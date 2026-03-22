@@ -206,7 +206,7 @@ input[type=time].fi{width:auto;min-width:92px}
     <div class="tabs">
       <button class="tab on" onclick="goTo('auj')">Aujourd&rsquo;hui</button>
       <button class="tab" onclick="goTo('cont')">Contrats</button>
-      <button class="tab" onclick="goToCgAm()">Congés</button>
+      <button class="tab" onclick="goToCgAm()">Congés Ass’Mat</button>
     </div>
   </div>
 
@@ -404,6 +404,7 @@ input[type=time].fi{width:auto;min-width:92px}
 </div>
 
 <div class="toast" id="toast"></div>
+
 <script>
 const JOURS=['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'];
 const MOIS=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
@@ -1096,8 +1097,9 @@ function buildRecapHtml(recap){
     <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures mensualisées</td><td style="padding:7px 4px;font-weight:600;text-align:right">${(recap.hMensu||0).toFixed(2)} h</td></tr>
     <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures complémentaires</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hComp} h${recap.montantCompNet>0?' — '+recap.montantCompNet.toFixed(2)+' € (+11,31% exo.)':''}</td></tr>
     ${parseFloat(recap.hSup)>0?`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures supplémentaires</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hSup} h</td></tr>`:''}
-    ${parseFloat(recap.hAbs)>0?`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures d\'absence</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hAbs} h</td></tr>`:''}
+    ${parseFloat(recap.hAbs)>0?`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures d’absence</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hAbs} h</td></tr>`:''}
     ${recap.montantAbsences>0?`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--al)">Montant absences</td><td style="padding:7px 4px;font-weight:600;text-align:right;color:var(--al)">− ${recap.montantAbsences.toFixed(2)} €</td></tr>`:''}
+    ${(recap.nbAbsEnfantTotal||0)>0?`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2);font-size:12px">Abs. maladie enfant (année)</td><td style="padding:7px 4px;font-weight:600;text-align:right;color:${recap.nbAbsEnfantTotal>=5?'var(--al)':'var(--tx2)'}">${recap.nbAbsEnfantTotal}/5 j</td></tr>`:''}
     <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Taux horaire net</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.txNet} €</td></tr>
     <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2);font-weight:600">Salaire net estimé</td><td style="padding:7px 4px;font-weight:700;font-size:15px;color:var(--m);text-align:right">${recap.salaireNet} €</td></tr>
     ${parseFloat(recap.indemEntretienTotal)>0?`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Indemnité entretien</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.indemEntretienTotal} €</td></tr>`:''}
@@ -1183,8 +1185,50 @@ function validerFiche(contratId,key){
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   saveToFirestore();
+  // Calculer et mettre à jour les congés acquis
+  calcCongesContrat(c);
+  const cidx2=S.contrats.findIndex(x=>x.id==contratId);
+  if(cidx2!==-1) S.contrats[cidx2]=c;
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  saveToFirestore();
   toast('Feuille de '+MOIS[c.fiches[key].mois]+' validée !');
   renderDetTab(contratId,'presence');
+}
+
+function calcCongesContrat(c){
+  // Calculer les congés acquis depuis toutes les fiches validées
+  if(!c.fiches||!c.dateDeb) return;
+  if(!c.conges) c.conges={acquis:0,pris:0,anticipes:0,enAcq:0};
+  const dateDebContrat=new Date(c.dateDeb);
+  // Trouver l'année de référence en cours (1er juin → 31 mai)
+  const now=new Date();
+  const anneeRef=now.getMonth()>=5?now.getFullYear():now.getFullYear()-1;
+  const debutRef=new Date(anneeRef,5,1); // 1er juin
+  const finRef=new Date(anneeRef+1,4,31); // 31 mai
+  // Compter les jours travaillés dans l'année de référence
+  let joursCompteRef=0;
+  let joursArretRef=0;
+  const nbJoursParSemaine=c.joursFixe?c.joursFixe.filter(j=>j).length:5;
+  const seuilAcq=nbJoursParSemaine===5?20:nbJoursParSemaine===4?16:nbJoursParSemaine===3?12:nbJoursParSemaine===2?8:4;
+  Object.entries(c.fiches).forEach(([key,fiche])=>{
+    if(!fiche.valide) return;
+    const [ay,am]=key.split('-').map(Number);
+    const dateF=new Date(ay,am-1,1);
+    if(dateF<debutRef||dateF>finRef) return;
+    fiche.jours.forEach(j=>{
+      const statut=j.statut||getStatutPrevu(c,j);
+      // Tout ce qui est rémunéré compte
+      const compteNormal=['prevu','travaille','ferie','conges-acq','abs-rem','abs-enfant'].includes(statut)||(!j.statut&&j.heureDebReel);
+      const compteArret=statut==='arret';
+      if(compteNormal) joursCompteRef++;
+      if(compteArret) joursArretRef++;
+    });
+  });
+  // Calcul congés (2.5j / 20j travaillés, 2j / 20j en arrêt)
+  const cgNormaux=Math.floor((joursCompteRef/seuilAcq)*2.5*10)/10;
+  const cgArret=Math.floor((joursArretRef/seuilAcq)*2*10)/10;
+  const cgAcquis=Math.min(30, cgNormaux+cgArret);
+  c.conges.acquis=Math.ceil(cgAcquis*10)/10; // arrondi supérieur au 31 mai sinon garder décimal
 }
 
 function calcRecapFiche(c,fiche){
@@ -1194,11 +1238,17 @@ function calcRecapFiche(c,fiche){
   const majSup=(c.majSup||0)/100;
   const hMensu=c.hMensu||0;
   const reposHebdo=c.reposHebdo||0;
-  // Nb jours moyens prévus au contrat par mois
-  const nbJoursMoyContrat=c.nbJoursMois||0;
+  // Nb jours prévus dans ce mois (calculé depuis la fiche)
+  let nbJoursPrevu=0;
+  fiche.jours.forEach(j=>{
+    const sp=getStatutPrevu(c,j);
+    if(sp==='prevu') nbJoursPrevu++;
+  });
+  // Fallback : nbJoursMois du contrat ou calcul depuis hMensu
+  if(nbJoursPrevu===0) nbJoursPrevu=c.nbJoursMois||Math.round(hMensu/8)||20;
 
   let hComp=0, hSup=0, hAbs=0;
-  let nbJoursTrav=nbJoursMoyContrat; // base = jours moyens prévus au contrat
+  let nbJoursTrav=nbJoursPrevu; // base = jours prévus ce mois
   let indemEntretienTotal=0, indemRepasTotal=0, indemKmTotal=0;
   let kmTotal=0;
   let montantAbsences=0;
@@ -1224,6 +1274,25 @@ function calcRecapFiche(c,fiche){
     }
   });
 
+  // Compter abs-enfant depuis début d'année de contrat (anniversaire)
+  const dateDebContrat=c.dateDeb?new Date(c.dateDeb):new Date();
+  const anneeContrat=fiche.annee;
+  const moisContrat=dateDebContrat.getMonth();
+  const jourContrat=dateDebContrat.getDate();
+  // Début de l'année de contrat en cours
+  let debutAnneeCont=new Date(anneeContrat,moisContrat,jourContrat);
+  if(debutAnneeCont>new Date(fiche.annee,fiche.mois,28)) debutAnneeCont=new Date(anneeContrat-1,moisContrat,jourContrat);
+  let nbAbsEnfantAnneeCont=0;
+  // Compter dans les fiches précédentes de l'année de contrat
+  Object.entries(c.fiches||{}).forEach(([k,f])=>{
+    if(k===Object.keys(c.fiches).find(kk=>c.fiches[kk]===fiche)) return;
+    const [ay,am]=k.split('-').map(Number);
+    const dateF=new Date(ay,am-1,1);
+    if(dateF>=debutAnneeCont&&dateF<new Date(fiche.annee,fiche.mois,1)){
+      (f.jours||[]).forEach(j=>{if(j.statut==='abs-enfant') nbAbsEnfantAnneeCont++;});
+    }
+  });
+
   fiche.jours.forEach(j=>{
     const statut=j.statut||getStatutPrevu(c,j);
     const estPresent=statut==='prevu'||statut==='travaille'||(!j.statut&&j.heureDebReel);
@@ -1232,7 +1301,11 @@ function calcRecapFiche(c,fiche){
     if(statut==='travaille'&&getStatutPrevu(c,j)==='non-prevu'){
       nbJoursTrav++; // jour supplémentaire non prévu
     }
-    const absDeduites=['abs-am','arret','abs-enfant'];
+    // abs-enfant : déductible seulement si < 5 jours dans l'année de contrat
+    const nbAbsEnfantCeMois=fiche.jours.slice(0,fiche.jours.indexOf(j)+1).filter(jj=>jj.statut==='abs-enfant').length;
+    const absEnfantDeductible=statut==='abs-enfant'&&(nbAbsEnfantAnneeCont+nbAbsEnfantCeMois<=5);
+    const absDeduites=['abs-am','arret'];
+    if(absEnfantDeductible) absDeduites.push('abs-enfant');
     const estAbsDeduite=absDeduites.includes(statut);
     const estCongesNonAcq52=(statut==='conges-non'&&c.tc==='52');
     if(estAbsDeduite||estCongesNonAcq52) nbJoursTrav--;
@@ -1313,19 +1386,26 @@ function calcRecapFiche(c,fiche){
   // Heures à déduire = montantAbsences / txNet
   const hAbsDeduit=txNet>0?parseFloat((montantAbsences/txNet).toFixed(2)):0;
 
-  // Montant h. comp avec exonération de charges (+11.31% du brut)
-  const montantCompBrut=parseFloat((hComp*(1+majComp)*txBrut).toFixed(2));
-  const montantCompNet=parseFloat((montantCompBrut*(1+0.1131)).toFixed(2));
-  const montantSupBrut=parseFloat((hSup*(1+majSup)*txBrut).toFixed(2));
-  const montantSupNet=parseFloat((montantSupBrut*(1+0.1131)).toFixed(2));
+  // Montant h. comp : brut majoré → net → + exonération charges (11.31% du brut majoré)
+  const montantCompBrutMaj=hComp*(1+majComp)*txBrut;
+  const montantCompNet=parseFloat((montantCompBrutMaj*0.7811975 + montantCompBrutMaj*0.1131).toFixed(2));
+  const montantSupBrutMaj=hSup*(1+majSup)*txBrut;
+  const montantSupNet=parseFloat((montantSupBrutMaj*0.7811975 + montantSupBrutMaj*0.1131).toFixed(2));
+  const montantCompBrut=parseFloat(montantCompBrutMaj.toFixed(2));
+  const montantSupBrut=parseFloat(montantSupBrutMaj.toFixed(2));
 
   const salaireNet=parseFloat(((hMensu+hComp*(1+majComp)+hSup*(1+majSup))*txNet - montantAbsences).toFixed(2));
+
+  // Total abs-enfant ce mois
+  const nbAbsEnfantMois=fiche.jours.filter(j=>j.statut==='abs-enfant').length;
 
   return{
     hMensu, hComp:hComp.toFixed(2), hSup:hSup.toFixed(2),
     montantCompBrut, montantCompNet, montantSupBrut, montantSupNet,
     hAbs:hAbs.toFixed(2), hAbsDeduit, montantAbsences,
     nbJoursTrav:Math.max(0,nbJoursTrav),
+    nbAbsEnfantMois, nbAbsEnfantAnneeCont,
+    nbAbsEnfantTotal:nbAbsEnfantAnneeCont+nbAbsEnfantMois,
     txNet:txNet.toFixed(2), salaireNet,
     indemEntretienTotal:indemEntretienTotal.toFixed(2),
     indemRepasTotal:indemRepasTotal.toFixed(2),
