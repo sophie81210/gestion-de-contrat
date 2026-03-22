@@ -748,59 +748,96 @@ function renderDetTab(id,tab){
   else if(tab==='presence'){
     renderPresence(c,cont);
   }
-    else if(tab==='regularisation'){
+      else if(tab==='regularisation'){
     if(c.tc!=='46'&&!c.nbSem){
       cont.innerHTML=`<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">La régularisation s'applique uniquement aux contrats de 46 semaines ou moins.</div></div>`;
     } else {
-      const moisAvecFiches=Object.entries(c.fiches||{}).sort(([a],[b])=>a.localeCompare(b));
-      if(!moisAvecFiches.length){
+      const moisTries=Object.keys(c.fiches||{}).sort();
+      if(!moisTries.length){
         cont.innerHTML=`<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">Aucune feuille de présence enregistrée.</div></div>`;
       } else {
-        let totMensu=0,totPrevu=0;
         const hMensu=c.hMensu||0;
-        const lignes=moisAvecFiches.map(([key,fiche])=>{
-          const [annee,moisStr]=key.split('-');
-          const moisNum=parseInt(moisStr)-1;
-          const label=MOIS[moisNum]+' '+annee;
-          // Heures prévues = calculées depuis le contrat (jours prévus × heures/jour)
-          let hPrevu=0;
-          (fiche.jours||[]).forEach(j=>{
-            if(j.heureDebPrev&&j.heureFinPrev){
-              const m=toMins(j.heureFinPrev)-toMins(j.heureDebPrev);
-              if(m>0) hPrevu+=m/60;
-            }
-          });
-          totMensu+=hMensu; totPrevu+=hPrevu;
-          const diff=hPrevu-hMensu;
-          const diffColor=diff>0?'var(--vt)':diff<0?'var(--al)':'var(--tx2)';
-          return `<tr style="border-bottom:1px solid var(--mb)">
-            <td style="padding:8px 4px;font-size:13px">${label}</td>
-            <td style="padding:8px 4px;font-size:13px;text-align:center">${hMensu.toFixed(2)}h</td>
-            <td style="padding:8px 4px;font-size:13px;text-align:center">${hPrevu.toFixed(2)}h</td>
-            <td style="padding:8px 4px;font-size:13px;font-weight:600;text-align:center;color:${diffColor}">${diff>0?'+':''}${diff.toFixed(2)}h</td>
-          </tr>`;
-        }).join('');
-        const totDiff=totPrevu-totMensu;
-        const totColor=totDiff>0?'var(--vt)':totDiff<0?'var(--al)':'var(--tx2)';
-        cont.innerHTML=`<div class="card">
-          <div class="ctitle">Régularisation annuelle</div>
-          <div class="ibox" style="margin-bottom:12px;font-size:12px">Les heures prévues sont calculées depuis le contrat. Les régularisations de mois (absences, heures sup.) sont traitées dans les fiches de présence.</div>
-          <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
-            <thead><tr style="background:var(--mp)">
-              <th style="padding:8px 4px;text-align:left;font-size:12px">Mois</th>
-              <th style="padding:8px 4px;font-size:12px;text-align:center">H. mensualisées</th>
-              <th style="padding:8px 4px;font-size:12px;text-align:center">H. prévues</th>
-              <th style="padding:8px 4px;font-size:12px;text-align:center">Différence</th>
-            </tr></thead>
-            <tbody>${lignes}</tbody>
-            <tfoot><tr style="background:var(--mp);font-weight:700">
-              <td style="padding:8px 4px;font-size:13px">Total</td>
-              <td style="padding:8px 4px;font-size:13px;text-align:center">${totMensu.toFixed(2)}h</td>
-              <td style="padding:8px 4px;font-size:13px;text-align:center">${totPrevu.toFixed(2)}h</td>
-              <td style="padding:8px 4px;font-size:14px;font-weight:700;text-align:center;color:${totColor}">${totDiff>0?'+':''}${totDiff.toFixed(2)}h</td>
-            </tr></tfoot>
-          </table></div>
-        </div>`;
+        const dateDebContrat=c.dateDeb?new Date(c.dateDeb):new Date();
+        // Regrouper par année de contrat (tranches de 12 mois depuis la date de début)
+        const tranches=[];
+        let trancheIdx=0;
+        moisTries.forEach(key=>{
+          const [ay,am]=key.split('-').map(Number);
+          const dateF=new Date(ay,am-1,1);
+          // Calculer l'anniversaire correspondant
+          let anniversaire=new Date(dateDebContrat.getFullYear()+trancheIdx+1,dateDebContrat.getMonth(),dateDebContrat.getDate());
+          if(dateF>=anniversaire){trancheIdx++;anniversaire=new Date(dateDebContrat.getFullYear()+trancheIdx+1,dateDebContrat.getMonth(),dateDebContrat.getDate());}
+          if(!tranches[trancheIdx]) tranches[trancheIdx]=[];
+          tranches[trancheIdx].push(key);
+        });
+
+        let totGenMensu=0,totGenPrevu=0;
+        // Afficher du plus récent au plus ancien
+        let tableauxHtml='';
+        [...tranches].reverse().forEach((moisList,tIdxRev)=>{
+          const tIdx=tranches.length-1-tIdxRev;
+          const anneeDebut=new Date(dateDebContrat.getFullYear()+tIdx,dateDebContrat.getMonth(),dateDebContrat.getDate());
+          const anneeFin=new Date(dateDebContrat.getFullYear()+tIdx+1,dateDebContrat.getMonth(),dateDebContrat.getDate());
+          const label='Année '+(tIdx+1)+' ('+anneeDebut.toLocaleDateString('fr-FR',{month:'short',year:'numeric'})+' → '+anneeFin.toLocaleDateString('fr-FR',{month:'short',year:'numeric'})+')';
+          let totMensu=0,totPrevu=0;
+          const lignes=moisList.map(key=>{
+            const fiche=c.fiches[key];
+            const [ay2,am2]=key.split('-').map(Number);
+            const moisLabel=MOIS[am2-1]+' '+ay2;
+            let hPrevu=0;
+            (fiche.jours||[]).forEach(j=>{
+              if(j.heureDebPrev&&j.heureFinPrev){
+                const m=toMins(j.heureFinPrev)-toMins(j.heureDebPrev);
+                if(m>0) hPrevu+=m/60;
+              }
+            });
+            totMensu+=hMensu; totPrevu+=hPrevu;
+            totGenMensu+=hMensu; totGenPrevu+=hPrevu;
+            const diff=hPrevu-hMensu;
+            const dc=diff>0?'var(--vt)':diff<0?'var(--al)':'var(--tx2)';
+            return `<tr style="border-bottom:1px solid var(--mb)">
+              <td style="padding:7px 4px;font-size:13px">${moisLabel}</td>
+              <td style="padding:7px 4px;font-size:13px;text-align:center">${hMensu.toFixed(2)}h</td>
+              <td style="padding:7px 4px;font-size:13px;text-align:center">${hPrevu.toFixed(2)}h</td>
+              <td style="padding:7px 4px;font-size:13px;font-weight:600;text-align:center;color:${dc}">${diff>0?'+':''}${diff.toFixed(2)}h</td>
+            </tr>`;
+          }).join('');
+          const diffT=totPrevu-totMensu;
+          const dcT=diffT>0?'var(--vt)':diffT<0?'var(--al)':'var(--tx2)';
+          tableauxHtml+=`<div class="card" style="margin-bottom:10px">
+            <div class="ctitle">${label}</div>
+            <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+              <thead><tr style="background:var(--mp)">
+                <th style="padding:7px 4px;text-align:left;font-size:12px">Mois</th>
+                <th style="padding:7px 4px;font-size:12px;text-align:center">H. mensual.</th>
+                <th style="padding:7px 4px;font-size:12px;text-align:center">H. prévues</th>
+                <th style="padding:7px 4px;font-size:12px;text-align:center">Différence</th>
+              </tr></thead>
+              <tbody>${lignes}</tbody>
+              <tfoot><tr style="background:var(--mp);font-weight:700">
+                <td style="padding:7px 4px;font-size:13px">Total année ${tIdx+1}</td>
+                <td style="padding:7px 4px;font-size:13px;text-align:center">${totMensu.toFixed(2)}h</td>
+                <td style="padding:7px 4px;font-size:13px;text-align:center">${totPrevu.toFixed(2)}h</td>
+                <td style="padding:7px 4px;font-size:14px;font-weight:700;text-align:center;color:${dcT}">${diffT>0?'+':''}${diffT.toFixed(2)}h</td>
+              </tr></tfoot>
+            </table></div>
+          </div>`;
+        });
+
+        const diffGen=totGenPrevu-totGenMensu;
+        const dcGen=diffGen>0?'var(--vt)':diffGen<0?'var(--al)':'var(--tx2)';
+        cont.innerHTML=`
+          <div class="card" style="background:var(--mp);margin-bottom:12px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div class="ctitle" style="margin:0">Total général</div>
+              <div style="display:flex;gap:16px;font-size:13px">
+                <span>Mensual. : <strong>${totGenMensu.toFixed(2)}h</strong></span>
+                <span>Prévues : <strong>${totGenPrevu.toFixed(2)}h</strong></span>
+                <span style="color:${dcGen};font-weight:700">${diffGen>0?'+':''}${diffGen.toFixed(2)}h</span>
+              </div>
+            </div>
+          </div>
+          ${tableauxHtml}`;
       }
     }
   }
@@ -872,7 +909,7 @@ function getStatutPrevu(c,j){
 
 function getStatutOptions(statutPrevu){
   const opts={
-    'prevu':['prevu','abs-rem','abs-enfant','abs-am','conges','arret'],
+    'prevu':['prevu','abs-rem','abs-enfant','abs-am','arret'],
     'non-prevu':['non-prevu','travaille'],
     'repos':['repos','travaille'],
     'ferie':['ferie','travaille','arret'],
@@ -1023,7 +1060,7 @@ function ouvrirFiche(contratId,key){
       <td style="padding:5px 4px;font-size:12px;font-weight:500;white-space:nowrap;${manquant?'color:var(--al)':''}">${nomJour} ${numJour}</td>
       <td style="padding:3px 4px;font-size:11px;color:var(--tx2);white-space:nowrap">${j.heureDebPrev||'—'}<br>${j.heureFinPrev||'—'}</td>
       <td style="padding:3px 4px">
-        ${['prevu','travaille'].includes(statutActuel)?`
+        ${['prevu','travaille','abs-rem','abs-non'].includes(statutActuel)?`
         <input type="time" value="${j.heureDebReel||''}" 
           style="width:82px;padding:2px 4px;border:1px solid var(--mb);${inputBorder};border-radius:3px;font-size:11px;display:block;margin-bottom:2px"
           onchange="majFiche(${contratId},'${key}',${idx},'debReel',this.value)">
@@ -1111,6 +1148,23 @@ function buildRecapHtml(recap){
 function majFicheStatut(contratId,key,idx,val){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c||!c.fiches||!c.fiches[key])return;
+  // Bloquer abs-enfant si déjà 5 jours dans l'année de contrat
+  if(val==='abs-enfant'){
+    const fiche=c.fiches[key];
+    const dateDebContrat=c.dateDeb?new Date(c.dateDeb):new Date();
+    const annee=fiche.annee; const mois=fiche.mois;
+    let debutAnnee=new Date(annee,dateDebContrat.getMonth(),dateDebContrat.getDate());
+    if(debutAnnee>new Date(annee,mois,28)) debutAnnee=new Date(annee-1,dateDebContrat.getMonth(),dateDebContrat.getDate());
+    let compteur=0;
+    Object.entries(c.fiches).forEach(([k,f])=>{
+      const [ay,am]=k.split('-').map(Number);
+      const df=new Date(ay,am-1,1);
+      if(df>=debutAnnee){
+        f.jours.forEach((j,ji)=>{if(j.statut==='abs-enfant'&&!(k===key&&ji===idx)) compteur++;});
+      }
+    });
+    if(compteur>=5){toast('⚠ Limite de 5 jours d’absence maladie enfant atteinte pour cette année de contrat');return;}
+  }
   c.fiches[key].jours[idx].statut=val||null;
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
@@ -1172,7 +1226,7 @@ function validerFiche(contratId,key){
     const sp=getStatutPrevu(c,j);
     const sa=j.statut||sp; // statut actuel
     // Heures requises seulement si prévu ou travaillé (pas absence, congés, repos, férié...)
-    const heuresRequises=sa==='prevu'||sa==='travaille';
+    const heuresRequises=['prevu','travaille','abs-rem','abs-non'].includes(sa);
     if(!heuresRequises) return;
     if(!j.heureDebReel||!j.heureFinReel){
       manquant=true;
@@ -1196,40 +1250,71 @@ function validerFiche(contratId,key){
 }
 
 function calcCongesContrat(c){
-  // Calculer les congés acquis depuis toutes les fiches validées
   if(!c.fiches||!c.dateDeb) return;
-  if(!c.conges) c.conges={acquis:0,pris:0,anticipes:0,enAcq:0};
+  if(!c.conges) c.conges={};
   const dateDebContrat=new Date(c.dateDeb);
-  // Trouver l'année de référence en cours (1er juin → 31 mai)
   const now=new Date();
-  const anneeRef=now.getMonth()>=5?now.getFullYear():now.getFullYear()-1;
-  const debutRef=new Date(anneeRef,5,1); // 1er juin
-  const finRef=new Date(anneeRef+1,4,31); // 31 mai
-  // Compter les jours travaillés dans l'année de référence
-  let joursCompteRef=0;
-  let joursArretRef=0;
-  const nbJoursParSemaine=c.joursFixe?c.joursFixe.filter(j=>j).length:5;
-  const seuilAcq=nbJoursParSemaine===5?20:nbJoursParSemaine===4?16:nbJoursParSemaine===3?12:nbJoursParSemaine===2?8:4;
-  Object.entries(c.fiches).forEach(([key,fiche])=>{
-    if(!fiche.valide) return;
-    const [ay,am]=key.split('-').map(Number);
-    const dateF=new Date(ay,am-1,1);
-    if(dateF<debutRef||dateF>finRef) return;
-    fiche.jours.forEach(j=>{
-      const statut=j.statut||getStatutPrevu(c,j);
-      // Tout ce qui est rémunéré compte
-      const compteNormal=['prevu','travaille','ferie','conges-acq','abs-rem','abs-enfant'].includes(statut)||(!j.statut&&j.heureDebReel);
-      const compteArret=statut==='arret';
-      if(compteNormal) joursCompteRef++;
-      if(compteArret) joursArretRef++;
+  // Générer toutes les années de référence depuis le début du contrat
+  const anneeRefDebut=now.getMonth()>=5?now.getFullYear():now.getFullYear()-1;
+  const anneeContratDebut=dateDebContrat.getFullYear();
+  const nbJoursParSemaine=c.joursFixe?c.joursFixe.filter(j=>j).length:
+    (c.semTypes&&c.semTypes[0]?.jours?c.semTypes[0].jours.filter(j=>j).length:5);
+  const seuilAcq=nbJoursParSemaine===5?20:nbJoursParSemaine===4?16:
+    nbJoursParSemaine===3?12:nbJoursParSemaine===2?8:4;
+
+  for(let anneeRef=anneeContratDebut-1; anneeRef<=anneeRefDebut; anneeRef++){
+    const debutRef=new Date(anneeRef,5,1);   // 1er juin
+    const finRef=new Date(anneeRef+1,4,31);  // 31 mai
+    const estTerminee=finRef<now;
+    let joursComptes=0, joursArret=0;
+    Object.entries(c.fiches).forEach(([key,fiche])=>{
+      if(!fiche.valide) return;
+      const [ay,am]=key.split('-').map(Number);
+      const dateF=new Date(ay,am-1,1);
+      if(dateF<debutRef||dateF>finRef) return;
+      fiche.jours.forEach(j=>{
+        const dateJ=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
+        if(dateJ<debutRef||dateJ>finRef) return;
+        // Ignorer les jours hors contrat
+        if(dateJ<dateDebContrat) return;
+        const statut=j.statut||getStatutPrevu(c,j);
+        const compte=['prevu','travaille','ferie','conges-acq','abs-rem','abs-enfant'].includes(statut)
+          ||(!j.statut&&j.heureDebReel);
+        if(compte) joursComptes++;
+        if(statut==='arret') joursArret++;
+      });
     });
-  });
-  // Calcul congés (2.5j / 20j travaillés, 2j / 20j en arrêt)
-  const cgNormaux=Math.floor((joursCompteRef/seuilAcq)*2.5*10)/10;
-  const cgArret=Math.floor((joursArretRef/seuilAcq)*2*10)/10;
-  const cgAcquis=Math.min(30, cgNormaux+cgArret);
-  c.conges.acquis=Math.ceil(cgAcquis*10)/10; // arrondi supérieur au 31 mai sinon garder décimal
+    const cgNormaux=(joursComptes/seuilAcq)*2.5;
+    const cgArret=(joursArret/seuilAcq)*2;
+    let cgTotal=Math.min(30, cgNormaux+cgArret);
+    // Ajouter enfants à charge (depuis congesAM)
+    if(S.congesAM){
+      const amData=S.congesAM[anneeRef];
+      const nbEnfants=amData?.enfants||0;
+      if(nbEnfants>0) cgTotal=Math.min(30, cgTotal+nbEnfants*2);
+    }
+    // Arrondir : supérieur si année terminée, inférieur si en cours
+    const acquis=estTerminee?Math.ceil(cgTotal):Math.floor(cgTotal);
+    // Calculer jours pris depuis congésAM
+    let prisDansRef=0;
+    if(S.congesAM&&S.congesAM[anneeRef]){
+      const joursAm=S.congesAM[anneeRef].jours||{};
+      Object.keys(joursAm).filter(d=>joursAm[d]==='pose').forEach(d=>{
+        const dp=new Date(d);
+        if(dp>=debutRef&&dp<=finRef) prisDansRef++;
+      });
+    }
+    c.conges[anneeRef]={
+      acquis, pris:prisDansRef,
+      restants:Math.max(0,acquis-prisDansRef),
+      estTerminee, joursComptes, joursArret,
+      anneeRef, anneeRefFin:anneeRef+1
+    };
+  }
+  // Année en cours (raccourci)
+  c.congesCourants=c.conges[anneeRefDebut]||{acquis:0,pris:0,restants:0};
 }
+
 
 function calcRecapFiche(c,fiche){
   const txBrut=c.txBrut||0;
@@ -1304,7 +1389,7 @@ function calcRecapFiche(c,fiche){
     // abs-enfant : déductible seulement si < 5 jours dans l'année de contrat
     const nbAbsEnfantCeMois=fiche.jours.slice(0,fiche.jours.indexOf(j)+1).filter(jj=>jj.statut==='abs-enfant').length;
     const absEnfantDeductible=statut==='abs-enfant'&&(nbAbsEnfantAnneeCont+nbAbsEnfantCeMois<=5);
-    const absDeduites=['abs-am','arret'];
+    const absDeduites=['abs-am','arret','abs-non'];
     if(absEnfantDeductible) absDeduites.push('abs-enfant');
     const estAbsDeduite=absDeduites.includes(statut);
     const estCongesNonAcq52=(statut==='conges-non'&&c.tc==='52');
@@ -1332,14 +1417,12 @@ function calcRecapFiche(c,fiche){
     // ── Absences déduites ──
     if(estAbsDeduite){
       let hAbsJour=0;
+      const hPrev=j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:hMensu/(nbJoursPrevu||20);
       if(j.heureDebReel&&j.heureFinReel){
-        const prev=j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:0;
-        const reel=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
-        hAbsJour=Math.max(0,prev-reel);
-      } else if(j.heureDebPrev&&j.heureFinPrev){
-        hAbsJour=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
+        const hReel2=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
+        hAbsJour=Math.max(0,hPrev-hReel2);
       } else {
-        hAbsJour=hMensu/(nbJoursMoyContrat||20);
+        hAbsJour=hPrev; // journée entière
       }
       hAbs+=hAbsJour;
     }
@@ -1356,16 +1439,17 @@ function calcRecapFiche(c,fiche){
         if(deb<dp) hJour+=( dp-deb)/60;
         if(fin>fp) hJour+=(fin-fp)/60;
       }
-      // Indemnité entretien : heures RÉELLES uniquement (pas les complémentaires)
-      let hReel=0;
-      if(j.heureDebReel&&j.heureFinReel) hReel=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
-      else if(j.heureDebPrev&&j.heureFinPrev) hReel=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
-      if(c.indemType==='legal'){
-        const tauxH=c.params?.indemLegalH||S.params?.indemLegalH||0.425;
-        const forfait=c.params?.indemLegal||S.params?.indemLegal||2.65;
-        indemEntretienTotal+=Math.max(forfait, tauxH*hReel);
-      } else if(c.indemType==='nego'&&c.indemMontant){
-        indemEntretienTotal+=c.indemPer==='journalier'?c.indemMontant:c.indemMontant*hReel;
+      // Indemnité entretien : heures réelles uniquement
+      let hPourIndem=0;
+      if(j.heureDebReel&&j.heureFinReel) hPourIndem=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
+      if(hPourIndem>0){
+        if(c.indemType==='legal'){
+          const tauxH=c.params?.indemLegalH||S.params?.indemLegalH||0.425;
+          const forfait=c.params?.indemLegal||S.params?.indemLegal||2.65;
+          indemEntretienTotal+=Math.max(forfait, tauxH*hPourIndem);
+        } else if(c.indemType==='nego'&&c.indemMontant){
+          indemEntretienTotal+=c.indemPer==='journalier'?c.indemMontant:c.indemMontant*hPourIndem;
+        }
       }
       // Repas
       if(c.repas&&j.repas){
@@ -1937,32 +2021,38 @@ function getAnneesRef(){
   return{ref:debRef+'/'+(debRef+1),acq:(debRef+1)+'/'+(debRef+2)};
 }
 function genCumul(c){
-  const{ref,acq}=getAnneesRef();
-  const cg=c.conges||{acquis:0,pris:0,anticipes:0,enAcq:0};
-  const restants=Math.max(0,(cg.acquis||0)-(cg.pris||0));
+  if(!c.conges||Object.keys(c.conges).length===0){
+    return '<div style="text-align:center;padding:20px;color:var(--tx2)">Validez des feuilles de présence pour calculer les congés acquis.</div>';
+  }
   const ls='display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--mb);font-size:13px';
   const vs='font-weight:600;color:var(--m)';
-  const ps='font-size:11px;color:var(--tx3);font-style:italic';
-  return `
-    <div style="margin-bottom:12px">
-      <div style="font-size:12px;font-weight:700;color:var(--tx2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Année de référence — ${ref}</div>
-      <div style="${ls}"><span style="color:var(--tx2)">Congés acquis</span><span style="${vs}">${cg.acquis||0} j <span style="${ps}">(calcul via fiches de présence)</span></span></div>
-      <div style="${ls}"><span style="color:var(--tx2)">Congés pris</span><span style="${vs}">${cg.pris||0} j</span></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;font-size:13px">
-        <span style="color:var(--tx2)">Congés restants</span>
-        <span style="font-weight:700;font-size:15px;color:${restants>0?'var(--vt)':'var(--tx3)'}">${restants} j</span>
-      </div>
-    </div>
-    <div>
-      <div style="font-size:12px;font-weight:700;color:var(--tx2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Année en cours — ${acq}</div>
-      <div style="${ls}"><span style="color:var(--tx2)">En cours d\u2019acquisition</span><span style="${vs}">${cg.enAcq||0} j <span style="${ps}">(calcul via fiches de présence)</span></span></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;font-size:13px">
-        <span style="color:var(--tx2)">Pris par anticipation</span><span style="${vs}">${cg.anticipes||0} j</span>
-      </div>
+  // Trier années de référence : plus récente en premier
+  const annees=Object.keys(c.conges).map(Number).sort((a,b)=>b-a);
+  let html2='';
+  annees.forEach(anneeRef=>{
+    const cg=c.conges[anneeRef];
+    const titre=cg.estTerminee
+      ?`Congés acquis ${anneeRef}/${anneeRef+1} (terminée)`
+      :`Congés en cours d’acquisition ${anneeRef}/${anneeRef+1}`;
+    const couleur=cg.estTerminee?'#e8f0ff':'#e8f5ee';
+    html2+=`<div style="background:${couleur};border-radius:8px;padding:10px 12px;margin-bottom:10px">
+      <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:6px">${titre}</div>
+      <div style="${ls}"><span>Jours acquis</span><span style="${vs}">${cg.acquis} j</span></div>
+      <div style="${ls}"><span>Jours pris</span><span style="${vs}">${cg.pris} j</span></div>
+      <div style="${ls};border-bottom:none"><span>Jours restants</span><span style="${vs}">${cg.restants} j</span></div>
     </div>`;
+  });
+  // Total général
+  const totalAcquis=annees.reduce((t,a)=>t+(c.conges[a]?.acquis||0),0);
+  const totalPris=annees.reduce((t,a)=>t+(c.conges[a]?.pris||0),0);
+  html2+=`<div style="border-top:2px solid var(--mb);padding-top:8px;display:flex;justify-content:space-between;font-weight:700;font-size:13px">
+    <span>Total restant (toutes années)</span>
+    <span style="color:var(--m)">${Math.max(0,totalAcquis-totalPris)} j</span>
+  </div>`;
+  return html2;
 }
 
-// ══ SIGNATURE ══
+
 function signerContrat(){
   if(!S.enEd&&!S.dernierContratId){toast("Enregistrez d’abord le contrat");return;}
   const id=S.enEd||S.dernierContratId;
@@ -2058,78 +2148,97 @@ function ouvrirCgAm(anneeDebut){
 
 function buildCgAmDetail(anneeDebut,data){
   const anneeFin=anneeDebut+1;
-  const reposHebdo=(S.contrats.find(c=>c.signe)?.reposHebdo)||0;
-  const joursCoches=Object.keys(data.jours||{}).filter(k=>data.jours[k]==='pose').length;
-  const nbSamedis=Object.keys(data.jours||{}).filter(k=>{
-    if(data.jours[k]!=='pose')return false;
-    const d=new Date(k.split('-')[0],parseInt(k.split('-')[1])-1,parseInt(k.split('-')[2]));
-    return d.getDay()===6;
+  // Récupérer le repos hebdo depuis les contrats signés actifs
+  const contratsActifs=S.contrats.filter(c=>c.signe&&!c.cloture);
+  const reposHebdo=contratsActifs[0]?.reposHebdo||0;
+  // Compter les jours cochés
+  const joursCoches=Object.keys(data.jours||{}).filter(k=>data.jours[k]==='pose');
+  const nb=joursCoches.length;
+  const nbSamedis=joursCoches.filter(d=>{
+    const p=d.split('-');
+    return new Date(parseInt(p[0]),parseInt(p[1])-1,parseInt(p[2])).getDay()===6;
   }).length;
 
+  // Calendrier du 1er mai au 30 avril
   let calHtml='';
-  let moisCur=new Date(anneeDebut,4,1); // 1er mai
-  const finCal=new Date(anneeFin,3,30); // 30 avril
+  let moisCur=new Date(anneeDebut,4,1);
+  const finCal=new Date(anneeFin,3,30);
 
   while(moisCur<=finCal){
     const moisIdx=moisCur.getMonth();
     const annee=moisCur.getFullYear();
     const dernierJour=new Date(annee,moisIdx+1,0).getDate();
-    let joursHtml='';
+    // En-têtes jours de la semaine
+    let joursHtml='<div style="display:flex;flex-wrap:wrap;gap:0">';
     for(let d=1;d<=dernierJour;d++){
       const jourDate=new Date(annee,moisIdx,d);
       const dateStr=annee+'-'+String(moisIdx+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
-      const jourSem=jourDate.getDay();
+      const jourSem=jourDate.getDay(); // 0=dim
       const jourIdx=jourSem===0?6:jourSem-1;
-      const isDim=jourSem===0;
-      const isRepos=jourSem===reposHebdo&&reposHebdo!==0;
-      const isFer=isFerie(dateStr,S.contrats.find(c=>c.signe)||{});
+      const isReposH=jourSem===reposHebdo;
+      // Vérifier si c'est un férié non travaillé pour TOUS les contrats actifs
+      const isFerNonTrav=contratsActifs.length>0&&contratsActifs.every(c=>{
+        if(!isFerie(dateStr,c)) return false;
+        const p=dateStr.split('-');
+        const mmdd=p[1]+'-'+p[2];
+        return !(c.feriesTravailles||[]).includes(mmdd);
+      });
       const isPose=(data.jours[dateStr]==='pose');
-      let bg='transparent',color='var(--tx)',cursor='pointer';
-      if(isDim||isRepos){bg='var(--mp)';color='var(--tx3)';cursor='not-allowed';}
-      if(isFer&&!isPose){bg='#fff8e1';}
-      if(isPose){bg='var(--vt)';color='#fff';}
-      const clickable=!isDim&&!isRepos;
-      joursHtml+=`<div onclick="${clickable?`toggleCgAm(${anneeDebut},'${dateStr}')`:''}" style="display:inline-flex;flex-direction:column;align-items:center;width:30px;margin:1px 0;padding:3px 0;border-radius:5px;cursor:${cursor};background:${bg};color:${color};user-select:none;min-height:36px;justify-content:center">
-        <span style="font-size:9px;font-weight:600;line-height:1">${JOURS_INIT[jourIdx]}</span>
-        <span style="font-size:12px;line-height:1.3">${d}</span>
+      // Couleur de fond
+      let bg='#fff',color='var(--tx)',cursor='pointer',border='1px solid #e0d8d0';
+      if(isReposH){bg='#f0f0f0';color='var(--tx3)';cursor='not-allowed';}
+      if(isFerNonTrav&&!isPose){bg='#fff8e1';color='#854F0B';}
+      if(isFerNonTrav&&isReposH){cursor='not-allowed';}
+      if(isPose){bg='var(--vt)';color='#fff';border='none';}
+      const clickable=!isReposH&&!(isFerNonTrav&&isReposH);
+      joursHtml+=`<div onclick="${clickable?`toggleCgAm(${anneeDebut},'${dateStr}')`:''}"
+        style="display:inline-flex;flex-direction:column;align-items:center;width:34px;margin:1px;padding:4px 0;border-radius:6px;cursor:${cursor};background:${bg};color:${color};border:${border};user-select:none;min-height:40px;justify-content:center;font-size:10px">
+        <span style="font-weight:600;line-height:1">${JOURS_INIT[jourIdx]}</span>
+        <span style="font-size:13px;font-weight:${isPose?'700':'400'};line-height:1.4">${d}</span>
       </div>`;
     }
-    calHtml+=`<div style="margin-bottom:12px">
-      <div style="font-weight:700;font-size:12px;color:var(--m);margin-bottom:4px;text-transform:uppercase">${MOIS_ABR[moisIdx]} ${annee}</div>
-      <div style="display:flex;flex-wrap:wrap;gap:1px">${joursHtml}</div>
+    joursHtml+='</div>';
+    calHtml+=`<div style="margin-bottom:14px">
+      <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:5px;text-transform:uppercase;letter-spacing:.5px">${MOIS_ABR[moisIdx]} ${annee}</div>
+      ${joursHtml}
     </div>`;
     moisCur=new Date(annee,moisIdx+1,1);
   }
 
-  const ok=joursCoches===30&&nbSamedis===5;
-  const alertHtml=joursCoches>30?`<div style="background:#fdecea;color:var(--al);padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">⚠ ${joursCoches} jours cochés — maximum 30</div>`:
-    joursCoches===30&&nbSamedis!==5?`<div style="background:#fff8e1;color:#854F0B;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">⚠ ${nbSamedis} samedi(s) — il en faut exactement 5</div>`:
-    ok?`<div style="background:var(--vtc);color:var(--vt);padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">✓ 30 jours posés dont 5 samedis</div>`:'';
+  const ok=nb===30&&nbSamedis===5;
+  const alertHtml=nb>30?`<div style="background:#fdecea;color:var(--al);padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">⚠ ${nb} jours cochés — maximum 30</div>`:
+    nb===30&&nbSamedis!==5?`<div style="background:#fff8e1;color:#854F0B;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">⚠ ${nbSamedis} samedi(s) — il en faut exactement 5</div>`:
+    ok?`<div style="background:var(--vtc);color:var(--vt);padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">✓ 30 jours posés dont 5 samedis — calendrier validé !</div>`:
+    `<div style="font-size:12px;color:var(--tx3);margin-bottom:10px">${nb}/30 jours cochés — ${nbSamedis}/5 samedis</div>`;
 
   return `<div style="padding:14px">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
       <button class="btn bs bsm" onclick="retourCgAmList()">← Retour</button>
-      <span style="font-weight:700;font-size:15px;color:var(--m)">Congés ${anneeDebut}/${anneeFin}</span>
-      <span style="font-size:13px;font-weight:600;color:${ok?'var(--vt)':'var(--al)'}">${joursCoches}/30 — ${nbSamedis}/5 sam.</span>
+      <span style="font-weight:700;font-size:15px;color:var(--m)">Pose des congés ${anneeDebut}/${anneeFin}</span>
+      <span style="font-size:13px;font-weight:600;color:${ok?'var(--vt)':'var(--tx2)'}">${nb}/30 — ${nbSamedis}/5</span>
     </div>
     <div class="card" style="margin-bottom:10px">
       <div class="fg" style="margin-bottom:0">
-        <label class="fl">Enfants à charge de moins de 15 ans au 30 avril</label>
-        <input type="number" min="0" max="10" value="${data.enfants||0}"
+        <label class="fl">Enfants à charge de moins de 15 ans au 30 avril ${anneeFin}</label>
+        <input type="number" min="0" max="15" value="${data.enfants||0}"
           style="width:60px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:14px;margin-top:6px"
           onchange="majCgAmEnfants(${anneeDebut},this.value)">
       </div>
     </div>
     <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <div class="ctitle" style="margin:0">Pose des congés</div>
-      </div>
+      <div class="ctitle" style="margin-bottom:4px">Calendrier des congés — 1er mai ${anneeDebut} au 30 avril ${anneeFin}</div>
       ${alertHtml}
-      <div style="font-size:11px;color:var(--tx3);margin-bottom:10px">Cliquez sur les jours pour les cocher. 30 jours dont exactement 5 samedis. Dimanches et jours de repos non cochables.</div>
-      ${calHtml}
+      <div style="font-size:11px;color:var(--tx3);margin-bottom:10px">
+        Cliquez sur les jours pour les cocher (vert).<br>
+        30 jours dont <strong>exactement 5 samedis</strong>.<br>
+        <span style="background:#f0f0f0;padding:1px 4px;border-radius:3px">Gris</span> = jour de repos —
+        <span style="background:#fff8e1;padding:1px 4px;border-radius:3px;color:#854F0B">Jaune</span> = férié non travaillé
+      </div>
+      <div style="overflow-x:auto">${calHtml}</div>
     </div>
   </div>`;
 }
+
 
 function toggleCgAm(anneeDebut,dateStr){
   if(!S.congesAM) S.congesAM={};
