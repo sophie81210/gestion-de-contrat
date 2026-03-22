@@ -1094,7 +1094,7 @@ function buildRecapHtml(recap){
   return `
     <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Jours travaillés</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.nbJoursTrav} j</td></tr>
     <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures mensualisées</td><td style="padding:7px 4px;font-weight:600;text-align:right">${(recap.hMensu||0).toFixed(2)} h</td></tr>
-    <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures complémentaires</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hComp} h</td></tr>
+    <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures complémentaires</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hComp} h${recap.montantCompNet>0?' — '+recap.montantCompNet.toFixed(2)+' € (+11,31% exo.)':''}</td></tr>
     ${parseFloat(recap.hSup)>0?`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures supplémentaires</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hSup} h</td></tr>`:''}
     ${parseFloat(recap.hAbs)>0?`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures d\'absence</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hAbs} h</td></tr>`:''}
     ${recap.montantAbsences>0?`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--al)">Montant absences</td><td style="padding:7px 4px;font-weight:600;text-align:right;color:var(--al)">− ${recap.montantAbsences.toFixed(2)} €</td></tr>`:''}
@@ -1165,12 +1165,19 @@ function validerFiche(contratId,key){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c||!c.fiches||!c.fiches[key])return;
   let manquant=false;
+  let manquantJours=[];
   c.fiches[key].jours.forEach(j=>{
-    const sp=j.statutPrevu||getStatutPrevu(c,j);
-    if(sp!=='prevu') return;
-    if(!j.heureDebReel||!j.heureFinReel) manquant=true;
+    const sp=getStatutPrevu(c,j);
+    const sa=j.statut||sp; // statut actuel
+    // Heures requises seulement si prévu ou travaillé (pas absence, congés, repos, férié...)
+    const heuresRequises=sa==='prevu'||sa==='travaille';
+    if(!heuresRequises) return;
+    if(!j.heureDebReel||!j.heureFinReel){
+      manquant=true;
+      manquantJours.push(parseInt(j.date.split('-')[2]));
+    }
   });
-  if(manquant){toast('⚠ Des heures sont manquantes');return;}
+  if(manquant){toast('⚠ Heures manquantes : jours '+manquantJours.join(', '));return;}
   c.fiches[key].valide=true;c.fiches[key].complete=true;
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
@@ -1276,12 +1283,16 @@ function calcRecapFiche(c,fiche){
         if(deb<dp) hJour+=( dp-deb)/60;
         if(fin>fp) hJour+=(fin-fp)/60;
       }
+      // Indemnité entretien : heures RÉELLES uniquement (pas les complémentaires)
+      let hReel=0;
+      if(j.heureDebReel&&j.heureFinReel) hReel=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
+      else if(j.heureDebPrev&&j.heureFinPrev) hReel=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
       if(c.indemType==='legal'){
         const tauxH=c.params?.indemLegalH||S.params?.indemLegalH||0.425;
         const forfait=c.params?.indemLegal||S.params?.indemLegal||2.65;
-        indemEntretienTotal+=Math.max(forfait, tauxH*hJour);
+        indemEntretienTotal+=Math.max(forfait, tauxH*hReel);
       } else if(c.indemType==='nego'&&c.indemMontant){
-        indemEntretienTotal+=c.indemPer==='journalier'?c.indemMontant:c.indemMontant*hJour;
+        indemEntretienTotal+=c.indemPer==='journalier'?c.indemMontant:c.indemMontant*hReel;
       }
       // Repas
       if(c.repas&&j.repas){
@@ -1302,10 +1313,17 @@ function calcRecapFiche(c,fiche){
   // Heures à déduire = montantAbsences / txNet
   const hAbsDeduit=txNet>0?parseFloat((montantAbsences/txNet).toFixed(2)):0;
 
+  // Montant h. comp avec exonération de charges (+11.31% du brut)
+  const montantCompBrut=parseFloat((hComp*(1+majComp)*txBrut).toFixed(2));
+  const montantCompNet=parseFloat((montantCompBrut*(1+0.1131)).toFixed(2));
+  const montantSupBrut=parseFloat((hSup*(1+majSup)*txBrut).toFixed(2));
+  const montantSupNet=parseFloat((montantSupBrut*(1+0.1131)).toFixed(2));
+
   const salaireNet=parseFloat(((hMensu+hComp*(1+majComp)+hSup*(1+majSup))*txNet - montantAbsences).toFixed(2));
 
   return{
     hMensu, hComp:hComp.toFixed(2), hSup:hSup.toFixed(2),
+    montantCompBrut, montantCompNet, montantSupBrut, montantSupNet,
     hAbs:hAbs.toFixed(2), hAbsDeduit, montantAbsences,
     nbJoursTrav:Math.max(0,nbJoursTrav),
     txNet:txNet.toFixed(2), salaireNet,
