@@ -1022,7 +1022,7 @@ function ouvrirFiche(contratId,key){
       <td style="padding:5px 4px;font-size:12px;font-weight:500;white-space:nowrap;${manquant?'color:var(--al)':''}">${nomJour} ${numJour}</td>
       <td style="padding:3px 4px;font-size:11px;color:var(--tx2);white-space:nowrap">${j.heureDebPrev||'—'}<br>${j.heureFinPrev||'—'}</td>
       <td style="padding:3px 4px">
-        ${['prevu','travaille','non-prevu','repos'].includes(statutActuel)?`
+        ${['prevu','travaille'].includes(statutActuel)?`
         <input type="time" value="${j.heureDebReel||''}" 
           style="width:82px;padding:2px 4px;border:1px solid var(--mb);${inputBorder};border-radius:3px;font-size:11px;display:block;margin-bottom:2px"
           onchange="majFiche(${contratId},'${key}',${idx},'debReel',this.value)">
@@ -1094,9 +1094,10 @@ function buildRecapHtml(recap){
   return `
     <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Jours travaillés</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.nbJoursTrav} j</td></tr>
     <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures mensualisées</td><td style="padding:7px 4px;font-weight:600;text-align:right">${(recap.hMensu||0).toFixed(2)} h</td></tr>
-    <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures réelles</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hReelTotal} h</td></tr>
-    <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures complémentaires</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hCompTotal} h</td></tr>
-    <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures d\'absence</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hAbsTotal} h</td></tr>
+    <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures complémentaires</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hComp} h</td></tr>
+    ${parseFloat(recap.hSup)>0?`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures supplémentaires</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hSup} h</td></tr>`:''}
+    ${parseFloat(recap.hAbs)>0?`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures d\'absence</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hAbs} h</td></tr>`:''}
+    ${recap.montantAbsences>0?`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--al)">Montant absences</td><td style="padding:7px 4px;font-weight:600;text-align:right;color:var(--al)">− ${recap.montantAbsences.toFixed(2)} €</td></tr>`:''}
     <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Taux horaire net</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.txNet} €</td></tr>
     <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2);font-weight:600">Salaire net estimé</td><td style="padding:7px 4px;font-weight:700;font-size:15px;color:var(--m);text-align:right">${recap.salaireNet} €</td></tr>
     ${parseFloat(recap.indemEntretienTotal)>0?`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Indemnité entretien</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.indemEntretienTotal} €</td></tr>`:''}
@@ -1180,42 +1181,141 @@ function validerFiche(contratId,key){
 }
 
 function calcRecapFiche(c,fiche){
-  let hReelTotal=0,hCompTotal=0,hAbsTotal=0,nbJoursTrav=0,kmTotal=0;
-  let indemEntretienTotal=0,indemRepasTotal=0;
   const txBrut=c.txBrut||0;
+  const txNet=parseFloat((txBrut*0.7811975).toFixed(4));
   const majComp=(c.majComp||0)/100;
   const majSup=(c.majSup||0)/100;
   const hMensu=c.hMensu||0;
+  const reposHebdo=c.reposHebdo||0;
+  // Nb jours moyens prévus au contrat par mois
+  const nbJoursMoyContrat=c.nbJoursMois||0;
+
+  let hComp=0, hSup=0, hAbs=0;
+  let nbJoursTrav=nbJoursMoyContrat; // base = jours moyens prévus au contrat
+  let indemEntretienTotal=0, indemRepasTotal=0, indemKmTotal=0;
+  let kmTotal=0;
+  let montantAbsences=0;
+
+  // Heures théoriques du mois (pour calcul déduction absences)
+  let hTheoriques=0;
   fiche.jours.forEach(j=>{
-    const sp=j.statutPrevu||getStatutPrevu(c,j);
-    const statut=j.statut||sp;
-    if(statut==='abs-rem'||statut==='arret'||statut==='abs-am'){hAbsTotal+=toM(j.heureFinPrev||'00:00')/60-toM(j.heureDebPrev||'00:00')/60;return;}
-    if(statut==='abs-enfant'){hAbsTotal+=toM(j.heureFinPrev||'00:00')/60-toM(j.heureDebPrev||'00:00')/60;return;}
-    if(statut==='conges'||statut==='conges-acq'||statut==='conges-non') return;
-    if(!j.heureDebReel||!j.heureFinReel) return;
-    const minsReel=toM(j.heureFinReel)-toM(j.heureDebReel);
-    if(minsReel<=0) return;
-    hReelTotal+=minsReel/60;nbJoursTrav++;
-    const minsPrev=j.heureDebPrev&&j.heureFinPrev?toM(j.heureFinPrev)-toM(j.heureDebPrev):0;
-    const diff=minsReel-minsPrev;
-    if(diff>0) hCompTotal+=diff/60;
-    if(j.km) kmTotal+=j.km;
-    if(c.indemType==='legal'){
-      const taux=S.params?.indemLegalH||0.425;
-      const forfait=S.params?.indemLegal||2.65;
-      indemEntretienTotal+=Math.max(forfait,taux*(minsReel/60));
-    } else if(c.indemType==='nego'&&c.indemMontant){
-      indemEntretienTotal+=c.indemPer==='journalier'?c.indemMontant:c.indemMontant*(minsReel/60);
+    if(j.heureDebPrev&&j.heureFinPrev){
+      hTheoriques+=toM(j.heureFinPrev)-toM(j.heureDebPrev);
     }
-    if(c.repas&&j.repas) j.repas.forEach((pris,ri)=>{if(pris&&c.repas[ri])indemRepasTotal+=c.repas[ri];});
   });
-  const txNet=txBrut*0.7811975;
-  const indemKmTotal=(c.km||0)*kmTotal;
-  const salaireNet=(hMensu+hCompTotal*(1+majComp))*txNet;
-  return{hMensu,hReelTotal:hReelTotal.toFixed(2),hCompTotal:hCompTotal.toFixed(2),hAbsTotal:hAbsTotal.toFixed(2),nbJoursTrav,kmTotal,indemEntretienTotal:indemEntretienTotal.toFixed(2),indemRepasTotal:indemRepasTotal.toFixed(2),indemKmTotal:indemKmTotal.toFixed(2),txNet:txNet.toFixed(2),salaireNet:salaireNet.toFixed(2)};
+  hTheoriques=hTheoriques/60;
+  // Si pas d'heures théoriques, utiliser hMensu
+  if(hTheoriques<=0) hTheoriques=hMensu;
+
+  // Calcul hebdomadaire pour heures sup (> 45h/sem)
+  const hParSemaine={};
+  fiche.jours.forEach(j=>{
+    const semKey=getSemISO(j.date);
+    if(!hParSemaine[semKey]) hParSemaine[semKey]=0;
+    if(j.heureDebReel&&j.heureFinReel&&(j.statut==='prevu'||j.statut==='travaille'||!j.statut)){
+      hParSemaine[semKey]+=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
+    }
+  });
+
+  fiche.jours.forEach(j=>{
+    const statut=j.statut||getStatutPrevu(c,j);
+    const estPresent=statut==='prevu'||statut==='travaille'||(!j.statut&&j.heureDebReel);
+
+    // ── Jours travaillés ──
+    if(statut==='travaille'&&getStatutPrevu(c,j)==='non-prevu'){
+      nbJoursTrav++; // jour supplémentaire non prévu
+    }
+    const absDeduites=['abs-am','arret','abs-enfant'];
+    const estAbsDeduite=absDeduites.includes(statut);
+    const estCongesNonAcq52=(statut==='conges-non'&&c.tc==='52');
+    if(estAbsDeduite||estCongesNonAcq52) nbJoursTrav--;
+
+    // ── Heures complémentaires / supplémentaires ──
+    if(estPresent&&j.heureDebReel&&j.heureFinReel){
+      const debReel=toM(j.heureDebReel);
+      const finReel=toM(j.heureFinReel);
+      const debPrev=j.heureDebPrev?toM(j.heureDebPrev):null;
+      const finPrev=j.heureFinPrev?toM(j.heureFinPrev):null;
+      let compJour=0;
+      if(debPrev!==null&&debReel<debPrev) compJour+=debPrev-debReel;
+      if(finPrev!==null&&finReel>finPrev) compJour+=finReel-finPrev;
+      if(compJour>0) hComp+=compJour/60;
+      // Heures sup > 45h/sem
+      const semKey=getSemISO(j.date);
+      const hSem=hParSemaine[semKey]||0;
+      if(hSem>45){
+        const compCeSoir=compJour/60;
+        hSup+=Math.min(compCeSoir, hSem-45);
+      }
+    }
+
+    // ── Absences déduites ──
+    if(estAbsDeduite){
+      let hAbsJour=0;
+      if(j.heureDebReel&&j.heureFinReel){
+        const prev=j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:0;
+        const reel=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
+        hAbsJour=Math.max(0,prev-reel);
+      } else if(j.heureDebPrev&&j.heureFinPrev){
+        hAbsJour=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
+      } else {
+        hAbsJour=hMensu/(nbJoursMoyContrat||20);
+      }
+      hAbs+=hAbsJour;
+    }
+
+    // ── Indemnité entretien (uniquement jours de présence effective) ──
+    if(estPresent&&(j.heureDebReel||j.heureDebPrev)){
+      let hJour=0;
+      if(j.heureDebReel&&j.heureFinReel) hJour=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
+      else if(j.heureDebPrev&&j.heureFinPrev) hJour=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
+      // Ajouter heures complémentaires de ce jour
+      if(j.heureDebReel&&j.heureFinReel&&j.heureDebPrev&&j.heureFinPrev){
+        const deb=toM(j.heureDebReel),fin=toM(j.heureFinReel);
+        const dp=toM(j.heureDebPrev),fp=toM(j.heureFinPrev);
+        if(deb<dp) hJour+=( dp-deb)/60;
+        if(fin>fp) hJour+=(fin-fp)/60;
+      }
+      if(c.indemType==='legal'){
+        const tauxH=c.params?.indemLegalH||S.params?.indemLegalH||0.425;
+        const forfait=c.params?.indemLegal||S.params?.indemLegal||2.65;
+        indemEntretienTotal+=Math.max(forfait, tauxH*hJour);
+      } else if(c.indemType==='nego'&&c.indemMontant){
+        indemEntretienTotal+=c.indemPer==='journalier'?c.indemMontant:c.indemMontant*hJour;
+      }
+      // Repas
+      if(c.repas&&j.repas){
+        j.repas.forEach((pris,ri)=>{if(pris&&c.repas[ri])indemRepasTotal+=parseFloat(c.repas[ri])||0;});
+      }
+      // Km
+      if(j.km&&c.km) kmTotal+=j.km;
+    }
+  });
+
+  indemKmTotal=(c.km||0)*kmTotal;
+
+  // Montant absences
+  if(hAbs>0&&hTheoriques>0){
+    const tauxHAbs=(hMensu*txNet)/hTheoriques;
+    montantAbsences=parseFloat((tauxHAbs*hAbs).toFixed(2));
+  }
+  // Heures à déduire = montantAbsences / txNet
+  const hAbsDeduit=txNet>0?parseFloat((montantAbsences/txNet).toFixed(2)):0;
+
+  const salaireNet=parseFloat(((hMensu+hComp*(1+majComp)+hSup*(1+majSup))*txNet - montantAbsences).toFixed(2));
+
+  return{
+    hMensu, hComp:hComp.toFixed(2), hSup:hSup.toFixed(2),
+    hAbs:hAbs.toFixed(2), hAbsDeduit, montantAbsences,
+    nbJoursTrav:Math.max(0,nbJoursTrav),
+    txNet:txNet.toFixed(2), salaireNet,
+    indemEntretienTotal:indemEntretienTotal.toFixed(2),
+    indemRepasTotal:indemRepasTotal.toFixed(2),
+    indemKmTotal:indemKmTotal.toFixed(2)
+  };
 }
 
-// ══ SUPPRIMER ══
+
 function confSuppr(id){
   const c=S.contrats.find(x=>x.id==id);if(!c)return;
   const m=document.createElement('div');m.className='modal-wrap';
@@ -1699,6 +1799,7 @@ function valider(){
     majComp:parseFloat(document.getElementById('f-maj-comp')?.value)||0,
     majSup:parseFloat(document.getElementById('f-maj-sup')?.value)||0,
     hMensu:hm?parseFloat(hm.toFixed(2)):0,
+    nbJoursMois:parseFloat(document.getElementById('r-jours-mois')?.textContent)||0,
     mensBrute:tx&&hm?parseFloat((tx*hm).toFixed(2)):0,
     cgAnticipe:document.querySelector('[name="cg-anticipe"]:checked')?.value||null,
     dateCg:document.querySelector('[name="date-cg"]:checked')?.value||null,
