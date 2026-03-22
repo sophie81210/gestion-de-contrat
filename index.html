@@ -206,6 +206,7 @@ input[type=time].fi{width:auto;min-width:92px}
     <div class="tabs">
       <button class="tab on" onclick="goTo('auj')">Aujourd&rsquo;hui</button>
       <button class="tab" onclick="goTo('cont')">Contrats</button>
+      <button class="tab" onclick="goToCgAm()">Congés</button>
     </div>
   </div>
 
@@ -406,7 +407,7 @@ input[type=time].fi{width:auto;min-width:92px}
 <script>
 const JOURS=['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'];
 const MOIS=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
-const PAGES=['pg-auj','pg-cont','pg-form','pg-det'];
+const PAGES=['pg-auj','pg-cont','pg-form','pg-det','pg-cgam'];
 const PLAN_COULEURS=[
   {bg:'#B5D4F4',txt:'#0C447C',brd:'#378ADD'},
   {bg:'#9FE1CB',txt:'#085041',brd:'#1D9E75'},
@@ -420,6 +421,7 @@ const DET_LABELS={contrat:'Contrat & avenants',presence:'Présence',regularisati
 
 const S={
   contrats:JSON.parse(localStorage.getItem('cam_c')||'[]'),
+  congesAM:JSON.parse(localStorage.getItem('cam_cgam')||'{}'),
   tc:null,th:null,planType:null,nbSem:0,enEd:null,enCours:null,detTab:'contrat',
   params:{indemLegal:2.65,indemLegalH:0.425,mgMin:4.25}
 };
@@ -637,6 +639,11 @@ function pointer(id,type){
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   saveToFirestore();
 
+  // Si statut n'est pas prévu, le passer à "travaillé"
+  if(jour.statut&&jour.statut!=='prevu'&&jour.statut!=='travaille'){
+    jour.statut='travaille';
+  }
+
   // Sauvegarder dans S.contrats
   const cidx2=S.contrats.findIndex(x=>x.id==id);
   if(cidx2!==-1){
@@ -740,54 +747,55 @@ function renderDetTab(id,tab){
   else if(tab==='presence'){
     renderPresence(c,cont);
   }
-  else if(tab==='regularisation'){
-    if(c.tc!=='46'&&c.nbSem){
+    else if(tab==='regularisation'){
+    if(c.tc!=='46'&&!c.nbSem){
       cont.innerHTML=`<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">La régularisation s'applique uniquement aux contrats de 46 semaines ou moins.</div></div>`;
     } else {
       const moisAvecFiches=Object.entries(c.fiches||{}).sort(([a],[b])=>a.localeCompare(b));
       if(!moisAvecFiches.length){
         cont.innerHTML=`<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">Aucune feuille de présence enregistrée.</div></div>`;
       } else {
-        let totMensu=0,totReel=0;
+        let totMensu=0,totPrevu=0;
+        const hMensu=c.hMensu||0;
         const lignes=moisAvecFiches.map(([key,fiche])=>{
           const [annee,moisStr]=key.split('-');
           const moisNum=parseInt(moisStr)-1;
           const label=MOIS[moisNum]+' '+annee;
-          const hMensu=c.hMensu||0;
-          let hReel=0;
+          // Heures prévues = calculées depuis le contrat (jours prévus × heures/jour)
+          let hPrevu=0;
           (fiche.jours||[]).forEach(j=>{
-            if(j.heureDebReel&&j.heureFinReel&&j.statut!=='abs-non'&&j.statut!=='conges'){
-              const m=toMins(j.heureFinReel)-toMins(j.heureDebReel);
-              if(m>0)hReel+=m/60;
+            if(j.heureDebPrev&&j.heureFinPrev){
+              const m=toMins(j.heureFinPrev)-toMins(j.heureDebPrev);
+              if(m>0) hPrevu+=m/60;
             }
           });
-          totMensu+=hMensu;totReel+=hReel;
-          const diff=hReel-hMensu;
+          totMensu+=hMensu; totPrevu+=hPrevu;
+          const diff=hPrevu-hMensu;
           const diffColor=diff>0?'var(--vt)':diff<0?'var(--al)':'var(--tx2)';
           return `<tr style="border-bottom:1px solid var(--mb)">
             <td style="padding:8px 4px;font-size:13px">${label}</td>
             <td style="padding:8px 4px;font-size:13px;text-align:center">${hMensu.toFixed(2)}h</td>
-            <td style="padding:8px 4px;font-size:13px;text-align:center">${hReel.toFixed(2)}h</td>
+            <td style="padding:8px 4px;font-size:13px;text-align:center">${hPrevu.toFixed(2)}h</td>
             <td style="padding:8px 4px;font-size:13px;font-weight:600;text-align:center;color:${diffColor}">${diff>0?'+':''}${diff.toFixed(2)}h</td>
           </tr>`;
         }).join('');
-        const totDiff=totReel-totMensu;
+        const totDiff=totPrevu-totMensu;
         const totColor=totDiff>0?'var(--vt)':totDiff<0?'var(--al)':'var(--tx2)';
         cont.innerHTML=`<div class="card">
           <div class="ctitle">Régularisation annuelle</div>
-          <div class="ibox" style="margin-bottom:12px;font-size:12px">Les heures réelles n'incluent que le planning prévu — les régularisations de mois sont déjà traitées dans les fiches.</div>
+          <div class="ibox" style="margin-bottom:12px;font-size:12px">Les heures prévues sont calculées depuis le contrat. Les régularisations de mois (absences, heures sup.) sont traitées dans les fiches de présence.</div>
           <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
             <thead><tr style="background:var(--mp)">
               <th style="padding:8px 4px;text-align:left;font-size:12px">Mois</th>
               <th style="padding:8px 4px;font-size:12px;text-align:center">H. mensualisées</th>
-              <th style="padding:8px 4px;font-size:12px;text-align:center">H. réelles</th>
+              <th style="padding:8px 4px;font-size:12px;text-align:center">H. prévues</th>
               <th style="padding:8px 4px;font-size:12px;text-align:center">Différence</th>
             </tr></thead>
             <tbody>${lignes}</tbody>
             <tfoot><tr style="background:var(--mp);font-weight:700">
               <td style="padding:8px 4px;font-size:13px">Total</td>
               <td style="padding:8px 4px;font-size:13px;text-align:center">${totMensu.toFixed(2)}h</td>
-              <td style="padding:8px 4px;font-size:13px;text-align:center">${totReel.toFixed(2)}h</td>
+              <td style="padding:8px 4px;font-size:13px;text-align:center">${totPrevu.toFixed(2)}h</td>
               <td style="padding:8px 4px;font-size:14px;font-weight:700;text-align:center;color:${totColor}">${totDiff>0?'+':''}${totDiff.toFixed(2)}h</td>
             </tr></tfoot>
           </table></div>
@@ -890,7 +898,7 @@ function getStatutBg(statut){
 }
 
 function initFichesContrat(c){
-  if(!c.dateDeb||c.cloture) return;
+  if(!c.dateDeb||c.cloture||!c.signe) return;
   if(!c.fiches) c.fiches={};
   const debut=new Date(c.dateDeb);
   const maintenant=new Date();
@@ -1014,12 +1022,14 @@ function ouvrirFiche(contratId,key){
       <td style="padding:5px 4px;font-size:12px;font-weight:500;white-space:nowrap;${manquant?'color:var(--al)':''}">${nomJour} ${numJour}</td>
       <td style="padding:3px 4px;font-size:11px;color:var(--tx2);white-space:nowrap">${j.heureDebPrev||'—'}<br>${j.heureFinPrev||'—'}</td>
       <td style="padding:3px 4px">
+        ${['prevu','travaille','non-prevu','repos'].includes(statutActuel)?`
         <input type="time" value="${j.heureDebReel||''}" 
           style="width:82px;padding:2px 4px;border:1px solid var(--mb);${inputBorder};border-radius:3px;font-size:11px;display:block;margin-bottom:2px"
           onchange="majFiche(${contratId},'${key}',${idx},'debReel',this.value)">
         <input type="time" value="${j.heureFinReel||''}" 
           style="width:82px;padding:2px 4px;border:1px solid var(--mb);${inputBorder};border-radius:3px;font-size:11px;display:block"
-          onchange="majFiche(${contratId},'${key}',${idx},'finReel',this.value)">
+          onchange="majFiche(${contratId},'${key}',${idx},'finReel',this.value)">`
+        :`<span style="font-size:11px;color:var(--tx3);font-style:italic">—</span>`}
       </td>
       <td style="padding:3px 4px;font-size:11px;font-weight:600;color:${hComp?'var(--vt)':'var(--tx3)'}">
         ${hComp||hSup||'—'}
@@ -1062,22 +1072,37 @@ function ouvrirFiche(contratId,key){
     </div>
     <div class="card" style="margin-top:10px">
       <div class="ctitle">Récapitulatif — ${label}</div>
-      <table style="width:100%;border-collapse:collapse;font-size:13px">
-        <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Jours travaillés</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.nbJoursTrav} j</td></tr>
-        <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures mensualisées</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hMensu?.toFixed(2)||'—'} h</td></tr>
-        <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures réelles</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hReelTotal} h</td></tr>
-        <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures complémentaires</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hCompTotal} h</td></tr>
-        <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures d\'absence</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hAbsTotal} h</td></tr>
-        <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Taux horaire net</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.txNet} €</td></tr>
-        <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2);font-weight:600">Salaire net estimé</td><td style="padding:7px 4px;font-weight:700;font-size:15px;color:var(--m);text-align:right">${recap.salaireNet} €</td></tr>
-        ${parseFloat(recap.indemEntretienTotal)>0?`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Indemnité entretien</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.indemEntretienTotal} €</td></tr>`:''}
-        ${parseFloat(recap.indemRepasTotal)>0?`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Indemnité repas</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.indemRepasTotal} €</td></tr>`:''}
-        ${parseFloat(recap.indemKmTotal)>0?`<tr><td style="padding:7px 4px;color:var(--tx2)">Indemnité km</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.indemKmTotal} €</td></tr>`:''}
+      <table id="recap-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
+        ${buildRecapHtml(recap)}
       </table>
     </div>
     <div style="text-align:center;padding:14px 0">
       <button class="btn bp" onclick="validerFiche(${contratId},'${key}')">✓ Valider la feuille du mois</button>
     </div>`;
+}
+
+function majRecapFiche(contratId,key){
+  const c=S.contrats.find(x=>x.id==contratId);
+  if(!c||!c.fiches||!c.fiches[key])return;
+  const recap=calcRecapFiche(c,c.fiches[key]);
+  const el=document.getElementById('recap-'+contratId+'-'+key);
+  if(!el)return;
+  el.innerHTML=buildRecapHtml(recap);
+}
+
+function buildRecapHtml(recap){
+  return `
+    <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Jours travaillés</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.nbJoursTrav} j</td></tr>
+    <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures mensualisées</td><td style="padding:7px 4px;font-weight:600;text-align:right">${(recap.hMensu||0).toFixed(2)} h</td></tr>
+    <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures réelles</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hReelTotal} h</td></tr>
+    <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures complémentaires</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hCompTotal} h</td></tr>
+    <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Heures d\'absence</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.hAbsTotal} h</td></tr>
+    <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Taux horaire net</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.txNet} €</td></tr>
+    <tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2);font-weight:600">Salaire net estimé</td><td style="padding:7px 4px;font-weight:700;font-size:15px;color:var(--m);text-align:right">${recap.salaireNet} €</td></tr>
+    ${parseFloat(recap.indemEntretienTotal)>0?`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Indemnité entretien</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.indemEntretienTotal} €</td></tr>`:''}
+    ${parseFloat(recap.indemRepasTotal)>0?`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2)">Indemnité repas</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.indemRepasTotal} €</td></tr>`:''}
+    ${parseFloat(recap.indemKmTotal||0)>0?`<tr><td style="padding:7px 4px;color:var(--tx2)">Indemnité km</td><td style="padding:7px 4px;font-weight:600;text-align:right">${recap.indemKmTotal} €</td></tr>`:''}
+  `;
 }
 
 function majFicheStatut(contratId,key,idx,val){
@@ -1112,14 +1137,16 @@ function majFiche(contratId,key,idx,champ,val){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c||!c.fiches||!c.fiches[key])return;
   const j=c.fiches[key].jours[idx];
-  if(champ==='debReel') j.heureDebReel=val;
-  else if(champ==='finReel') j.heureFinReel=val;
+  if(champ==='debReel') j.heureDebReel=val||null;
+  else if(champ==='finReel') j.heureFinReel=val||null;
   else if(champ==='statut') j.statut=val||null;
   else if(champ==='km') j.km=parseFloat(val)||null;
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   saveToFirestore();
+  // Mettre à jour le récap sans recharger toute la fiche
+  majRecapFiche(contratId,key);
 }
 
 function majFicheRepas(contratId,key,idx,ri,checked){
@@ -1756,12 +1783,222 @@ function creerAvenant(id){
     (S.contrats.find(x=>x.id==id)?.datSignature||'?'));
 }
 
+// ══ CONGÉS ASS'MAT NAV ══
+function goToCgAm(){
+  PAGES.forEach(p=>document.getElementById(p).style.display='none');
+  document.getElementById('pg-cgam').style.display='flex';
+  renderCgAm();
+}
+
 // ══ NOUVEAU CONTRAT ══
 function nouveauContrat(){
   S.enEd=null;
   S.dernierContratId=null;
   resetForm();
   goTo('form');
+}
+
+
+// ══ CONGÉS ASS'MAT ══
+const MOIS_ABR=['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Aoû','Sep','Oct','Nov','Déc'];
+const JOURS_INIT=['L','Ma','Me','J','V','S','D'];
+
+function getAnneesRefAM(){
+  const now=new Date();
+  const anneeRef=now.getMonth()>=5?now.getFullYear():now.getFullYear()-1;
+  const premierContrat=S.contrats.reduce((min,c)=>{
+    if(!c.dateDeb)return min;
+    const y=new Date(c.dateDeb).getFullYear();
+    return y<min?y:min;
+  },anneeRef);
+  const annees=[];
+  for(let y=anneeRef;y>=Math.max(premierContrat,anneeRef-5);y--){
+    annees.push({debut:y,fin:y+1,label:y+'/'+(y+1)});
+  }
+  return annees;
+}
+
+function renderCgAm(){
+  const listEl=document.getElementById('cgam-list');
+  if(!listEl)return;
+  const detEl=document.getElementById('cgam-detail');
+  if(detEl)detEl.style.display='none';
+  listEl.style.display='block';
+  if(!S.congesAM) S.congesAM={};
+  const annees=getAnneesRefAM();
+  const btns=annees.map(a=>{
+    const data=S.congesAM[a.debut]||{};
+    const jCoch=Object.keys(data.jours||{}).filter(k=>data.jours[k]==='pose').length;
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:#fff;border-radius:var(--rs);border:1px solid var(--mb);margin-bottom:8px;cursor:pointer" onclick="ouvrirCgAm(${a.debut})">
+      <div>
+        <div style="font-weight:700;font-size:15px;color:var(--m)">${a.label}</div>
+        <div style="font-size:12px;color:var(--tx2)">1er juin ${a.debut} → 31 mai ${a.fin}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:13px;font-weight:600;color:${jCoch===30?'var(--vt)':'var(--al)'}">${jCoch}/30 j</div>
+        <span style="font-size:20px;color:var(--tx3)">›</span>
+      </div>
+    </div>`;
+  }).join('');
+  listEl.innerHTML=`<div style="padding:14px">
+    <div class="ctitle" style="margin-bottom:12px">Congés de l’Ass’Mat</div>
+    ${btns||'<div style="text-align:center;padding:20px;color:var(--tx2)">Aucun contrat enregistré</div>'}
+  </div>`;
+}
+
+function ouvrirCgAm(anneeDebut){
+  if(!S.congesAM) S.congesAM={};
+  if(!S.congesAM[anneeDebut]) S.congesAM[anneeDebut]={enfants:0,jours:{}};
+  const data=S.congesAM[anneeDebut];
+  const listEl=document.getElementById('cgam-list');
+  const detEl=document.getElementById('cgam-detail');
+  listEl.style.display='none';
+  detEl.style.display='block';
+  detEl.innerHTML=buildCgAmDetail(anneeDebut,data);
+}
+
+function buildCgAmDetail(anneeDebut,data){
+  const anneeFin=anneeDebut+1;
+  const reposHebdo=(S.contrats.find(c=>c.signe)?.reposHebdo)||0;
+  const joursCoches=Object.keys(data.jours||{}).filter(k=>data.jours[k]==='pose').length;
+  const nbSamedis=Object.keys(data.jours||{}).filter(k=>{
+    if(data.jours[k]!=='pose')return false;
+    const d=new Date(k.split('-')[0],parseInt(k.split('-')[1])-1,parseInt(k.split('-')[2]));
+    return d.getDay()===6;
+  }).length;
+
+  let calHtml='';
+  let moisCur=new Date(anneeDebut,4,1); // 1er mai
+  const finCal=new Date(anneeFin,3,30); // 30 avril
+
+  while(moisCur<=finCal){
+    const moisIdx=moisCur.getMonth();
+    const annee=moisCur.getFullYear();
+    const dernierJour=new Date(annee,moisIdx+1,0).getDate();
+    let joursHtml='';
+    for(let d=1;d<=dernierJour;d++){
+      const jourDate=new Date(annee,moisIdx,d);
+      const dateStr=annee+'-'+String(moisIdx+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+      const jourSem=jourDate.getDay();
+      const jourIdx=jourSem===0?6:jourSem-1;
+      const isDim=jourSem===0;
+      const isRepos=jourSem===reposHebdo&&reposHebdo!==0;
+      const isFer=isFerie(dateStr,S.contrats.find(c=>c.signe)||{});
+      const isPose=(data.jours[dateStr]==='pose');
+      let bg='transparent',color='var(--tx)',cursor='pointer';
+      if(isDim||isRepos){bg='var(--mp)';color='var(--tx3)';cursor='not-allowed';}
+      if(isFer&&!isPose){bg='#fff8e1';}
+      if(isPose){bg='var(--vt)';color='#fff';}
+      const clickable=!isDim&&!isRepos;
+      joursHtml+=`<div onclick="${clickable?`toggleCgAm(${anneeDebut},'${dateStr}')`:''}" style="display:inline-flex;flex-direction:column;align-items:center;width:30px;margin:1px 0;padding:3px 0;border-radius:5px;cursor:${cursor};background:${bg};color:${color};user-select:none;min-height:36px;justify-content:center">
+        <span style="font-size:9px;font-weight:600;line-height:1">${JOURS_INIT[jourIdx]}</span>
+        <span style="font-size:12px;line-height:1.3">${d}</span>
+      </div>`;
+    }
+    calHtml+=`<div style="margin-bottom:12px">
+      <div style="font-weight:700;font-size:12px;color:var(--m);margin-bottom:4px;text-transform:uppercase">${MOIS_ABR[moisIdx]} ${annee}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:1px">${joursHtml}</div>
+    </div>`;
+    moisCur=new Date(annee,moisIdx+1,1);
+  }
+
+  const ok=joursCoches===30&&nbSamedis===5;
+  const alertHtml=joursCoches>30?`<div style="background:#fdecea;color:var(--al);padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">⚠ ${joursCoches} jours cochés — maximum 30</div>`:
+    joursCoches===30&&nbSamedis!==5?`<div style="background:#fff8e1;color:#854F0B;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">⚠ ${nbSamedis} samedi(s) — il en faut exactement 5</div>`:
+    ok?`<div style="background:var(--vtc);color:var(--vt);padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">✓ 30 jours posés dont 5 samedis</div>`:'';
+
+  return `<div style="padding:14px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+      <button class="btn bs bsm" onclick="retourCgAmList()">← Retour</button>
+      <span style="font-weight:700;font-size:15px;color:var(--m)">Congés ${anneeDebut}/${anneeFin}</span>
+      <span style="font-size:13px;font-weight:600;color:${ok?'var(--vt)':'var(--al)'}">${joursCoches}/30 — ${nbSamedis}/5 sam.</span>
+    </div>
+    <div class="card" style="margin-bottom:10px">
+      <div class="fg" style="margin-bottom:0">
+        <label class="fl">Enfants à charge de moins de 15 ans au 30 avril</label>
+        <input type="number" min="0" max="10" value="${data.enfants||0}"
+          style="width:60px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:14px;margin-top:6px"
+          onchange="majCgAmEnfants(${anneeDebut},this.value)">
+      </div>
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div class="ctitle" style="margin:0">Pose des congés</div>
+      </div>
+      ${alertHtml}
+      <div style="font-size:11px;color:var(--tx3);margin-bottom:10px">Cliquez sur les jours pour les cocher. 30 jours dont exactement 5 samedis. Dimanches et jours de repos non cochables.</div>
+      ${calHtml}
+    </div>
+  </div>`;
+}
+
+function toggleCgAm(anneeDebut,dateStr){
+  if(!S.congesAM) S.congesAM={};
+  if(!S.congesAM[anneeDebut]) S.congesAM[anneeDebut]={enfants:0,jours:{}};
+  const data=S.congesAM[anneeDebut];
+  const joursCoches=Object.keys(data.jours).filter(k=>data.jours[k]==='pose').length;
+  if(data.jours[dateStr]==='pose'){
+    delete data.jours[dateStr];
+  } else {
+    if(joursCoches>=30){toast('Maximum 30 jours de congés');return;}
+    const parts=dateStr.split('-');
+    const jourDate=new Date(parseInt(parts[0]),parseInt(parts[1])-1,parseInt(parts[2]));
+    if(jourDate.getDay()===6){
+      const nbSam=Object.keys(data.jours).filter(k=>{
+        if(data.jours[k]!=='pose')return false;
+        const p=k.split('-');
+        return new Date(parseInt(p[0]),parseInt(p[1])-1,parseInt(p[2])).getDay()===6;
+      }).length;
+      if(nbSam>=5){toast('Maximum 5 samedis dans les congés');return;}
+    }
+    data.jours[dateStr]='pose';
+  }
+  S.congesAM[anneeDebut]=data;
+  majFichesCgAm(anneeDebut);
+  saveCongesAM();
+  ouvrirCgAm(anneeDebut);
+}
+
+function majFichesCgAm(anneeDebut){
+  const data=S.congesAM[anneeDebut];
+  S.contrats.forEach(c=>{
+    if(!c.fiches||!c.signe)return;
+    Object.values(c.fiches).forEach(fiche=>{
+      fiche.jours.forEach(j=>{
+        if(data.jours[j.date]==='pose'){
+          if(!j.statut||j.statut==='prevu'||j.statut==='conges-acq'||j.statut==='conges-non'){
+            j.statut='conges-acq';
+          }
+        } else if(j.statut==='conges-acq'){
+          // Retirer le statut congés si le jour n'est plus coché
+          j.statut=null;
+        }
+      });
+    });
+  });
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+}
+
+function majCgAmEnfants(anneeDebut,val){
+  if(!S.congesAM) S.congesAM={};
+  if(!S.congesAM[anneeDebut]) S.congesAM[anneeDebut]={enfants:0,jours:{}};
+  S.congesAM[anneeDebut].enfants=parseInt(val)||0;
+  saveCongesAM();
+}
+
+function saveCongesAM(){
+  localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM||{}));
+  if(window.FB_USER&&window.fbSaveData){
+    window.fbSaveData(window.FB_USER.uid,{
+      contrats:S.contrats,params:S.params||{},congesAM:S.congesAM||{}
+    }).catch(e=>console.error('Save cgam:',e));
+  }
+}
+
+function retourCgAmList(){
+  document.getElementById('cgam-list').style.display='block';
+  document.getElementById('cgam-detail').style.display='none';
+  renderCgAm();
 }
 
 // ══ TOAST ══
@@ -1774,4 +2011,11 @@ function toast(msg){
 initJ('j-fixe','fixe');
 </script>
 </body>
-</html>
+</html
+  <!-- PAGE CONGÉS ASS'MAT -->
+  <div id="pg-cgam" class="page" style="display:none;flex-direction:column;flex:1;overflow-y:auto">
+    <div id="cgam-list"></div>
+    <div id="cgam-detail" style="display:none"></div>
+  </div>
+
+>
