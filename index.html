@@ -1233,7 +1233,7 @@ function validerFiche(contratId,key){
     const sp=getStatutPrevu(c,j);
     const sa=j.statut||sp; // statut actuel
     // Heures requises seulement si prévu ou travaillé (pas absence, congés, repos, férié...)
-    const heuresRequises=['prevu','travaille','abs-rem','abs-am'].includes(sa);
+    const heuresRequises=['prevu','travaille'].includes(sa);
     if(!heuresRequises) return;
     if(!j.heureDebReel||!j.heureFinReel){
       manquant=true;
@@ -2028,13 +2028,22 @@ function getAnneesRef(){
   return{ref:debRef+'/'+(debRef+1),acq:(debRef+1)+'/'+(debRef+2)};
 }
 function genCumul(c){
-  if(!c.conges||Object.keys(c.conges).length===0){
-    return '<div style="text-align:center;padding:20px;color:var(--tx2)">Validez des feuilles de présence pour calculer les congés acquis.</div>';
+  // Détecter l'ancien format {acquis:0,pris:0,...} vs nouveau {2024:{...},2025:{...}}
+  const estNouveauFormat=c.conges&&Object.keys(c.conges).some(k=>!isNaN(Number(k))&&Number(k)>2000);
+  if(!c.conges||!estNouveauFormat){
+    // Calculer à la volée si possible
+    if(c.fiches&&Object.values(c.fiches).some(f=>f.valide)){
+      calcCongesContrat(c);
+      const cidx=S.contrats.findIndex(x=>x.id==c.id);
+      if(cidx!==-1){S.contrats[cidx]=c;localStorage.setItem('cam_c',JSON.stringify(S.contrats));}
+    } else {
+      return '<div style="text-align:center;padding:20px;color:var(--tx2)">Validez des feuilles de présence pour calculer les congés acquis.</div>';
+    }
   }
   const ls='display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--mb);font-size:13px';
   const vs='font-weight:600;color:var(--m)';
-  // Trier années de référence : plus récente en premier
-  const annees=Object.keys(c.conges).map(Number).sort((a,b)=>b-a);
+  const annees=Object.keys(c.conges).map(Number).filter(n=>n>2000).sort((a,b)=>b-a);
+  if(!annees.length) return '<div style="text-align:center;padding:20px;color:var(--tx2)">Aucune donnée de congés disponible.</div>';
   let html2='';
   annees.forEach(anneeRef=>{
     const cg=c.conges[anneeRef];
@@ -2081,8 +2090,11 @@ function creerAvenant(id){
 
 // ══ CONGÉS ASS'MAT NAV ══
 function goToCgAm(){
-  PAGES.forEach(p=>document.getElementById(p).style.display='none');
-  document.getElementById('pg-cgam').style.display='flex';
+  PAGES.forEach(p=>{const el=document.getElementById(p);if(el)el.style.display='none';});
+  const pgcgam=document.getElementById('pg-cgam');
+  if(!pgcgam){console.error('pg-cgam not found');return;}
+  pgcgam.style.display='block';
+  pgcgam.style.flexDirection='column';
   renderCgAm();
 }
 
@@ -2117,12 +2129,14 @@ function getAnneesRefAM(){
 
 function renderCgAm(){
   const listEl=document.getElementById('cgam-list');
-  if(!listEl)return;
+  if(!listEl){console.error('cgam-list not found');return;}
   const detEl=document.getElementById('cgam-detail');
   if(detEl)detEl.style.display='none';
   listEl.style.display='block';
   if(!S.congesAM) S.congesAM={};
-  const annees=getAnneesRefAM();
+  let annees=[];
+  try{ annees=getAnneesRefAM(); }
+  catch(e){ console.error('getAnneesRefAM err:',e); listEl.innerHTML='<div style="color:red;padding:20px">Erreur AM: '+e.message+'</div>'; return; }
   const btns=annees.map(a=>{
     const data=S.congesAM[a.debut]||{};
     const jCoch=Object.keys(data.jours||{}).filter(k=>data.jours[k]==='pose').length;
