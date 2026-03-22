@@ -224,7 +224,7 @@ input[type=time].fi{width:auto;min-width:92px}
           <div class="ro" id="ro-46" onclick="selTC(this,'46')"><input type="radio" name="tc"><label>Accueil de 46 semaines ou moins par p&eacute;riode de 12 mois</label></div>
         </div>
         <div class="cond" id="cond-nbsem">
-          <div class="fg" style="margin-top:10px;margin-bottom:0"><label class="fl">Nombre de semaines travaill&eacute;es</label><input class="fi fi-sm" type="number" id="f-nbsem" min="1" max="46" oninput="calc()"></div>
+          <div class="fg" style="margin-top:10px;margin-bottom:0"><label class="fl">Nombre de semaines travaill&eacute;es</label><input class="fi fi-sm" type="number" id="f-nbsem" min="1" max="46" oninput="if(parseInt(this.value)>46)this.value=46;calc()"></div>
         </div>
       </div>
     </div>
@@ -1217,20 +1217,31 @@ function sv(id,v){const el=document.getElementById(id);if(el&&v!=null&&v!=='')el
 
 // ══ RESET FORM ══
 function resetForm(){
-  if(!S.enEd){
-    S.tc=null;S.th=null;S.planType=null;planVarN=0;S.nbSem=0;
-    document.querySelectorAll('.ro').forEach(r=>r.classList.remove('on'));
-    document.querySelectorAll('.cond').forEach(c=>c.classList.remove('on'));
-    document.getElementById('sem-wrap').innerHTML='';
-    document.getElementById('plan-var-wrap').innerHTML='';
-    ['card-mens','card-feries','card-cg','card-ind'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
-    const sdcg=document.getElementById('section-date-cg');if(sdcg)sdcg.style.display='none';
-    ['f-nom','f-datedeb','f-nbsem','f-txbrut','f-maj-comp','f-maj-sup','f-hmin','f-ind-mont','f-km',
-     'f-repas-0','f-repas-1','f-repas-2','f-repas-3','f-repas-4'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
-    initJ('j-fixe','fixe');
-    planAffect.fill(null);pinceauActif=null;
-    const pc=document.getElementById('planning-couleurs');if(pc)pc.innerHTML='';
-  }
+  // Toujours réinitialiser complètement
+  S.tc=null;S.th=null;S.planType=null;planVarN=0;S.nbSem=0;
+  document.querySelectorAll('.ro').forEach(r=>r.classList.remove('on'));
+  document.querySelectorAll('.cond').forEach(c=>c.classList.remove('on'));
+  document.getElementById('sem-wrap').innerHTML='';
+  document.getElementById('plan-var-wrap').innerHTML='';
+  ['card-mens','card-feries','card-cg','card-ind'].forEach(id=>{
+    const el=document.getElementById(id);if(el)el.style.display='none';
+  });
+  const sdcg=document.getElementById('section-date-cg');if(sdcg)sdcg.style.display='none';
+  ['f-nom','f-datedeb','f-nbsem','f-txbrut','f-maj-comp','f-maj-sup','f-hmin',
+   'f-ind-mont','f-km','f-repas-0','f-repas-1','f-repas-2','f-repas-3','f-repas-4',
+   'f-maj-ferie','f-maj-1ermai','f-repos-hebdo'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el){
+      if(id==='f-repos-hebdo') el.value='0';
+      else if(id==='f-maj-1ermai') el.value='100';
+      else el.value='';
+    }
+  });
+  document.querySelectorAll('[name="feries"]').forEach(cb=>cb.checked=false);
+  initJ('j-fixe','fixe');
+  planAffect.fill(null);pinceauActif=null;
+  const pc=document.getElementById('planning-couleurs');if(pc)pc.innerHTML='';
+  const bs=document.getElementById('btn-signe');if(bs)bs.style.display='none';
   document.getElementById('btn-val').textContent='Valider et enregistrer';
 }
 
@@ -1239,6 +1250,12 @@ function selTC(el,v){
   document.querySelectorAll('[name="tc"]').forEach(r=>r.parentElement.classList.remove('on'));
   el.classList.add('on');el.querySelector('input').checked=true;S.tc=v;
   document.getElementById('cond-nbsem').classList.toggle('on',v==='46');
+  // Afficher congés/fériés/indemnités dès qu'un type de contrat est choisi
+  ['card-feries','card-cg','card-ind'].forEach(id=>{
+    const el2=document.getElementById(id);if(el2)el2.style.display='block';
+  });
+  const sdcg=document.getElementById('section-date-cg');
+  if(sdcg)sdcg.style.display=v==='46'?'block':'none';
   calc();
 }
 function selTH(el,v){
@@ -1536,8 +1553,11 @@ function calc(){
   st('r-sem',sem>0?sem:'—');st('r-sem-f',fSem);
   st('r-hm',hM>0?hM.toFixed(2)+'h':'—');
   st('r-hm-f',hM>0?hAnn.toFixed(2)+'h ann. / 12':'');
-  if(hH>0||sem>0){
-    ['card-mens','card-cg','card-ind'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='block';});
+  // Afficher les sections dès que les horaires sont renseignés
+  if(S.th){
+    ['card-mens','card-feries','card-cg','card-ind'].forEach(id=>{
+      const el=document.getElementById(id);if(el)el.style.display='block';
+    });
     const sdcg=document.getElementById('section-date-cg');
     if(sdcg)sdcg.style.display=S.tc==='46'?'block':'none';
   }
@@ -1567,6 +1587,11 @@ function getJoursData(prefix){
   });
 }
 function valider(){
+  // Bloquer si contrat signé (mode modification)
+  if(S.enEd){
+    const cEx=S.contrats.find(x=>x.id==S.enEd);
+    if(cEx&&cEx.signe){toast('Contrat signé — impossible de modifier');return;}
+  }
   const nom=document.getElementById('f-nom').value.trim();
   if(!nom){toast('Veuillez saisir un nom de contrat');return;}
   if(!S.tc){toast('Veuillez choisir un type de contrat');return;}
@@ -1696,6 +1721,7 @@ function creerAvenant(id){
 function nouveauContrat(){
   S.enEd=null;
   S.dernierContratId=null;
+  resetForm();
   goTo('form');
 }
 
