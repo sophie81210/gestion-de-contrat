@@ -401,13 +401,11 @@ input[type=time].fi{width:auto;min-width:92px}
   </div>
 
   <div id="pg-det" class="content" style="display:none;padding:14px"></div>
-</div>
-
-  <!-- PAGE CONGÉS ASS'MAT -->
   <div id="pg-cgam" class="content" style="display:none">
     <div id="cgam-list"></div>
     <div id="cgam-detail" style="display:none"></div>
   </div>
+</div>
 
   <div class="toast" id="toast"></div>
 
@@ -566,13 +564,18 @@ function showLoginTab(tab){
 
 // ══ NAVIGATION ══
 function goTo(p){
+  // Si on quitte le formulaire, réinitialiser S.enEd
+  if(p!=='form') S.enEd=null;
   PAGES.forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
   const titres={auj:"Aujourd\u2019hui",cont:'Contrats',form:'Nouveau contrat',det:'Fiche contrat'};
   document.getElementById('hdr-title').textContent=titres[p]||p;
   if(p==='auj'){document.getElementById('pg-auj').style.display='block';document.querySelectorAll('.tab')[0].classList.add('on');renderAuj();}
   else if(p==='cont'){document.getElementById('pg-cont').style.display='block';document.querySelectorAll('.tab')[1].classList.add('on');renderCont();}
-  else if(p==='form'){document.getElementById('pg-form').style.display='block';resetForm();}
+  else if(p==='form'){
+    document.getElementById('pg-form').style.display='block';
+    if(!S.enEd) resetForm(); // Reset seulement si nouveau contrat
+  }
   else if(p==='det'){document.getElementById('pg-det').style.display='block';renderDet(S.enCours);}
 }
 
@@ -609,7 +612,6 @@ function pointer(id,type){
   const h=now.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
   const c=S.contrats.find(x=>x.id==id);
   if(!c){toast('⚠ Contrat '+id+' introuvable dans '+S.contrats.length+' contrats');return;}
-  toast('DEBUG: pointer '+type+' pour '+c.nom+' signe='+c.signe);
 
   // Clé du mois en cours
   const annee=now.getFullYear();
@@ -629,23 +631,16 @@ function pointer(id,type){
 
   // Vérifier les cas spéciaux
   if(type==='arr'&&jour.heureDebReel){
-    // Arrivée déjà pointée → ouvrir fiche pour saisie manuelle
-    toast('Arrivée déjà enregistrée — ouvrez la fiche pour modifier');
-    ouvrirFiche(id,key);
-    return;
+    toast('Arrivée déjà enregistrée — modifiez dans la fiche');return;
   }
   if(type==='dep'&&!jour.heureDebReel){
-    // Départ sans arrivée → ouvrir fiche
-    toast('Arrivée non enregistrée — ouvrez la fiche pour saisir manuellement');
-    ouvrirFiche(id,key);
-    return;
+    toast('Pointez d’abord l’arrivée');return;
   }
   if(type==='dep'&&jour.heureFinReel){
-    // Départ déjà pointé → ouvrir fiche
-    toast('Départ déjà enregistré — ouvrez la fiche pour modifier');
-    ouvrirFiche(id,key);
-    return;
+    toast('Départ déjà enregistré — modifiez dans la fiche');return;
   }
+  // Autoriser même si jour non prévu ou fiche validée
+  if(fiche.valide) fiche.valide=false; // réouvrir la fiche si elle était validée
 
   // Enregistrer l'heure
   if(type==='arr') jour.heureDebReel=h;
@@ -657,8 +652,11 @@ function pointer(id,type){
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   saveToFirestore();
 
-  // Si statut n'est pas prévu, le passer à "travaillé"
-  if(jour.statut&&jour.statut!=='prevu'&&jour.statut!=='travaille'){
+  // Si jour non prévu ou repos et qu'on pointe → passer à "travaillé"
+  const statutActuelPtr=jour.statut||getStatutPrevu(c,jour);
+  if(statutActuelPtr==='non-prevu'||statutActuelPtr==='repos'){
+    jour.statut='travaille';
+  } else if(jour.statut&&jour.statut!=='prevu'&&jour.statut!=='travaille'){
     jour.statut='travaille';
   }
 
@@ -1226,8 +1224,13 @@ function majFiche(contratId,key,idx,champ,val){
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   saveToFirestore();
-  // Mettre à jour le récap sans recharger toute la fiche
   majRecapFiche(contratId,key);
+  // Réactiver les boutons arrivée/départ si heures effacées
+  if((champ==='debReel'||champ==='finReel')&&!val){
+    const now=new Date();
+    const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+    if(key===todayKey) renderAuj();
+  }
 }
 
 function majFicheRepas(contratId,key,idx,ri,checked){
@@ -2147,7 +2150,6 @@ function getAnneesRefAM(){
 function renderCgAm(){
   const listEl=document.getElementById('cgam-list');
   if(!listEl){toast('⚠ cgam-list introuvable');console.error('cgam-list not found');return;}
-  toast('DEBUG renderCgAm: '+S.contrats.length+' contrats, congesAM='+JSON.stringify(Object.keys(S.congesAM||{})));
   const detEl=document.getElementById('cgam-detail');
   if(detEl)detEl.style.display='none';
   listEl.style.display='block';
