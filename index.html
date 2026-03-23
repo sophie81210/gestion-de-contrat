@@ -959,7 +959,7 @@ function getStatutPrevu(c,j){
 
 function getStatutOptions(statutPrevu){
   const opts={
-    'prevu':['prevu','abs-rem','abs-enfant','abs-am','arret','init'],
+    'prevu':['prevu','abs-partielle','abs-rem','abs-enfant','abs-am','arret','init'],
     'non-prevu':['non-prevu','travaille','init'],
     'repos':['repos','travaille','init'],
     'ferie':['ferie','travaille','arret','init'],
@@ -972,7 +972,7 @@ function getStatutOptions(statutPrevu){
     'abs-am':'Absence Ass\u2019Mat','conges':'Congés','arret':'Arrêt de travail',
     'non-prevu':'Non prévu','travaille':'Travaillé','repos':'Repos hebdomadaire',
     'ferie':'Férié','conges-acq':'Congés acquis','conges-non':'Congés non acquis',
-  'init':'↺ Réinitialiser','hors-contrat':'Hors contrat'};
+  'init':'↺ Réinitialiser','hors-contrat':'Hors contrat','abs-partielle':'Absence partielle'};
   return (opts[statutPrevu]||['prevu']).map(v=>`<option value="${v}">${labels[v]||v}</option>`).join('');
 }
 
@@ -1125,7 +1125,7 @@ function ouvrirFiche(contratId,key){
       <td style="padding:5px 4px;font-size:12px;font-weight:500;white-space:nowrap;${manquant?'color:var(--al)':''}">${nomJour} ${numJour}</td>
       <td style="padding:3px 4px;font-size:11px;color:var(--tx2);white-space:nowrap">${j.heureDebPrev||'—'}<br>${j.heureFinPrev||'—'}</td>
       <td style="padding:3px 4px">
-        ${['prevu','travaille','abs-rem','abs-am'].includes(statutActuel)?`
+        ${['prevu','travaille','abs-rem','abs-am','abs-partielle'].includes(statutActuel)?`
         <input type="time" value="${j.heureDebReel||''}" 
           style="width:82px;padding:2px 4px;border:1px solid var(--mb);${inputBorder};border-radius:3px;font-size:11px;display:block;margin-bottom:2px"
           onchange="majFiche(${contratId},'${key}',${idx},'debReel',this.value)">
@@ -1235,6 +1235,11 @@ function majFicheStatut(contratId,key,idx,val){
   }
   // init = réinitialiser au statut prévu (null = calculé depuis le contrat)
   c.fiches[key].jours[idx].statut=(val==='init')?null:val||null;
+  // Si on repasse en non-prévu ou repos, effacer les heures réelles
+  if(val==='non-prevu'||val==='repos'||val==='init'){
+    c.fiches[key].jours[idx].heureDebReel=null;
+    c.fiches[key].jours[idx].heureFinReel=null;
+  }
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
@@ -1272,8 +1277,27 @@ function majFiche(contratId,key,idx,champ,val){
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   saveToFirestore();
   majRecapFiche(contratId,key);
-  // Réactiver les boutons arrivée/départ si heures effacées
-  if((champ==='debReel'||champ==='finReel')&&!val){
+  // Mettre à jour la cellule H± de la ligne concernée sans recharger toute la fiche
+  if(champ==='debReel'||champ==='finReel'){
+    const j2=c.fiches[key].jours[idx];
+    const statut2=j2.statut||getStatutPrevu(c,j2);
+    let hComp2='',hDeduit2='';
+    if(j2.heureDebReel&&j2.heureFinReel){
+      const reel2=toM(j2.heureFinReel)-toM(j2.heureDebReel);
+      if(j2.heureDebPrev&&j2.heureFinPrev){
+        const prev2=toM(j2.heureFinPrev)-toM(j2.heureDebPrev);
+        const diff2=reel2-prev2;
+        if(diff2>0)hComp2='+'+fmtH(diff2); else if(diff2<0)hDeduit2='−'+fmtH(-diff2);
+      } else if(reel2>0)hComp2='+'+fmtH(reel2);
+    } else if(['abs-am','arret','abs-non','conges-non','abs-enfant','abs-partielle'].includes(statut2)&&j2.heureDebPrev&&j2.heureFinPrev){
+      const prev2=toM(j2.heureFinPrev)-toM(j2.heureDebPrev);
+      if(prev2>0)hDeduit2='−'+fmtH(prev2);
+    }
+    const cellHpm=document.getElementById('hpm-'+contratId+'-'+key+'-'+idx);
+    if(cellHpm){
+            cellHpm.style.color=hComp2?'var(--vt)':hDeduit2?'var(--al)':'var(--tx3)';
+      cellHpm.innerHTML=hComp2||(hDeduit2?'<span style="color:var(--al)">'+hDeduit2+'</span>':'—');
+    }
     const now=new Date();
     const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
     if(key===todayKey) renderAuj();
@@ -1454,7 +1478,7 @@ function calcRecapFiche(c,fiche){
 
   fiche.jours.forEach(j=>{
     const statut=j.statut||getStatutPrevu(c,j);
-    const estPresent=statut==='prevu'||statut==='travaille'||(!j.statut&&j.heureDebReel)||(statut==='travaille'&&!j.heureDebPrev);
+    const estPresent=statut==='prevu'||statut==='travaille'||statut==='abs-partielle'||statut==='abs-rem'||(!j.statut&&j.heureDebReel)||(statut==='travaille'&&!j.heureDebPrev);
 
     // ── Jours travaillés ──
     if(statut==='travaille'&&getStatutPrevu(c,j)==='non-prevu'){
@@ -1466,7 +1490,9 @@ function calcRecapFiche(c,fiche){
     const estCongesNonAcq52=(statut==='conges-non'&&c.tc==='52');
     const estCongesNon46Travaille=(statut==='conges-non'&&c.tc!=='52'&&j.heureDebPrev&&j.heureFinPrev);
     const estCongesNonDeduit=estCongesNonAcq52||estCongesNon46Travaille;
-    const absDeduites=['abs-am','arret','abs-non'];
+    const absDeduites=['abs-am','arret','abs-non','abs-partielle'];
+    // hors-contrat : déduit seulement si c'était une semaine prévue travaillée
+    if(statut==='hors-contrat'&&(c.tc==='52'||j.heureDebPrev)) absDeduites.push('hors-contrat');
     if(absEnfantDeductible) absDeduites.push('abs-enfant');
     if(estCongesNonDeduit) absDeduites.push('conges-non');
     const estAbsDeduite=absDeduites.includes(statut);
@@ -2013,6 +2039,26 @@ function calc(){
   st('r-sem',sem>0?sem:'—');st('r-sem-f',fSem);
   st('r-hm',hM>0?hM.toFixed(2)+'h':'—');
   st('r-hm-f',hM>0?hAnn.toFixed(2)+'h ann. / 12':'');
+  // Calculer nbJoursMois = jours/sem moyens * sem / 12 (arrondi au plus proche)
+  let nbJSem=0;
+  if(S.th==='fixe'&&document.getElementById('j-fixe')){
+    JOURS.forEach((_,i)=>{if(document.getElementById('j-fixe-cb-'+i)?.checked)nbJSem++;});
+  } else if(S.th==='sem'){
+    let totalJ=0,totalS=0;
+    document.querySelectorAll('[id^="nbsem-"]').forEach(el=>{
+      const n=parseFloat(el.value)||0;const id=el.id.replace('nbsem-','');
+      const jSem=JOURS.filter((_,i)=>document.getElementById('sem'+id+'-cb-'+i)?.checked).length;
+      totalJ+=jSem*n;totalS+=n;
+    });
+    nbJSem=totalS>0?totalJ/totalS:0;
+  } else if(S.th==='plan'){
+    nbJSem=5; // par défaut pour planning variable
+  }
+  const nbJMois=sem>0?Math.round(nbJSem*sem/12):0;
+  // Stocker dans un champ caché pour valider()
+  let rjm=document.getElementById('r-jours-mois');
+  if(!rjm){rjm=document.createElement('span');rjm.id='r-jours-mois';rjm.style.display='none';document.getElementById('card-mens').appendChild(rjm);}
+  rjm.textContent=nbJMois;
   // Afficher les sections dès que les horaires sont renseignés
   if(S.th){
     ['card-mens','card-feries','card-cg','card-ind'].forEach(id=>{
@@ -2623,15 +2669,18 @@ function majFichesCgAm(anneeDebut){
         }
       });
     });
-    // Retirer le statut congés des jours qui ne sont plus posés
+    // Retirer le statut congés des jours qui ne sont plus posés DANS CETTE PÉRIODE
+    const periodeDebut=String(anneeDebut)+'-05-01';
+    const periodeFin=String(anneeDebut+1)+'-04-30';
     Object.values(c.fiches).forEach(fiche => {
       fiche.jours.forEach(j => {
+        if(j.date<periodeDebut||j.date>periodeFin) return;
         if((j.statut === 'conges-acq' || j.statut === 'conges-non') && data.jours[j.date] !== 'pose'){
           j.statut = null;
         }
       });
     });
-  });
+  }); // fin S.contrats.forEach
   // Réassigner dans S.contrats pour garantir la persistance
   S.contrats.forEach((c,i)=>{ if(c.fiches) S.contrats[i]=c; });
   localStorage.setItem('cam_c', JSON.stringify(S.contrats));
