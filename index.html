@@ -495,6 +495,15 @@ async function deconn(){
   document.getElementById('shell').classList.remove('on');
   document.getElementById('pg-login').style.display='flex';
 }
+async function saveToFirestoreSync(){
+  if(!window.FB_USER||!window.fbSaveData) return;
+  await window.fbSaveData(window.FB_USER.uid,{
+    contrats:S.contrats,
+    params:S.params||{},
+    congesAM:S.congesAM||{}
+  });
+}
+
 async function saveToFirestore(){
   if(!window.FB_USER||!window.fbSaveData) return;
   try{
@@ -596,8 +605,8 @@ function renderAuj(){
         <div class="ename">${ct.nom||'?'}</div>
         <div class="eheure" id="h-${ct.id}">${heureInfo}</div>
       </div>
-      <div class="ebtns">
-        <button id="btn-arr-${ct.id}" class="barr" onclick="pointer(${ct.id},'arr')" ondblclick="voirC(${ct.id})"
+      <div class="ebtns" style="cursor:pointer" ondblclick="voirC(${ct.id})">
+        <button id="btn-arr-${ct.id}" class="barr" onclick="pointer(${ct.id},'arr')"
           ${arrFait?'disabled style=\"opacity:.45;cursor:default\"':''}>Arrivée</button>
         <button id="btn-dep-${ct.id}" class="bdep" onclick="pointer(${ct.id},'dep')" ondblclick="voirC(${ct.id})"
           ${depFait?'disabled style=\"opacity:.45;cursor:default\"':''}>Départ</button>
@@ -2038,14 +2047,20 @@ function valider(){
   if(S.enEd){
     const idx=S.contrats.findIndex(x=>x.id==S.enEd);
     if(idx!==-1)S.contrats[idx]={...S.contrats[idx],...data};
-    S.enEd=null;toast('Contrat '+nom+' modifié !');
+    const idModif=S.enEd; // sauvegarder avant reset
+    S.dernierContratId=idModif;S.enEd=null;toast('Contrat '+nom+' modifié !');
+    localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+    saveToFirestore();
+    setTimeout(()=>goTo('cont'),1200);
+    return; // mode modif : pas de btn-signe
   } else {
     S.contrats.push({id:Date.now(),...data});toast('Contrat '+nom+' enregistré !');
   }
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   saveToFirestore();
-  if(!S.enEd){
-    S.dernierContratId=S.contrats[S.contrats.length-1]?.id;
+  // Montrer btn-signe après sauvegarde (nouveau contrat ou modification)
+  {
+    if(!S.dernierContratId) S.dernierContratId=S.contrats[S.contrats.length-1]?.id;
     const bs=document.getElementById('btn-signe');
     if(bs){bs.style.display='inline-flex';bs.style.cssText='display:inline-flex;background:#3a6b4a;color:#e8f5ee;border:none;padding:9px 20px;border-radius:24px;font-size:14px;font-weight:600;cursor:pointer;font-family:Calibri,sans-serif;align-items:center;gap:6px';}
     return;
@@ -2101,17 +2116,35 @@ function genCumul(c){
 }
 
 
-function signerContrat(){
-  if(!S.enEd&&!S.dernierContratId){toast("Enregistrez d’abord le contrat");return;}
+async function signerContrat(){
+  if(!S.enEd&&!S.dernierContratId){toast("Enregistrez d'abord le contrat");return;}
   const id=S.enEd||S.dernierContratId;
+  const c=S.contrats.find(x=>x.id==id);
+  if(!c){toast("Contrat introuvable");return;}
+  // Vérifications complétude
+  const manquants=[];
+  if(!c.tc) manquants.push("type de contrat");
+  if(!c.th) manquants.push("type d'horaires");
+  if(!c.txBrut) manquants.push("taux horaire brut");
+  if(!c.cgAnticipe) manquants.push("congés par anticipation");
+  if(!c.indemType) manquants.push("indemnité d'entretien");
+  if(c.th==='fixe'&&(!c.joursFixe||!c.joursFixe.some(j=>j))) manquants.push("horaires (aucun jour coché)");
+  if(c.th==='sem'&&(!c.semTypes||!c.semTypes.length)) manquants.push("semaines types");
+  if(c.th==='plan'&&(!c.planVar||!c.planVar.some(v=>v.h>0&&v.s>0))) manquants.push("volumes du planning");
+  if(manquants.length>0){
+    toast("⚠ Incomplet : "+manquants.join(", "));
+    return;
+  }
   const idx=S.contrats.findIndex(x=>x.id==id);
   if(idx===-1)return;
   S.contrats[idx].signe=true;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-  saveToFirestore();
   document.getElementById('btn-signe').style.display='none';
-  toast('Contrat signé — modifications verrouillées ✓');
-  setTimeout(()=>goTo('cont'),1200);
+  toast("Contrat signé — modifications verrouillées ✓");
+  // Attendre Firebase avant de naviguer
+  try{ await saveToFirestoreSync(); }catch(e){ console.error("Save sign:",e); }
+  S.enEd=null;
+  setTimeout(()=>goTo('cont'),800);
 }
 
 // ══ AVENANT ══
@@ -2485,6 +2518,7 @@ function majFichesCgAm(anneeDebut){
     .sort();
   const premierJourPose = joursPoses[0] || null;
 
+  console.log("majFichesCgAm anneeDebut=",anneeDebut,"joursPoses=",joursPoses.length,"contrats signes=",S.contrats.filter(c=>c.signe).length);
   S.contrats.forEach(c => {
     if(!c.signe) return;
     if(!c.fiches) c.fiches={};
@@ -2512,6 +2546,7 @@ function majFichesCgAm(anneeDebut){
         const jour = fiche.jours.find(j => j.date === dateStr);
         const statutsRemplacables=['prevu','non-prevu','repos','ferie','conges-acq','conges-non'];
         if(jour && (!jour.statut || statutsRemplacables.includes(jour.statut))){
+          console.log('MAJ',dateStr,'->',statut,'dans fiche',fiche.annee+'-'+fiche.mois);
           jour.statut = statut;
         }
       });
