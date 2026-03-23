@@ -1418,9 +1418,13 @@ function calcRecapFiche(c,fiche){
     const absEnfantDeductible=statut==='abs-enfant'&&(nbAbsEnfantAnneeCont+nbAbsEnfantCeMois<=5);
     const absDeduites=['abs-am','arret','abs-non'];
     if(absEnfantDeductible) absDeduites.push('abs-enfant');
+    if(estCongesNonDeduit) absDeduites.push('conges-non');
     const estAbsDeduite=absDeduites.includes(statut);
+    // conges-non 52sem -> déduit ; conges-non 46sem -> déduit seulement si semaine prévue travaillée
     const estCongesNonAcq52=(statut==='conges-non'&&c.tc==='52');
-    if(estAbsDeduite||estCongesNonAcq52) nbJoursTrav--;
+    const estCongesNon46Travaille=(statut==='conges-non'&&c.tc!=='52'&&j.heureDebPrev&&j.heureFinPrev);
+    const estCongesNonDeduit=estCongesNonAcq52||estCongesNon46Travaille;
+    if(estAbsDeduite||estCongesNonDeduit) nbJoursTrav--;
 
     // ── Heures complémentaires / supplémentaires ──
     if(estPresent&&j.heureDebReel&&j.heureFinReel){
@@ -2439,24 +2443,74 @@ function toggleCgAm(anneeDebut,dateStr){
   ouvrirCgAm(anneeDebut);
 }
 
+function calcSeuilAcquis(c, anneeDebut, premierJourPose){
+  // Jours acquis année de reference terminée (arrondi supérieur)
+  const anneeRefTerminee = anneeDebut - 1;
+  const cgTermine = c.conges && c.conges[anneeRefTerminee];
+  let seuil = cgTermine ? Math.ceil(cgTermine.acquis || 0) : 0;
+  // Ajouter congés anticipés : acquis jusqu'à fin du mois précédant le 1er jour posé
+  if(c.cgAnticipe === 'oui' && premierJourPose){
+    const p = premierJourPose.split('-').map(Number);
+    // Fin du mois précédant = dernier jour du mois M-1
+    const finMoisPrec = new Date(p[0], p[1]-1, 0); // jour 0 du mois courant = dernier du précédent
+    // Calculer congés acquis jusqu'à cette date depuis calcCongesContrat
+    // Utiliser les données déjà calculées : c.conges[anneeDebut]
+    const cgEnCours = c.conges && c.conges[anneeDebut];
+    if(cgEnCours){
+      // Recalculer au prorata : jours de l'année de ref en cours jusqu'à finMoisPrec
+      const debutRef = new Date(anneeDebut, 5, 1); // 1er juin
+      const joursEcoules = Math.max(0, Math.floor((finMoisPrec - debutRef) / 86400000));
+      const totalJoursRef = 365;
+      const acqAnticiRaw = (cgEnCours.acquis || 0) * (joursEcoules / totalJoursRef);
+      seuil += Math.floor(acqAnticiRaw); // arrondi inférieur pour anticipés
+    }
+  }
+  return Math.min(30, seuil);
+}
+
 function majFichesCgAm(anneeDebut){
-  const data=S.congesAM[anneeDebut];
-  S.contrats.forEach(c=>{
-    if(!c.fiches||!c.signe)return;
-    Object.values(c.fiches).forEach(fiche=>{
-      fiche.jours.forEach(j=>{
-        if(data.jours[j.date]==='pose'){
-          if(!j.statut||j.statut==='prevu'||j.statut==='conges-acq'||j.statut==='conges-non'){
-            j.statut='conges-acq';
-          }
-        } else if(j.statut==='conges-acq'){
-          // Retirer le statut congés si le jour n'est plus coché
-          j.statut=null;
+  const data = S.congesAM[anneeDebut];
+  if(!data) return;
+  // Trier les jours posés chronologiquement
+  const joursPoses = Object.keys(data.jours)
+    .filter(d => data.jours[d] === 'pose')
+    .sort();
+  const premierJourPose = joursPoses[0] || null;
+
+  S.contrats.forEach(c => {
+    if(!c.fiches || !c.signe) return;
+    const seuil = calcSeuilAcquis(c, anneeDebut, premierJourPose);
+    // Marquer chaque jour posé : acquis ou non acquis
+    let compteur = 0;
+    joursPoses.forEach(dateStr => {
+      // Ne compter que les jours ouvrables selon le repos hebdo du contrat
+      const p = dateStr.split('-').map(Number);
+      const jourSem = new Date(p[0], p[1]-1, p[2]).getDay();
+      const reposH = c.reposHebdo || 0;
+      if(jourSem === 0 || jourSem === reposH) return; // repos/dim ne comptent pas
+      // Les fériés dans une période acquise ne comptent pas
+      const isFer = isFerie(dateStr, c);
+      if(!isFer) compteur++; // les fériés ne consomment pas le quota acquis
+      const statut = compteur <= seuil ? 'conges-acq' : 'conges-non';
+      // Mettre à jour dans toutes les fiches
+      Object.values(c.fiches).forEach(fiche => {
+        const jour = fiche.jours.find(j => j.date === dateStr);
+        if(jour && (!jour.statut || jour.statut === 'prevu' || jour.statut === 'conges-acq' || jour.statut === 'conges-non')){
+          jour.statut = statut;
+        }
+      });
+    });
+    // Retirer le statut congés des jours qui ne sont plus posés
+    Object.values(c.fiches).forEach(fiche => {
+      fiche.jours.forEach(j => {
+        if((j.statut === 'conges-acq' || j.statut === 'conges-non') && data.jours[j.date] !== 'pose'){
+          j.statut = null;
         }
       });
     });
   });
-  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  localStorage.setItem('cam_c', JSON.stringify(S.contrats));
+  saveToFirestore();
 }
 
 function majCgAmEnfants(anneeDebut,val){
