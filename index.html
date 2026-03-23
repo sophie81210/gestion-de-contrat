@@ -1054,13 +1054,18 @@ function ouvrirFiche(contratId,key){
     const manquant=statutPrevu==='prevu'&&!j.heureDebReel&&!j.heureFinReel&&statutActuel==='prevu';
     const inputBorder=manquant?'border-color:var(--al)':'';
 
-    // Calcul h. comp/sup
-    let hComp='', hSup='';
+    // Calcul h. comp/sup et heures déduites
+    let hComp='', hSup='', hDeduit='';
     if(j.heureDebReel&&j.heureFinReel&&j.heureDebPrev&&j.heureFinPrev){
       const reel=toM(j.heureFinReel)-toM(j.heureDebReel);
       const prev=toM(j.heureFinPrev)-toM(j.heureDebPrev);
-      const diff=Math.max(0,reel-prev);
+      const diff=reel-prev;
       if(diff>0) hComp='+'+fmtH(diff);
+      else if(diff<0) hDeduit='−'+fmtH(-diff);
+    } else if(['abs-am','arret','abs-non','conges-non','abs-enfant'].includes(statutActuel)&&j.heureDebPrev&&j.heureFinPrev){
+      // Absence journée entière
+      const prev=toM(j.heureFinPrev)-toM(j.heureDebPrev);
+      if(prev>0) hDeduit='−'+fmtH(prev);
     }
 
     const repasCell=aRepas?`<td style="padding:2px 4px;font-size:13px;min-width:90px">${
@@ -1101,7 +1106,7 @@ function ouvrirFiche(contratId,key){
         :`<span style="font-size:11px;color:var(--tx3);font-style:italic">—</span>`}
       </td>
       <td style="padding:3px 4px;font-size:11px;font-weight:600;color:${hComp?'var(--vt)':'var(--tx3)'}">
-        ${hComp||hSup||'—'}
+        ${hComp||hSup||(hDeduit?'<span style="color:var(--al)">'+hDeduit+'</span>':'—')}
       </td>
       ${repasCell}${kmCell}
       <td style="padding:3px 4px">
@@ -2115,8 +2120,8 @@ function genCumul(c){
 
 async function signerDepuisFiche(id){
   S.enEd=id;
+  S.dernierContratId=id;
   signerContrat();
-  S.enEd=null;
 }
 
 async function signerContrat(){
@@ -2129,7 +2134,7 @@ async function signerContrat(){
   if(!c.tc) manquants.push("type de contrat");
   if(!c.th) manquants.push("type d'horaires");
   if(!c.txBrut) manquants.push("taux horaire brut");
-  if(!c.cgAnticipe) manquants.push("congés par anticipation");
+  if(!c.cgAnticipe) c.cgAnticipe='non';
   if(!c.indemType) manquants.push("indemnité d'entretien");
   if(c.th==='fixe'&&(!c.joursFixe||!c.joursFixe.some(j=>j))) manquants.push("horaires (aucun jour coché)");
   if(c.th==='sem'&&(!c.semTypes||!c.semTypes.length)) manquants.push("semaines types");
@@ -2564,8 +2569,14 @@ function majFichesCgAm(anneeDebut){
       });
     });
   });
+  // Réassigner dans S.contrats pour garantir la persistance
+  S.contrats.forEach((c,i)=>{ if(c.fiches) S.contrats[i]=c; });
   localStorage.setItem('cam_c', JSON.stringify(S.contrats));
   saveToFirestore();
+  // Confirmer la mise à jour
+  let nbMaj=0;
+  S.contrats.forEach(c=>Object.values(c.fiches||{}).forEach(f=>f.jours.forEach(j=>{if(j.statut==='conges-acq'||j.statut==='conges-non')nbMaj++;})));
+  toast('✅ Congés reportés : '+nbMaj+' jour(s) dans les fiches');
 }
 
 function majCgAmEnfants(anneeDebut,val){
