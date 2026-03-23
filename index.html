@@ -1843,7 +1843,13 @@ function renderPlanning(){
   // Calculer l'année de référence depuis date début
   const dateDeb=document.getElementById('f-datedeb')?.value;
   const anneeRef=dateDeb?new Date(dateDeb).getFullYear():new Date().getFullYear();
-  const semDebut=dateDeb?getSemISO(dateDeb):1;
+  // Démarrer à la 1ère semaine du mois de début de contrat
+  let semDebut=1;
+  if(dateDeb){
+    const p=dateDeb.split('-');
+    const premierMois=p[0]+'-'+p[1]+'-01';
+    semDebut=getSemISO(premierMois);
+  }
   const nbSemAnnee=getNbSemainesAnnee(anneeRef);
 
   // Construire mois → semaines depuis le mois de début du contrat
@@ -1935,8 +1941,24 @@ function addPlanVar(){
   const wrap=document.getElementById('plan-var-wrap');
   const d=document.createElement('div');d.id='planvar-'+n;
   d.style.cssText='display:flex;align-items:center;gap:8px;margin-bottom:7px;flex-wrap:wrap';
+  // Calculer le numéro de semaine de début
+  let semDebut=1;
+  for(let prev=1;prev<n;prev++){
+    semDebut+=parseFloat(document.getElementById("pv-s-"+prev)?.value)||0;
+  }
+  const dateDeb=document.getElementById("f-datedeb")?.value;
+  let labelSem="";
+  if(dateDeb){
+    const d=new Date(dateDeb);
+    d.setDate(1); // début du mois
+    d.setDate(d.getDate()+(semDebut-1)*7);
+    labelSem=" (à partir du "+d.toLocaleDateString("fr-FR",{day:"numeric",month:"short",year:"numeric"})+")";
+  }
   d.innerHTML=`
+    <span style="font-size:12px;color:var(--tx2);min-width:70px" id="pv-lbl-${n}">Période ${n}${labelSem}</span>
     <input class="fi fi-sm" type="number" id="pv-h-${n}" step="0.5" placeholder="h/sem" style="width:85px" oninput="checkPlanVar()">
+    <span style="font-size:13px;color:var(--tx2)">h/sem pendant</span>
+    <input class="fi fi-sm" type="number" id="pv-s-${n}" min="1" placeholder="nb sem." style="width:85px" oninput="checkPlanVar()">
     <span style="font-size:13px;color:var(--tx2)">h/sem pendant</span>
     <input class="fi fi-sm" type="number" id="pv-s-${n}" min="1" placeholder="nb sem." style="width:85px" oninput="checkPlanVar()">
     <span style="font-size:13px;color:var(--tx2)">semaines</span>
@@ -2559,23 +2581,24 @@ function calcSeuilAcquis(c, anneeDebut, premierJourPose){
 
 function majFichesCgAm(anneeDebut){
   const data = S.congesAM[anneeDebut];
-  if(!data){toast('⚠ Pas de données Congés AM pour '+anneeDebut);return;}
-  toast('📋 Congés: '+Object.keys(data.jours||{}).filter(k=>data.jours[k]==="pose").length+' jours, contrats signés: '+S.contrats.filter(c=>c.signe).length);
+  if(!data) return;
   // Trier les jours posés chronologiquement
   const joursPoses = Object.keys(data.jours)
     .filter(d => data.jours[d] === 'pose')
     .sort();
   const premierJourPose = joursPoses[0] || null;
 
-  toast("CGM: "+anneeDebut+" "+joursPoses.length+"j "+S.contrats.filter(c=>c.signe).length+"c");
   S.contrats.forEach(c => {
     if(!c.signe) return;
     if(!c.fiches) c.fiches={};
-    // Créer les fiches manquantes pour les mois concernés
+    // Créer les fiches manquantes UNIQUEMENT après dateDeb du contrat
+    const dateDebC=c.dateDeb?c.dateDeb.substring(0,7):null;
     joursPoses.forEach(dateStr=>{
       const p=dateStr.split('-').map(Number);
-      const key=p[0]+'-'+String(p[1]).padStart(2,'0');
-      if(!c.fiches[key]) c.fiches[key]=creerFiche(c,p[0],p[1]-1);
+      const key=p[0]+'-'+String(p[1]).padStart(2,'00');
+      const keyMois=p[0]+'-'+String(p[1]).padStart(2,'0');
+      if(dateDebC&&keyMois<dateDebC) return; // avant dateDeb → ignorer
+      if(!c.fiches[keyMois]) c.fiches[keyMois]=creerFiche(c,p[0],p[1]-1);
     });
     const seuil = calcSeuilAcquis(c, anneeDebut, premierJourPose);
     // Marquer chaque jour posé : acquis ou non acquis
@@ -2594,7 +2617,7 @@ function majFichesCgAm(anneeDebut){
       Object.values(c.fiches).forEach(fiche => {
         const jour = fiche.jours.find(j => j.date === dateStr);
         const statutsRemplacables=['prevu','non-prevu','repos','ferie','conges-acq','conges-non'];
-        if(jour && (!jour.statut || statutsRemplacables.includes(jour.statut))){
+        if(jour && dateStr>=(c.dateDeb||'') && (!jour.statut || statutsRemplacables.includes(jour.statut))){
           toast(dateStr+'->'+statut);
           jour.statut = statut;
         }
@@ -2616,7 +2639,7 @@ function majFichesCgAm(anneeDebut){
   // Confirmer la mise à jour
   let nbMaj=0;
   S.contrats.forEach(c=>Object.values(c.fiches||{}).forEach(f=>f.jours.forEach(j=>{if(j.statut==='conges-acq'||j.statut==='conges-non')nbMaj++;})));
-  toast('✅ Congés reportés : '+nbMaj+' jour(s) dans les fiches');
+  if(joursPoses.length>0) toast('✅ Congés mis à jour : '+joursPoses.length+' jour(s) posés');
 }
 
 function majCgAmEnfants(anneeDebut,val){
