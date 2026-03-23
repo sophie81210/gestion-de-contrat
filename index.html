@@ -1035,7 +1035,7 @@ function ouvrirFiche(contratId,key){
   const aRepas=c.repas&&c.repas.some(r=>r>0);
   const aKm=!!(c.km>0);
   const JOURS_ABR=['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
-  const REPAS_SYM=['🍼','🍽','🍎','🌙'];
+  const REPAS_SYM=['🍼','🍲','🍎','🌙'];
   const REPAS_NOM=['Petit-déj','Déjeuner','Goûter','Dîner'];
 
   const lignes=fiche.jours.map((j,idx)=>{
@@ -1057,7 +1057,7 @@ function ouvrirFiche(contratId,key){
       if(diff>0) hComp='+'+fmtH(diff);
     }
 
-    const repasCell=aRepas?`<td style="padding:3px 2px;font-size:11px">${
+    const repasCell=aRepas?`<td style="padding:2px 4px;font-size:13px;min-width:90px">${
       REPAS_SYM.map((sym,ri)=>c.repas&&c.repas[ri]?
         `<label style="cursor:pointer;display:block" title="${REPAS_NOM[ri]}">
           <input type="checkbox" ${j.repas&&j.repas[ri]?'checked':''} 
@@ -2141,8 +2141,9 @@ function getAnneesRefAM(){
     return y<min?y:min;
   },anneeRef);
   const annees=[];
+  annees.push({debut:anneeRef+1,fin:anneeRef+2,label:(anneeRef+1)+"/"+(anneeRef+2),future:true});
   for(let y=anneeRef;y>=Math.max(premierContrat,anneeRef-5);y--){
-    annees.push({debut:y,fin:y+1,label:y+'/'+(y+1)});
+    annees.push({debut:y,fin:y+1,label:y+"/"+(y+1),future:false});
   }
   return annees;
 }
@@ -2160,7 +2161,7 @@ function renderCgAm(){
   const btns=annees.map(a=>{
     const data=S.congesAM[a.debut]||{};
     const jCoch=Object.keys(data.jours||{}).filter(k=>data.jours[k]==='pose').length;
-    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:#fff;border-radius:var(--rs);border:1px solid var(--mb);margin-bottom:8px;cursor:pointer" onclick="ouvrirCgAm(${a.debut})">
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:${a.future?"#f5f0ff":"#fff"};border-radius:var(--rs);border:1px solid var(--mb);margin-bottom:8px;cursor:pointer" onclick="ouvrirCgAm(${a.debut})">
       <div>
         <div style="font-weight:700;font-size:15px;color:var(--m)">${a.label}</div>
         <div style="font-size:12px;color:var(--tx2)">1er juin ${a.debut} → 31 mai ${a.fin}</div>
@@ -2230,14 +2231,19 @@ function buildCgAmDetail(anneeDebut,data){
         const mmdd=p[1]+'-'+p[2];
         return !(c.feriesTravailles||[]).includes(mmdd);
       });
+      // Ferié cochable si non couvert par les acquis du meilleur contrat
+      const ferieNonCouvert=isFerNonTrav&&!ferieCouvretParAcquis(dateStr,anneeDebut,data);
+
       const isPose=(data.jours[dateStr]==='pose');
       // Couleur de fond
       let bg='#fff',color='var(--tx)',cursor='pointer',border='1px solid #e0d8d0';
       if(isReposH){bg='#f0f0f0';color='var(--tx3)';cursor='not-allowed';}
-      if(isFerNonTrav&&!isPose){bg='#fff8e1';color='#854F0B';}
+      if(isFerNonTrav&&!ferieNonCouvert&&!isPose){bg='#fff8e1';color='#854F0B';} // jaune si couvert
       if(isFerNonTrav&&isReposH){cursor='not-allowed';}
       if(isPose){bg='var(--vt)';color='#fff';border='none';}
-      const clickable=!isReposH&&!(isFerNonTrav&&isReposH);
+      // Ferié non couvert = blanc et cochable comme un jour normal
+      if(ferieNonCouvert&&!isPose){bg='#fff';color='var(--tx)';}
+      const clickable=(!isReposH&&!(isFerNonTrav&&isReposH))||ferieNonCouvert;
       joursHtml+=`<div onclick="${clickable?`toggleCgAm(${anneeDebut},'${dateStr}')`:''}"
         style="display:inline-flex;flex-direction:column;align-items:center;width:34px;margin:1px;padding:4px 0;border-radius:6px;cursor:${cursor};background:${bg};color:${color};border:${border};user-select:none;min-height:40px;justify-content:center;font-size:10px">
         <span style="font-weight:600;line-height:1">${JOURS_INIT[jourIdx]}</span>
@@ -2264,9 +2270,10 @@ function buildCgAmDetail(anneeDebut,data){
       <span style="font-weight:700;font-size:15px;color:var(--m)">Pose des congés ${anneeDebut}/${anneeFin}</span>
       <span style="font-size:13px;font-weight:600;color:${ok?'var(--vt)':'var(--tx2)'}">${nb}/30 — ${nbSamedis}/5</span>
     </div>
+    ${new Date().getFullYear()<=anneeDebut?`<div style="background:#f5f0ff;border:1px solid #c4b5fd;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:#5b21b6">📌 Ces congés sont à planifier pour l’année — à fixer idéalement avant le 1er mars.</div>`:""}
     <div class="card" style="margin-bottom:10px">
       <div class="fg" style="margin-bottom:0">
-        <label class="fl">Enfants à charge de moins de 15 ans au 30 avril ${anneeFin}</label>
+        <label class="fl">Enfants à charge de moins de 15 ans au 30 avril ${anneeDebut+1}</label>
         <input type="number" min="0" max="15" value="${data.enfants||0}"
           style="width:60px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:14px;margin-top:6px"
           onchange="majCgAmEnfants(${anneeDebut},this.value)">
@@ -2286,6 +2293,124 @@ function buildCgAmDetail(anneeDebut,data){
   </div>`;
 }
 
+
+
+// Calcule si un ferié est couvert par les conges acquis du meilleur contrat
+// Retourne true si le ferié doit rester jaune/non cochable
+function ferieCouvretParAcquis(dateStr, anneeDebut, dataAM) {
+  const joursAM = dataAM.jours || {};
+  // Trouver le meilleur contrat (max jours acquis + anticipes si option)
+  let maxJoursAcquis = 0;
+  let meilleurContrat = null;
+  S.contrats.filter(c => c.signe && !c.cloture).forEach(c => {
+    let acquis = 0;
+    if (c.conges) {
+      // Chercher l annee de reference correspondante
+      const anneeRef = anneeDebut - 1; // Les conges de 2025/2026 sont acquis sur ref 2024/2025
+      const cgRef = c.conges[anneeRef] || c.conges[anneeDebut] || {};
+      acquis = cgRef.acquis || 0;
+      // Ajouter anticipes si option cochee
+      if (c.cgAnticipe === 'oui' && c.conges[anneeDebut]) {
+        acquis += (c.conges[anneeDebut].acquis || 0);
+      }
+    }
+    if (acquis > maxJoursAcquis) {
+      maxJoursAcquis = acquis;
+      meilleurContrat = c;
+    }
+  });
+
+  if (!meilleurContrat || maxJoursAcquis === 0) return false; // pas de conges acquis -> ferié cochable
+
+  // Trouver le repos hebdo du meilleur contrat
+  const reposHebdo = meilleurContrat.reposHebdo || 0;
+
+  // Trier les jours caches dans le calendrier AM
+  const joursCaches = Object.keys(joursAM)
+    .filter(d => joursAM[d] === 'pose')
+    .sort();
+
+  if (!joursCaches.length) return false;
+
+  // Identifier les periodes continues de conges (séparées par des dimanches/repos)
+  // Pour chaque periode, compter les jours ouvrables selon le meilleur contrat
+  // et voir si le ferié est couvert
+  const partsD = dateStr.split('-').map(Number);
+  const dateFerie = new Date(partsD[0], partsD[1]-1, partsD[2]);
+
+  // Trouver la periode de conges qui contient la veille ou le lendemain du ferié
+  // (le ferié doit être entre 2 jours poses ou précédé d'un jour posé avant reprise)
+  const veilleStr = getPrevJourOuvrable(dateStr, reposHebdo);
+  const lendemainStr = getNextJourOuvrable(dateStr, reposHebdo);
+  const veilleCoché = joursAM[veilleStr] === 'pose';
+  const lendemainCoché = joursAM[lendemainStr] === 'pose';
+
+  // Le ferié n'est pertinent que s'il est entouré de jours poses
+  if (!veilleCoché && !lendemainCoché) return false; // ferié isolé -> pas dans une periode
+
+  // Trouver le début de la période de congés contenant ce ferié
+  const debutPeriode = trouverDebutPeriode(dateStr, joursAM, reposHebdo);
+  if (!debutPeriode) return false;
+
+  // Compter les jours ouvrables (selon meilleur contrat) depuis début période jusqu'au ferié (exclu)
+  let compteur = 0;
+  let cursor = new Date(debutPeriode.split('-')[0], parseInt(debutPeriode.split('-')[1])-1, parseInt(debutPeriode.split('-')[2]));
+  const dateF = new Date(partsD[0], partsD[1]-1, partsD[2]);
+
+  while (cursor < dateF) {
+    const jourSem = cursor.getDay();
+    if (jourSem !== 0 && jourSem !== reposHebdo) { // ni dimanche ni repos hebdo
+      const ds = cursor.getFullYear()+'-'+String(cursor.getMonth()+1).padStart(2,'0')+'-'+String(cursor.getDate()).padStart(2,'0');
+      if (!isFerie(ds, meilleurContrat)) { // les fériés déjà couverts ne comptent pas
+        compteur++;
+      }
+    }
+    cursor.setDate(cursor.getDate()+1);
+  }
+
+  // Le ferié est couvert si compteur < maxJoursAcquis
+  // ET (le lendemain est posé OU le ferié est le dernier jour avant reprise avec veille acquise)
+  return compteur < maxJoursAcquis;
+}
+
+function getPrevJourOuvrable(dateStr, reposHebdo) {
+  const p = dateStr.split('-').map(Number);
+  const d = new Date(p[0], p[1]-1, p[2]);
+  d.setDate(d.getDate()-1);
+  while (d.getDay() === 0 || d.getDay() === reposHebdo) d.setDate(d.getDate()-1);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+
+function getNextJourOuvrable(dateStr, reposHebdo) {
+  const p = dateStr.split('-').map(Number);
+  const d = new Date(p[0], p[1]-1, p[2]);
+  d.setDate(d.getDate()+1);
+  while (d.getDay() === 0 || d.getDay() === reposHebdo) d.setDate(d.getDate()+1);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+
+function trouverDebutPeriode(dateStr, joursAM, reposHebdo) {
+  // Remonter en arrière depuis le ferié pour trouver le 1er jour posé de la période
+  const p = dateStr.split('-').map(Number);
+  const d = new Date(p[0], p[1]-1, p[2]);
+  let cursor = new Date(d);
+  cursor.setDate(cursor.getDate()-1);
+  let debutTrouve = null;
+
+  // Remonter jusqu'à trouver un jour non posé (ni ferié posé)
+  for (let i = 0; i < 60; i++) {
+    const ds = cursor.getFullYear()+'-'+String(cursor.getMonth()+1).padStart(2,'0')+'-'+String(cursor.getDate()).padStart(2,'0');
+    const jourSem = cursor.getDay();
+    if (jourSem === 0) { cursor.setDate(cursor.getDate()-1); continue; } // dimanche ignoré
+    if (joursAM[ds] === 'pose' || isFerie(ds, {reposHebdo})) {
+      debutTrouve = ds;
+      cursor.setDate(cursor.getDate()-1);
+    } else {
+      break;
+    }
+  }
+  return debutTrouve;
+}
 
 function toggleCgAm(anneeDebut,dateStr){
   if(!S.congesAM) S.congesAM={};
@@ -2363,7 +2488,10 @@ function toast(msg){
   setTimeout(()=>el.classList.remove('on'),2800);
 }
 
-initJ('j-fixe','fixe');
+initJ('j-fixe','fixe');if(c.th==="fixe"&&(!c.joursFixe||!c.joursFixe.some(j=>j))){manquants.push("horaires (aucun jour coché)");}
+  if(c.th==="sem"&&(!c.semTypes||!c.semTypes.length)){manquants.push("semaines types");}
+  if(c.th==="plan"&&(!c.planVar||!c.planVar.some(v=>v.h>0&&v.s>0))){manquants.push("volumes du planning");}
+  
 </script>
 
 </body>
