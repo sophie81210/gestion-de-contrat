@@ -227,8 +227,8 @@ input[type=time].fi{width:auto;min-width:92px}
     <div class="card">
       <div class="ctitle">Horaires</div>
       <div class="rg row" style="gap:7px">
-        <div class="ro" id="ro-fixe" onclick="selTH(this,'fixe')" style="flex:1;min-width:90px"><input type="radio" name="th"><label>Fixe</label></div>
-        <div class="ro" id="ro-sem" onclick="selTH(this,'sem')" style="flex:1;min-width:140px"><input type="radio" name="th"><label>Fixes selon semaine</label></div>
+        
+        <div class="ro" id="ro-sem" onclick="selTH(this,'sem')" style="flex:1;min-width:140px"><input type="radio" name="th"><label>Fixes</label></div>
         <div class="ro" id="ro-plan" onclick="selTH(this,'plan')" style="flex:1;min-width:110px"><input type="radio" name="th"><label>Sur planning</label></div>
       </div>
       <div class="cond" id="cond-fixe">
@@ -243,13 +243,7 @@ input[type=time].fi{width:auto;min-width:92px}
         <div class="tbar"><span>Total semaines saisies</span><span id="tot-sem">0 / &mdash;</span></div>
       </div>
       <div class="cond" id="cond-plan">
-        <div style="margin-top:11px">
-          <label class="fl">Type de planning</label>
-          <div class="rg row" style="gap:7px">
-            <div class="ro" id="ro-plan-min" onclick="selPlanType(this,'min')" style="flex:1;min-width:155px"><input type="radio" name="plan-type"><label>Heures minimales fixes</label></div>
-            <div class="ro" id="ro-plan-var" onclick="selPlanType(this,'var')" style="flex:1;min-width:155px"><input type="radio" name="plan-type"><label>Volume variable</label></div>
-          </div>
-        </div>
+        
         <div class="cond" id="cond-plan-min">
           <div class="fg" style="margin-top:10px"><label class="fl">Heures minimales hebdomadaires pr&eacute;vues</label><input class="fi fi-sm" type="number" id="f-hmin" step="0.5" oninput="calc()"></div>
           <div class="ibox">Si ces heures ne sont pas enti&egrave;rement effectu&eacute;es, elles seront perdues. Les heures effectu&eacute;es au-del&agrave; seront r&eacute;mun&eacute;r&eacute;es en heures compl&eacute;mentaires ou suppl&eacute;mentaires en fin de mois.</div>
@@ -746,7 +740,17 @@ function renderDetTab(id,tab){
       ['Paiement congés',{juin:'En juin',principale:'Prise principale',chaque:'Chaque prise'}[c.dateCg]||'—'],
       ['Indem. entretien',indemL],['Indem. repas',repasStr],
       ['Indem. km',c.km?(c.km+' €/km'):'—'],
-    ].map(([k,v])=>`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:8px 4px;color:var(--tx2);font-size:13px;width:52%">${k}</td><td style="padding:8px 4px;font-weight:600;font-size:13px">${v}</td></tr>`).join('');
+    ,
+      c.th==='fixe'&&c.joursFixe?['Horaires',
+        JOURS.map((_,i)=>c.joursFixe[i]?JOURS[i]+' '+c.joursFixe[i].d+'–'+c.joursFixe[i].f:'').filter(Boolean).join(', ')
+      ]:null,
+      c.th==='sem'&&c.semTypes?['Semaines types',
+        c.semTypes.map((st,si)=>'Type '+(si+1)+'('+st.nb+' sem): '+JOURS.map((_,i)=>st.jours&&st.jours[i]?JOURS[i]+' '+st.jours[i].d+'–'+st.jours[i].f:'').filter(Boolean).join(', ')).join(' | ')
+      ]:null,
+      c.th==='plan'&&c.planVar?['Planning variable',
+        c.planVar.map(pv=>(pv.h||'?')+'h/sem × '+(pv.s||'?')+' sem').join(' + ')
+      ]:null
+    ].filter(l=>l&&l[1]).map(([k,v])=>`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:8px 4px;color:var(--tx2);font-size:13px;width:52%">${k}</td><td style="padding:8px 4px;font-weight:600;font-size:13px">${v}</td></tr>`).join('');
     cont.innerHTML=`
       <div class="card">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
@@ -1235,6 +1239,10 @@ function majFicheStatut(contratId,key,idx,val){
   }
   // init = réinitialiser au statut prévu (null = calculé depuis le contrat)
   c.fiches[key].jours[idx].statut=(val==='init')?null:val||null;
+  if(val==='non-prevu'||val==='repos'||val==='init'){
+    c.fiches[key].jours[idx].heureDebReel=null;
+    c.fiches[key].jours[idx].heureFinReel=null;
+  }
   // Si on repasse en non-prévu ou repos, effacer les heures réelles
   if(val==='non-prevu'||val==='repos'||val==='init'){
     c.fiches[key].jours[idx].heureDebReel=null;
@@ -1505,8 +1513,12 @@ function calcRecapFiche(c,fiche){
       const debPrev=j.heureDebPrev?toM(j.heureDebPrev):null;
       const finPrev=j.heureFinPrev?toM(j.heureFinPrev):null;
       let compJour=0;
-      if(debPrev!==null&&debReel<debPrev) compJour+=debPrev-debReel;
-      if(finPrev!==null&&finReel>finPrev) compJour+=finReel-finPrev;
+      if(debPrev===null&&finPrev===null){
+        compJour=finReel-debReel;
+      } else {
+        if(debPrev!==null&&debReel<debPrev) compJour+=debPrev-debReel;
+        if(finPrev!==null&&finReel>finPrev) compJour+=finReel-finPrev;
+      }
       if(compJour>0) hComp+=compJour/60;
       // Heures sup > 45h/sem
       const semKey=getSemISO(j.date);
@@ -1520,7 +1532,7 @@ function calcRecapFiche(c,fiche){
     // ── Absences déduites ──
     if(estAbsDeduite){
       let hAbsJour=0;
-      const hPrev=j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:hMensu/(nbJoursPrevu||20);
+      const hPrev=j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:0;
       if(j.heureDebReel&&j.heureFinReel){
         const hReel2=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
         hAbsJour=Math.max(0,hPrev-hReel2);
@@ -2721,6 +2733,3 @@ function toast(msg){
 }
 
 initJ('j-fixe','fixe');
-</script>
-</body>
-</html>
