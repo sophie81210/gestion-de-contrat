@@ -243,6 +243,17 @@ input[type=time].fi{width:auto;min-width:92px}
       </div>
       <div class="cond" id="cond-sem">
         <div id="sem-wrap"></div>
+               <div class="row" style="margin-top:12px; gap:10px">
+    <button class="btn bs" onclick="validerSemainesTypes()">Valider les semaines types</button>
+    <button class="btn br" onclick="modifierSemainesTypes()">Modifier</button>
+</div>
+
+<div id="alert-modif" class="abox" style="display:none; margin-top:8px;">
+    ⚠️ Modifier les semaines types réinitialisera l’agenda.
+</div>
+
+<div id="agenda-wrap" style="margin-top:15px"></div>
+
         <button class="btn bs bsm" style="margin-top:8px" onclick="addSem()">+ Ajouter une semaine type</button>
         <div id="planning-couleurs" style="margin-top:12px"></div>
         <div class="abox" id="alert-sem">&nbsp;</div>
@@ -438,6 +449,169 @@ S.showTodayMap = JSON.parse(localStorage.getItem("cam_showToday") || "{}");
 
 const volAffect={};
 let planVarN=0;
+         // --- Gestion validation / modification des semaines types ---
+
+function validerSemainesTypes() {
+    const jours = new Set();
+
+    S.semTypes.forEach(sem => {
+        sem.jours.forEach((val, idx) => {
+            if (val) jours.add(idx);
+        });
+    });
+
+    S.joursPossibles = Array.from(jours);
+
+    genererAgenda();
+
+    document.querySelectorAll('#sem-wrap input').forEach(el => el.disabled = true);
+
+    document.getElementById('alert-modif').style.display = 'none';
+}
+
+function modifierSemainesTypes() {
+    document.querySelectorAll('#sem-wrap input').forEach(el => el.disabled = false);
+
+    document.getElementById('alert-modif').style.display = 'block';
+
+    resetAgenda();
+}
+
+function resetAgenda() {
+    document.getElementById('agenda-wrap').innerHTML = '';
+    document.getElementById('planning-couleurs').innerHTML = '';
+
+    S.agenda = null;
+    S.nbSem = 0;
+}
+function genererAgenda() {
+
+    // --- 1. Déterminer la période couverte (12 mois complets) ---
+
+    const debutContrat = new Date(S.newContrat.dateDebut);
+    const debutMois = new Date(debutContrat.getFullYear(), debutContrat.getMonth(), 1);
+
+    // Fin = dernier jour du mois précédent, 12 mois plus tard
+    const finMois = new Date(debutMois.getFullYear(), debutMois.getMonth() + 12, 0);
+
+    // --- 2. Fonctions ISO ---
+
+    function getISOWeek(d) {
+        const date = new Date(d);
+        date.setHours(0,0,0,0);
+        date.setDate(date.getDate() + 3 - (date.getDay() + 6) % 7);
+        const week1 = new Date(date.getFullYear(), 0, 4);
+        return 1 + Math.round(((date - week1) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
+    }
+
+    function getMondayOfISOWeek(week, year) {
+        const simple = new Date(year, 0, 4);
+        const dayOfWeek = simple.getDay() || 7;
+        const monday = new Date(simple);
+        monday.setDate(simple.getDate() - dayOfWeek + 1 + (week - 1) * 7);
+        return monday;
+    }
+
+    // --- 3. Trouver la première semaine ISO utile ---
+
+    let week = getISOWeek(debutMois);
+    let year = debutMois.getFullYear();
+    let monday = getMondayOfISOWeek(week, year);
+
+    function semaineContientJourTravailleDansMois(monday, moisRef) {
+        for (let i = 0; i < 7; i++) {
+            const d = new Date(monday);
+            d.setDate(d.getDate() + i);
+
+            if (d.getMonth() === moisRef && S.joursPossibles.includes(d.getDay() === 0 ? 6 : d.getDay() - 1)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Avancer jusqu'à trouver la première semaine utile
+    while (!semaineContientJourTravailleDansMois(monday, debutMois.getMonth())) {
+        week++;
+        const nbSemAnnee = (new Date(year, 11, 28).getDay() === 4) ? 53 : 52;
+        if (week > nbSemAnnee) { week = 1; year++; }
+        monday = getMondayOfISOWeek(week, year);
+    }
+
+    const debutAgenda = new Date(monday);
+
+    // --- 4. Trouver la dernière semaine ISO utile ---
+
+    let lastWeek = getISOWeek(finMois);
+    let lastYear = finMois.getFullYear();
+    let lastMonday = getMondayOfISOWeek(lastWeek, lastYear);
+
+    while (!semaineContientJourTravailleDansMois(lastMonday, finMois.getMonth())) {
+        lastWeek--;
+        if (lastWeek < 1) {
+            lastYear--;
+            lastWeek = (new Date(lastYear, 11, 28).getDay() === 4) ? 53 : 52;
+        }
+        lastMonday = getMondayOfISOWeek(lastWeek, lastYear);
+    }
+
+    const finAgenda = new Date(lastMonday);
+
+    // --- 5. Générer toutes les semaines entre débutAgenda et finAgenda ---
+
+    const moisMap = {};
+
+    let cursor = new Date(debutAgenda);
+
+    while (cursor <= finAgenda) {
+
+        const lundi = new Date(cursor);
+        const weekNum = getISOWeek(lundi);
+
+        // Trouver le mois dans lequel cette semaine doit être affichée
+        let moisAffichage = null;
+
+        for (let i = 0; i < 7; i++) {
+            const d = new Date(lundi);
+            d.setDate(d.getDate() + i);
+
+            if (S.joursPossibles.includes(d.getDay() === 0 ? 6 : d.getDay() - 1)) {
+                moisAffichage = d.getMonth();
+                break;
+            }
+        }
+
+        if (moisAffichage !== null) {
+            if (!moisMap[moisAffichage]) moisMap[moisAffichage] = [];
+            moisMap[moisAffichage].push(weekNum);
+        }
+
+        cursor.setDate(cursor.getDate() + 7);
+    }
+
+    // --- 6. Affichage dans #agenda-wrap ---
+
+    const wrap = document.getElementById('agenda-wrap');
+    wrap.innerHTML = '';
+
+    Object.keys(moisMap).sort((a,b)=>a-b).forEach(mois => {
+        const div = document.createElement('div');
+        div.className = 'mois-bloc';
+
+        div.innerHTML = `
+            <div class="mois-titre">${MOIS[mois]}</div>
+            <div class="mois-sems">${moisMap[mois].join(' ')}</div>
+        `;
+
+        wrap.appendChild(div);
+    });
+
+    // --- 7. Mise à jour de S ---
+
+    S.agenda = moisMap;
+    S.nbSem = Object.values(moisMap).reduce((a,b)=>a+b.length,0);
+}
+
 
 // ══ FIREBASE AUTH ══
 window.entrerApresAuth = function(user){
