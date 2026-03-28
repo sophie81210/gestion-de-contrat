@@ -243,15 +243,7 @@ input[type=time].fi{width:auto;min-width:92px}
       </div>
       <div class="cond" id="cond-sem">
         <div id="sem-wrap"></div>
-               <div class="row" style="margin-top:12px; gap:10px">
-    <button class="btn bs" onclick="validerSemainesTypes()">Valider les semaines types</button>
-    <button class="btn br" onclick="modifierSemainesTypes()">Modifier</button>
-</div>
-
-<div id="alert-modif" class="abox" style="display:none; margin-top:8px;">
-    ⚠️ Modifier les semaines types réinitialisera l’agenda.
-</div>
-
+               
 <div id="agenda-wrap" style="margin-top:15px"></div>
 
         <button class="btn bs bsm" style="margin-top:8px" onclick="addSem()">+ Ajouter une semaine type</button>
@@ -449,180 +441,125 @@ S.showTodayMap = JSON.parse(localStorage.getItem("cam_showToday") || "{}");
 
 const volAffect={};
 let planVarN=0;
-         // --- Gestion validation / modification des semaines types ---
+// ═══════════════════════════════════════════════════════════
+//  AGENDA FINAL DU CONTRAT (affiché dans la fiche contrat)
+// ═══════════════════════════════════════════════════════════
 
-function validerSemainesTypes() {
-
-    // 1. Construire la liste des jours potentiellement travaillés
-    const jours = new Set();
-
-    S.semTypes.forEach(sem => {
-        sem.jours.forEach((val, idx) => {
-            if (val) jours.add(idx);
-        });
-    });
-
-    S.joursPossibles = Array.from(jours);
-
-    // 2. Générer l'agenda
-    genererAgenda();
-
-    // 3. Figer TOUT : jours, heures, nbsem
-    document.querySelectorAll('#sem-wrap input[type="checkbox"]').forEach(el => el.disabled = true);
-    document.querySelectorAll('#sem-wrap input[type="time"]').forEach(el => el.disabled = true);
-    document.querySelectorAll('#sem-wrap .nbsem').forEach(el => el.disabled = true);
-
-    // 4. Cacher l'alerte "modification"
-    document.getElementById('alert-modif').style.display = 'none';
-}
-
-function modifierSemainesTypes() {
-
-    // 1. Réactiver TOUT : jours, heures, nbsem
-    document.querySelectorAll('#sem-wrap input[type="checkbox"]').forEach(el => el.disabled = false);
-    document.querySelectorAll('#sem-wrap input[type="time"]').forEach(el => el.disabled = false);
-    document.querySelectorAll('#sem-wrap .nbsem').forEach(el => el.disabled = false);
-
-    // 2. Réafficher l'alerte "modification"
-    document.getElementById('alert-modif').style.display = 'block';
-
-    // 3. Effacer l'agenda
-    resetAgenda();
-}
-
-function resetAgenda() {
-    document.getElementById('agenda-wrap').innerHTML = '';
-    document.getElementById('planning-couleurs').innerHTML = '';
-
-    S.agenda = null;
-    S.nbSem = 0;
-}
-function genererAgenda() {
-
-    // --- 1. Déterminer la période couverte (12 mois complets) ---
-
-    const debutContrat = new Date(S.newContrat.dateDebut);
-    const debutMois = new Date(debutContrat.getFullYear(), debutContrat.getMonth(), 1);
-
-    // Fin = dernier jour du mois précédent, 12 mois plus tard
-    const finMois = new Date(debutMois.getFullYear(), debutMois.getMonth() + 12, 0);
-
-    // --- 2. Fonctions ISO ---
-
-    function getISOWeek(d) {
-        const date = new Date(d);
-        date.setHours(0,0,0,0);
-        date.setDate(date.getDate() + 3 - (date.getDay() + 6) % 7);
-        const week1 = new Date(date.getFullYear(), 0, 4);
-        return 1 + Math.round(((date - week1) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
-    }
-
-    function getMondayOfISOWeek(week, year) {
-        const simple = new Date(year, 0, 4);
-        const dayOfWeek = simple.getDay() || 7;
-        const monday = new Date(simple);
-        monday.setDate(simple.getDate() - dayOfWeek + 1 + (week - 1) * 7);
-        return monday;
-    }
-
-    // --- 3. Trouver la première semaine ISO utile ---
-
-    let week = getISOWeek(debutMois);
-    let year = debutMois.getFullYear();
-    let monday = getMondayOfISOWeek(week, year);
-
-    function semaineContientJourTravailleDansMois(monday, moisRef) {
-        for (let i = 0; i < 7; i++) {
-            const d = new Date(monday);
-            d.setDate(d.getDate() + i);
-
-            if (d.getMonth() === moisRef && S.joursPossibles.includes(d.getDay() === 0 ? 6 : d.getDay() - 1)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // Avancer jusqu'à trouver la première semaine utile
-    while (!semaineContientJourTravailleDansMois(monday, debutMois.getMonth())) {
-        week++;
-        const nbSemAnnee = (new Date(year, 11, 28).getDay() === 4) ? 53 : 52;
-        if (week > nbSemAnnee) { week = 1; year++; }
-        monday = getMondayOfISOWeek(week, year);
-    }
-
-    const debutAgenda = new Date(monday);
-
-    // --- 4. Trouver la dernière semaine ISO utile ---
-
-    let lastWeek = getISOWeek(finMois);
-    let lastYear = finMois.getFullYear();
-    let lastMonday = getMondayOfISOWeek(lastWeek, lastYear);
-
-    while (!semaineContientJourTravailleDansMois(lastMonday, finMois.getMonth())) {
-        lastWeek--;
-        if (lastWeek < 1) {
-            lastYear--;
-            lastWeek = (new Date(lastYear, 11, 28).getDay() === 4) ? 53 : 52;
-        }
-        lastMonday = getMondayOfISOWeek(lastWeek, lastYear);
-    }
-
-    const finAgenda = new Date(lastMonday);
-
-    // --- 5. Générer toutes les semaines entre débutAgenda et finAgenda ---
-
-    const moisMap = {};
-
-    let cursor = new Date(debutAgenda);
-
-    while (cursor <= finAgenda) {
-
-        const lundi = new Date(cursor);
-        const weekNum = getISOWeek(lundi);
-
-        // Trouver le mois dans lequel cette semaine doit être affichée
-        let moisAffichage = null;
-
-        for (let i = 0; i < 7; i++) {
-            const d = new Date(lundi);
-            d.setDate(d.getDate() + i);
-
-            if (S.joursPossibles.includes(d.getDay() === 0 ? 6 : d.getDay() - 1)) {
-                moisAffichage = d.getMonth();
-                break;
-            }
-        }
-
-        if (moisAffichage !== null) {
-            if (!moisMap[moisAffichage]) moisMap[moisAffichage] = [];
-            moisMap[moisAffichage].push(weekNum);
-        }
-
-        cursor.setDate(cursor.getDate() + 7);
-    }
-
-    // --- 6. Affichage dans #agenda-wrap ---
+// Affiche l’agenda déjà généré et enregistré dans c.agenda
+function afficherAgenda(c) {
 
     const wrap = document.getElementById('agenda-wrap');
     wrap.innerHTML = '';
 
-    Object.keys(moisMap).sort((a,b)=>a-b).forEach(mois => {
+    if (!c.agenda) {
+        wrap.innerHTML = `<div style="color:var(--tx2);font-style:italic">Aucun agenda enregistré</div>`;
+        return;
+    }
+
+    // Pour chaque mois → afficher les semaines
+    Object.keys(c.agenda).sort((a,b)=>a-b).forEach(mois => {
+
         const div = document.createElement('div');
         div.className = 'mois-bloc';
 
-        div.innerHTML = `
+        const semaines = c.agenda[mois];
+
+        // Construction du HTML avec pinceaux
+        let html = `
             <div class="mois-titre">${MOIS[mois]}</div>
-            <div class="mois-sems">${moisMap[mois].join(' ')}</div>
+            <div class="mois-sems">
         `;
 
+        semaines.forEach(sem => {
+            html += `
+                <div class="agenda-semaine" data-sem="${sem}">
+                    <span class="num">${sem}</span>
+                    <button class="btn-color" onclick="changerCouleurAgenda(${sem})">🎨</button>
+                </div>
+            `;
+        });
+
+        html += `</div>`;
+        div.innerHTML = html;
         wrap.appendChild(div);
     });
 
-    // --- 7. Mise à jour de S ---
+    // Désactiver les pinceaux par défaut
+    activerEditionAgenda(false);
+}
 
-    S.agenda = moisMap;
-    S.nbSem = Object.values(moisMap).reduce((a,b)=>a+b.length,0);
+
+// Active / désactive les pinceaux dans l’agenda final
+function activerEditionAgenda(etat) {
+
+    document.querySelectorAll('.btn-color').forEach(b => b.disabled = !etat);
+
+    document.getElementById('btn-modifier-agenda').style.display = etat ? 'none' : 'inline-block';
+    document.getElementById('btn-confirmer-agenda').style.display = etat ? 'inline-block' : 'none';
+}
+
+
+// Change la couleur d’une semaine dans l’agenda final
+function changerCouleurAgenda(sem) {
+
+    // Exemple simple : cycle entre 3 couleurs
+    const cell = document.querySelector(`.agenda-semaine[data-sem="${sem}"]`);
+
+    if (!cell) return;
+
+    const couleurs = ['#ffd8d8', '#d8ffd8', '#d8e4ff'];
+    let idx = couleurs.indexOf(cell.dataset.couleur || '');
+
+    idx = (idx + 1) % couleurs.length;
+
+    cell.dataset.couleur = couleurs[idx];
+    cell.style.background = couleurs[idx];
+}
+
+
+// Enregistre l’agenda modifié dans Firebase
+function enregistrerAgenda(c) {
+
+    const agenda = {};
+
+    document.querySelectorAll('.mois-bloc').forEach(bloc => {
+
+        const mois = MOIS.indexOf(bloc.querySelector('.mois-titre').textContent);
+        const sems = [];
+
+        bloc.querySelectorAll('.agenda-semaine').forEach(s => {
+
+            const num = parseInt(s.dataset.sem);
+            const couleur = s.dataset.couleur || null;
+
+            // Trouver le type de semaine depuis la couleur
+            const type = getTypeFromColor(couleur);
+
+            // Trouver le nom de la semaine type
+            const nom = type ? getSemTypeNom(type) : null;
+
+            sems.push({ num, couleur, type, nom });
+        });
+
+        agenda[mois] = sems;
+    });
+
+    c.agenda = agenda;
+
+    // Mettre à jour S.contrats
+    const idx = S.contrats.findIndex(x => x.id === c.id);
+    if (idx >= 0) {
+        S.contrats[idx].agenda = agenda;
+    }
+
+    // Sauvegarder dans Firebase
+    fbSaveData(S.uid, {
+        contrats: S.contrats,
+        params: S.params,
+        congesAM: S.congesAM
+    });
+
+    toast("Agenda enregistré");
 }
 
 
@@ -1119,6 +1056,18 @@ function renderDetTab(id,tab){
         </div>
         <table style="width:100%;border-collapse:collapse">${lignes}</table>
       </div>
+<div class="bloc">
+   <h3>Agenda du contrat</h3>
+
+   <div id="agenda-wrap"></div>
+
+   <div id="agenda-actions">
+      <button class="btn bs" id="btn-modifier-agenda">Modifier l’agenda</button>
+      <button class="btn bp" id="btn-confirmer-agenda" style="display:none">Confirmer l’agenda</button>
+   </div>
+</div>
+
+      
       <div style="display:flex;gap:8px;justify-content:center;padding:4px 0 16px;flex-wrap:wrap">
         <button class="btn bs" onclick="goTo('cont')">← Retour</button>
         ${c.signe
