@@ -471,13 +471,14 @@ function afficherAgenda(c) {
         `;
 
         semaines.forEach(sem => {
-            html += `
-                <div class="agenda-semaine" data-sem="${sem}">
-                    <span class="num">${sem}</span>
-                    <button class="btn-color" onclick="changerCouleurAgenda(${sem})">🎨</button>
-                </div>
-            `;
-        });
+    html += `
+        <div class="agenda-semaine" data-sem="${sem.num}">
+            <span class="num">${sem.num}</span>
+            <button class="btn-color" onclick="changerCouleurAgenda(${sem.num})">🎨</button>
+        </div>
+    `;
+});
+
 
         html += `</div>`;
         div.innerHTML = html;
@@ -487,8 +488,13 @@ function afficherAgenda(c) {
     // Désactiver les pinceaux par défaut
     activerEditionAgenda(false);
 }
-
-
+function calculerTotalSemaines() {
+    let total = 0;
+    S.semTypes.forEach(st => {
+        total += parseFloat(st.nb) || 0;
+    });
+    return total;
+}
 // Active / désactive les pinceaux dans l’agenda final
 function activerEditionAgenda(etat) {
 
@@ -515,7 +521,6 @@ function changerCouleurAgenda(sem) {
     cell.dataset.couleur = couleurs[idx];
     cell.style.background = couleurs[idx];
 }
-
 
 // Enregistre l’agenda modifié dans Firebase
 function enregistrerAgenda(c) {
@@ -561,8 +566,48 @@ function enregistrerAgenda(c) {
 
     toast("Agenda enregistré");
 }
+function genererAgendaDepuisContrat(c) {
 
+    const agenda = {};
+    const dateDeb = new Date(c.dateDeb);
+    const annee = dateDeb.getFullYear();
 
+    for (let m = 0; m < 12; m++) {
+
+        const mois = (dateDeb.getMonth() + m) % 12;
+        const an = annee + Math.floor((dateDeb.getMonth() + m) / 12);
+
+        const semaines = [];
+        const d = new Date(an, mois, 1);
+
+        while (d.getMonth() === mois) {
+
+            const num = getISOWeek(d);
+
+            if (!semaines.some(s => s.num === num)) {
+
+                const type = determinerTypeDeSemaine(c, num);
+                const nom = type ? c.semTypes[type - 1]?.nom || null : null;
+                const couleur = type ? PLAN_COULEURS[type - 1]?.bg || null : null;
+
+                semaines.push({ num, type, nom, couleur });
+            }
+
+            d.setDate(d.getDate() + 1);
+        }
+
+        agenda[mois] = semaines;
+    }
+
+    return agenda;
+}
+function determinerTypeDeSemaine(c, numISO) {
+    const nb = c.semTypes.length;
+    if (!nb) return null;
+    return ((numISO - 1) % nb) + 1;
+}
+
+         
 // ══ FIREBASE AUTH ══
 window.entrerApresAuth = function(user){
   window.FB_USER = user;
@@ -1078,6 +1123,9 @@ function renderDetTab(id,tab){
         <button class="btn bpurple" onclick="toast('Clôture à venir')">Clôturer</button>
         <button class="btn bd" onclick="confSuppr(${c.id})">Supprimer</button>
       </div>`;
+           
+           afficherAgenda(c);
+
   }
   else if(tab==='presence'){
     renderPresence(c,cont);
@@ -1985,6 +2033,8 @@ function modif(id){
 }
 function sv(id,v){const el=document.getElementById(id);if(el&&v!=null&&v!=='')el.value=v;}
 
+         
+
 // ══ RESET FORM ══
 function resetForm(){
   // Toujours réinitialiser complètement
@@ -2463,90 +2513,156 @@ function getJoursData(prefix){
   });
 }
 function valider(){
-  // Bloquer si contrat signé (mode modification)
-  if(S.enEd){
-    const cEx=S.contrats.find(x=>x.id==S.enEd);
-    if(cEx&&cEx.signe){toast('Contrat signé — impossible de modifier');return;}
-  }
-  const nom=document.getElementById('f-nom').value.trim();
-  if(!nom){toast('Veuillez saisir un nom de contrat');return;}
-  if(!S.tc){toast('Veuillez choisir un type de contrat');return;}
-  if(!S.th){toast('Veuillez choisir un type d\u2019horaires');return;}
-  const prefs=S.th==='fixe'?['fixe']:
-    Array.from(document.querySelectorAll('[id^="nbsem-"]')).map(el=>'sem'+el.id.replace('nbsem-',''));
-  for(const p of prefs){
-    for(let i=0;i<7;i++){
-      const cb=document.getElementById(p+'-cb-'+i);if(!cb?.checked)continue;
-      const d=document.getElementById(p+'-d-'+i)?.value;
-      const f=document.getElementById(p+'-f-'+i)?.value;
-      if(!d||!f){toast('Horaires manquants — '+JOURS[i]);return;}
-      if(toM(f)<=toM(d)){toast('Heure de fin invalide — '+JOURS[i]);return;}
+
+    // Vérifier total semaines
+    const total = calculerTotalSemaines();
+    const attendu = parseInt(S.tc);
+    if (total !== attendu) {
+        toast(`Le total des semaines (${total}) ne correspond pas au contrat (${attendu})`);
+        return;
     }
-  }
-  if(document.getElementById('alert-sem').classList.contains('on')){
-    let tot=0;document.querySelectorAll('[id^="nbsem-"]').forEach(el=>{tot+=parseFloat(el.value)||0;});
-    const pl=S.tc==='52'?47:(parseFloat(document.getElementById('f-nbsem')?.value)||46);
-    toast(tot>pl?'Total semaines dépasse ('+pl+')':'Total semaines ('+tot+') ≠ déclarées ('+pl+')');
-    return;
-  }
-  const tx=parseFloat(document.getElementById('f-txbrut')?.value)||0;
-  const hm=parseFloat(document.getElementById('r-hm')?.textContent)||0;
-  const joursFixe=S.th==='fixe'?getJoursData('fixe'):null;
-  const semNoms={};
-  getSemTypeIds().forEach(id=>{semNoms[id]=getSemTypeNom(id);});
-  const semTypes=S.th==='sem'?Array.from(document.querySelectorAll('[id^="nbsem-"]')).map(el=>{
-    const n=el.id.replace('nbsem-','');
-    return{nb:parseFloat(el.value)||0,nom:semNoms[n]||('Type '+n),jours:getJoursData('sem'+n),wks:getSelWks(parseInt(n))};
-  }):null;
-  const planVar=S.th==='plan'&&S.planType==='var'?Array.from(document.querySelectorAll('[id^="pv-s-"]')).map(el=>{
-    const n=el.id.replace('pv-s-','');
-    return{h:parseFloat(document.getElementById('pv-h-'+n)?.value)||0,s:parseFloat(el.value)||0};
-  }):null;
-  const data={nom,dateDeb:document.getElementById('f-datedeb').value,tc:S.tc,th:S.th,planType:S.planType,
-    nbSem:parseFloat(document.getElementById('f-nbsem')?.value)||null,
-    hMin:parseFloat(document.getElementById('f-hmin')?.value)||null,
-    txBrut:tx,txNet:tx?parseFloat((tx*0.7811975).toFixed(2)):0,
-    majComp:parseFloat(document.getElementById('f-maj-comp')?.value)||0,
-    majSup:parseFloat(document.getElementById('f-maj-sup')?.value)||0,
-    hMensu:hm?parseFloat(hm.toFixed(2)):0,
-    nbJoursMois:parseFloat(document.getElementById('r-jours-mois')?.textContent)||0,
-    mensBrute:tx&&hm?parseFloat((tx*hm).toFixed(2)):0,
-    cgAnticipe:document.querySelector('[name="cg-anticipe"]:checked')?.value||null,
-    dateCg:document.querySelector('[name="date-cg"]:checked')?.value||null,
-    indemType:document.querySelector('[name="ind-type"]:checked')?.value||null,
-    indemMontant:parseFloat(document.getElementById('f-ind-mont')?.value)||null,
-    indemPer:document.querySelector('[name="ind-per"]:checked')?.value||null,
-    repas:[0,1,2,3,4].map(i=>parseFloat(document.getElementById('f-repas-'+i)?.value)||null),
-    km:parseFloat(document.getElementById('f-km')?.value)||null,
-    feriesTravailles:Array.from(document.querySelectorAll('[name="feries"]:checked')).map(cb=>cb.value),
-    majFerie:parseFloat(document.getElementById('f-maj-ferie')?.value)||0,
-    maj1erMai:parseFloat(document.getElementById('f-maj-1ermai')?.value)||100,
-    reposHebdo:parseInt(document.getElementById('f-repos-hebdo')?.value)||0,
-    majRepos:parseFloat(document.getElementById('f-maj-repos')?.value)||25,
-    joursFixe,semTypes,planVar};
-  if(S.enEd){
-    const idx=S.contrats.findIndex(x=>x.id==S.enEd);
-    if(idx!==-1)S.contrats[idx]={...S.contrats[idx],...data};
-    const idModif=S.enEd; // sauvegarder avant reset
-    S.dernierContratId=idModif;S.enEd=null;toast('Contrat '+nom+' modifié !');
+
+    // Bloquer si contrat signé (modification)
+    if(S.enEd){
+        const cEx = S.contrats.find(x => x.id == S.enEd);
+        if(cEx && cEx.signe){
+            toast('Contrat signé — impossible de modifier');
+            return;
+        }
+    }
+
+    // Vérifs de base
+    const nom = document.getElementById('f-nom').value.trim();
+    if(!nom){ toast('Veuillez saisir un nom de contrat'); return; }
+    if(!S.tc){ toast('Veuillez choisir un type de contrat'); return; }
+    if(!S.th){ toast('Veuillez choisir un type d’horaires'); return; }
+
+    // Vérif horaires
+    const prefs = S.th==='fixe'
+        ? ['fixe']
+        : Array.from(document.querySelectorAll('[id^="nbsem-"]')).map(el => 'sem'+el.id.replace('nbsem-',''));
+
+    for(const p of prefs){
+        for(let i=0;i<7;i++){
+            const cb=document.getElementById(p+'-cb-'+i);
+            if(!cb?.checked) continue;
+
+            const d=document.getElementById(p+'-d-'+i)?.value;
+            const f=document.getElementById(p+'-f-'+i)?.value;
+
+            if(!d || !f){ toast('Horaires manquants — '+JOURS[i]); return; }
+            if(toM(f) <= toM(d)){ toast('Heure de fin invalide — '+JOURS[i]); return; }
+        }
+    }
+
+    // Vérif alert-sem
+    if(document.getElementById('alert-sem').classList.contains('on')){
+        let tot=0;
+        document.querySelectorAll('[id^="nbsem-"]').forEach(el => tot += parseFloat(el.value)||0);
+        const pl = S.tc==='52' ? 47 : (parseFloat(document.getElementById('f-nbsem')?.value)||46);
+        toast(tot>pl ? 'Total semaines dépasse ('+pl+')' : 'Total semaines ('+tot+') ≠ déclarées ('+pl+')');
+        return;
+    }
+
+    // Construction des données
+    const tx=parseFloat(document.getElementById('f-txbrut')?.value)||0;
+    const hm=parseFloat(document.getElementById('r-hm')?.textContent)||0;
+    const joursFixe=S.th==='fixe'?getJoursData('fixe'):null;
+
+    const semNoms={};
+    getSemTypeIds().forEach(id => semNoms[id]=getSemTypeNom(id));
+
+    const semTypes = S.th==='sem'
+        ? Array.from(document.querySelectorAll('[id^="nbsem-"]')).map(el=>{
+            const n=el.id.replace('nbsem-','');
+            return {
+                nb:parseFloat(el.value)||0,
+                nom:semNoms[n]||('Type '+n),
+                jours:getJoursData('sem'+n),
+                wks:getSelWks(parseInt(n))
+            };
+        })
+        : null;
+
+    const planVar = (S.th==='plan' && S.planType==='var')
+        ? Array.from(document.querySelectorAll('[id^="pv-s-"]')).map(el=>{
+            const n=el.id.replace('pv-s-','');
+            return { h:parseFloat(document.getElementById('pv-h-'+n)?.value)||0, s:parseFloat(el.value)||0 };
+        })
+        : null;
+
+    const data = {
+        nom,
+        dateDeb:document.getElementById('f-datedeb').value,
+        tc:S.tc,
+        th:S.th,
+        planType:S.planType,
+        nbSem:parseFloat(document.getElementById('f-nbsem')?.value)||null,
+        hMin:parseFloat(document.getElementById('f-hmin')?.value)||null,
+        txBrut:tx,
+        txNet:tx?parseFloat((tx*0.7811975).toFixed(2)):0,
+        majComp:parseFloat(document.getElementById('f-maj-comp')?.value)||0,
+        majSup:parseFloat(document.getElementById('f-maj-sup')?.value)||0,
+        hMensu:hm?parseFloat(hm.toFixed(2)):0,
+        nbJoursMois:parseFloat(document.getElementById('r-jours-mois')?.textContent)||0,
+        mensBrute:tx&&hm?parseFloat((tx*hm).toFixed(2)):0,
+        cgAnticipe:document.querySelector('[name="cg-anticipe"]:checked')?.value||null,
+        dateCg:document.querySelector('[name="date-cg"]:checked')?.value||null,
+        indemType:document.querySelector('[name="ind-type"]:checked')?.value||null,
+        indemMontant:parseFloat(document.getElementById('f-ind-mont')?.value)||null,
+        indemPer:document.querySelector('[name="ind-per"]:checked')?.value||null,
+        repas:[0,1,2,3,4].map(i=>parseFloat(document.getElementById('f-repas-'+i)?.value)||null),
+        km:parseFloat(document.getElementById('f-km')?.value)||null,
+        feriesTravailles:Array.from(document.querySelectorAll('[name="feries"]:checked')).map(cb=>cb.value),
+        majFerie:parseFloat(document.getElementById('f-maj-ferie')?.value)||0,
+        maj1erMai:parseFloat(document.getElementById('f-maj-1ermai')?.value)||100,
+        reposHebdo:parseInt(document.getElementById('f-repos-hebdo')?.value)||0,
+        majRepos:parseFloat(document.getElementById('f-maj-repos')?.value)||25,
+        joursFixe,
+        semTypes,
+        planVar
+    };
+
+    // MODE MODIFICATION
+    if(S.enEd){
+        const idx=S.contrats.findIndex(x=>x.id==S.enEd);
+        if(idx!==-1) S.contrats[idx]={...S.contrats[idx],...data};
+
+        const idModif=S.enEd;
+        S.dernierContratId=idModif;
+        S.enEd=null;
+
+        toast('Contrat '+nom+' modifié !');
+        localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+        saveToFirestore();
+        setTimeout(()=>goTo('cont'),1200);
+        return;
+    }
+
+    // MODE NOUVEAU CONTRAT
+    const c = { id: Date.now(), ...data };
+
+    // Générer l’agenda AVANT l’enregistrement
+    c.agenda = genererAgendaDepuisContrat(c);
+
+    // Enregistrer
+    S.contrats.push(c);
+    toast('Contrat '+nom+' enregistré !');
+
     localStorage.setItem('cam_c',JSON.stringify(S.contrats));
     saveToFirestore();
-    setTimeout(()=>goTo('cont'),1200);
-    return; // mode modif : pas de btn-signe
-  } else {
-    S.contrats.push({id:Date.now(),...data});toast('Contrat '+nom+' enregistré !');
-  }
-  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-  saveToFirestore();
-  // Montrer btn-signe après sauvegarde (nouveau contrat ou modification)
-  {
-    if(!S.dernierContratId) S.dernierContratId=S.contrats[S.contrats.length-1]?.id;
+
+    // Afficher bouton signature
+    if(!S.dernierContratId)
+        S.dernierContratId = c.id;
+
     const bs=document.getElementById('btn-signe');
-    if(bs){bs.style.display='inline-flex';bs.style.cssText='display:inline-flex;background:#3a6b4a;color:#e8f5ee;border:none;padding:9px 20px;border-radius:24px;font-size:14px;font-weight:600;cursor:pointer;font-family:Calibri,sans-serif;align-items:center;gap:6px';}
-    return;
-  }
-  setTimeout(()=>goTo('cont'),1200);
+    if(bs){
+        bs.style.display='inline-flex';
+        bs.style.cssText='display:inline-flex;background:#3a6b4a;color:#e8f5ee;border:none;padding:9px 20px;border-radius:24px;font-size:14px;font-weight:600;cursor:pointer;font-family:Calibri,sans-serif;align-items:center;gap:6px';
+    }
 }
+
 
 // ══ CONGÉS ══
 function getAnneesRef(){
