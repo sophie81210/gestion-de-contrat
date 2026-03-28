@@ -1243,81 +1243,95 @@ function renderDetTab(id,tab){
 
 
 // ══ FEUILLES DE PRÉSENCE ══
-function creerFiche(c,annee,mois){
-  const premierJour=new Date(annee,mois,1);
-  const dernierJour=new Date(annee,mois+1,0);
-  const jours=[];
-  for(let d=new Date(premierJour);d<=dernierJour;d.setDate(d.getDate()+1)){
-    const dateStr=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-    const jourSemaine=d.getDay(); // 0=dim, 1=lun...6=sam
-    // Récupérer les heures prévues depuis le contrat
-    const prevus=getHeuresPrevues(c,d);
+
+function creerFiche(c, annee, mois) {
+  const premierJour = new Date(annee, mois, 1);
+  const dernierJour = new Date(annee, mois + 1, 0);
+  const jours = [];
+
+  for (let d = new Date(premierJour); d <= dernierJour; d.setDate(d.getDate() + 1)) {
+    const dateStr = d.getFullYear() + '-' +
+      String(d.getMonth() + 1).padStart(2, '0') + '-' +
+      String(d.getDate()).padStart(2, '0');
+
+    const jourSemaine = d.getDay();
+
+    // Heures prévues depuis l’agenda + semTypes
+    const prevus = getHeuresPrevues(c, d);
+
     jours.push({
-      date:dateStr,
+      date: dateStr,
       jourSemaine,
-      heureDebPrev:prevus.debut,
-      heureFinPrev:prevus.fin,
-      heureDebReel:null,
-      heureFinReel:null,
-      statut:null, // null=normal, 'abs-rem'=absence rémunérée, 'abs-non'=absence non rémunérée, 'conges'=congés
-      repas:[false,false,false,false,false], // petit-déj, déj, goûter, dîner, forfait
-      km:null,
-      note:null
+      heureDebPrev: prevus.debut,
+      heureFinPrev: prevus.fin,
+      heureDebReel: null,
+      heureFinReel: null,
+      statut: null,
+      repas: [false, false, false, false, false],
+      km: null,
+      note: null
     });
   }
-  return{annee,mois,jours,complete:false,valide:false};
+
+  return { annee, mois, jours, complete: false, valide: false };
 }
 
- function getTypeDeSemaineDepuisAgenda(c, date) {
+/* ────────────────────────────────────────────────
+   LIRE LE TYPE DE SEMAINE DEPUIS L’AGENDA
+   (source de vérité : c.agenda)
+────────────────────────────────────────────────── */
 
-    if (!c.agenda) return null;
+function getTypeDeSemaineDepuisAgenda(c, date) {
 
-    const mois = date.getMonth(); // 0–11
-    const numISO = getISOWeek(date);
+  if (!c.agenda) return null;
 
-    const semaines = c.agenda[mois];
-    if (!semaines) return null;
+  const mois = date.getMonth(); // 0–11
+  const numISO = getISOWeek(date);
 
-    // Chercher la semaine ISO dans l’agenda du mois
-    const sem = semaines.find(s => s.num === numISO);
-    if (!sem) return null;
+  const semaines = c.agenda[mois];
+  if (!semaines) return null;
 
-    return sem.type || null;
+  const sem = semaines.find(s => s.num === numISO);
+  if (!sem) return null;
+
+  return sem.type || null;
 }
+
+/* ────────────────────────────────────────────────
+   HEURES PRÉVUES (AGENDA → semTypes → horaires)
+────────────────────────────────────────────────── */
+
 function getHeuresPrevues(c, date) {
 
-    const jourSemaine = date.getDay();
-    const jourIdx = jourSemaine === 0 ? 6 : jourSemaine - 1;
+  const jourSemaine = date.getDay();
+  const jourIdx = jourSemaine === 0 ? 6 : jourSemaine - 1;
 
-    // 1) PRIORITÉ : lire l’agenda
-    const type = getTypeDeSemaineDepuisAgenda(c, date);
+  // 1) PRIORITÉ : lire l’agenda
+  const type = getTypeDeSemaineDepuisAgenda(c, date);
 
-    if (type && c.semTypes && c.semTypes[type - 1]) {
-        const st = c.semTypes[type - 1];
-        const j = st.jours[jourIdx];
-        if (j && j.d && j.f) {
-            return { debut: j.d, fin: j.f };
-        }
+  if (type && c.semTypes && c.semTypes[type - 1]) {
+    const st = c.semTypes[type - 1];
+    const j = st.jours[jourIdx];
+    if (j && j.d && j.f) {
+      return { debut: j.d, fin: j.f };
     }
+  }
 
-    // 2) Horaires fixes (si jamais utilisés)
-    if ((c.th === 'fixe' || c.th === 'sem') && c.joursFixe) {
-        const j = c.joursFixe[jourIdx];
-        if (j && j.d && j.f) {
-            return { debut: j.d, fin: j.f };
-        }
+  // 2) Horaires fixes (si jamais utilisés)
+  if ((c.th === 'fixe' || c.th === 'sem') && c.joursFixe) {
+    const j = c.joursFixe[jourIdx];
+    if (j && j.d && j.f) {
+      return { debut: j.d, fin: j.f };
     }
+  }
 
-    // 3) Planning variable → pas d'heures prévues
-    if (c.th === 'plan') {
-        return { debut: null, fin: null };
-    }
-
+  // 3) Planning variable
+  if (c.th === 'plan') {
     return { debut: null, fin: null };
+  }
+
+  return { debut: null, fin: null };
 }
-
-
-
 function toMins(t){return toM(t);}
 
 function getStatutPrevu(c,j){
