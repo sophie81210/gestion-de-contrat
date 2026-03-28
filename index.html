@@ -2056,24 +2056,81 @@ function renderPlanning(){
   const nbSemAnnee=getNbSemainesAnnee(anneeRef);
 
   // Construire mois → semaines depuis le mois de début du contrat
-  // sur 52 semaines à partir de semDebut
-  const moisSemaines=[];
-  const moisMap={};
-  for(let i=0;i<52;i++){
-    // Calculer la date du lundi de la semaine (semDebut-1+i) dans l'année de ref
-    // en gérant le débordement sur l'année suivante
-    const wNum=semDebut+i;
-    const targetAnnee=wNum>nbSemAnnee?anneeRef+1:anneeRef;
-    const targetSem=wNum>nbSemAnnee?wNum-nbSemAnnee:wNum;
-    const jan4=new Date(targetAnnee,0,4);
-    const lundi=new Date(jan4);
-    lundi.setDate(jan4.getDate()-(jan4.getDay()||7)+1+(targetSem-1)*7);
-    const moisKey=lundi.getFullYear()*12+lundi.getMonth();
-    const semKey=wNum>nbSemAnnee?targetSem:wNum;
-    if(!moisMap[moisKey]) moisMap[moisKey]={mois:lundi.getMonth(),annee:lundi.getFullYear(),sems:[]};
-    moisMap[moisKey].sems.push(semKey);
+// en conservant le chevauchement ISO et en appliquant la règle du jour de repos
+
+const moisSemaines = [];
+const moisMap = {};
+
+// Jour de repos hebdomadaire (0 = dimanche)
+const jourRepos = 0;
+
+// 1. Date de début du contrat
+const debut = new Date(S.newContrat.dateDebut);
+
+// 2. Premier jour du mois d'embauche
+const firstOfMonth = new Date(debut.getFullYear(), debut.getMonth(), 1);
+
+// 3. Fonction pour obtenir la semaine ISO
+function getISOWeek(d) {
+  const date = new Date(d);
+  date.setHours(0,0,0,0);
+  date.setDate(date.getDate() + 3 - (date.getDay() + 6) % 7);
+  const week1 = new Date(date.getFullYear(), 0, 4);
+  return 1 + Math.round(((date - week1) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
+}
+
+// 4. Déterminer la semaine ISO du 1er du mois
+let firstWeek = getISOWeek(firstOfMonth);
+let firstYear = firstOfMonth.getFullYear();
+
+// 5. Si le 1er du mois tombe sur le jour de repos → on commence à la semaine suivante
+if (firstOfMonth.getDay() === jourRepos) {
+  firstWeek += 1;
+
+  // Si on dépasse le nombre de semaines ISO de l'année, on bascule sur l'année suivante
+  const nbSemAnnee = (new Date(firstYear, 11, 28).getDay() === 4) ? 53 : 52;
+  if (firstWeek > nbSemAnnee) {
+    firstWeek = 1;
+    firstYear += 1;
   }
-  Object.values(moisMap).forEach(m=>moisSemaines.push(m));
+}
+
+// 6. Fonction pour obtenir le lundi d'une semaine ISO
+function getMondayOfISOWeek(week, year) {
+  const simple = new Date(year, 0, 4);
+  const dayOfWeek = simple.getDay() || 7;
+  const monday = new Date(simple);
+  monday.setDate(simple.getDate() - dayOfWeek + 1 + (week - 1) * 7);
+  return monday;
+}
+
+// 7. Lundi de la première semaine à afficher
+let cursor = getMondayOfISOWeek(firstWeek, firstYear);
+
+// 8. Générer 52 semaines (conservation du chevauchement ISO)
+for (let i = 0; i < 52; i++) {
+
+  const lundi = new Date(cursor);
+  const moisKey = lundi.getFullYear() * 12 + lundi.getMonth();
+
+  if (!moisMap[moisKey]) {
+    moisMap[moisKey] = {
+      mois: lundi.getMonth(),
+      annee: lundi.getFullYear(),
+      sems: []
+    };
+  }
+
+  // On stocke la date du lundi (plus fiable que le numéro ISO pour l’agenda)
+  moisMap[moisKey].sems.push(new Date(lundi));
+
+  // Semaine suivante
+  cursor.setDate(cursor.getDate() + 7);
+}
+
+// 9. Transformer en tableau final
+Object.values(moisMap).forEach(m => moisSemaines.push(m));
+
 
   // Pinceaux
   let pHtml=`<div style="margin-bottom:8px;font-size:12px;color:var(--tx2);font-style:italic">Sélectionnez un pinceau puis cliquez sur les semaines — recliquez pour effacer</div>`;
