@@ -610,6 +610,23 @@ function determinerTypeDeSemaine(semTypes, numISO) {
     if (!nb) return null;
     return ((numISO - 1) % nb) + 1;
 }
+         function getTypeDeSemaineDepuisAgenda(c, date) {
+
+    if (!c.agenda) return null;
+
+    const mois = date.getMonth(); // 0–11
+    const numISO = getISOWeek(date);
+
+    const semaines = c.agenda[mois];
+    if (!semaines) return null;
+
+    // Chercher la semaine ISO dans l’agenda du mois
+    const sem = semaines.find(s => s.num === numISO);
+    if (!sem) return null;
+
+    return sem.type || null;
+}
+
          
 // ══ FIREBASE AUTH ══
 window.entrerApresAuth = function(user){
@@ -1267,40 +1284,38 @@ function creerFiche(c,annee,mois){
 }
 
 
-function getHeuresPrevues(c,date){
-  const jourSemaine=date.getDay();
-  const jourIdx=jourSemaine===0?6:jourSemaine-1; // 0=lun..6=dim
+function getHeuresPrevues(c, date) {
 
-  // ── Horaires fixes ──
-  if((c.th==='fixe'||c.th==='sem')&&c.joursFixe){
-    const j=c.joursFixe[jourIdx];
-    if(j&&j.d&&j.f) return{debut:j.d,fin:j.f};
-  }
+    const jourSemaine = date.getDay();
+    const jourIdx = jourSemaine === 0 ? 6 : jourSemaine - 1;
 
-  // ── Semaines types ──
-  if(c.th==='sem'&&c.semTypes&&c.semTypes.length){
-    // Numéro de semaine depuis le début du contrat
-    const debut=c.dateDeb?new Date(c.dateDeb):new Date(date);
-    const diffMs=date-debut;
-    const diffSem=Math.floor(diffMs/(7*24*3600*1000));
-    const nbTypes=c.semTypes.length;
-    const idxType=((diffSem%nbTypes)+nbTypes)%nbTypes;
-    const st=c.semTypes[idxType];
-    if(st&&st.jours){
-      const j=st.jours[jourIdx];
-      if(j&&j.d&&j.f) return{debut:j.d,fin:j.f};
+    // 1) PRIORITÉ : lire l’agenda
+    const type = getTypeDeSemaineDepuisAgenda(c, date);
+
+    if (type && c.semTypes && c.semTypes[type - 1]) {
+        const st = c.semTypes[type - 1];
+        const j = st.jours[jourIdx];
+        if (j && j.d && j.f) {
+            return { debut: j.d, fin: j.f };
+        }
     }
-  }
 
-  // ── Planning variable (heures par semaine) ──
-  if(c.th==='plan'&&c.planVar&&c.planVar.length){
-    // Pour planning variable on ne peut pas connaître les heures exactes par jour
-    // On retourne null - l'utilisateur saisit les heures réelles
-    return{debut:null,fin:null};
-  }
+    // 2) Horaires fixes (si jamais utilisés)
+    if ((c.th === 'fixe' || c.th === 'sem') && c.joursFixe) {
+        const j = c.joursFixe[jourIdx];
+        if (j && j.d && j.f) {
+            return { debut: j.d, fin: j.f };
+        }
+    }
 
-  return{debut:null,fin:null};
+    // 3) Planning variable → pas d'heures prévues
+    if (c.th === 'plan') {
+        return { debut: null, fin: null };
+    }
+
+    return { debut: null, fin: null };
 }
+
 
 
 function toMins(t){return toM(t);}
