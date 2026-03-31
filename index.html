@@ -1105,6 +1105,16 @@ function renderDetTab(id,tab){
       <div class="ctitle">Horaires</div>
       ${horairesHtml}
     </div>
+    
+    ${contratNeedAgenda(c)?`
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div class="ctitle" style="margin:0">Agenda</div>
+      <button class="btn bs bsm" onclick="creerAgenda(${c.id})">+ Nouvel agenda</button>
+    </div>
+    <div id="agenda-wrap-${c.id}">${renderAgendas(c)}</div>
+  </div>`:''}
+  
     <div style="display:flex;gap:8px;justify-content:center;padding:4px 0 16px;flex-wrap:wrap">
       <button class="btn bs" onclick="goTo('cont')">← Retour</button>
       ${c.signe
@@ -1225,7 +1235,223 @@ function renderDetTab(id,tab){
   }
 }
 
+     // ══ AGENDA UTILS ══    
+function contratNeedAgenda(c){
+  if(c.tc==='52'&&c.th==='fixe') return false;
+  if(c.tc==='52'&&c.th==='plan'&&c.planType==='min') return false;
+  return true;
+}
+function premiereSemaineAgenda(dateDeb, jourReposHebdo){
+  const d=new Date(dateDeb);
+  const premier=new Date(d.getFullYear(),d.getMonth(),1);
+  // Si le 1er du mois est le jour de repos → semaine suivante
+  const jourSemaine=premier.getDay()||7; // 1=lun, 7=dim
+  const semISO=getSemISO(premier.toISOString().slice(0,10));
+  if(jourSemaine===(jourReposHebdo||7)) return semISO+1;
+  return semISO;
+}
+function creerAgenda(cid){
+  const c=S.contrats.find(x=>x.id==cid);
+  if(!c)return;
+  if(!c.agendas)c.agendas=[];
+  // Calculer dateDebut du nouvel agenda
+  let dateDebut;
+  if(c.agendas.length){
+    // Commence à la semaine suivant la dernière semaine du dernier agenda
+    const last=c.agendas[c.agendas.length-1];
+    const d=new Date(last.dateFin);
+    d.setDate(d.getDate()+1);
+    dateDebut=d.toISOString().slice(0,10);
+  } else {
+    dateDebut=c.dateDeb;
+  }
+  const dDebut=new Date(dateDebut);
+  const dFin=new Date(dDebut.getFullYear()+1,dDebut.getMonth(),dDebut.getDate()-1);
+  c.agendas.push({
+    id:Date.now(),
+    dateDebut:dDebut.toISOString().slice(0,10),
+    dateFin:dFin.toISOString().slice(0,10),
+    semaines:{}
+  });
+  const cidx=S.contrats.findIndex(x=>x.id==cid);
+  if(cidx!==-1)S.contrats[cidx]=c;
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  saveToFirestore();
+  document.getElementById('agenda-wrap-'+cid).innerHTML=renderAgendas(c);
+}
 
+     function renderAgendas(c){
+  if(!c.agendas||!c.agendas.length){
+    return `<div style="text-align:center;padding:16px;color:var(--tx2);font-size:13px">Aucun agenda — cliquez sur "+ Nouvel agenda" pour commencer</div>`;
+  }
+  const aujourd=new Date();
+  const limiteModif=new Date(aujourd.getFullYear(),aujourd.getMonth()-(aujourd.getDate()<=5?1:0),1);
+  return [...c.agendas].reverse().map((ag,idx)=>{
+    const estDernier=idx===0;
+    const dDebut=new Date(ag.dateDebut);
+    const dFin=new Date(ag.dateFin);
+    const label=dDebut.toLocaleDateString('fr-FR',{month:'long',year:'numeric'})+' → '+dFin.toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
+    // Construire les semaines de l'agenda
+    const semaines=getSemsAgenda(ag.dateDebut,ag.dateFin);
+    // Avertissements
+    const warnings=getAgendaWarnings(c,ag,semaines);
+    const warningHtml=warnings.length?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">${warnings.map(w=>'⚠ '+w).join('<br>')}</div>`:'';
+    // Rendu calendrier
+    const calHtml=renderCalAgenda(c,ag,semaines,limiteModif,false);
+    return `<div style="margin-bottom:14px">
+      <div style="font-size:13px;font-weight:600;color:var(--tx2);margin-bottom:6px">${label}${estDernier?' <span style="color:var(--m)">(en cours)</span>':''}</div>
+      ${warningHtml}
+      ${calHtml}
+      <div style="text-align:right;margin-top:6px">
+        <button class="btn bs bsm" onclick="toggleModifAgenda(${c.id},${ag.id})">✏️ Modifier</button>
+      </div>
+      <div id="modif-agenda-${ag.id}" style="display:none"></div>
+    </div>`;
+  }).join('<hr style="border:none;border-top:1px solid var(--mb);margin:10px 0">');
+}
+
+         function getSemsAgenda(dateDebut, dateFin){
+  const sems=[];
+  const d=new Date(dateDebut);
+  const fin=new Date(dateFin);
+  while(d<=fin){
+    const s=getSemISO(d.toISOString().slice(0,10));
+    const annee=getSemAnnee(d.toISOString().slice(0,10));
+    const key=annee+'-S'+String(s).padStart(2,'0');
+    if(!sems.find(x=>x.key===key)){
+      sems.push({sem:s,annee,key,lundi:getLundiSem(s,annee)});
+    }
+    d.setDate(d.getDate()+7);
+  }
+  return sems;
+}
+
+        function getAgendaWarnings(c,ag,semaines){
+  const warnings=[];
+  const total=semaines.length;
+  if(c.tc==='52'&&(c.th==='sem'||c.planType==='var')){
+    // Vérifier que toutes les semaines sont affectées
+    const nonAffectees=semaines.filter(s=>!ag.semaines[s.key]).length;
+    if(nonAffectees>0) warnings.push(nonAffectees+' semaine(s) sans type affecté — un avenant est peut-être nécessaire');
+    // Vérifier les compteurs par type
+    if(c.th==='sem'&&c.semTypes){
+      c.semTypes.forEach(st=>{
+        const compte=Object.values(ag.semaines).filter(v=>v===st.nom).length;
+        if(compte!==st.nb) warnings.push(st.nom+' : '+compte+' semaine(s) pointée(s) / '+st.nb+' attendue(s) — un avenant est peut-être nécessaire');
+      });
+    }
+  }
+  if(c.tc!=='52'){
+    const travaillees=Object.values(ag.semaines).filter(v=>v!=='off').length;
+    const attendues=c.nbSem||46;
+    if(travaillees!==attendues) warnings.push('Semaines travaillées : '+travaillees+' / '+attendues+' attendues — un avenant est peut-être nécessaire');
+  }
+  return warnings;
+} function renderCalAgenda(c,ag,semaines,limiteModif,modeModif){
+  // Grouper par mois
+  const moisMap={};
+  semaines.forEach(s=>{
+    const mKey=s.annee+'-'+String(s.lundi.getMonth()+1).padStart(2,'0');
+    if(!moisMap[mKey])moisMap[mKey]={label:MOIS[s.lundi.getMonth()]+' '+s.lundi.getFullYear(),sems:[]};
+    moisMap[mKey].sems.push(s);
+  });
+  // Légende
+  let legendeHtml='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;font-size:11px">';
+  if(c.tc!=='52'){
+    legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:12px;height:12px;background:var(--mp);border:1px solid var(--mb);border-radius:3px;display:inline-block"></span>Non pointée</span>`;
+    legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:12px;height:12px;background:#e8f5ee;border:1px solid #3a6b4a;border-radius:3px;display:inline-block"></span>Travaillée</span>`;
+    legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:12px;height:12px;background:#fde8e8;border:1px solid #c0392b;border-radius:3px;display:inline-block"></span>Non travaillée</span>`;
+  } else if(c.th==='sem'&&c.semTypes){
+    c.semTypes.forEach((st,i)=>{
+      const cc=PLAN_COULEURS[i%PLAN_COULEURS.length];
+      legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:12px;height:12px;background:${cc.bg};border:1px solid ${cc.brd};border-radius:3px;display:inline-block"></span>${st.nom}</span>`;
+    });
+  }
+  legendeHtml+='</div>';
+  // Calendrier
+  let calHtml='<div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%">';
+  Object.values(moisMap).forEach(({label,sems})=>{
+    calHtml+=`<tr><td style="font-size:12px;font-weight:600;color:var(--tx2);padding:4px 8px 4px 0;white-space:nowrap;vertical-align:middle">${label}</td><td style="padding:3px 0"><div style="display:flex;gap:3px;flex-wrap:wrap">`;
+    sems.forEach(s=>{
+      const val=ag.semaines[s.key]||null;
+      const estPassee=s.lundi<limiteModif;
+      // Couleur selon valeur
+      let bg='var(--mp)',brd='var(--mb)',txt='var(--tx3)';
+      if(c.tc!=='52'){
+        if(val==='on'){bg='#e8f5ee';brd='#3a6b4a';txt='#3a6b4a';}
+        else if(val==='off'){bg='#fde8e8';brd='#c0392b';txt='#c0392b';}
+      } else if(c.th==='sem'&&c.semTypes){
+        const idx=c.semTypes.findIndex(st=>st.nom===val);
+        if(idx>=0){const cc=PLAN_COULEURS[idx%PLAN_COULEURS.length];bg=cc.bg;brd=cc.brd;txt=cc.txt;}
+      } else if(c.planType==='var'&&c.planVar){
+        const idx=c.planVar.findIndex((_,i)=>('V'+(i+1))===val);
+        if(idx>=0){const cc=PLAN_COULEURS[idx%PLAN_COULEURS.length];bg=cc.bg;brd=cc.brd;txt=cc.txt;}
+      }
+      const opacite=estPassee?'opacity:0.45;':'';
+      const onclick=modeModif&&!estPassee?`onclick="peindreAgenda('${s.key}',${c.id},${ag.id})"`:estPassee?`title="Semaine verrouillée (feuille validée ou délai dépassé)"`:'';
+      calHtml+=`<div style="min-width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:4px;font-size:11px;font-weight:600;cursor:${modeModif&&!estPassee?'pointer':'default'};background:${bg};color:${txt};border:1px solid ${brd};${opacite}" ${onclick}>${s.sem}</div>`;
+    });
+    calHtml+='</div></td></tr>';
+  });
+  calHtml+='</table></div>';
+  return legendeHtml+calHtml;
+}
+
+         function toggleModifAgenda(cid,agid){
+  const c=S.contrats.find(x=>x.id==cid);
+  if(!c)return;
+  const ag=c.agendas.find(a=>a.id==agid);
+  if(!ag)return;
+  const div=document.getElementById('modif-agenda-'+agid);
+  if(!div)return;
+  if(div.style.display==='none'){
+    const aujourd=new Date();
+    const limiteModif=new Date(aujourd.getFullYear(),aujourd.getMonth()-(aujourd.getDate()<=5?1:0),1);
+    const semaines=getSemsAgenda(ag.dateDebut,ag.dateFin);
+    // Pinceaux
+    let pHtml='<div style="display:flex;gap:7px;flex-wrap:wrap;margin:10px 0">';
+    if(c.tc!=='52'){
+      pHtml+=`<div class="pinceau-btn ${S.agendaPinceau==='on'?'actif':''}" style="background:#e8f5ee;color:#3a6b4a;--brd:#3a6b4a" onclick="S.agendaPinceau='on';toggleModifAgenda(${cid},${agid})">✅ Travaillée</div>`;
+      pHtml+=`<div class="pinceau-btn ${S.agendaPinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="S.agendaPinceau='off';toggleModifAgenda(${cid},${agid})">❌ Non travaillée</div>`;
+    } else if(c.th==='sem'&&c.semTypes){
+      c.semTypes.forEach((st,i)=>{
+        const cc=PLAN_COULEURS[i%PLAN_COULEURS.length];
+        pHtml+=`<div class="pinceau-btn ${S.agendaPinceau===st.nom?'actif':''}" style="background:${cc.bg};color:${cc.txt};--brd:${cc.brd}" onclick="S.agendaPinceau='${st.nom}';toggleModifAgenda(${cid},${agid})">${st.nom}</div>`;
+      });
+    } else if(c.planType==='var'&&c.planVar){
+      c.planVar.forEach((v,i)=>{
+        const cc=PLAN_COULEURS[i%PLAN_COULEURS.length];
+        const nom='V'+(i+1);
+        pHtml+=`<div class="pinceau-btn ${S.agendaPinceau===nom?'actif':''}" style="background:${cc.bg};color:${cc.txt};--brd:${cc.brd}" onclick="S.agendaPinceau='${nom}';toggleModifAgenda(${cid},${agid})">Volume ${i+1} (${v.h}h)</div>`;
+      });
+    }
+    pHtml+='</div>';
+    div.innerHTML=pHtml+renderCalAgenda(c,ag,semaines,limiteModif,true);
+    div.style.display='block';
+  } else {
+    div.style.display='none';
+    S.agendaPinceau=null;
+  }
+}
+
+function peindreAgenda(key,cid,agid){
+  const c=S.contrats.find(x=>x.id==cid);
+  if(!c)return;
+  const ag=c.agendas.find(a=>a.id==agid);
+  if(!ag||!S.agendaPinceau)return;
+  // Toggle : reclic efface
+  if(ag.semaines[key]===S.agendaPinceau) delete ag.semaines[key];
+  else ag.semaines[key]=S.agendaPinceau;
+  const cidx=S.contrats.findIndex(x=>x.id==cid);
+  if(cidx!==-1)S.contrats[cidx]=c;
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  saveToFirestore();
+  // Rafraîchir
+  toggleModifAgenda(cid,agid);
+  toggleModifAgenda(cid,agid);
+  // Mettre à jour les avertissements
+  document.getElementById('agenda-wrap-'+cid).innerHTML=renderAgendas(c);
+}
 // ══ FEUILLES DE PRÉSENCE ══
 function creerFiche(c,annee,mois){
   const premierJour=new Date(annee,mois,1);
@@ -2520,8 +2746,17 @@ if(bs){bs.style.display='inline-flex';bs.style.cssText='display:inline-flex;back
     if(idxB!==-1) S.contrats[idxB]={...S.contrats[idxB],...data,id:brouillon.id};
     S.dernierContratId=brouillon.id;
  } else {
-  const newId=Date.now();
-  S.contrats.push({id:newId,...data});
+ const newId=Date.now();
+S.contrats.push({
+  id:newId,
+  ...data,
+  agendas: [{
+    id: Date.now(),
+    dateDebut: data.dateDeb,
+    dateFin: '2026-03-31',
+    semaines: {}
+  }]
+});
   S.dernierContratId=newId;
   toast('Contrat '+nom+' enregistré !');
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
