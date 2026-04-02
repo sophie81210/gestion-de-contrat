@@ -2598,30 +2598,37 @@ function setAgendaPinceau(cid,agid,val){
 
 function getAgendaWarnings(c,ag,semaines){
   const warnings=[];
-  if(c.tc!=='52'){
-    const travaillees=Object.values(ag.semaines).filter(v=>v==='on').length;
+  const totalSemaines=semaines.length;
+
+  if(c.th==='sem'&&c.semTypes){
+    // Vérifier chaque type de semaine
+    c.semTypes.forEach(st=>{
+      const compte=Object.values(ag.semaines||{}).filter(v=>v===st.nom).length;
+      if(compte!==st.nb)
+        warnings.push(st.nom+' : '+compte+' / '+st.nb+' semaines attendues — un avenant est peut-être nécessaire');
+    });
+    // Semaines non pointées = semaines hors contrat (repos, congés...)
+    const nonPointees=semaines.filter(s=>!ag.semaines[s.key]).length;
+    const attenduesNonPointees=totalSemaines-c.semTypes.reduce((acc,st)=>acc+(st.nb||0),0);
+    if(nonPointees!==attenduesNonPointees)
+      warnings.push('Semaines non pointées : '+nonPointees+' / '+attenduesNonPointees+' attendues');
+  } else if(c.planType==='var'&&c.planVar){
+    c.planVar.forEach((v,i)=>{
+      const nom=v.nom||('Volume '+(i+1));
+      const compte=Object.values(ag.semaines||{}).filter(x=>x===nom).length;
+      if(compte!==v.s)
+        warnings.push(nom+' : '+compte+' / '+v.s+' semaines attendues — un avenant est peut-être nécessaire');
+    });
+  } else if(c.tc!=='52'){
+    // Contrat fixe 46 sem ou moins
+    const travaillees=Object.values(ag.semaines||{}).filter(v=>v==='on').length;
     const attendues=c.nbSem||46;
+    const nonPointees=semaines.filter(s=>!ag.semaines[s.key]).length;
+    const attenduesNonPointees=totalSemaines-attendues;
     if(travaillees!==attendues)
       warnings.push('Semaines travaillées : '+travaillees+' / '+attendues+' attendues — un avenant est peut-être nécessaire');
-  } else {
-    if(c.th==='sem'&&c.semTypes){
-      c.semTypes.forEach(st=>{
-        const compte=Object.values(ag.semaines).filter(v=>v===st.nom).length;
-        if(compte!==st.nb)
-          warnings.push(st.nom+' : '+compte+' semaine(s) / '+st.nb+' attendues — un avenant est peut-être nécessaire');
-      });
-      const nonPointees=semaines.filter(s=>!ag.semaines[s.key]).length;
-      if(nonPointees>0)
-        warnings.push(nonPointees+' semaine(s) sans type affecté');
-    }
-    if(c.planType==='var'&&c.planVar){
-      c.planVar.forEach((v,i)=>{
-        const nom=v.nom||('Volume '+(i+1));
-        const compte=Object.values(ag.semaines).filter(x=>x===nom).length;
-        if(compte!==v.s)
-          warnings.push(nom+' : '+compte+' semaine(s) / '+v.s+' attendues — un avenant est peut-être nécessaire');
-      });
-    }
+    if(nonPointees!==attenduesNonPointees)
+      warnings.push('Semaines non prévues : '+nonPointees+' / '+attenduesNonPointees+' attendues ('+totalSemaines+' - '+attendues+')');
   }
   return warnings;
 }
@@ -2772,6 +2779,11 @@ function validerModifAgenda(cid,agid){
   if(!c)return;
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
+ const semaines=getSemsAgenda(ag);
+  const warnings=getAgendaWarnings(c,ag,semaines);
+  if(warnings.length>0){
+    if(!confirm('⚠ Attention :\n'+warnings.join('\n')+'\n\nValider quand même ?'))return;
+  }
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   saveToFirestore();
   toast('Agenda enregistré ✓');
