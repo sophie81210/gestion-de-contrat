@@ -411,7 +411,16 @@ input[type=time].fi{width:auto;min-width:92px}
     <div style="padding:14px 0 18px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
   <button class="btn bp" id="btn-val" onclick="valider()">Valider et enregistrer</button>
   <button class="btn" id="btn-signe" style="display:none;background:#3a6b4a;color:#e8f5ee;border:none" onclick="if(confirm('Avez-vous enregistré les dernières modifications ? Le contrat sera verrouillé et ne pourra plus être modifié ensuite. Confirmer la signature ?')) signerContrat()">✓ Signer le contrat</button>
-  <button class="btn bs" onclick="if(!S.enEd&&!S.dernierContratId||confirm('Les modifications non enregistrées seront perdues.')){if(S.dernierContratId){S.enCours=S.dernierContratId;S.detTab='contrat';goTo('det');}else goTo('cont');}">Retour</button>
+  <button class="btn bs" onclick="
+  if(S.enAvenant){
+    if(confirm('Les modifications non enregistrées seront perdues.')){
+      const cid=S.enAvenant.cid;S.enAvenant=null;
+      S.enCours=cid;S.detTab='contrat';goTo('det');
+    }
+  } else if(!S.enEd&&!S.dernierContratId||confirm('Les modifications non enregistrées seront perdues.')){
+    if(S.dernierContratId){S.enCours=S.dernierContratId;S.detTab='contrat';goTo('det');}
+    else goTo('cont');
+  }">Retour</button>
 </div>
   </div>
 
@@ -1133,7 +1142,13 @@ function renderDetTab(id,tab){
       ${c.signe
         ?`<button class="btn bp" onclick="creerAvenant(${c.id})">+ Créer un avenant</button>
           <span style="display:inline-flex;align-items:center;gap:5px;padding:8px 14px;background:#e8f5ee;color:#3a6b4a;border-radius:20px;font-size:13px;font-weight:600">✓ Signé</span>`
-        :`<button class="btn bp" onclick="modif(${c.id})">Modifier</button>`}    
+      :`<button class="btn bp" onclick="modif(${c.id})">Modifier</button>`}
+    ${c.signe?(() => {
+      const avBrouillon=c.avenants&&c.avenants.find(a=>!a.signe);
+      return avBrouillon
+        ?`<button class="btn bp" style="background:#7c3aed;color:#fff" onclick="creerAvenant(${c.id})">✏️ Modifier l'avenant en cours</button>`
+        :`<button class="btn bp" onclick="creerAvenant(${c.id})">+ Créer un avenant</button>`;
+    })():''}   
         <button class="btn bpurple" onclick="toast('Clôture à venir')">Clôturer</button>
       <button class="btn bd" onclick="confSuppr(${c.id})">Supprimer</button>
     </div>`;
@@ -3065,6 +3080,11 @@ function valider(){
 document.getElementById('btn-val').disabled=true;
 setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
   // Bloquer si contrat signé (mode modification)
+ // Mode avenant
+  if(S.enAvenant){
+    validerAvenant();
+    return;
+  }
   const idCible=S.enEd||S.dernierContratId;
   if(idCible){
     const cEx=S.contrats.find(x=>x.id==idCible);
@@ -3158,6 +3178,7 @@ const finStr=dernierJour.getFullYear()+'-'+String(dernierJour.getMonth()+1).padS
 S.contrats.push({
   id:newId,
   ...data,
+  avenants:[],
   agendas: contratNeedAgenda(data)?[{
     id:agendaId,
     dateDebut:data.dateDeb,
@@ -3176,6 +3197,73 @@ toast('Contrat '+nom+' enregistré !');
 }
 }
 
+function validerAvenant(){
+  const {cid,avid}=S.enAvenant;
+  const c=S.contrats.find(x=>x.id==cid);
+  if(!c)return;
+  const av=c.avenants.find(a=>a.id==avid);
+  if(!av)return;
+
+  const dateAvenant=document.getElementById('f-dateavenant')?.value;
+  if(!dateAvenant){toast('Veuillez saisir la date d\'effet de l\'avenant');return;}
+
+  // Récupérer toutes les données du formulaire
+  const tx=parseFloat(document.getElementById('f-txbrut')?.value)||0;
+  const hm=parseFloat(document.getElementById('r-hm')?.textContent)||0;
+  const joursFixe=S.th==='fixe'?getJoursData('fixe'):null;
+  const semNoms={};
+  getSemTypeIds().forEach(id=>{semNoms[id]=getSemTypeNom(id);});
+  const semTypes=S.th==='sem'?Array.from(document.querySelectorAll('[id^="nbsem-"]')).map(el=>{
+    const n=el.id.replace('nbsem-','');
+    return{nb:parseFloat(el.value)||0,nom:semNoms[n]||('Type '+n),jours:getJoursData('sem'+n)};
+  }):null;
+  const planVar=S.th==='plan'&&S.planType==='var'?Array.from(document.querySelectorAll('[id^="pv-h-"]')).map(el=>{
+    const n=el.id.replace('pv-h-','');
+    const jours=[0,1,2,3,4,5,6].map(i=>!!(document.getElementById('pv-jour-'+n+'-'+i)?.checked));
+    const nomEl=document.querySelector('#planvar-'+n+' input[type="text"]');
+    return{h:parseFloat(document.getElementById('pv-h-'+n)?.value)||0,
+           s:parseFloat(document.getElementById('pv-s-'+n)?.value)||0,
+           j:parseFloat(document.getElementById('pv-j-'+n)?.value)||0,
+           jours,nom:nomEl?nomEl.value:('Volume '+n)};
+  }):null;
+
+  // Mettre à jour l'avenant
+  av.dateAvenant=dateAvenant;
+  av.tc=S.tc;av.th=S.th;av.planType=S.planType;
+  av.nbSem=parseFloat(document.getElementById('f-nbsem')?.value)||null;
+  av.hMin=parseFloat(document.getElementById('f-hmin')?.value)||null;
+  av.jMaxMin=parseFloat(document.getElementById('f-jmax-min')?.value)||null;
+  av.joursMin=[0,1,2,3,4,5,6].map(i=>!!(document.getElementById('plan-min-jour-'+i)?.checked));
+  av.txBrut=tx;av.txNet=tx?parseFloat((tx*0.7811975).toFixed(2)):0;
+  av.hMensu=hm?parseFloat(hm.toFixed(2)):0;
+  av.mensBrute=tx&&hm?parseFloat((tx*hm).toFixed(2)):0;
+  av.majComp=parseFloat(document.getElementById('f-maj-comp')?.value)||0;
+  av.majSup=parseFloat(document.getElementById('f-maj-sup')?.value)||0;
+  av.cgAnticipe=document.querySelector('[name="cg-anticipe"]:checked')?.value||null;
+  av.dateCg=document.querySelector('[name="date-cg"]:checked')?.value||null;
+  av.indemType=document.querySelector('[name="ind-type"]:checked')?.value||null;
+  av.indemMontant=parseFloat(document.getElementById('f-ind-mont')?.value)||null;
+  av.indemPer=document.querySelector('[name="ind-per"]:checked')?.value||null;
+  av.repas=[0,1,2,3,4].map(i=>parseFloat(document.getElementById('f-repas-'+i)?.value)||null);
+  av.km=parseFloat(document.getElementById('f-km')?.value)||null;
+  av.feriesTravailles=Array.from(document.querySelectorAll('[name="feries"]:checked')).map(cb=>cb.value);
+  av.majFerie=document.getElementById('f-maj-ferie')?.value!==''?parseFloat(document.getElementById('f-maj-ferie').value):null;
+  av.maj1erMai=document.getElementById('f-maj-1ermai')?.value!==''?parseFloat(document.getElementById('f-maj-1ermai').value):null;
+  av.reposHebdo=document.getElementById('f-repos-hebdo')?.value!==''?parseInt(document.getElementById('f-repos-hebdo').value):null;
+  av.majRepos=document.getElementById('f-maj-repos')?.value!==''?parseFloat(document.getElementById('f-maj-repos').value):null;
+  av.joursFixe=joursFixe;av.semTypes=semTypes;av.planVar=planVar;
+
+  const cidx=S.contrats.findIndex(x=>x.id==cid);
+  if(cidx!==-1)S.contrats[cidx]=c;
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  saveToFirestore();
+  toast('Avenant n°'+av.num+' enregistré ✓');
+  S.enAvenant=null;
+  // Retour fiche récap
+  S.enCours=cid;S.detTab='contrat';
+  goTo('det');
+}
+         
 // ══ CONGÉS ══
 function getAnneesRef(){
   const now=new Date();const m=now.getMonth()+1;
@@ -3283,10 +3371,176 @@ if(c.th==='sem'&&c.semTypes){
 
 // ══ AVENANT ══
 function creerAvenant(id){
-  toast('Fonctionnalité avenant à venir — contrat signé le '+
-    (S.contrats.find(x=>x.id==id)?.datSignature||'?'));
+  const c=S.contrats.find(x=>x.id==id);
+  if(!c)return;
+  if(!c.signe){toast('Le contrat doit être signé avant de créer un avenant');return;}
+
+  // Vérifier si un avenant brouillon existe déjà
+  const brouillon=c.avenants&&c.avenants.find(a=>!a.signe);
+  if(brouillon){
+    // Ouvrir l'avenant en cours
+    ouvrirFormulaireAvenant(id,brouillon.id);
+    return;
+  }
+
+  // Créer un nouvel avenant brouillon
+  if(!c.avenants)c.avenants=[];
+  const num=(c.avenants.length)+1;
+  const newAv={
+    id:Date.now(),
+    num,
+    dateAvenant:null,
+    signe:false,
+    dateSigne:null,
+    // Copier toutes les données modifiables du dernier avenant signé ou du contrat
+    ...getDonneesActives(c)
+  };
+  c.avenants.push(newAv);
+  const cidx=S.contrats.findIndex(x=>x.id==id);
+  if(cidx!==-1)S.contrats[cidx]=c;
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  saveToFirestore();
+  ouvrirFormulaireAvenant(id,newAv.id);
 }
 
+function getDonneesActives(c){
+  // Retourne les données du dernier avenant signé, ou du contrat initial
+  const dernierAv=c.avenants&&[...c.avenants].reverse().find(a=>a.signe);
+  const source=dernierAv||c;
+  return {
+    tc:source.tc, th:source.th, planType:source.planType,
+    nbSem:source.nbSem, hMin:source.hMin, jMaxMin:source.jMaxMin,
+    joursMin:source.joursMin, txBrut:source.txBrut, txNet:source.txNet,
+    hMensu:source.hMensu, mensBrute:source.mensBrute,
+    majComp:source.majComp, majSup:source.majSup,
+    majRepos:source.majRepos, majFerie:source.majFerie, maj1erMai:source.maj1erMai,
+    reposHebdo:source.reposHebdo, feriesTravailles:source.feriesTravailles,
+    cgAnticipe:source.cgAnticipe, dateCg:source.dateCg,
+    indemType:source.indemType, indemMontant:source.indemMontant, indemPer:source.indemPer,
+    repas:source.repas, km:source.km,
+    joursFixe:source.joursFixe, semTypes:source.semTypes, planVar:source.planVar,
+    agendas:[]
+  };
+}
+         
+ function ouvrirFormulaireAvenant(cid,avid){
+  const c=S.contrats.find(x=>x.id==cid);
+  if(!c)return;
+  const av=c.avenants.find(a=>a.id==avid);
+  if(!av)return;
+
+  S.enAvenant={cid,avid};
+  S.enEd=null;
+  S.dernierContratId=null;
+  goTo('form');
+
+  setTimeout(()=>{
+    resetForm();
+    // Afficher date d'embauche en lecture seule et champ date d'effet
+    const labelDatedeb=document.querySelector('label[for="f-datedeb"]');
+    const inputDatedeb=document.getElementById('f-datedeb');
+    if(inputDatedeb){
+      inputDatedeb.value=c.dateDeb;
+      inputDatedeb.disabled=true;
+      inputDatedeb.style.opacity='0.6';
+    }
+    // Ajouter champ date d'effet si pas encore présent
+    if(!document.getElementById('f-dateavenant')){
+      const fg=document.createElement('div');
+      fg.className='fg';
+      fg.id='fg-dateavenant';
+      fg.innerHTML=`<label class="fl">Date d'effet de l'avenant</label>
+        <input class="fi" type="date" id="f-dateavenant" value="${av.dateAvenant||''}">`;
+      inputDatedeb.parentElement.parentElement.insertBefore(fg,inputDatedeb.parentElement.nextSibling);
+    } else {
+      document.getElementById('f-dateavenant').value=av.dateAvenant||'';
+    }
+
+    // Préremplir avec les données de l'avenant
+    sv('f-nom',c.nom);
+    sv('f-txbrut',av.txBrut);
+    sv('f-maj-comp',av.majComp);sv('f-maj-sup',av.majSup);
+    sv('f-nbsem',av.nbSem);sv('f-hmin',av.hMin);
+    if(av.tc){const el=document.getElementById('ro-'+av.tc);if(el)selTC(el,av.tc);}
+    if(av.th){const el=document.getElementById('ro-'+av.th);if(el)selTH(el,av.th);}
+    document.getElementById('sem-wrap').innerHTML='';S.nbSem=0;
+    if(av.th==='sem'&&av.semTypes){
+      av.semTypes.forEach((st,idx)=>{
+        const n=idx+1;
+        if(!document.getElementById('sem-'+n))addSem();
+        setTimeout(()=>{
+          const nomEl=document.querySelector('#sem-'+n+' input[type="text"]');
+          if(nomEl&&st.nom)nomEl.value=st.nom;
+          JOURS.forEach((_,i)=>{
+            const h=st.jours&&st.jours[i];if(!h)return;
+            const cb=document.getElementById('sem'+n+'-cb-'+i);
+            if(cb){cb.checked=true;toggleJ('sem'+n,i);}
+            sv('sem'+n+'-d-'+i,h.d);sv('sem'+n+'-f-'+i,h.f);calcJ('sem'+n,i);
+          });
+          sv('nbsem-'+n,st.nb);checkSem();
+        },50);
+      });
+    }
+    if(av.th==='fixe'&&av.joursFixe){
+      av.joursFixe.forEach((h,i)=>{
+        if(!h)return;
+        const cb=document.getElementById('fixe-cb-'+i);
+        if(cb){cb.checked=true;toggleJ('fixe',i);}
+        sv('fixe-d-'+i,h.d);sv('fixe-f-'+i,h.f);calcJ('fixe',i);
+      });
+    }
+    if(av.cgAnticipe){const el=document.getElementById('ro-cg-'+av.cgAnticipe);if(el)selR(el,'cg-anticipe',av.cgAnticipe);}
+    if(av.dateCg){const el=document.getElementById('ro-cg-'+av.dateCg);if(el)selR(el,'date-cg',av.dateCg);}
+    if(av.indemType){const el=document.getElementById('ro-ind-'+(av.indemType==='legal'?'legal':'nego'));if(el)selInd(el,av.indemType);}
+    if(av.indemMontant)sv('f-ind-mont',av.indemMontant);
+    if(av.repas)av.repas.forEach((v,i)=>{if(v)sv('f-repas-'+i,v);});
+    if(av.km)sv('f-km',av.km);
+    if(av.majFerie)sv('f-maj-ferie',av.majFerie);
+    if(av.maj1erMai)sv('f-maj-1ermai',av.maj1erMai);
+    if(av.reposHebdo!==undefined){const el=document.getElementById('f-repos-hebdo');if(el)el.value=av.reposHebdo;}
+    if(av.majRepos)sv('f-maj-repos',av.majRepos);
+    if(av.feriesTravailles){av.feriesTravailles.forEach(v=>{const cb=document.querySelector('[name="feries"][value="'+v+'"]');if(cb)cb.checked=true;});}
+    if(av.th==='plan'&&av.planType){
+      const elPlan=document.getElementById('ro-plan-'+av.planType);
+      if(elPlan)elPlan.click();
+      if(av.planType==='min'&&av.joursMin){
+        setTimeout(()=>{
+          av.joursMin.forEach((checked,i)=>{
+            const cb=document.getElementById('plan-min-jour-'+i);
+            if(cb)cb.checked=checked;
+          });
+        },50);
+      }
+      if(av.planType==='var'&&av.planVar){
+        setTimeout(()=>{
+          document.getElementById('plan-var-wrap').innerHTML='';
+          planVarN=0;
+          av.planVar.forEach((v,i)=>{
+            addPlanVar();
+            setTimeout(()=>{
+              sv('pv-h-'+(i+1),v.h);
+              sv('pv-s-'+(i+1),v.s);
+              sv('pv-j-'+(i+1),v.j);
+              const nomEl=document.querySelector('#planvar-'+(i+1)+' input[type="text"]');
+              if(nomEl&&v.nom)nomEl.value=v.nom;
+              if(v.jours){v.jours.forEach((checked,ji)=>{
+                const cb=document.getElementById('pv-jour-'+(i+1)+'-'+ji);
+                if(cb)cb.checked=checked;
+              });}
+              checkPlanVar();
+            },50);
+          });
+        },50);
+      }
+    }
+    calc();
+    document.getElementById('btn-val').textContent='Enregistrer l\'avenant';
+    // Cacher btn-signe et afficher btn-signe-avenant
+    const bs=document.getElementById('btn-signe');
+    if(bs)bs.style.display='none';
+  },100);
+}    
+         
 // ══ CONGÉS ASS'MAT NAV ══
 function goToCgAm(){
   PAGES.forEach(p=>{const el=document.getElementById(p);if(el)el.style.display='none';});
