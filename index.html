@@ -1249,8 +1249,9 @@ function creerFiche(c,annee,mois){
     jours.push({
       date:dateStr,
       jourSemaine,
-      heureDebPrev:prevus.debut,
+      heureDebPrev:prevus.debut==='prévu'?null:prevus.debut,
       heureFinPrev:prevus.fin,
+      planVarPrevu:!!(prevus.planVar),
       heureDebReel:null,
       heureFinReel:null,
       statut:null, // null=normal, 'abs-rem'=absence rémunérée, 'abs-non'=absence non rémunérée, 'conges'=congés
@@ -1301,17 +1302,29 @@ function getHeuresPrevues(c, date){
   }
 
   // ── Planning variable ──
-  if(c.th === 'plan' && c.planType === 'var' && typeSem && c.planVar){
-    // On sait le volume mais pas les heures exactes par jour
-    return {debut: null, fin: null};
+  if(c.th==='plan'&&c.planType==='var'&&c.planVar){
+    const semISO=getSemISO(date.toISOString().slice(0,10));
+    const semAnnee=getSemAnnee(date.toISOString().slice(0,10));
+    const semKey=getKeyAgenda(semISO,semAnnee);
+    const agendaPV=c.agendas&&c.agendas.find(ag=>{
+      const premierMois=new Date(date.getFullYear(),date.getMonth(),1);
+      const dernierMois=new Date(date.getFullYear(),date.getMonth()+1,0);
+      return new Date(ag.dateDebut)<=dernierMois&&new Date(ag.dateFin)>=premierMois;
+    });
+    const typeSemPV=agendaPV&&agendaPV.semaines&&agendaPV.semaines[semKey];
+    const vol=typeSemPV?c.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemPV):null;
+    if(vol&&vol.jours&&vol.jours[jourIdx]){
+      return{debut:'prévu',fin:null,planVar:true};
+    }
+    return{debut:null,fin:null};
   }
 
   // ── Planning minimum ──
-  if(c.th === 'plan' && c.planType === 'min'){
-    return {debut: null, fin: null};
+  if(c.th==='plan'&&c.planType==='min'){
+    return{debut:null,fin:null};
   }
 
-  return {debut: null, fin: null};
+  return{debut:null,fin:null};
 }
          
 function toMins(t){return toM(t);}
@@ -1328,7 +1341,7 @@ function getStatutPrevu(c,j){
     if(!feriesTrav.includes(mmdd)&&!feriesTrav.includes('variable')) return 'ferie';
   }
   if(j.statut==='conges') return 'conges-acq';
-  if(!j.heureDebPrev&&!j.heureFinPrev) return 'non-prevu';
+  if(!j.heureDebPrev&&!j.heureFinPrev&&!j.planVarPrevu) return 'non-prevu';
   return 'prevu';
 }
 
@@ -1436,8 +1449,9 @@ function ouvrirFiche(contratId,key){
   fiche.jours.forEach(j=>{
     const d=new Date(j.date);
     const prevus=getHeuresPrevues(c,d);
-    j.heureDebPrev=prevus.debut;
+    j.heureDebPrev=prevus.debut==='prévu'?null:prevus.debut;
     j.heureFinPrev=prevus.fin;
+    j.planVarPrevu=!!(prevus.planVar);
   });
   const [annee,moisStr]=key.split('-');
   const mois=parseInt(moisStr)-1;
@@ -2120,6 +2134,10 @@ function modif(id){
               sv('pv-j-'+(i+1),v.j);
               const nomEl=document.querySelector('#planvar-'+(i+1)+' input[type="text"]');
               if(nomEl&&v.nom)nomEl.value=v.nom;
+              if(v.jours){v.jours.forEach((checked,ji)=>{
+                const cb=document.getElementById('pv-jour-'+(i+1)+'-'+ji);
+                if(cb)cb.checked=checked;
+              });}
               checkPlanVar();
             },50);
           });
@@ -2452,6 +2470,16 @@ function addPlanVar(){
       <span style="font-size:13px;color:var(--tx2)">Jours max / semaine</span>
       <input class="fi fi-sm" type="number" id="pv-j-${n}" min="1" max="6" step="1" placeholder="j/sem max" style="width:85px" oninput="checkPlanVar()">
       <span style="font-size:13px;color:var(--tx2)">jours max</span>
+    </div>
+    <div style="margin-top:9px">
+      <div style="font-size:13px;color:var(--tx2);margin-bottom:5px">Jours possiblement travaillés</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'].map((j,i)=>`
+          <label style="display:flex;flex-direction:column;align-items:center;gap:3px;font-size:11px;color:var(--tx2);cursor:pointer">
+            <input type="checkbox" id="pv-jour-${n}-${i}" style="width:14px;height:14px;accent-color:${cc.brd}">
+            ${j}
+          </label>`).join('')}
+      </div>
     </div>`;
   wrap.appendChild(d);
   checkPlanVar();
@@ -3056,9 +3084,13 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
 }):null;
   const planVar=S.th==='plan'&&S.planType==='var'?Array.from(document.querySelectorAll('[id^="pv-h-"]')).map(el=>{
   const n=el.id.replace('pv-h-','');
+  const jours=[0,1,2,3,4,5,6].map(i=>!!(document.getElementById('pv-jour-'+n+'-'+i)?.checked));
+  const nomEl=document.querySelector('#planvar-'+n+' input[type="text"]');
   return{h:parseFloat(document.getElementById('pv-h-'+n)?.value)||0,
          s:parseFloat(document.getElementById('pv-s-'+n)?.value)||0,
-         j:parseFloat(document.getElementById('pv-j-'+n)?.value)||0};
+         j:parseFloat(document.getElementById('pv-j-'+n)?.value)||0,
+         jours,
+         nom:nomEl?nomEl.value:('Volume '+n)};
 }):null
   const data={nom,dateDeb:document.getElementById('f-datedeb').value,tc:S.tc,th:S.th,planType:S.planType,
   nbSem:parseFloat(document.getElementById('f-nbsem')?.value)||null,
