@@ -3534,12 +3534,77 @@ function getDonneesActives(c){
     }
     calc();
     document.getElementById('btn-val').textContent='Enregistrer l\'avenant';
-    // Cacher btn-signe et afficher btn-signe-avenant
+    // Remplacer le bouton signer par le bouton signer l'avenant
     const bs=document.getElementById('btn-signe');
-    if(bs)bs.style.display='none';
+    if(bs){
+      bs.style.display='inline-flex';
+      bs.style.cssText='display:inline-flex;background:#7c3aed;color:#fff;border:none;padding:9px 20px;border-radius:24px;font-size:14px;font-weight:600;cursor:pointer;font-family:Calibri,sans-serif;align-items:center;gap:6px';
+      bs.textContent='✓ Signer l\'avenant';
+     bs.onclick=()=>signerAvenant();
+    }
   },100);
 }    
          
+function signerAvenant(){
+  if(!S.enAvenant){toast('Erreur : pas d\'avenant en cours');return;}
+  const {cid,avid}=S.enAvenant;
+  const c=S.contrats.find(x=>x.id==cid);
+  if(!c)return;
+  const av=c.avenants.find(a=>a.id==avid);
+  if(!av)return;
+
+  // Vérifier date d'effet
+  if(!av.dateAvenant){toast('Veuillez d\'abord enregistrer l\'avenant avec une date d\'effet');return;}
+
+  // Vérifier que la feuille du mois de la date d'effet n'est pas validée
+  const dateEff=new Date(av.dateAvenant);
+  const keyMois=dateEff.getFullYear()+'-'+String(dateEff.getMonth()+1).padStart(2,'0');
+  if(c.fiches&&c.fiches[keyMois]&&c.fiches[keyMois].valide){
+    toast('⚠ La feuille de présence de ce mois est déjà validée — impossible de signer l\'avenant');
+    return;
+  }
+         
+  // Vérifier que la date d'effet n'est pas antérieure au contrat ou au dernier avenant signé
+  const dernierAvSigne=[...c.avenants].reverse().find(a=>a.signe&&a.id!==avid);
+  const dateMin=dernierAvSigne?dernierAvSigne.dateAvenant:c.dateDeb;
+  if(av.dateAvenant<=dateMin){
+    toast('⚠ La date d\'effet doit être postérieure au '+(dernierAvSigne?'dernier avenant':'contrat initial')+' ('+new Date(dateMin).toLocaleDateString('fr-FR')+')');
+    return;
+  }
+         
+  // Confirmer
+  if(!confirm('L\'avenant n°'+av.num+' sera verrouillé après signature et ne pourra plus être modifié. Confirmer ?')) return;
+
+  // Signer
+  av.signe=true;
+  av.dateSigne=new Date().toISOString().slice(0,10);
+
+  // Créer l'agenda si nécessaire
+  if(contratNeedAgenda(av)&&(!av.agendas||!av.agendas.length)){
+    const dRef=new Date(av.dateAvenant);
+    const premierMois=new Date(dRef.getFullYear(),dRef.getMonth(),1);
+    const dernierMois=new Date(dRef.getFullYear()+1,dRef.getMonth(),0);
+    const premierMoisStr=premierMois.toISOString().slice(0,10);
+    const dernierMoisStr=dernierMois.getFullYear()+'-'+String(dernierMois.getMonth()+1).padStart(2,'0')+'-'+String(dernierMois.getDate()).padStart(2,'0');
+    av.agendas=[{
+      id:Date.now(),
+      dateDebut:av.dateAvenant,
+      dateFin:dernierMoisStr,
+      _semDebut:{sem:getSemISO(premierMoisStr),annee:getSemAnnee(premierMoisStr)},
+      _semFin:{sem:getSemISO(dernierMoisStr),annee:getSemAnnee(dernierMoisStr)},
+      semaines:{}
+    }];
+  }
+
+  const cidx=S.contrats.findIndex(x=>x.id==cid);
+  if(cidx!==-1)S.contrats[cidx]=c;
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  saveToFirestore();
+  toast('Avenant n°'+av.num+' signé ✓');
+  S.enAvenant=null;
+  S.enCours=cid;S.detTab='contrat';
+  goTo('det');
+}      
 // ══ CONGÉS ASS'MAT NAV ══
 function goToCgAm(){
   PAGES.forEach(p=>{const el=document.getElementById(p);if(el)el.style.display='none';});
