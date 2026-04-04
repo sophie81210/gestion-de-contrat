@@ -1432,6 +1432,13 @@ function ouvrirFiche(contratId,key){
   }
   if(!c.fiches[key])return;
   const fiche=c.fiches[key];
+  // Recalculer les heures prévues depuis l'agenda (au cas où l'agenda a été modifié)
+  fiche.jours.forEach(j=>{
+    const d=new Date(j.date);
+    const prevus=getHeuresPrevues(c,d);
+    j.heureDebPrev=prevus.debut;
+    j.heureFinPrev=prevus.fin;
+  });
   const [annee,moisStr]=key.split('-');
   const mois=parseInt(moisStr)-1;
   const label=MOIS[mois]+' '+annee;
@@ -2017,6 +2024,9 @@ function modif(id){
         const n=idx+1;
         if(!document.getElementById('sem-'+n))addSem();
         setTimeout(()=>{
+          // Recharger le nom de la semaine type
+          const nomEl=document.querySelector('#sem-'+n+' input[type="text"]');
+          if(nomEl&&st.nom)nomEl.value=st.nom;
           JOURS.forEach((_,i)=>{
             const h=st.jours&&st.jours[i];if(!h)return;
             const cb=document.getElementById('sem'+n+'-cb-'+i);
@@ -2514,7 +2524,7 @@ function renderAgendas(c){
     const label=dDebut.toLocaleDateString('fr-FR',{month:'long',year:'numeric'})
       +' → '+dFin.toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
 
-    const semaines=getSemsAgenda(ag);
+    const semaines=getSemsAgenda(ag,c);
     const warnings=getAgendaWarnings(c,ag,semaines);
     const warningHtml=warnings.length
       ?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">${warnings.map(w=>'⚠ '+w).join('<br>')}</div>`
@@ -2541,16 +2551,34 @@ function renderAgendas(c){
   }).join('<hr style="border:none;border-top:1px solid var(--mb);margin:12px 0">');
 }
 
- function getSemsAgenda(ag){
+ function getSemsAgenda(ag,c){
   // Compatibilité anciens agendas sans _semDebut/_semFin
   if(!ag._semDebut || !ag._semFin){
     // Recalculer à la volée depuis dateDebut/dateFin
     if(!ag.dateDebut || !ag.dateFin) return [];
 
-    const dDeb = new Date(ag.dateDebut);
-    const premier = new Date(dDeb.getFullYear(), dDeb.getMonth(), 1);
-    const semDeb = getSemISO(premier.toISOString().slice(0,10));
-    const anneeDeb = getSemAnnee(premier.toISOString().slice(0,10));
+    const dDeb0 = new Date(ag.dateDebut);
+    const premier = new Date(dDeb0.getFullYear(), dDeb0.getMonth(), 1);
+    const dernierMoisDate = new Date(dDeb0.getFullYear(), dDeb0.getMonth()+1, 0);
+    const semDebTmp = getSemISO(premier.toISOString().slice(0,10));
+    const anneeDebTmp = getSemAnnee(premier.toISOString().slice(0,10));
+    const lundiDebTmp = getLundiSem(semDebTmp, anneeDebTmp);
+    const jourReposC = (c&&c.reposHebdo)||0;
+    const jourReposISO = jourReposC===0?7:jourReposC;
+    let semDeb = semDebTmp;
+    let anneeDeb = anneeDebTmp;
+    let aJourDansMois = false;
+    for(let i=0;i<7;i++){
+      const jour=new Date(lundiDebTmp);
+      jour.setDate(lundiDebTmp.getDate()+i);
+      const jourSem=(jour.getDay()||7);
+      if(jourSem===jourReposISO) continue;
+      if(jour>=premier&&jour<=dernierMoisDate){aJourDansMois=true;break;}
+    }
+    if(!aJourDansMois){
+      semDeb++;
+      if(semDeb>getNbSemainesAnnee(anneeDeb)){semDeb=1;anneeDeb++;}
+    }
 
     const dernierJour = new Date(
       new Date(ag.dateDebut).getFullYear() + 1,
@@ -2628,7 +2656,7 @@ function ouvrirModifAgenda(cid,agid){
   }
   pHtml+='</div>';
 
-  const semaines=getSemsAgenda(ag);
+  const semaines=getSemsAgenda(ag,c);
   const calModif=renderCalAgenda(c,ag,semaines,true);
 
   pHtml+=calModif;
@@ -2781,43 +2809,6 @@ function renderCalAgenda(c,ag,semaines,modeModif){
   return legendeHtml+calHtml;
 }
 
-function toggleModifAgenda(cid,agid){
-  const c=S.contrats.find(x=>x.id==cid);
-  if(!c)return;
-  const ag=c.agendas.find(a=>a.id==agid);
-  if(!ag)return;
-  const div=document.getElementById('modif-agenda-'+agid);
-  if(!div)return;
-  if(div.style.display==='none'){
-    const aujourd=new Date();
-    const limiteModif=new Date(aujourd.getFullYear(),aujourd.getMonth()-(aujourd.getDate()<=5?1:0),1);
-    const semaines=getSemsAgenda(ag.dateDebut,ag.dateFin);
-    // Pinceaux
-    let pHtml='<div style="display:flex;gap:7px;flex-wrap:wrap;margin:10px 0">';
-    if(c.tc!=='52'){
-      pHtml+=`<div class="pinceau-btn ${S.agendaPinceau==='on'?'actif':''}" style="background:#e8f5ee;color:#3a6b4a;--brd:#3a6b4a" onclick="S.agendaPinceau='on';toggleModifAgenda(${cid},${agid})">✅ Travaillée</div>`;
-      pHtml+=`<div class="pinceau-btn ${S.agendaPinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="S.agendaPinceau='off';toggleModifAgenda(${cid},${agid})">❌ Non travaillée</div>`;
-    } else if(c.th==='sem'&&c.semTypes){
-      c.semTypes.forEach((st,i)=>{
-        const cc=PLAN_COULEURS[i%PLAN_COULEURS.length];
-        pHtml+=`<div class="pinceau-btn ${S.agendaPinceau===st.nom?'actif':''}" style="background:${cc.bg};color:${cc.txt};--brd:${cc.brd}" onclick="S.agendaPinceau='${st.nom}';toggleModifAgenda(${cid},${agid})">${st.nom}</div>`;
-      });
-    } else if(c.planType==='var'&&c.planVar){
-      c.planVar.forEach((v,i)=>{
-        const cc=PLAN_COULEURS[i%PLAN_COULEURS.length];
-        const nom='V'+(i+1);
-        pHtml+=`<div class="pinceau-btn ${S.agendaPinceau===nom?'actif':''}" style="background:${cc.bg};color:${cc.txt};--brd:${cc.brd}" onclick="S.agendaPinceau='${nom}';toggleModifAgenda(${cid},${agid})">Volume ${i+1} (${v.h}h)</div>`;
-      });
-    }
-    pHtml+='</div>';
-    div.innerHTML=pHtml+renderCalAgenda(c,ag,semaines,limiteModif,true);
-    div.style.display='block';
-  } else {
-    div.style.display='none';
-    S.agendaPinceau=null;
-  }
-}
-
 function peindreAgenda(key,cid,agid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c)return;
@@ -2842,7 +2833,7 @@ function validerModifAgenda(cid,agid){
   if(!ag)return;
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
-  const semaines=getSemsAgenda(ag);
+  const semaines=getSemsAgenda(ag,c);
   const warnings=getAgendaWarnings(c,ag,semaines);
   if(warnings.length>0){
     if(!confirm('⚠ Attention :\n'+warnings.join('\n')+'\n\nValider quand même ?'))return;
