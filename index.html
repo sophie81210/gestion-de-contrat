@@ -2036,6 +2036,7 @@ function modif(id){
       });
     }
     if(c.cgAnticipe){const el=document.getElementById('ro-cg-'+c.cgAnticipe);if(el)selR(el,'cg-anticipe',c.cgAnticipe);}
+    if(c.dateCg){const el=document.getElementById('ro-cg-'+c.dateCg);if(el)selR(el,'date-cg',c.dateCg);}
     if(c.indemType){const el=document.getElementById('ro-ind-'+(c.indemType==='legal'?'legal':'nego'));if(el)selInd(el,c.indemType);}
     if(c.indemMontant)sv('f-ind-mont',c.indemMontant);
     if(c.repas)c.repas.forEach((v,i)=>{if(v)sv('f-repas-'+i,v);});
@@ -2459,8 +2460,27 @@ if(c.agendas.length){
     dateDebut=c.dateDeb;
   }
   const dRef=new Date(dateDebut);
-  const premierMois=new Date(dRef.getFullYear(),dRef.getMonth(),1).toISOString().slice(0,10);
-  const debut={sem:getSemISO(premierMois),annee:getSemAnnee(premierMois)};
+  const premierMois=new Date(dRef.getFullYear(),dRef.getMonth(),1);
+  const dernierMois=new Date(dRef.getFullYear(),dRef.getMonth()+1,0);
+  let semDeb=getSemISO(premierMois.toISOString().slice(0,10));
+  let anneeDeb=getSemAnnee(premierMois.toISOString().slice(0,10));
+  // Vérifier si au moins un jour travaillable de cette semaine est dans le mois
+  const jourReposDeb=c.reposHebdo||0; // 0=dim,1=lun...6=sam
+  const lundiDeb=getLundiSem(semDeb,anneeDeb);
+  let aJourDansMois=false;
+  for(let i=0;i<7;i++){
+    const jour=new Date(lundiDeb);
+    jour.setDate(lundiDeb.getDate()+i);
+    const jourSem=(jour.getDay()||7); // 1=lun..7=dim
+    const jourReposISO=jourReposDeb===0?7:jourReposDeb; // convertir 0=dim en 7
+    if(jourSem===jourReposISO) continue; // ignorer jour de repos
+    if(jour>=premierMois&&jour<=dernierMois){aJourDansMois=true;break;}
+  }
+  if(!aJourDansMois){
+    semDeb++;
+    if(semDeb>getNbSemainesAnnee(anneeDeb)){semDeb=1;anneeDeb++;}
+  }
+  const debut={sem:semDeb,annee:anneeDeb};
   const dernierJour=new Date(dRef.getFullYear()+1,dRef.getMonth(),0);
   const finSem=getSemISO(dernierJour.toISOString().slice(0,10));
   const finAnnee=getSemAnnee(dernierJour.toISOString().slice(0,10));
@@ -2587,7 +2607,7 @@ function ouvrirModifAgenda(cid,agid){
 
   const pinceau=S.agendaPinceaux[agid];
 
- if(c.tc!=='52' && c.th!=='sem'){
+ if(c.tc!=='52'&&c.th!=='sem'&&c.th!=='plan'){
     pHtml+=`<div class="pinceau-btn ${pinceau==='on'?'actif':''}" style="background:#e8f5ee;color:#3a6b4a;--brd:#3a6b4a" onclick="setAgendaPinceau(${cid},${agid},'on')">✅ Travaillée</div>`;
     pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">❌ Effacer</div>`;
   }
@@ -3143,7 +3163,19 @@ if(c.maj1erMai===null||c.maj1erMai===undefined) manquants.push("majoration 1er m
   // Attendre Firebase avant de naviguer
   try{ await saveToFirestoreSync(); }catch(e){ console.error("Save sign:",e); }
   S.enEd=null;
-  setTimeout(()=>goTo('cont'),800);
+  S.enCours=id;
+  S.detTab='contrat';
+  setTimeout(()=>{
+    goTo('det');
+    setTimeout(()=>{
+      if(contratNeedAgenda(c)){
+        if(confirm('Contrat signé ✓\n\nSouhaitez-vous remplir l\'agenda maintenant ?')){
+          const agWrap=document.getElementById('agenda-wrap-'+id);
+          if(agWrap) agWrap.scrollIntoView({behavior:'smooth'});
+        }
+      }
+    },300);
+  },800);
 }
 
 // ══ AVENANT ══
