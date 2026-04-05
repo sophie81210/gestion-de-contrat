@@ -1416,29 +1416,29 @@ function creerFiche(c,annee,mois){
 
 
 function getHeuresPrevues(c, date){
-  const jourSemaine = date.getDay();
-  const jourIdx = jourSemaine === 0 ? 6 : jourSemaine - 1; // 0=lun..6=dim
+  // Trouver la version active (contrat ou avenant) à cette date
+  const dateStr=date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0');
+  const source=getVersionActive(c, date);
 
-  // Trouver l'agenda correspondant au mois du jour
-  const moisKey = date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0');
-  const agenda = c.agendas && c.agendas.find(ag => {
-    // L'agenda couvre ce mois si dateDebut <= 1er du mois <= dateFin
-    const premierMois = new Date(date.getFullYear(), date.getMonth(), 1);
-    const dernierMois = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+  const jourSemaine = date.getDay();
+  const jourIdx = jourSemaine === 0 ? 6 : jourSemaine - 1;
+
+  // Trouver l'agenda de la source correspondant au mois du jour
+  const premierMois = new Date(date.getFullYear(), date.getMonth(), 1);
+  const dernierMois = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+  const agendas = source.agendas || [];
+  const agenda = agendas.find(ag => {
     return new Date(ag.dateDebut) <= dernierMois && new Date(ag.dateFin) >= premierMois;
   });
 
-  // Trouver la semaine ISO du jour
-  const semISO = getSemISO(date.toISOString().slice(0, 10));
-  const semAnnee = getSemAnnee(date.toISOString().slice(0, 10));
+  const semISO = getSemISO(dateStr);
+  const semAnnee = getSemAnnee(dateStr);
   const semKey = getKeyAgenda(semISO, semAnnee);
-
-  // Récupérer le type de semaine depuis l'agenda
   const typeSem = agenda && agenda.semaines && agenda.semaines[semKey];
 
   // ── Semaines types ──
-  if(c.th === 'sem' && c.semTypes && typeSem){
-    const st = c.semTypes.find(x => x.nom === typeSem);
+  if(source.th === 'sem' && source.semTypes && typeSem){
+    const st = source.semTypes.find(x => x.nom === typeSem);
     if(st && st.jours){
       const j = st.jours[jourIdx];
       if(j && j.d && j.f) return {debut: j.d, fin: j.f};
@@ -1447,58 +1447,31 @@ function getHeuresPrevues(c, date){
   }
 
   // ── Horaires fixes ──
-  if(c.th === 'fixe' && c.joursFixe){
-    const j = c.joursFixe[jourIdx];
+  if(source.th === 'fixe' && source.joursFixe){
+    const j = source.joursFixe[jourIdx];
     if(j && j.d && j.f) return {debut: j.d, fin: j.f};
   }
 
   // ── Planning variable ──
-  if(c.th==='plan'&&c.planType==='var'&&c.planVar){
-    const semISO=getSemISO(date.toISOString().slice(0,10));
-    const semAnnee=getSemAnnee(date.toISOString().slice(0,10));
-    const semKey=getKeyAgenda(semISO,semAnnee);
-    const agendaPV=c.agendas&&c.agendas.find(ag=>{
-      const premierMois=new Date(date.getFullYear(),date.getMonth(),1);
-      const dernierMois=new Date(date.getFullYear(),date.getMonth()+1,0);
-      return new Date(ag.dateDebut)<=dernierMois&&new Date(ag.dateFin)>=premierMois;
-    });
-    const typeSemPV=agendaPV&&agendaPV.semaines&&agendaPV.semaines[semKey];
-    const vol=typeSemPV?c.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemPV):null;
-    if(vol&&vol.jours&&vol.jours[jourIdx]){
-      return{debut:'prévu',fin:null,planVar:true};
+  if(source.th==='plan' && source.planType==='var' && source.planVar){
+    const typeSemPV = typeSem;
+    const vol = typeSemPV ? source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemPV) : null;
+    if(vol && vol.jours && vol.jours[jourIdx]){
+      return {debut:'prévu', fin:null, planVar:true};
     }
-    return{debut:null,fin:null};
+    return {debut:null, fin:null};
   }
 
   // ── Planning minimum ──
-  if(c.th==='plan'&&c.planType==='min'){
-    if(c.joursMin&&c.joursMin[jourIdx]){
-      return{debut:'prévu',fin:null,planVar:true};
+  if(source.th==='plan' && source.planType==='min'){
+    if(source.joursMin && source.joursMin[jourIdx]){
+      return {debut:'prévu', fin:null, planVar:true};
     }
-    return{debut:null,fin:null};
+    return {debut:null, fin:null};
   }
 
-  return{debut:null,fin:null};
+  return {debut:null, fin:null};
 }
-         
-function toMins(t){return toM(t);}
-
-function getStatutPrevu(c,j){
-  // Jours hors contrat (avant dateDeb)
-  if(c.dateDeb&&j.date<c.dateDeb) return 'hors-contrat';
-  const reposHebdo=c.reposHebdo||0;
-  if(j.jourSemaine===reposHebdo) return 'repos';
-  if(isFerie(j.date,c)){
-    const parts=j.date.split('-');
-    const mmdd=parts[1]+'-'+parts[2];
-    const feriesTrav=c.feriesTravailles||[];
-    if(!feriesTrav.includes(mmdd)&&!feriesTrav.includes('variable')) return 'ferie';
-  }
-  if(j.statut==='conges') return 'conges-acq';
-  if(!j.heureDebPrev&&!j.heureFinPrev&&!j.planVarPrevu) return 'non-prevu';
-  return 'prevu';
-}
-
 function getStatutOptions(statutPrevu){
   const opts={
     'prevu':['prevu','abs-partielle','abs-rem','abs-enfant','abs-am','arret','init'],
