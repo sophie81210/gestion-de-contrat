@@ -2879,7 +2879,17 @@ function renderAgendas(c){
 function ouvrirModifAgenda(cid,agid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c)return;
-  const ag=c.agendas.find(a=>a.id==agid);
+  // Chercher l'agenda dans le contrat ou dans les avenants
+  let ag=c.agendas.find(a=>a.id==agid);
+  let source=c;
+  if(!ag&&c.avenants){
+    for(const av of c.avenants){
+      if(av.agendas){
+        const found=av.agendas.find(a=>a.id==agid);
+        if(found){ag=found;source=av;break;}
+      }
+    }
+  }
   if(!ag)return;
 
   // Cacher le calendrier lecture seule
@@ -2898,19 +2908,19 @@ function ouvrirModifAgenda(cid,agid){
 
   const pinceau=S.agendaPinceaux[agid];
 
- if(c.tc!=='52'&&c.th!=='sem'&&c.th!=='plan'){
+ if(source.tc!=='52'&&source.th!=='sem'&&source.th!=='plan'){
     pHtml+=`<div class="pinceau-btn ${pinceau==='on'?'actif':''}" style="background:#e8f5ee;color:#3a6b4a;--brd:#3a6b4a" onclick="setAgendaPinceau(${cid},${agid},'on')">✅ Travaillée</div>`;
     pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">❌ Effacer</div>`;
   }
-  if(c.th==='sem'&&c.semTypes){
-    c.semTypes.forEach((st,i)=>{
+  if(source.th==='sem'&&source.semTypes){
+    source.semTypes.forEach((st,i)=>{
       const cc=PLAN_COULEURS[i%PLAN_COULEURS.length];
       const compte=Object.values(ag.semaines||{}).filter(v=>v===st.nom).length;
       pHtml+=`<div class="pinceau-btn ${pinceau===st.nom?'actif':''}" style="background:${cc.bg};color:${cc.txt};--brd:${cc.brd}" onclick="setAgendaPinceau(${cid},${agid},'${st.nom}')">${st.nom} <strong>(${compte}/${st.nb})</strong></div>`;
     });
   }
-  if(c.planType==='var'&&c.planVar){
-    c.planVar.forEach((v,i)=>{
+  if(source.planType==='var'&&source.planVar){
+    source.planVar.forEach((v,i)=>{
       const cc=PLAN_COULEURS[i%PLAN_COULEURS.length];
       const nom=v.nom||('Volume '+(i+1));
       const compte=Object.values(ag.semaines||{}).filter(x=>x===nom).length;
@@ -2919,8 +2929,8 @@ function ouvrirModifAgenda(cid,agid){
   }
   pHtml+='</div>';
 
-  const semaines=getSemsAgenda(ag,c);
-  const calModif=renderCalAgenda(c,ag,semaines,true);
+  cconst semaines=getSemsAgenda(ag,source);
+  const calModif=renderCalAgenda(source,ag,semaines,true);
 
   pHtml+=calModif;
   pHtml+=`<div style="display:flex;gap:8px;margin-top:10px;justify-content:flex-end">
@@ -3072,32 +3082,47 @@ function renderCalAgenda(c,ag,semaines,modeModif){
   return legendeHtml+calHtml;
 }
 
+function trouverAgenda(c, agid){
+  // Cherche l'agenda dans le contrat ou dans les avenants
+  // Retourne {ag, source} où source est le contrat ou l'avenant contenant l'agenda
+  let ag=c.agendas.find(a=>a.id==agid);
+  if(ag) return {ag, source:c};
+  if(c.avenants){
+    for(const av of c.avenants){
+      if(av.agendas){
+        const found=av.agendas.find(a=>a.id==agid);
+        if(found) return {ag:found, source:av};
+      }
+    }
+  }
+  return null;
+}
+
 function peindreAgenda(key,cid,agid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c)return;
-  const ag=c.agendas.find(a=>a.id==agid);
-  if(!ag)return;
+  const res=trouverAgenda(c,agid);
+  if(!res)return;
+  const {ag}=res;
   const pinceau=S.agendaPinceaux&&S.agendaPinceaux[agid];
   if(!pinceau){toast('Sélectionnez d\'abord un pinceau');return;}
-  // Toggle
   if(ag.semaines[key]===pinceau)delete ag.semaines[key];
   else ag.semaines[key]=pinceau;
-  // Sauvegarder temporairement (sans fermer)
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
-  // Rafraîchir uniquement la zone de modif
   ouvrirModifAgenda(cid,agid);
 }
-  
+
 function validerModifAgenda(cid,agid){
- const c=S.contrats.find(x=>x.id==cid);
+  const c=S.contrats.find(x=>x.id==cid);
   if(!c)return;
-  const ag=c.agendas.find(a=>a.id==agid);
-  if(!ag)return;
+  const res=trouverAgenda(c,agid);
+  if(!res)return;
+  const {ag,source}=res;
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
-  const semaines=getSemsAgenda(ag,c);
-  const warnings=getAgendaWarnings(c,ag,semaines);
+  const semaines=getSemsAgenda(ag,source);
+  const warnings=getAgendaWarnings(source,ag,semaines);
   if(warnings.length>0){
     if(!confirm('⚠ Attention :\n'+warnings.join('\n')+'\n\nValider quand même ?'))return;
   }
@@ -3105,9 +3130,8 @@ function validerModifAgenda(cid,agid){
   saveToFirestore();
   toast('Agenda enregistré ✓');
   fermerModifAgenda(cid,agid);
-  // Rafraîchir tout l'agenda
-  document.getElementById('agenda-wrap-'+cid).innerHTML=renderAgendas(c);
-}   
+  document.getElementById('agenda-wrap-'+cid).innerHTML=renderAgendas({...source,id:c.id});
+}
 
 function fermerModifAgenda(cid,agid){
   const zone=document.getElementById('modif-zone-'+agid);
@@ -3122,15 +3146,17 @@ function fermerModifAgenda(cid,agid){
 function supprimerAgenda(cid,agid){
   if(!confirm('Supprimer cet agenda ?'))return;
   const c=S.contrats.find(x=>x.id==cid);
-  if(!c||!c.agendas)return;
-  c.agendas=c.agendas.filter(a=>a.id!=agid);
+  if(!c)return;
+  const res=trouverAgenda(c,agid);
+  if(!res)return;
+  const {source}=res;
+  source.agendas=source.agendas.filter(a=>a.id!=agid);
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   saveToFirestore();
-  document.getElementById('agenda-wrap-'+cid).innerHTML=renderAgendas(c);
-}       
-         
+  document.getElementById('agenda-wrap-'+cid).innerHTML=renderAgendas({...source,id:c.id});
+}
 // ══ CALCULS ══
 function calc(){
   if(!S.th||!S.tc)return;
