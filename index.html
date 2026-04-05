@@ -1109,6 +1109,7 @@ function buildFicheContenu(source, c){
     ['Taux horaire brut',source.txBrut?(source.txBrut.toFixed(2)+' €'):'—'],
     ['Taux horaire net',source.txBrut?((source.txBrut*0.7811975).toFixed(2)+' €'):'—'],
     ['Heures mensualisées',source.hMensu?(source.hMensu.toFixed(2)+'h'):'—'],
+    ['Heures hebdo moyennes', source.hMensu?(source.hMensu*12/52).toFixed(2)+'h':'—'],
     ['Mensualisation brute',source.mensBrute?(source.mensBrute.toFixed(2)+' €'):'—'],
     ['Mensualisation nette',source.mensBrute?((source.mensBrute*0.7811975).toFixed(2)+' €'):'—'],
     ['Congés anticipés',source.cgAnticipe==='oui'?'Oui':'Non'],
@@ -1796,7 +1797,7 @@ function buildRecapHtml(recap){
   if(recap.donneesManquantes) return '<div style="color:var(--al);padding:10px;font-size:13px">⚠ Taux horaire ou mensualisation manquants dans le contrat — complétez le contrat pour voir les calculs.</div>';
   const ligneG=(label,val,gras,color)=>`<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2);${gras?'font-weight:700':''}">${label}</td><td style="padding:7px 4px;font-weight:${gras?'700':'600'};text-align:right;${color?'color:'+color:''}">${val}</td></tr>`;
   return `
-    ${ligneG('Jours travaillés', recap.nbJoursTrav+' j')}
+    ${ligneG('Jours travaillés', recap.nbJoursTrav+' j'+(recap.joursEnPlus>0?' (+'+recap.joursEnPlus+')':'')+(recap.joursEnMoins>0?' (-'+recap.joursEnMoins+')':''))}
     ${ligneG('Heures mensualisées', (recap.hMensu||0).toFixed(2)+' h')}
     ${parseFloat(recap.hAbs)>0?ligneG('Heures d’absence', recap.hAbsDeduit.toFixed(2)+' h — '+recap.montantAbsences.toFixed(2)+' €','','var(--al)'):''}
     ${ligneG('Heures normales à déclarer', Math.max(0,(recap.hMensu||0)-(recap.hAbsDeduit||0)).toFixed(2)+' h', true)}
@@ -2033,7 +2034,10 @@ const txNet=parseFloat((txBrut*(coeff.valeur||0.7811975)).toFixed(4));
   if(nbJoursPrevu===0) nbJoursPrevu=c.nbJoursMois||Math.round(hMensu/8)||20;
 
   let hComp=0, hSup=0, hAbs=0;
-  let nbJoursTrav=nbJoursPrevu; // base = jours prévus ce mois
+  const nbJoursMoisContrat=c.nbJoursMois||nbJoursPrevu||20;
+  let nbJoursTrav=nbJoursMoisContrat; // base = jours moyens du contrat
+  let joursEnPlus=0;
+  let joursEnMoins=0;
   let indemEntretienTotal=0, indemRepasTotal=0, indemKmTotal=0;
   let kmTotal=0;
   let montantAbsences=0;
@@ -2084,7 +2088,7 @@ const txNet=parseFloat((txBrut*(coeff.valeur||0.7811975)).toFixed(4));
 
     // ── Jours travaillés ──
     if(statut==='travaille'&&getStatutPrevu(c,j)==='non-prevu'){
-      nbJoursTrav++; // jour supplémentaire non prévu
+      joursEnPlus++;
     }
     // abs-enfant : déductible seulement si < 5 jours dans l'année de contrat
     const nbAbsEnfantCeMois=fiche.jours.slice(0,fiche.jours.indexOf(j)+1).filter(jj=>jj.statut==='abs-enfant').length;
@@ -2098,7 +2102,7 @@ const txNet=parseFloat((txBrut*(coeff.valeur||0.7811975)).toFixed(4));
     if(absEnfantDeductible) absDeduites.push('abs-enfant');
     if(estCongesNonDeduit) absDeduites.push('conges-non');
     const estAbsDeduite=absDeduites.includes(statut);
-    if(estAbsDeduite||estCongesNonDeduit) nbJoursTrav--;
+   // les déductions de jours seront calculées via montantAbsences après la boucle
 
     // ── Heures complémentaires / supplémentaires ──
     if(estPresent&&j.heureDebReel&&j.heureFinReel){
@@ -2107,8 +2111,14 @@ const txNet=parseFloat((txBrut*(coeff.valeur||0.7811975)).toFixed(4));
       const debPrev=j.heureDebPrev?toM(j.heureDebPrev):null;
       const finPrev=j.heureFinPrev?toM(j.heureFinPrev):null;
       let compJour=0;
-      if(debPrev!==null&&debReel<debPrev) compJour+=debPrev-debReel;
-      if(finPrev!==null&&finReel>finPrev) compJour+=finReel-finPrev;
+      if(debPrev!==null&&finPrev!==null){
+        // Jour prévu : heures en dehors des heures prévues
+        if(debReel<debPrev) compJour+=debPrev-debReel;
+        if(finReel>finPrev) compJour+=finReel-finPrev;
+      } else {
+        // Jour non prévu travaillé : toutes les heures sont complémentaires
+        compJour+=finReel-debReel;
+      }
       if(compJour>0) hComp+=compJour/60;
       // Heures sup > 45h/sem
       const semKey=getSemISO(j.date);
@@ -2168,13 +2178,21 @@ const forfait=indem.parJour||2.65;
 
   indemKmTotal=(c.km||0)*kmTotal;
 
+  // Calcul jours en moins depuis montant absences
+  const hMoyParJour=nbJoursMoisContrat>0?hMensu/nbJoursMoisContrat:hMensu/20;
+
   // Montant absences
   if(hAbs>0&&hTheoriques>0){
     const tauxHAbs=(hMensu*txNet)/hTheoriques;
     montantAbsences=parseFloat((tauxHAbs*hAbs).toFixed(2));
   }
+  joursEnMoins=hMoyParJour>0&&txNet>0?parseFloat((montantAbsences/txNet/hMoyParJour).toFixed(1)):0;
+  nbJoursTrav=parseFloat((nbJoursMoisContrat+joursEnPlus-joursEnMoins).toFixed(1));
+ 
   // Heures à déduire = montantAbsences / txNet
   const hAbsDeduit=txNet>0?parseFloat((montantAbsences/txNet).toFixed(2)):0;
+  joursEnMoins=hMoyParJour>0&&txNet>0?parseFloat((montantAbsences/txNet/hMoyParJour).toFixed(1)):0;
+  nbJoursTrav=parseFloat((nbJoursMoisContrat+joursEnPlus-joursEnMoins).toFixed(1));
 
   // Montant h. comp : brut majoré → net → + exonération charges (11.31% du brut majoré)
   const montantCompBrutMaj=hComp*(1+majComp)*txBrut;
@@ -2196,7 +2214,8 @@ const forfait=indem.parJour||2.65;
     donneesManquantes, hMensu, hComp:hComp.toFixed(2), hSup:hSup.toFixed(2),
     montantCompBrut, montantCompNet, montantSupBrut, montantSupNet,
     hAbs:hAbs.toFixed(2), hAbsDeduit, montantAbsences,
-    nbJoursTrav:Math.max(0,nbJoursTrav),
+    nbJoursTrav:Math.max(0,parseFloat(nbJoursTrav.toFixed(1))),
+    joursEnPlus, joursEnMoins:parseFloat(joursEnMoins.toFixed(1)),
     nbAbsEnfantMois, nbAbsEnfantAnneeCont,
     nbAbsEnfantTotal:nbAbsEnfantAnneeCont+nbAbsEnfantMois,
     txNet:txNet.toFixed(2), salaireNet,
