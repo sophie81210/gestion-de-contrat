@@ -219,14 +219,7 @@ input[type=time].fi{width:auto;min-width:92px}
       <div class="ctitle">Informations de base</div>
       <div class="fg"><label class="fl">Nom du contrat <small>(ex&nbsp;: Emma Martin)</small></label><input class="fi" type="text" id="f-nom" placeholder="ex&nbsp;: Emma Martin"></div>
       <div class="fg"><label class="fl">Date de d&eacute;but de contrat</label><input class="fi" type="date" id="f-datedeb"></div>
-      <div class="fg">
-        <label class="fl">Durée de la période d'essai</label>
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <input class="fi fi-sm" type="number" id="f-periode-essai" min="0" max="3" step="1" placeholder="0 à 3" style="width:80px"> 
-          <span style="font-size:13px;color:var(--tx2)">mois</span>
-        </div>
-        <div class="ibox" style="margin-top:6px">La période d'essai ne peut excéder 3 mois pour un accueil de moins de 4 jours par semaine, et 2 mois dans les autres cas.</div>
-      </div>
+      
       <div class="fg">
         <label class="fl">Type de contrat</label>
         <div class="rg">
@@ -237,6 +230,14 @@ input[type=time].fi{width:auto;min-width:92px}
         <div class="cond" id="cond-nbsem">
           <div class="fg" style="margin-top:10px;margin-bottom:0"><label class="fl">Nombre de semaines travaill&eacute;es</label><input class="fi fi-sm" type="number" id="f-nbsem" min="1" max="46" oninput="if(parseInt(this.value)>46)this.value=46;calc()"></div>
         </div>
+        <div class="fg">
+        <label class="fl">Durée de la période d'essai</label>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <input class="fi fi-sm" type="number" id="f-periode-essai" min="0" max="3" step="1" placeholder="0 à 3" style="width:80px"> 
+          <span style="font-size:13px;color:var(--tx2)">mois</span>
+        </div>
+        <div class="ibox" style="margin-top:6px">La période d'essai ne peut excéder 3 mois pour un accueil de moins de 4 jours par semaine, et 2 mois dans les autres cas.</div>
+      </div>
       </div>
     </div>
 
@@ -2712,62 +2713,82 @@ function premiereSemaineAgenda(dateDeb, jourReposHebdo){
 function creerAgenda(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c)return;
-  if(!c.agendas)c.agendas=[];
+
+  // Déterminer la source active (avenant effectif ou contrat)
+  const now=new Date();
+  const aujourdStr=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+  const avsEffectifs=c.avenants?c.avenants.filter(a=>a.signe&&a.dateAvenant<=aujourdStr)
+    .sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant)):[];
+  const source=avsEffectifs.length?avsEffectifs[avsEffectifs.length-1]:c;
+  if(!source.agendas)source.agendas=[];
+
+  // Max 1 agenda d'avance
   const aujourd=new Date();
-  const agendaFuturs=c.agendas.filter(ag=>new Date(ag.dateFin)>=aujourd);
+  const agendaFuturs=source.agendas.filter(ag=>new Date(ag.dateFin)>=aujourd);
   if(agendaFuturs.length>=2){
     toast('Un seul agenda en avance est autorisé');return;
   }
+
+  // Date de début
   let dateDebut;
-if(c.agendas.length){
-    const last=c.agendas[c.agendas.length-1];
+  if(source.agendas.length){
+    const last=source.agendas[source.agendas.length-1];
     const parts=last.dateFin.split('-');
-    const moisFin=parseInt(parts[1])-1; // 0-indexé
+    const moisFin=parseInt(parts[1])-1;
     const anneeFin=parseInt(parts[0]);
-   const dDebut=new Date(anneeFin,moisFin+1,1);
+    const dDebut=new Date(anneeFin,moisFin+1,1);
     dateDebut=dDebut.getFullYear()+'-'+String(dDebut.getMonth()+1).padStart(2,'0')+'-01';
   } else {
-    dateDebut=c.dateDeb;
+    // Premier agenda de cette source
+    dateDebut=source.dateAvenant||c.dateDeb;
   }
-  const dRef=new Date(dateDebut);
+
+  // Fuseau horaire safe
+  const parts0=dateDebut.split('-');
+  const dRef=new Date(parseInt(parts0[0]),parseInt(parts0[1])-1,parseInt(parts0[2]));
+
   const premierMois=new Date(dRef.getFullYear(),dRef.getMonth(),1);
   const dernierMois=new Date(dRef.getFullYear(),dRef.getMonth()+1,0);
   let semDeb=getSemISO(premierMois.toISOString().slice(0,10));
   let anneeDeb=getSemAnnee(premierMois.toISOString().slice(0,10));
-  // Vérifier si au moins un jour travaillable de cette semaine est dans le mois
-  const jourReposDeb=c.reposHebdo||0; // 0=dim,1=lun...6=sam
+
+  const jourReposDeb=source.reposHebdo||0;
   const lundiDeb=getLundiSem(semDeb,anneeDeb);
   let aJourDansMois=false;
   for(let i=0;i<7;i++){
     const jour=new Date(lundiDeb);
     jour.setDate(lundiDeb.getDate()+i);
-    const jourSem=(jour.getDay()||7); // 1=lun..7=dim
-    const jourReposISO=jourReposDeb===0?7:jourReposDeb; // convertir 0=dim en 7
-    if(jourSem===jourReposISO) continue; // ignorer jour de repos
+    const jourSem=(jour.getDay()||7);
+    const jourReposISO=jourReposDeb===0?7:jourReposDeb;
+    if(jourSem===jourReposISO) continue;
     if(jour>=premierMois&&jour<=dernierMois){aJourDansMois=true;break;}
   }
   if(!aJourDansMois){
     semDeb++;
     if(semDeb>getNbSemainesAnnee(anneeDeb)){semDeb=1;anneeDeb++;}
   }
+
   const debut={sem:semDeb,annee:anneeDeb};
   const dernierJour=new Date(dRef.getFullYear()+1,dRef.getMonth(),0);
-  const finSem=getSemISO(dernierJour.toISOString().slice(0,10));
-  const finAnnee=getSemAnnee(dernierJour.toISOString().slice(0,10));
+  const finStr=dernierJour.getFullYear()+'-'+String(dernierJour.getMonth()+1).padStart(2,'0')+'-'+String(dernierJour.getDate()).padStart(2,'0');
+  const finSem=getSemISO(finStr);
+  const finAnnee=getSemAnnee(finStr);
+
   const ag={
     id:Date.now(),
     dateDebut:dateDebut,
-    dateFin:dernierJour.toISOString().slice(0,10),
+    dateFin:finStr,
     _semDebut:debut,
     _semFin:{sem:finSem,annee:finAnnee},
     semaines:{}
   };
-  c.agendas.push(ag);
+
+  source.agendas.push(ag);
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   saveToFirestore();
-  document.getElementById('agenda-wrap-'+cid).innerHTML=renderAgendas(c);
+  document.getElementById('agenda-wrap-'+cid).innerHTML=renderAgendas({...source,id:c.id});
 }
          
 function renderAgendas(c){
@@ -3270,7 +3291,7 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
   const doublon=S.contrats.find(x=>x.nom.toLowerCase()===nom.toLowerCase()&&x.id!=idCible);
   if(doublon){toast('Un contrat avec ce nom existe déjà ("'+doublon.nom+'")');return;}
   if(!S.tc){toast('Veuillez choisir un type de contrat');return;}
-  if(!S.th){toast('Veuillez choisir un type d\u2019horaires');return;}
+  if(S.tc!=='occ'&&!S.th){toast('Veuillez choisir un type d\'horaires');return;}
   const prefs=S.th==='fixe'?['fixe']:
     Array.from(document.querySelectorAll('[id^="nbsem-"]')).map(el=>'sem'+el.id.replace('nbsem-',''));
   for(const p of prefs){
@@ -3761,8 +3782,8 @@ function signerAvenant(){
 
   // Créer l'agenda si nécessaire
   if(contratNeedAgenda(av)&&(!av.agendas||!av.agendas.length)){
-    const dRef=new Date(av.dateAvenant);
-    const premierMois=new Date(dRef.getFullYear(),dRef.getMonth(),1);
+    const parts=av.dateAvenant.split('-');
+  const dRef=new Date(parseInt(parts[0]),parseInt(parts[1])-1,parseInt(parts[2]));
     const dernierMois=new Date(dRef.getFullYear()+1,dRef.getMonth(),0);
     const premierMoisStr=premierMois.toISOString().slice(0,10);
     const dernierMoisStr=dernierMois.getFullYear()+'-'+String(dernierMois.getMonth()+1).padStart(2,'0')+'-'+String(dernierMois.getDate()).padStart(2,'0');
