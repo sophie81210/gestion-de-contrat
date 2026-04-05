@@ -1677,7 +1677,7 @@ function ouvrirFiche(contratId,key){
       REPAS_SYM.map((sym,ri)=>c.repas&&c.repas[ri]?
         `<label style="cursor:pointer;display:block" title="${REPAS_NOM[ri]}">
           <input type="checkbox" ${j.repas&&j.repas[ri]?'checked':''}
-            onchange="majFicheRepas(${contratId},'${key}',${idx},${ri},this.checked)"
+            ${fiche.valide?'disabled':`onchange="majFicheRepas(${contratId},'${key}',${idx},${ri},this.checked)"`}
             style="width:12px;height:12px;accent-color:var(--m)">
           <span style="font-size:13px">${sym}</span>
         </label>`:'').join('')
@@ -1686,7 +1686,7 @@ function ouvrirFiche(contratId,key){
     const kmCell=aKm?`<td style="padding:3px 2px">
       <input type="number" style="width:46px;padding:2px 4px;border:1px solid var(--mb);border-radius:3px;font-size:11px"
         placeholder="km" value="${j.km||''}"
-        onchange="majFiche(${contratId},'${key}',${idx},'km',this.value)">
+       ${fiche.valide?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'km',this.value)"`}>
     </td>`:'';
 
     const optsBase=['conges-acq','conges-non'].includes(statutActuel)?statutActuel:statutPrevu;
@@ -1715,13 +1715,13 @@ function ouvrirFiche(contratId,key){
       <td style="padding:5px 4px;font-size:12px;font-weight:500;white-space:nowrap;${manquant?'color:var(--al)':''}">${nomJour} ${numJour}</td>
       ${prevuCell}
       <td style="padding:3px 4px">
-        ${['prevu','travaille','abs-rem','abs-am','abs-partielle'].includes(statutActuel)?`
+       ${['prevu','travaille','abs-rem','abs-am','abs-partielle'].includes(statutActuel)?`
         <input type="time" value="${j.heureDebReel||''}"
           style="width:70px;padding:2px 4px;border:1px solid var(--mb);${inputBorder};border-radius:3px;font-size:11px;display:block;margin-bottom:2px"
-          oninput="majFiche(${contratId},'${key}',${idx},'debReel',this.value)">
+          ${fiche.valide?'disabled':`oninput="majFiche(${contratId},'${key}',${idx},'debReel',this.value)"`}>
         <input type="time" value="${j.heureFinReel||''}"
           style="width:70px;padding:2px 4px;border:1px solid var(--mb);${inputBorder};border-radius:3px;font-size:11px;display:block"
-          oninput="majFiche(${contratId},'${key}',${idx},'finReel',this.value)">`
+          ${fiche.valide?'disabled':`oninput="majFiche(${contratId},'${key}',${idx},'finReel',this.value)"`}>`
         :`<span style="font-size:11px;color:var(--tx3);font-style:italic">—</span>`}
       </td>
       <td id="hpm-${contratId}-${key}-${idx}" style="padding:3px 4px;font-size:11px;font-weight:600;color:${hComp?'var(--vt)':'var(--tx3)'}">
@@ -1730,7 +1730,7 @@ function ouvrirFiche(contratId,key){
       ${repasCell}${kmCell}
       <td style="padding:3px 4px">
         <select style="font-size:10px;padding:2px 3px;border:1px solid var(--mb);border-radius:3px;max-width:110px;background:${bg}"
-          onchange="majFicheStatut(${contratId},'${key}',${idx},this.value)">
+          ${fiche.valide?'disabled':`onchange="majFicheStatut(${contratId},'${key}',${idx},this.value)"`}>
           ${selectedOpts}
         </select>
       </td>
@@ -1770,10 +1770,104 @@ function ouvrirFiche(contratId,key){
       </table>
     </div>
     <div style="text-align:center;padding:14px 0">
-      <button class="btn bp" onclick="validerFiche(${contratId},'${key}')">✓ Valider la feuille du mois</button>
+      ${fiche.valide
+        ?`<span style="color:var(--vt);font-size:13px;font-weight:600">✓ Feuille validée — lecture seule</span>
+          <button class="btn bs bsm" onclick="imprimerFiche(${contratId},'${key}')">📄 Télécharger PDF</button>`
+        :`<button class="btn bp" onclick="validerFiche(${contratId},'${key}')">✓ Valider la feuille du mois</button>`}
     </div>`;
 }
 
+function imprimerFiche(contratId,key){
+  const c=S.contrats.find(x=>x.id==contratId);
+  if(!c||!c.fiches||!c.fiches[key])return;
+  const fiche=c.fiches[key];
+  const [annee,moisStr]=key.split('-');
+  const mois=parseInt(moisStr)-1;
+  const label=MOIS[mois]+' '+annee;
+  const recap=calcRecapFiche(c,fiche);
+  const JOURS_ABR=['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
+  const aRepas=c.repas&&c.repas.some(r=>r>0);
+  const aKm=!!(c.km>0);
+  const REPAS_NOM=['Petit-déj','Déjeuner','Goûter','Dîner'];
+
+  let lignes='';
+  fiche.jours.forEach((j,idx)=>{
+    const numJour=parseInt(j.date.split('-')[2]);
+    const nomJour=JOURS_ABR[j.jourSemaine===0?6:j.jourSemaine-1];
+    const statutPrevu=getStatutPrevu(c,j);
+    const statutActuel=j.statut||statutPrevu;
+    const statutLbl={'prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié',
+      'conges-acq':'Congés acquis','conges-non':'Congés non acquis','travaille':'Travaillé',
+      'abs-rem':'Abs. rémunérée','abs-enfant':'Abs. maladie enfant','abs-am':'Abs. non rém.',
+      'arret':'Arrêt','abs-partielle':'Abs. partielle','hors-contrat':'Hors contrat'}[statutActuel]||statutActuel;
+    let hComp='',hDeduit='';
+    if(j.heureDebReel&&j.heureFinReel){
+      const reel=toM(j.heureFinReel)-toM(j.heureDebReel);
+      if(j.heureDebPrev&&j.heureFinPrev){
+        const prev=toM(j.heureFinPrev)-toM(j.heureDebPrev);
+        const diff=reel-prev;
+        if(diff>0)hComp='+'+fmtH(diff);else if(diff<0)hDeduit='\u2212'+fmtH(-diff);
+      } else if(reel>0) hComp='+'+fmtH(reel);
+    }
+    const repasCell=aRepas?(j.repas||[]).map((pris,ri)=>pris&&c.repas&&c.repas[ri]?REPAS_NOM[ri]:'').filter(Boolean).join(', '):'';
+    lignes+=`<tr>
+      <td>${nomJour} ${numJour}</td>
+      <td>${j.heureDebPrev||'—'} ${j.heureFinPrev?'→ '+j.heureFinPrev:''}</td>
+      <td>${j.heureDebReel||'—'} ${j.heureFinReel?'→ '+j.heureFinReel:''}</td>
+      <td>${hComp||hDeduit||'—'}</td>
+      ${aRepas?'<td>'+repasCell+'</td>':''}
+      ${aKm?'<td>'+(j.km||'')+'</td>':''}
+      <td>${statutLbl}</td>
+    </tr>`;
+  });
+
+  const win=window.open('','_blank');
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8">
+  <title>Feuille de présence — ${c.nom} — ${label}</title>
+  <style>
+    body{font-family:Arial,sans-serif;font-size:11px;margin:20px}
+    h2{font-size:14px;margin-bottom:4px}
+    h3{font-size:12px;color:#555;margin-bottom:12px;font-weight:normal}
+    table{width:100%;border-collapse:collapse;margin-bottom:16px}
+    th{background:#eee;padding:5px 4px;text-align:left;font-size:10px;border-bottom:2px solid #ccc}
+    td{padding:4px;border-bottom:1px solid #eee;font-size:10px}
+    tr:nth-child(even){background:#f9f9f9}
+    .recap td{padding:5px 4px;border-bottom:1px solid #ddd}
+    .recap td:last-child{text-align:right;font-weight:600}
+    .total td{font-weight:700;border-top:2px solid #333}
+    @media print{body{margin:10px}}
+  </style>
+  </head><body>
+  <h2>Feuille de présence — ${c.nom}</h2>
+  <h3>${label}</h3>
+  <table>
+    <thead><tr>
+      <th>Jour</th><th>Prévu</th><th>Réel</th><th>H±</th>
+      ${aRepas?'<th>Repas</th>':''}
+      ${aKm?'<th>Km</th>':''}
+      <th>Statut</th>
+    </tr></thead>
+    <tbody>${lignes}</tbody>
+  </table>
+  <h3>Récapitulatif</h3>
+  <table class="recap">
+    <tr><td>Jours travaill\u00E9s</td><td>${recap.nbJoursTrav} j</td></tr>
+    <tr><td>Heures mensualis\u00E9es</td><td>${(recap.hMensu||0).toFixed(2)} h</td></tr>
+    ${parseFloat(recap.hAbs)>0?'<tr><td>Heures d\'absence</td><td>'+recap.hAbsDeduit.toFixed(2)+' h \u2014 '+recap.montantAbsences.toFixed(2)+' \u20AC</td></tr>':''}
+    <tr><td>Heures normales \u00E0 d\u00E9clarer</td><td>${Math.max(0,(recap.hMensu||0)-(recap.hAbsDeduit||0)).toFixed(2)} h</td></tr>
+    ${parseFloat(recap.hComp)>0?'<tr><td>Heures compl\u00E9mentaires</td><td>'+recap.hComp+' h \u2014 '+recap.montantCompNet.toFixed(2)+' \u20AC</td></tr>':''}
+    ${parseFloat(recap.hSup||0)>0?'<tr><td>Heures suppl\u00E9mentaires</td><td>'+recap.hSup+' h \u2014 '+recap.montantSupNet.toFixed(2)+' \u20AC</td></tr>':''}
+    <tr><td>Taux horaire net</td><td>${recap.txNet} \u20AC</td></tr>
+    <tr class="total"><td>Salaire net \u00E0 d\u00E9clarer</td><td>${recap.salaireNet} \u20AC</td></tr>
+    ${parseFloat(recap.indemEntretienTotal)>0?'<tr><td>Indem. entretien</td><td>'+recap.indemEntretienTotal+' \u20AC</td></tr>':''}
+    ${parseFloat(recap.indemRepasTotal)>0?'<tr><td>Indem. repas</td><td>'+recap.indemRepasTotal+' \u20AC</td></tr>':''}
+    ${parseFloat(recap.indemKmTotal||0)>0?'<tr><td>Indem. km</td><td>'+recap.indemKmTotal+' \u20AC</td></tr>':''}
+  </table>
+  <script>window.onload=function(){window.print();}<\/script>
+  </body></html>`);
+  win.document.close();
+}
+         
 function enregistrerFiche(contratId,key){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c||!c.fiches||!c.fiches[key])return;
