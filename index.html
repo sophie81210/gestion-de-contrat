@@ -4404,8 +4404,139 @@ function majFichesCgAm(anneeDebut){
       let tousNonPrevus=true;
       let tmp=new Date(apresFinStr);
       while(tmp<=avantReprise){
-        const ds=tmp.getFullYear()+'-'+String(tmp.getMo
+        const ds=tmp.getFullYear()+'-'+String(tmp.getMonth()+1).padStart(2,'0')+'-'+String(tmp.getDate()).padStart(2,'0');
+        const jourSem=tmp.getDay();
+        const reposH=c.reposHebdo||0;
+        if(jourSem!==reposH&&!isFerie(ds,c)){
+          const prevus=getHeuresPrevues(c,tmp);
+          if(prevus.debut||prevus.planVar){tousNonPrevus=false;break;}
+        }
+        tmp.setDate(tmp.getDate()+1);
+      }
+      if(tousNonPrevus) return finPeriode; // semaine non prévue → on s'arrête à la fin de la période
+    }
+    // Dernier jour décompté = veille de la reprise
+    const veille=new Date(reprise);
+    veille.setDate(veille.getDate()-1);
+    return veille.getFullYear()+'-'+String(veille.getMonth()+1).padStart(2,'0')+'-'+String(veille.getDate()).padStart(2,'0');
+  }
 
+  S.contrats.forEach(c=>{
+    if(!c.signe||!c.fiches)return;
+    const periodes=getPeriodes(joursPoses);
+
+    // Calculer le quota acquis jusqu'à fin du mois précédant chaque pose
+    // (basé sur calcCongesContrat)
+    calcCongesContrat(c);
+
+    // Pour chaque période, calculer les jours décomptés
+    let compteurTotal=0; // compteur global sur toute l'année AM
+
+    // Retirer d'abord tous les statuts congés de la période AM
+    const periodeDebut=String(anneeDebut)+'-05-01';
+    const periodeFin=String(anneeDebut+1)+'-04-30';
+    Object.values(c.fiches).forEach(fiche=>{
+      fiche.jours.forEach(j=>{
+        if(j.date<periodeDebut||j.date>periodeFin)return;
+        const statutsConges=['conges-acq','conges-non','conges-am','conges-anticipe'];
+        if(statutsConges.includes(j.statut)) j.statut=null;
+      });
+    });
+
+    periodes.forEach(({debut,fin})=>{
+      const premierTrav=premierJourTravaille(c,debut,fin);
+      const dernierDecompte=dernierJourDecompte(c,fin,joursPoses);
+
+      // Quota disponible = acquis jusqu'à fin du mois précédant le début
+      const debutDate=new Date(debut);
+      const moisPrecedent=new Date(debutDate.getFullYear(),debutDate.getMonth()-1,1);
+      const keyMoisPrec=moisPrecedent.getFullYear()+'-'+String(moisPrecedent.getMonth()+1).padStart(2,'0');
+      // Chercher anneeRef correspondante
+      const moisPrecDate=new Date(keyMoisPrec+'-01');
+      let quotaAcquis=0;
+      if(c.conges){
+        // Trouver l'année de ref dont la période couvre ce mois
+        Object.values(c.conges).forEach(cg=>{
+          const debutRef=new Date(cg.anneeRef,5,1);
+          const finRef=new Date(cg.anneeRef+1,4,31);
+          if(moisPrecDate>=debutRef&&moisPrecDate<=finRef) quotaAcquis+=cg.acquis||0;
+        });
+      }
+      const quotaDisponible=Math.max(0,quotaAcquis-compteurTotal);
+
+      // Appliquer les statuts jour par jour
+      const dStart=new Date(debut);
+      const dEnd=new Date(dernierDecompte);
+      let cur=new Date(dStart);
+      let decompteCommence=false;
+
+      while(cur<=dEnd){
+        const dateStr=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
+        const jourSem=cur.getDay();
+        const reposH=c.reposHebdo||0;
+        const estRepos=jourSem===reposH;
+        const estFerie=isFerie(dateStr,c);
+        const estDansPeriodeCochee=dateStr>=debut&&dateStr<=fin;
+        const estPose=data.jours[dateStr]==='pose';
+
+        // Trouver la fiche correspondante
+        const moisKey=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0');
+        if(!c.fiches[moisKey])c.fiches[moisKey]=creerFiche(c,cur.getFullYear(),cur.getMonth());
+        const fiche=c.fiches[moisKey];
+        const jourIdx=fiche.jours.findIndex(j=>j.date===dateStr);
+        if(jourIdx===-1){cur.setDate(cur.getDate()+1);continue;}
+        const jour=fiche.jours[jourIdx];
+
+        if(premierTrav&&dateStr>=premierTrav) decompteCommence=true;
+
+        if(estRepos){
+          // Repos hebdo : garde son statut
+          cur.setDate(cur.getDate()+1);continue;
+        }
+
+        if(!decompteCommence&&estDansPeriodeCochee){
+          // Avant le 1er jour prévu travaillé → conges-am
+          jour.statut='conges-am';
+          cur.setDate(cur.getDate()+1);continue;
+        }
+
+        if(decompteCommence){
+          if(estFerie){
+            // Vérifier si entouré de jours acquis/anticipés
+            const veilleStr=new Date(cur);veilleStr.setDate(veilleStr.getDate()-1);
+            const lendStr=new Date(cur);lendStr.setDate(lendStr.getDate()+1);
+            const veilleKey=veilleStr.getFullYear()+'-'+String(veilleStr.getMonth()+1).padStart(2,'0');
+            const lendKey=lendStr.getFullYear()+'-'+String(lendStr.getMonth()+1).padStart(2,'0');
+            const veilleJour=c.fiches[veilleKey]?.jours.find(j=>j.date===veilleStr.getFullYear()+'-'+String(veilleStr.getMonth()+1).padStart(2,'0')+'-'+String(veilleStr.getDate()).padStart(2,'0'));
+            const lendJour=c.fiches[lendKey]?.jours.find(j=>j.date===lendStr.getFullYear()+'-'+String(lendStr.getMonth()+1).padStart(2,'0')+'-'+String(lendStr.getDate()).padStart(2,'0'));
+            const veilleAcquis=['conges-acq','conges-anticipe'].includes(veilleJour?.statut);
+            const lendAcquis=['conges-acq','conges-anticipe'].includes(lendJour?.statut);
+            if(veilleAcquis&&lendAcquis){
+              // Reste férié
+              cur.setDate(cur.getDate()+1);continue;
+            }
+            // Sinon décompté comme conges-non
+            compteurTotal++;
+            jour.statut=compteurTotal<=quotaDisponible?'conges-acq':'conges-non';
+          } else {
+            // Jour ouvrable décompté
+            compteurTotal++;
+            jour.statut=compteurTotal<=quotaDisponible?'conges-acq':'conges-non';
+          }
+        }
+        cur.setDate(cur.getDate()+1);
+      }
+    });
+
+    const cidx=S.contrats.findIndex(x=>x.id==c.id);
+    if(cidx!==-1)S.contrats[cidx]=c;
+  });
+
+  S.contrats.forEach((c,i)=>{if(c.fiches)S.contrats[i]=c;});
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  saveToFirestore();
+  if(joursPoses.length>0)toast('\u2705 Cong\u00E9s mis \u00E0 jour');
+}
 function majCgAmEnfants(anneeDebut,val){
   if(!S.congesAM) S.congesAM={};
   if(!S.congesAM[anneeDebut]) S.congesAM[anneeDebut]={enfants:0,jours:{}};
