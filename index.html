@@ -4316,68 +4316,95 @@ function calcSeuilAcquis(c, anneeDebut, premierJourPose){
 }
 
 function majFichesCgAm(anneeDebut){
-  const data = S.congesAM[anneeDebut];
-  if(!data) return;
-  // Trier les jours posés chronologiquement
-  const joursPoses = Object.keys(data.jours)
-    .filter(d => data.jours[d] === 'pose')
-    .sort();
-  const premierJourPose = joursPoses[0] || null;
+  const data=S.congesAM[anneeDebut];
+  if(!data)return;
 
-  S.contrats.forEach(c => {
-    if(!c.signe) return;
-    if(!c.fiches) c.fiches={};
-    // Créer les fiches manquantes UNIQUEMENT après dateDeb du contrat
-    const dateDebC=c.dateDeb?c.dateDeb.substring(0,7):null;
-    joursPoses.forEach(dateStr=>{
-      const p=dateStr.split('-').map(Number);
-      const key=p[0]+'-'+String(p[1]).padStart(2,'00');
-      const keyMois=p[0]+'-'+String(p[1]).padStart(2,'0');
-      if(dateDebC&&keyMois<dateDebC) return; // avant dateDeb → ignorer
-      if(!c.fiches[keyMois]) c.fiches[keyMois]=creerFiche(c,p[0],p[1]-1);
-    });
-    const seuil = calcSeuilAcquis(c, anneeDebut, premierJourPose);
-    // Marquer chaque jour posé : acquis ou non acquis
-    let compteur = 0;
-    joursPoses.forEach(dateStr => {
-      // Ne compter que les jours ouvrables selon le repos hebdo du contrat
-      const p = dateStr.split('-').map(Number);
-      const jourSem = new Date(p[0], p[1]-1, p[2]).getDay();
-      const reposH = c.reposHebdo || 0;
-      if(jourSem === 0 || jourSem === reposH) return; // repos/dim ne comptent pas
-      // Les fériés dans une période acquise ne comptent pas
-      const isFer = isFerie(dateStr, c);
-      if(!isFer) compteur++; // les fériés ne consomment pas le quota acquis
-      const statut = compteur <= seuil ? 'conges-acq' : 'conges-non';
-      // Mettre à jour dans toutes les fiches
-      Object.values(c.fiches).forEach(fiche => {
-        const jour = fiche.jours.find(j => j.date === dateStr);
-        const statutsRemplacables=['prevu','non-prevu','repos','ferie','conges-acq','conges-non'];
-        if(jour && dateStr>=(c.dateDeb||'') && (!jour.statut || statutsRemplacables.includes(jour.statut))){
-          toast(dateStr+'->'+statut);
-          jour.statut = statut;
-        }
+  const joursPoses=Object.keys(data.jours).filter(d=>data.jours[d]==='pose').sort();
+  if(!joursPoses.length){
+    // Retirer tous les statuts congés de la période
+    S.contrats.forEach(c=>{
+      if(!c.signe||!c.fiches)return;
+      const periodeDebut=String(anneeDebut)+'-05-01';
+      const periodeFin=String(anneeDebut+1)+'-04-30';
+      Object.values(c.fiches).forEach(fiche=>{
+        fiche.jours.forEach(j=>{
+          if(j.date<periodeDebut||j.date>periodeFin)return;
+          const statutsConges=['conges-acq','conges-non','conges-am','conges-anticipe'];
+          if(statutsConges.includes(j.statut)) j.statut=null;
+        });
       });
     });
-    // Retirer le statut congés des jours qui ne sont plus posés TOUTES PÉRIODES CONFONDUES
-    Object.values(c.fiches).forEach(fiche => {
-      fiche.jours.forEach(j => {
-        if(j.statut !== 'conges-acq' && j.statut !== 'conges-non') return;
-        // Vérifier dans TOUTES les années de congesAM si ce jour est posé
-        const estPose=Object.values(S.congesAM||{}).some(dataAn=>dataAn.jours&&dataAn.jours[j.date]==='pose');
-        if(!estPose) j.statut=null;
-      });
+    S.contrats.forEach((c,i)=>{if(c.fiches)S.contrats[i]=c;});
+    localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+    saveToFirestore();
+    return;
+  }
+
+  // Identifier les périodes continues de jours cochés
+  function getPeriodes(jours){
+    const periodes=[];
+    let debut=null,fin=null;
+    jours.forEach((d,i)=>{
+      if(!debut){debut=d;fin=d;return;}
+      const prev=new Date(jours[i-1]);
+      const cur=new Date(d);
+      const diff=(cur-prev)/(86400000);
+      if(diff<=1){fin=d;}
+      else{periodes.push({debut,fin});debut=d;fin=d;}
     });
-  }); // fin S.contrats.forEach
-  // Réassigner dans S.contrats pour garantir la persistance
-  S.contrats.forEach((c,i)=>{ if(c.fiches) S.contrats[i]=c; });
-  localStorage.setItem('cam_c', JSON.stringify(S.contrats));
-  saveToFirestore();
-  // Confirmer la mise à jour
-  let nbMaj=0;
-  S.contrats.forEach(c=>Object.values(c.fiches||{}).forEach(f=>f.jours.forEach(j=>{if(j.statut==='conges-acq'||j.statut==='conges-non')nbMaj++;})));
-  if(joursPoses.length>0) toast('✅ Congés mis à jour : '+joursPoses.length+' jour(s) posés');
-}
+    if(debut)periodes.push({debut,fin});
+    return periodes;
+  }
+
+  // Pour une période, trouver le 1er jour prévu travaillé
+  function premierJourTravaille(c,debut,fin){
+    const d=new Date(debut);
+    const f=new Date(fin);
+    while(d<=f){
+      const dateStr=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+      const jourSem=d.getDay();
+      const reposH=c.reposHebdo||0;
+      if(jourSem!==reposH&&!isFerie(dateStr,c)){
+        const prevus=getHeuresPrevues(c,d);
+        if(prevus.debut||prevus.planVar) return dateStr;
+      }
+      d.setDate(d.getDate()+1);
+    }
+    return null;
+  }
+
+  // Trouver le dernier jour décompté = jour ouvrable précédant la reprise
+  function dernierJourDecompte(c,finPeriode,joursPoses){
+    // Trouver la 1ère date de reprise après finPeriode
+    const fin=new Date(finPeriode);
+    let cur=new Date(fin);
+    cur.setDate(cur.getDate()+1);
+    // Chercher le 1er jour prévu travaillé après la période
+    let reprise=null;
+    for(let i=0;i<60;i++){
+      const dateStr=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
+      const jourSem=cur.getDay();
+      const reposH=c.reposHebdo||0;
+      if(jourSem!==reposH&&!isFerie(dateStr,c)){
+        const prevus=getHeuresPrevues(c,cur);
+        if(prevus.debut||prevus.planVar){reprise=dateStr;break;}
+      }
+      cur.setDate(cur.getDate()+1);
+    }
+    if(!reprise)return finPeriode;
+    // Vérifier si une semaine non prévue suit la période (contrat 46 sem)
+    const is46=c.tc!=='52';
+    if(is46){
+      // Chercher si tous les jours entre fin+1 et reprise-1 sont non prévus
+      const apresFinStr=new Date(fin);
+      apresFinStr.setDate(apresFinStr.getDate()+1);
+      const avantReprise=new Date(reprise);
+      avantReprise.setDate(avantReprise.getDate()-1);
+      // Vérifier si c'est une semaine non prévue
+      let tousNonPrevus=true;
+      let tmp=new Date(apresFinStr);
+      while(tmp<=avantReprise){
+        const ds=tmp.getFullYear()+'-'+String(tmp.getMo
 
 function majCgAmEnfants(anneeDebut,val){
   if(!S.congesAM) S.congesAM={};
