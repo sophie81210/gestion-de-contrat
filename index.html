@@ -1235,7 +1235,9 @@ function renderDetTab(id,tab){
     if(c.tc!=='46'){
       cont.innerHTML=`<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">La régularisation s'applique uniquement aux contrats de 46 semaines ou moins.</div></div>`;
     } else {
-      const moisTries=Object.keys(c.fiches||{}).sort();
+     const now=new Date();
+        const moisMax=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+        const moisTries=Object.keys(c.fiches||{}).filter(k=>k<=moisMax).sort();
       if(!moisTries.length){
         cont.innerHTML=`<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">Aucune feuille de présence enregistrée.</div></div>`;
       } else {
@@ -1728,7 +1730,8 @@ function ouvrirFiche(contratId,key){
       // sinon pas de cellule (fusionnée)
     } else {
 const statutPrevuJ=getStatutPrevu(c,j);
-      const cocheVerte=!fiche.valide&&j.heureDebPrev&&j.heureFinPrev&&!j.heureDebReel&&!j.heureFinReel&&statutPrevuJ!=='hors-contrat'&&statutPrevuJ!=='non-prevu'
+      const peutAvoirHeures=['prevu','travaille','abs-partielle'].includes(statutPrevuJ);
+      const cocheVerte=!fiche.valide&&peutAvoirHeures&&j.heureDebPrev&&j.heureFinPrev&&!j.heureDebReel&&!j.heureFinReel
         ?`<button onclick="confirmerHeuresPrevues(${contratId},'${key}',${idx})"
             style="width:20px;height:36px;background:#3a6b4a;color:#fff;border:none;border-radius:3px;font-size:12px;cursor:pointer;margin-left:3px;flex-shrink:0"
             title="Confirmer les heures pr\u00E9vues">\u2713</button>`:'';
@@ -2289,13 +2292,20 @@ const txNet=parseFloat((txBrut*(coeff.valeur||0.7811975)).toFixed(4));
       } else {
         compJour+=finReel-debReel;
       }
-      if(compJour>0) hComp+=compJour/60;
-      // Heures sup > 45h/sem
-      const semKey=getSemISO(j.date);
-      const hSem=hParSemaine[semKey]||0;
-      if(hSem>45){
-        const compCeSoir=compJour/60;
-        hSup+=Math.min(compCeSoir, hSem-45);
+     if(compJour>0){
+        const hCompJour=compJour/60;
+        // Heures sup = partie des heures comp qui dépasse 45h/sem
+        const semKeyJ=getSemISO(j.date);
+        const hSem=hParSemaine[semKeyJ]||0;
+        const hPrevSem=hPrevuParSemaine[semKeyJ]||0;
+        const seuilSup=Math.max(45, hPrevSem); // seuil sup = max(45h, volume prévu)
+        if(hSem>seuilSup){
+          const hSupJour=Math.min(hCompJour, hSem-seuilSup);
+          hSup+=hSupJour;
+          hComp+=hCompJour-hSupJour; // les heures sup ne comptent pas comme comp
+        } else {
+          hComp+=hCompJour;
+        }
       }
     }
 
