@@ -2201,13 +2201,26 @@ const txNet=parseFloat((txBrut*(coeff.valeur||0.7811975)).toFixed(4));
   hTheoriques=hTheoriques/60;
 
 
-  // Calcul hebdomadaire pour heures sup (> 45h/sem)
+  // Calcul hebdomadaire pour heures sup (> 45h/sem) et comp planning variable
   const hParSemaine={};
+  const hPrevuParSemaine={}; // volume prévu par semaine (planning variable)
+  const agendaMois=c.agendas&&c.agendas.find(ag=>{
+    const pm=new Date(fiche.annee,fiche.mois,1);
+    const dm=new Date(fiche.annee,fiche.mois+1,0);
+    return new Date(ag.dateDebut)<=dm&&new Date(ag.dateFin)>=pm;
+  });
   fiche.jours.forEach(j=>{
     const semKey=getSemISO(j.date);
     if(!hParSemaine[semKey]) hParSemaine[semKey]=0;
     if(j.heureDebReel&&j.heureFinReel&&(j.statut==='prevu'||j.statut==='travaille'||!j.statut)){
       hParSemaine[semKey]+=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
+    }
+    // Volume prévu pour la semaine (planning variable)
+    if(c.th==='plan'&&c.planType==='var'&&c.planVar&&agendaMois&&!hPrevuParSemaine[semKey]){
+      const agKey=getKeyAgenda(semKey,getSemAnnee(j.date));
+      const typeSem=agendaMois.semaines&&agendaMois.semaines[agKey];
+      const vol=typeSem?c.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
+      if(vol) hPrevuParSemaine[semKey]=vol.h;
     }
   });
 
@@ -2259,9 +2272,17 @@ const txNet=parseFloat((txBrut*(coeff.valeur||0.7811975)).toFixed(4));
       const debPrev=j.heureDebPrev?toM(j.heureDebPrev):null;
       const finPrev=j.heureFinPrev?toM(j.heureFinPrev):null;
       let compJour=0;
-      if(c.th==='plan'&&c.planType==='var'){
-        // Planning variable : pas d'heures complémentaires jour par jour
-        // les heures sup > 45h/sem seront calculées plus bas
+     if(c.th==='plan'&&c.planType==='var'){
+        // Planning variable : heures comp = dépassement du volume hebdo prévu
+        const semKeyJ=getSemISO(j.date);
+        const hPrevSem=hPrevuParSemaine[semKeyJ]||0;
+        const hReelSem=hParSemaine[semKeyJ]||0;
+        if(hPrevSem>0&&hReelSem>hPrevSem){
+          // Répartir les heures comp proportionnellement sur ce jour
+          const hReelJour=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
+          const ratioJour=hReelJour/hReelSem;
+          compJour=Math.max(0,hReelSem-hPrevSem)*ratioJour*60;
+        }
       } else if(debPrev!==null&&finPrev!==null){
         if(debReel<debPrev) compJour+=debPrev-debReel;
         if(finReel>finPrev) compJour+=finReel-finPrev;
