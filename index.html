@@ -2231,6 +2231,39 @@ const txNet=parseFloat((txBrut*(coeff.valeur||0.7811975)).toFixed(4));
     const sp=getStatutPrevu(c,j);
     if(sp==='prevu') nbJoursPrevu++;
   });
+
+  // Pré-calcul des heures d'absence par semaine (pour ajuster le seuil des heures comp)
+  const hAbsParSemaine={};
+  if(c.th==='plan'){
+    fiche.jours.forEach(j=>{
+      const statut=j.statut||getStatutPrevu(c,j);
+      const absDeduitesPre=['abs-am','arret','abs-non','abs-partielle','hors-contrat'];
+      if(!absDeduitesPre.includes(statut)) return;
+      const semKeyPre=getSemISO(j.date);
+      if(!hAbsParSemaine[semKeyPre]) hAbsParSemaine[semKeyPre]=0;
+      // Calculer les heures de cette absence
+      if(j.heureDebPrev&&j.heureFinPrev){
+        hAbsParSemaine[semKeyPre]+=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
+      } else if(c.planType==='var'&&c.planVar){
+        const agKeyPre=getKeyAgenda(semKeyPre,getSemAnnee(j.date));
+        const typeSemPre=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKeyPre];
+        const volPre=typeSemPre?c.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemPre):null;
+        const jourIdxPre=j.jourSemaine===0?6:j.jourSemaine-1;
+        if(volPre&&volPre.jours&&volPre.jours[jourIdxPre]){
+          hAbsParSemaine[semKeyPre]+=(volPre.h/(volPre.j||1));
+        }
+      } else if(c.planType==='fix'||c.planType==='min'){
+        // Volume fixe : moyenne journalière
+        const jourIdxPre=j.jourSemaine===0?6:j.jourSemaine-1;
+        const joursPossibles=c.joursMin||[];
+        if(joursPossibles[jourIdxPre]){
+          const hHebdo=c.hMin||0;
+          const jMax=c.jMaxMin||5;
+          hAbsParSemaine[semKeyPre]+=(hHebdo/jMax);
+        }
+      }
+    });
+  }
   // Fallback : nbJoursMois du contrat ou calcul depuis hMensu
   if(nbJoursPrevu===0) nbJoursPrevu=c.nbJoursMois||Math.round(hMensu/8)||20;
 
@@ -2360,16 +2393,17 @@ const hMoyJourGlobal=(c.nbSem&&c.nbSem>0)?(hMensu*12/c.nbSem)/7:hMensu/20;
       const debPrev=j.heureDebPrev?toM(j.heureDebPrev):null;
       const finPrev=j.heureFinPrev?toM(j.heureFinPrev):null;
       let compJour=0;
-     if(c.th==='plan'&&c.planType==='var'){
-        // Planning variable : heures comp = dépassement du volume hebdo prévu
+    if(c.th==='plan'&&c.planType==='var'){
+        // Planning variable : heures comp = dépassement du volume hebdo prévu moins les absences
         const semKeyJ=getSemISO(j.date);
         const hPrevSem=hPrevuParSemaine[semKeyJ]||0;
+        const hAbsSem=hAbsParSemaine[semKeyJ]||0;
+        const hSeuilSem=Math.max(0,hPrevSem-hAbsSem);
         const hReelSem=hParSemaine[semKeyJ]||0;
-        if(hPrevSem>0&&hReelSem>hPrevSem){
-          // Répartir les heures comp proportionnellement sur ce jour
+        if(hSeuilSem>=0&&hReelSem>hSeuilSem){
           const hReelJour=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
           const ratioJour=hReelJour/hReelSem;
-          compJour=Math.max(0,hReelSem-hPrevSem)*ratioJour*60;
+          compJour=Math.max(0,hReelSem-hSeuilSem)*ratioJour*60;
         }
       } else if(debPrev!==null&&finPrev!==null){
         if(debReel<debPrev) compJour+=debPrev-debReel;
