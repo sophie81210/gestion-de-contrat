@@ -2297,9 +2297,36 @@ const hMoyJourGlobal=(c.nbSem&&c.nbSem>0)?(hMensu*12/c.nbSem)/7:hMensu/20;
       }
     }
   });
-  hTheoriques=hTheoriques/60;
-  if(hTheoriques<=0) hTheoriques=hMensu;
-         
+
+  // Pré-calcul des heures d'absence par semaine (pour ajuster le seuil des heures comp)
+  const hAbsParSemaine={};
+  if(c.th==='plan'){
+    fiche.jours.forEach(j=>{
+      const statut=j.statut||getStatutPrevu(c,j);
+      const absDeduitesPre=['abs-am','arret','abs-non','abs-partielle','hors-contrat'];
+      if(!absDeduitesPre.includes(statut)) return;
+      const semKeyPre=getSemISO(j.date);
+      if(!hAbsParSemaine[semKeyPre]) hAbsParSemaine[semKeyPre]=0;
+      if(j.heureDebPrev&&j.heureFinPrev){
+        hAbsParSemaine[semKeyPre]+=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
+      } else if(c.planType==='var'&&c.planVar){
+        const agKeyPre=getKeyAgenda(semKeyPre,getSemAnnee(j.date));
+        const typeSemPre=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKeyPre];
+        const volPre=typeSemPre?c.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemPre):null;
+        const jourIdxPre=j.jourSemaine===0?6:j.jourSemaine-1;
+        if(volPre&&volPre.jours&&volPre.jours[jourIdxPre]){
+          hAbsParSemaine[semKeyPre]+=(volPre.h/(volPre.j||1));
+        }
+      } else if(c.planType==='fix'||c.planType==='min'){
+        const jourIdxPre=j.jourSemaine===0?6:j.jourSemaine-1;
+        const joursPossibles=c.joursMin||[];
+        if(joursPossibles[jourIdxPre]){
+          hAbsParSemaine[semKeyPre]+=(c.hMin||0)/(c.jMaxMin||5);
+        }
+      }
+    });
+  }
+
   // Compter abs-enfant depuis début d'année de contrat (anniversaire)
   const dateDebContrat=c.dateDeb?new Date(c.dateDeb):new Date();
   const anneeContrat=fiche.annee;
