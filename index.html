@@ -10,7 +10,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/12.10.0/fireba
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithEmailAndPassword,
          createUserWithEmailAndPassword, sendPasswordResetEmail, signOut, onAuthStateChanged }
   from "https://www.gstatic.com/firebasejs/12.10.0/firebase-auth.js";
-import { getFirestore, doc, setDoc, getDoc }
+import { getFirestore, doc, setDoc, getDoc, getDocs, collection, deleteDoc }
   from "https://www.gstatic.com/firebasejs/12.10.0/firebase-firestore.js";
 
 const app = initializeApp({
@@ -30,8 +30,34 @@ window.fbLoginEmail = async(email,pwd)=>{try{const r=await signInWithEmailAndPas
 window.fbCreateEmail = async(email,pwd)=>{try{const r=await createUserWithEmailAndPassword(auth,email,pwd);return{ok:true,user:r.user};}catch(e){return{ok:false,err:e.message};}};
 window.fbResetPwd = async(email)=>{try{await sendPasswordResetEmail(auth,email);return{ok:true};}catch(e){return{ok:false,err:e.message};}};
 window.fbLogout = async()=>{try{await signOut(auth);return{ok:true};}catch(e){return{ok:false,err:e.message};}};
-window.fbSaveData = async(uid,data)=>{try{await setDoc(doc(db,'users',uid,'app','data'),{contrats:JSON.parse(JSON.stringify(data.contrats)),params:data.params||{},congesAM:data.congesAM||{},updatedAt:new Date().toISOString()});return{ok:true};}catch(e){return{ok:false,err:e.message};}};
-window.fbLoadData = async(uid)=>{try{const s=await getDoc(doc(db,'users',uid,'app','data'));return s.exists()?{ok:true,data:s.data()}:{ok:true,data:null};}catch(e){return{ok:false,err:e.message};}};
+window.fbSaveData = async(uid,data)=>{
+  try{
+    await setDoc(doc(db,'users',uid,'app','meta'),{
+      params:data.params||{},
+      congesAM:data.congesAM||{},
+      updatedAt:new Date().toISOString()
+    });
+    const promises=(data.contrats||[]).map(c=>
+      setDoc(doc(db,'users',uid,'contrats',String(c.id)),c)
+    );
+    await Promise.all(promises);
+    return{ok:true};
+  }catch(e){return{ok:false,err:e.message};}
+};
+window.fbLoadData = async(uid)=>{
+  try{
+    const metaSnap=await getDoc(doc(db,'users',uid,'app','meta'));
+    const meta=metaSnap.exists()?metaSnap.data():{};
+    const contratsSnap=await getDocs(collection(db,'users',uid,'contrats'));
+    const contrats=[];
+    contratsSnap.forEach(d=>contrats.push(d.data()));
+    return{ok:true,data:{
+      contrats,
+      params:meta.params||{},
+      congesAM:meta.congesAM||{}
+    }};
+  }catch(e){return{ok:false,err:e.message};}
+};
 
 onAuthStateChanged(auth,async user=>{
   window.FB_USER=user||null;
