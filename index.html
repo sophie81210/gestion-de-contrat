@@ -2178,10 +2178,12 @@ function calcCongesContrat(c){
   // Générer toutes les années de référence depuis le début du contrat
   const anneeRefDebut=now.getMonth()>=5?now.getFullYear():now.getFullYear()-1;
   const anneeContratDebut=dateDebContrat.getFullYear();
-  const nbJoursParSemaine=c.joursFixe?c.joursFixe.filter(j=>j).length:
-    (c.semTypes&&c.semTypes[0]?.jours?c.semTypes[0].jours.filter(j=>j).length:5);
-  const seuilAcq=nbJoursParSemaine===5?20:nbJoursParSemaine===4?16:
-    nbJoursParSemaine===3?12:nbJoursParSemaine===2?8:4;
+  const nbJoursParSemaine=c.th==='plan'?null:
+    (c.joursFixe?c.joursFixe.filter(j=>j).length:
+    (c.semTypes&&c.semTypes[0]?.jours?c.semTypes[0].jours.filter(j=>j).length:5));
+  const seuilAcq=nbJoursParSemaine===null?null:
+    (nbJoursParSemaine===5?20:nbJoursParSemaine===4?16:
+    nbJoursParSemaine===3?12:nbJoursParSemaine===2?8:4);
 
   for(let anneeRef=anneeContratDebut-1; anneeRef<=anneeRefDebut; anneeRef++){
     const debutRef=new Date(anneeRef,5,1);   // 1er juin
@@ -2205,7 +2207,31 @@ function calcCongesContrat(c){
         if(statut==='arret') joursArret++;
       });
     });
-    const cgNormaux=(joursComptes/seuilAcq)*2.5;
+    // Pour planning : compter les semaines travaillées
+    let cgNormaux;
+    if(seuilAcq===null){
+      // Contrat sur planning : 2.5j par 4 semaines travaillées
+      // On compte les semaines où au moins un jour est travaillé/prévu
+      const semTravaillees=new Set();
+      Object.entries(c.fiches).forEach(([key,fiche])=>{
+        if(!fiche.valide) return;
+        const [ay,am]=key.split('-').map(Number);
+        const dateF=new Date(ay,am-1,1);
+        if(dateF<debutRef||dateF>finRef) return;
+        fiche.jours.forEach(j=>{
+          const dateJ=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
+          if(dateJ<debutRef||dateJ>finRef) return;
+          if(dateJ<dateDebContrat) return;
+          const statut=j.statut||getStatutPrevu(c,j);
+          if(['prevu','travaille','ferie','conges-acq','abs-rem','abs-enfant'].includes(statut)||(!j.statut&&j.heureDebReel)){
+            semTravaillees.add(getSemISO(j.date)+'-'+getSemAnnee(j.date));
+          }
+        });
+      });
+      cgNormaux=(semTravaillees.size/4)*2.5;
+    } else {
+      cgNormaux=(joursComptes/seuilAcq)*2.5;
+    }
     const cgArret=(joursArret/seuilAcq)*2;
     let cgTotal=Math.min(30, cgNormaux+cgArret);
     // Ajouter enfants à charge (depuis congesAM)
