@@ -4704,6 +4704,7 @@ function majFichesCgAm(anneeDebut){
       apresFinStr.setDate(apresFinStr.getDate()+1);
       const avantReprise=new Date(reprise);
       avantReprise.setDate(avantReprise.getDate()-1);
+             
       // Vérifier si c'est une semaine non prévue
       let tousNonPrevus=true;
       let tmp=new Date(apresFinStr);
@@ -4818,10 +4819,10 @@ function majFichesCgAm(anneeDebut){
             const veilleAcquis=['conges-acq','conges-anticipe'].includes(veilleJour?.statut);
             const lendAcquis=['conges-acq','conges-anticipe'].includes(lendJour?.statut);
             if(veilleAcquis&&lendAcquis){
-              // Reste férié
+              // Reste férié (entouré de jours acquis)
               cur.setDate(cur.getDate()+1);continue;
             }
-            // Sinon décompté comme conges-non
+            // Sinon décompté comme congé (acquis ou non)
             compteurTotal++;
             jour.statut=compteurTotal<=quotaDisponible?'conges-acq':'conges-non';
           } else {
@@ -4834,10 +4835,34 @@ function majFichesCgAm(anneeDebut){
       }
     });
 
+   // Traiter les fériés non pointés encadrés par des congés
+    Object.values(c.fiches).forEach(fiche=>{
+      fiche.jours.forEach(jour=>{
+        if(jour.date<periodeDebut||jour.date>periodeFin) return;
+        if(jour.statut) return;
+        if(!isFerie(jour.date,c)) return;
+        const parts=jour.date.split('-').map(Number);
+        const d=new Date(parts[0],parts[1]-1,parts[2]);
+        const veilleD=new Date(d); veilleD.setDate(veilleD.getDate()-1);
+        const lendD=new Date(d); lendD.setDate(lendD.getDate()+1);
+        const veilleKey=veilleD.getFullYear()+'-'+String(veilleD.getMonth()+1).padStart(2,'0');
+        const lendKey=lendD.getFullYear()+'-'+String(lendD.getMonth()+1).padStart(2,'0');
+        const veilleStr=veilleD.getFullYear()+'-'+String(veilleD.getMonth()+1).padStart(2,'0')+'-'+String(veilleD.getDate()).padStart(2,'0');
+        const lendStr=lendD.getFullYear()+'-'+String(lendD.getMonth()+1).padStart(2,'0')+'-'+String(lendD.getDate()).padStart(2,'0');
+        const veilleJour=c.fiches[veilleKey]?.jours.find(j=>j.date===veilleStr);
+        const lendJour=c.fiches[lendKey]?.jours.find(j=>j.date===lendStr);
+        const veilleConges=['conges-acq','conges-non','conges-anticipe'].includes(veilleJour?.statut);
+        const lendConges=['conges-acq','conges-non','conges-anticipe'].includes(lendJour?.statut);
+        if(veilleConges&&lendConges){
+          const veilleAcq=['conges-acq','conges-anticipe'].includes(veilleJour?.statut);
+          const lendAcq=['conges-acq','conges-anticipe'].includes(lendJour?.statut);
+          jour.statut=veilleAcq&&lendAcq?'conges-acq':'conges-non';
+        }
+      });
+    });
     const cidx=S.contrats.findIndex(x=>x.id==c.id);
     if(cidx!==-1)S.contrats[cidx]=c;
   });
-
   S.contrats.forEach((c,i)=>{if(c.fiches)S.contrats[i]=c;});
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   saveToFirestore();
