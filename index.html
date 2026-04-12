@@ -2226,26 +2226,50 @@ function validerFiche(contratId,key){
   renderDetTab(contratId,'presence');
 }
 
+ function getDateFromSemISO(sem,annee){
+  // Trouver le premier lundi de la semaine ISO
+  const jan4=new Date(annee,0,4); // 4 janvier est toujours en semaine 1
+  const jourSemJan4=jan4.getDay()||7; // lundi=1...dimanche=7
+  const lundi=new Date(jan4);
+  lundi.setDate(jan4.getDate()-(jourSemJan4-1)+(sem-1)*7);
+  return lundi;
+}
+         
 function calcCongesContrat(c){
   if(!c.fiches||!c.dateDeb) return;
   if(!c.conges) c.conges={};
   const dateDebContrat=new Date(c.dateDeb);
   const now=new Date();
-  // Générer toutes les années de référence depuis le début du contrat
   const anneeRefDebut=now.getMonth()>=5?now.getFullYear():now.getFullYear()-1;
   const anneeContratDebut=dateDebContrat.getFullYear();
-  const nbJoursParSemaine=c.th==='plan'?null:
-    (c.joursFixe?c.joursFixe.filter(j=>j).length:
-    (c.semTypes&&c.semTypes[0]?.jours?c.semTypes[0].jours.filter(j=>j).length:5));
-  const seuilAcq=nbJoursParSemaine===null?null:
-    (nbJoursParSemaine===5?20:nbJoursParSemaine===4?16:
-    nbJoursParSemaine===3?12:nbJoursParSemaine===2?8:4);
+
+  // Calculer jours max par semaine selon type de contrat
+  function getJoursMax(){
+    if(c.th==='plan'){
+      if(c.planType==='var'&&c.planVar){
+        const totalJours=c.planVar.reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
+        const totalSem=c.planVar.reduce((t,v)=>t+(v.s||0),0);
+        return totalSem>0?totalJours/totalSem:5;
+      }
+      if(c.planType==='min') return c.jMaxMin||5;
+      return 5;
+    }
+    if(c.joursFixe) return c.joursFixe.filter(j=>j).length||5;
+    if(c.semTypes&&c.semTypes[0]?.jours) return c.semTypes[0].jours.filter(j=>j).length||5;
+    return 5;
+  }
+  const joursMax=getJoursMax();
 
   for(let anneeRef=anneeContratDebut-1; anneeRef<=anneeRefDebut; anneeRef++){
-    const debutRef=new Date(anneeRef,5,1);   // 1er juin
-    const finRef=new Date(anneeRef+1,4,31);  // 31 mai
+    const debutRef=new Date(anneeRef,5,1);
+    const finRef=new Date(anneeRef+1,4,31);
     const estTerminee=finRef<now;
-    let joursComptes=0, joursArret=0;
+
+    // Regrouper les jours par semaine ISO
+    const semaines={}; // {semKey: {jours:[], estTerminee:bool}}
+    let joursHorsPlanning=0; // jours travaillés hors planning (comp)
+    let joursArretTotal=0;
+
     Object.entries(c.fiches).forEach(([key,fiche])=>{
       if(!fiche.valide) return;
       const [ay,am]=key.split('-').map(Number);
@@ -2254,52 +2278,69 @@ function calcCongesContrat(c){
       fiche.jours.forEach(j=>{
         const dateJ=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
         if(dateJ<debutRef||dateJ>finRef) return;
-        // Ignorer les jours hors contrat
         if(dateJ<dateDebContrat) return;
         const statut=j.statut||getStatutPrevu(c,j);
-        const compte=['prevu','travaille','ferie','conges-acq','conges-anticipe','abs-rem','abs-enfant'].includes(statut)
-          ||(!j.statut&&j.heureDebReel);
-        if(compte) joursComptes++;
-        if(statut==='arret') joursArret++;
+        const semKey=getSemISO(j.date)+'-'+getSemAnnee(j.date);
+        if(!semaines[semKey]) semaines[semKey]={jours:[]};
+        semaines[semKey].jours.push({statut,heureDebReel:j.heureDebReel,date:j.date});
+        // Jours hors planning (travaillés en extra)
+        if(statut==='travaille'&&getStatutPrevu(c,j)==='non-prevu') joursHorsPlanning++;
+        if(statut==='arret') joursArretTotal++;
       });
     });
-    // Pour planning : compter les semaines travaillées
-    let cgNormaux;
-    if(seuilAcq===null){
-      // Contrat sur planning : 2.5j par 4 semaines travaillées
-      // On compte les semaines où au moins un jour est travaillé/prévu
-      const semTravaillees=new Set();
-      Object.entries(c.fiches).forEach(([key,fiche])=>{
-        if(!fiche.valide) return;
-        const [ay,am]=key.split('-').map(Number);
-        const dateF=new Date(ay,am-1,1);
-        if(dateF<debutRef||dateF>finRef) return;
-        fiche.jours.forEach(j=>{
-          const dateJ=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
-          if(dateJ<debutRef||dateJ>finRef) return;
-          if(dateJ<dateDebContrat) return;
-          const statut=j.statut||getStatutPrevu(c,j);
-          if(['prevu','travaille','ferie','conges-acq','abs-rem','abs-enfant'].includes(statut)||(!j.statut&&j.heureDebReel)){
-            semTravaillees.add(getSemISO(j.date)+'-'+getSemAnnee(j.date));
-          }
-        });
-      });
-      cgNormaux=(semTravaillees.size/4)*2.5;
-    } else {
-      cgNormaux=(joursComptes/seuilAcq)*2.5;
-    }
-   const cgArret=seuilAcq!==null?(joursArret/seuilAcq)*2:0;
+
+    // Déterminer si chaque semaine est terminée (dernier jour passé)
+    // et calculer le prorata
+    let totalSemaines=0;
+    let totalSemainesArret=0;
+
+    Object.entries(semaines).forEach(([semKey,sem])=>{
+      const jours=sem.jours;
+      if(!jours.length) return;
+
+      // La semaine est-elle terminée ? (dernier jour de la semaine < aujourd'hui)
+      const [semNum,semAn]=semKey.split('-');
+      // Trouver le dernier jour de cette semaine ISO (dimanche)
+      const premierLundi=getDateFromSemISO(parseInt(semNum),parseInt(semAn));
+      const dernierDimanche=new Date(premierLundi);
+      dernierDimanche.setDate(dernierDimanche.getDate()+6);
+      const semTerminee=dernierDimanche<now;
+
+      // Compter les absences non rémunérées
+      const absNonRem=jours.filter(j=>['abs-am','abs-non','arret'].includes(j.statut)).length;
+      const absArret=jours.filter(j=>j.statut==='arret').length;
+
+      if(semTerminee){
+        // Semaine terminée : (joursMax - absNonRem) / joursMax
+        const prorata=Math.max(0,(joursMax-absNonRem)/joursMax);
+        totalSemaines+=prorata;
+        totalSemainesArret+=absArret>0?absArret/joursMax:0;
+      } else {
+        // Semaine en cours : jours effectivement travaillés / joursMax
+        const joursTravailles=jours.filter(j=>j.heureDebReel).length;
+        totalSemaines+=joursTravailles/joursMax;
+      }
+    });
+
+    // Ajouter les jours hors planning regroupés en semaines
+    totalSemaines+=Math.floor(joursHorsPlanning/joursMax);
+
+    // Calcul congés
+    const cgNormaux=(totalSemaines/4)*2.5;
+    const cgArret=(totalSemainesArret/4)*2;
     const cgBrut=cgNormaux+cgArret;
     let cgTotal=isNaN(cgBrut)?0:Math.min(30,cgBrut);
-    // Ajouter enfants à charge (depuis congesAM)
+
+    // Enfants à charge
     if(S.congesAM){
       const amData=S.congesAM[anneeRef];
       const nbEnfants=amData?.enfants||0;
-      if(nbEnfants>0) cgTotal=Math.min(30, cgTotal+nbEnfants*2);
+      if(nbEnfants>0) cgTotal=Math.min(30,cgTotal+nbEnfants*2);
     }
-    // Arrondir : supérieur si année terminée, inférieur si en cours
+
     const acquis=estTerminee?Math.ceil(cgTotal):Math.floor(cgTotal);
-    // Calculer jours pris = jours conges-acq dans les fiches validées
+
+    // Jours pris
     let prisDansRef=0;
     Object.entries(c.fiches).forEach(([key,fiche])=>{
       if(!fiche.valide) return;
@@ -2309,17 +2350,17 @@ function calcCongesContrat(c){
       fiche.jours.forEach(j=>{
         const dateJ=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
         if(dateJ<debutRef||dateJ>finRef) return;
-       if(j.statut==='conges-acq'||j.statut==='conges-anticipe') prisDansRef++;
+        if(j.statut==='conges-acq'||j.statut==='conges-anticipe') prisDansRef++;
       });
     });
+
     c.conges[anneeRef]={
-      acquis, pris:prisDansRef,
+      acquis,pris:prisDansRef,
       restants:Math.max(0,acquis-prisDansRef),
-      estTerminee, joursComptes, joursArret,
-      anneeRef, anneeRefFin:anneeRef+1
+      estTerminee,joursComptes:Math.round(totalSemaines*joursMax),joursArret:joursArretTotal,
+      anneeRef,anneeRefFin:anneeRef+1
     };
   }
-  // Année en cours (raccourci)
   c.congesCourants=c.conges[anneeRefDebut]||{acquis:0,pris:0,restants:0};
 }
 
