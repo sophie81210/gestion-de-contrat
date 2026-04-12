@@ -1842,12 +1842,18 @@ const statutPrevuJ=getStatutPrevu(c,j);
     </tr>`;
   }).join('');
          
-  // En-têtes colonnes repas
+ // En-têtes colonnes repas
   const repasHeaders=aRepas?`<th style="padding:5px 2px;font-size:10px">Repas</th>`:'';
   const kmHeader=aKm?`<th style="padding:5px 2px;font-size:10px">Km</th>`:'';
 
+  // Détecter les poses de congés dans la fiche
+  const aDesConges=fiche.jours.some(j=>['conges-acq','conges-non','conges-anticipe'].includes(j.statut));
+  const anticipeActif=fiche.anticipeActif!==undefined?fiche.anticipeActif:(c.cgAnticipe==='oui');
+  const anticipeAutorise=c.cgAnticipe==='oui';
+
   // Récap
   const recap=calcRecapFiche(c,fiche);
+  cont.innerHTML=
 
   cont.innerHTML=`
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
@@ -1871,6 +1877,18 @@ const statutPrevuJ=getStatutPrevu(c,j);
         <tbody>${lignes}</tbody>
       </table>
     </div>
+    ${aDesConges&&!fiche.valide?`
+    <div class="card" style="margin-top:10px;background:${anticipeActif?'#f5f0ff':'#fff'}">
+      <div style="display:flex;align-items:center;gap:10px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600">
+          <input type="checkbox" ${anticipeActif?'checked':''} 
+            style="width:16px;height:16px;accent-color:var(--m)"
+            onchange="toggleAnticipe(${contratId},'${key}',this.checked)">
+          Prise de congés par anticipation
+        </label>
+        ${!anticipeAutorise?`<span style="font-size:11px;color:var(--al)">(non autorisé au contrat — <button class="btn bd bsm" onclick="toast('Créez un avenant pour autoriser la prise anticipée')">?</button>)</span>`:''}
+      </div>
+    </div>`:''}
     <div class="card" style="margin-top:10px">
       <div class="ctitle">Récapitulatif — ${label}</div>
       <table id="recap-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
@@ -1885,7 +1903,31 @@ const statutPrevuJ=getStatutPrevu(c,j);
           <button class="btn bp" onclick="validerFiche(${contratId},'${key}')">✓ Valider la feuille du mois</button>`}
     </div>`;
 }
-          
+
+         function toggleAnticipe(contratId,key,val){
+  const c=S.contrats.find(x=>x.id==contratId);
+  if(!c||!c.fiches||!c.fiches[key]) return;
+  if(val&&c.cgAnticipe!=='oui'){
+    toast('⚠ La prise par anticipation n\'est pas autorisée au contrat');
+    ouvrirFiche(contratId,key);
+    return;
+  }
+  c.fiches[key].anticipeActif=val;
+  const cidx=S.contrats.findIndex(x=>x.id==contratId);
+  if(cidx!==-1) S.contrats[cidx]=c;
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  S.ficheModifiee=true;
+  // Recalculer les statuts congés avec le nouveau choix
+  majFichesCgAm(getAnneeAmPourDate(key));
+  ouvrirFiche(contratId,key);
+}
+
+function getAnneeAmPourDate(key){
+  const [ay,am]=key.split('-').map(Number);
+  // Année AM : juin → mai suivant
+  return am>=6?ay:ay-1;
+}
+         
 function confirmerHeuresPrevues(contratId,key,idx){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c||!c.fiches||!c.fiches[key])return;
