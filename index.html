@@ -4864,14 +4864,24 @@ function majFichesCgAm(anneeDebut){
       const moisPrecDate=new Date(keyMoisPrec+'-01');
       let quotaAcquis=0;
       if(c.conges){
-        // Trouver l'année de ref dont la période couvre ce mois
+        // Quota acquis = uniquement les années terminées
         Object.values(c.conges).forEach(cg=>{
+          if(!cg.estTerminee) return;
           const debutRef=new Date(cg.anneeRef,5,1);
           const finRef=new Date(cg.anneeRef+1,4,31);
           if(moisPrecDate>=debutRef&&moisPrecDate<=finRef) quotaAcquis+=cg.acquis||0;
         });
       }
+      // Quota anticipé = jours en cours d'acquisition (année non terminée)
+      let quotaAnticipe=0;
+      if(c.conges&&c.cgAnticipe==='oui'){
+        Object.values(c.conges).forEach(cg=>{
+          if(cg.estTerminee) return;
+          quotaAnticipe+=cg.acquis||0;
+        });
+      }
       const quotaDisponible=Math.max(0,quotaAcquis-compteurTotal);
+      const quotaAnticipeDisponible=Math.max(0,quotaAnticipe-Math.max(0,compteurTotal-quotaAcquis));
 
       // Appliquer les statuts jour par jour
       const dStart=new Date(debut);
@@ -4929,12 +4939,24 @@ function majFichesCgAm(anneeDebut){
             // Sinon décompté comme congé (acquis ou non)
             compteurTotal++;
             const anticipeOk=c.cgAnticipe==='oui'&&(c.fiches[moisKey]?.anticipeActif!==false);
-            jour.statut=compteurTotal<=quotaDisponible?'conges-acq':(anticipeOk?'conges-anticipe':'conges-non');
+            if(compteurTotal<=quotaDisponible){
+              jour.statut='conges-acq';
+            } else if(anticipeOk&&compteurTotal<=quotaDisponible+quotaAnticipeDisponible){
+              jour.statut='conges-anticipe';
+            } else {
+              jour.statut='conges-non';
+            }
           } else {
             // Jour ouvrable décompté
             compteurTotal++;
             const anticipeOk=c.cgAnticipe==='oui'&&(c.fiches[moisKey]?.anticipeActif!==false);
-            jour.statut=compteurTotal<=quotaDisponible?'conges-acq':(anticipeOk?'conges-anticipe':'conges-non');
+            if(compteurTotal<=quotaDisponible){
+              jour.statut='conges-acq';
+            } else if(anticipeOk&&compteurTotal<=quotaDisponible+quotaAnticipeDisponible){
+              jour.statut='conges-anticipe';
+            } else {
+              jour.statut='conges-non';
+            }
           }
         }
         cur.setDate(cur.getDate()+1);
