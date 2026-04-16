@@ -1968,10 +1968,8 @@ function confirmerHeuresPrevues(contratId,key,idx){
   j.heureFinReel=j.heureFinPrev;
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1)S.contrats[cidx]=c;
- localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-  S.ficheModifiee=true;
-  const bandeau=document.getElementById('bandeau-non-enregistre');
-  if(bandeau) bandeau.style.display='block';
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  saveToFirestore();
   ouvrirFiche(contratId,key);
 }       
     
@@ -2253,34 +2251,18 @@ function validerFiche(contratId,key){
     }
   });
   if(manquant){toast('⚠ Heures manquantes : jours '+manquantJours.join(', '));return;}
-  // Vérifier que la fiche précédente est validée
-  const keysTries=Object.keys(c.fiches).sort();
-  const idxKey=keysTries.indexOf(key);
-  if(idxKey>0){
-    const keyPrec=keysTries[idxKey-1];
-    if(c.fiches[keyPrec]&&!c.fiches[keyPrec].valide){
-      toast('⚠ La feuille de '+keyPrec+' doit être validée en premier');
-      return;
-    }
-  }
   c.fiches[key].valide=true;c.fiches[key].complete=true;
   S.ficheModifiee=false;
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  saveToFirestore();
   // Calculer et mettre à jour les congés acquis
   calcCongesContrat(c);
   const cidx2=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx2!==-1) S.contrats[cidx2]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-  // Mettre à jour les statuts congés dans toutes les fiches
-  const anneeAm=getAnneeAmPourDate(key);
-  console.log('appel majFichesCgAm pour annee:', anneeAm, 'congesAM existe:', !!(S.congesAM&&S.congesAM[anneeAm]));
-  if(S.congesAM&&S.congesAM[anneeAm]) majFichesCgAm(anneeAm);
-  if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
-      .catch(e=>console.error('Save validerFiche:',e));
-  }
+  saveToFirestore();
   toast('Feuille de '+MOIS[c.fiches[key].mois]+' validée !');
   renderDetTab(contratId,'presence');
 }
@@ -2297,8 +2279,7 @@ function validerFiche(contratId,key){
 function calcCongesContrat(c){
   if(!c.fiches||!c.dateDeb) return;
   if(!c.conges) c.conges={};
- const [ddy,ddm,ddd]=c.dateDeb.split('-').map(Number);
-  const dateDebContrat=new Date(ddy,ddm-1,ddd);
+  const dateDebContrat=new Date(c.dateDeb);
   const now=new Date();
   const anneeRefDebut=now.getMonth()>=5?now.getFullYear():now.getFullYear()-1;
   const anneeContratDebut=dateDebContrat.getFullYear();
@@ -4991,23 +4972,20 @@ function majFichesCgAm(anneeDebut){
       const moisPrecDate=new Date(keyMoisPrec+'-01');
       let quotaAcquis=0;
       if(c.conges){
-        // Quota acquis = années terminées AVANT le début de la pose
+        // Quota acquis = uniquement les années terminées
         Object.values(c.conges).forEach(cg=>{
           if(!cg.estTerminee) return;
+          const debutRef=new Date(cg.anneeRef,5,1);
           const finRef=new Date(cg.anneeRef+1,4,31);
-          if(finRef<debutDate) quotaAcquis+=cg.acquis||0;
+          if(moisPrecDate>=debutRef&&moisPrecDate<=finRef) quotaAcquis+=cg.acquis||0;
         });
       }
       // Quota anticipé = jours en cours d'acquisition (année non terminée)
       let quotaAnticipe=0;
       if(c.conges&&c.cgAnticipe==='oui'){
         Object.values(c.conges).forEach(cg=>{
-          const debutRef=new Date(cg.anneeRef,5,1);
-          const finRef=new Date(cg.anneeRef+1,4,31);
-          // L'année couvre la période de la pose ET n'est pas terminée avant la pose
-          if(debutDate>=debutRef&&debutDate<=finRef){
-            quotaAnticipe+=cg.acquis||0;
-          }
+          if(cg.estTerminee) return;
+          quotaAnticipe+=cg.acquis||0;
         });
       }
       const quotaDisponible=Math.max(0,quotaAcquis-compteurTotal);
