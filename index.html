@@ -2637,7 +2637,8 @@ hTheoriques=hTheoriques/60;
     const estCongesNon46Travaille=false; // Les congés non acquis ne sont pas déduits pour les contrats 46 sem
     const estCongesNonDeduit=estCongesNonAcq52||estCongesNon46Travaille;
     const absDeduites=['abs-am','arret','abs-non','abs-partielle'];
-   // hors-contrat : déduit seulement si c'était une semaine prévue travaillée
+           
+   // hors-contrat : déduit même si la semaine n'était pas prévu travaillée
     if(statut==='hors-contrat'){
       let horsContratDeduit=false;
       if(j.heureDebPrev&&j.heureFinPrev){
@@ -2648,8 +2649,30 @@ hTheoriques=hTheoriques/60;
         const typeSemHC=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKeyHC];
         const volHC=typeSemHC?c.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemHC):null;
         const jourIdxHC=j.jourSemaine===0?6:j.jourSemaine-1;
-       if(volHC&&volHC.jours&&volHC.jours[jourIdxHC]) horsContratDeduit=true;
-        // Semaine non pointée : déduire si jour possiblement travaillé
+       if(volHC&&volHC.jours&&volHC.jours[jourIdxHC]){
+          // Vérifier si le quota sera atteint par les jours dans le contrat
+          const [ay,am]=j.date.split('-').map(Number);
+          const dateDebC=new Date(c.dateDeb);
+          // Compter les jours possibles dans le contrat pour cette semaine
+          const semDebut=new Date(ay,am-1,parseInt(j.date.split('-')[2]));
+          let joursDansContrat=0;
+          for(let d=1;d<=7;d++){
+            const cur=new Date(semDebut);
+            cur.setDate(semDebut.getDate()+d);
+            const curStr=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
+            if(cur>=dateDebC&&getSemISO(curStr)===getSemISO(j.date)){
+              const idx=cur.getDay()===0?6:cur.getDay()-1;
+              if(volHC.jours[idx]) joursDansContrat++;
+            }
+          }
+          if(!hAbsDedJoursCpt[semKeyHC]) hAbsDedJoursCpt[semKeyHC]=0;
+          if(hAbsDedJoursCpt[semKeyHC]+joursDansContrat<(volHC.j||1)){
+            hAbsDedJoursCpt[semKeyHC]++;
+            horsContratDeduit=true;
+          }
+        }
+        
+               // Semaine non pointée : déduire si jour possiblement travaillé
         if(!volHC){
           const jourPossibleHC=c.planVar.some(v=>v.jours&&v.jours[jourIdxHC]);
           if(jourPossibleHC){
