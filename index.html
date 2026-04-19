@@ -2703,7 +2703,45 @@ const hParSemainePrecMois={};
     }
   });
 hTheoriques=hTheoriques/60;
-  console.log('hTheoriques calculé:', hTheoriques, 'periodeAv:', periodeAv);
+  // Pour les périodes d'avenant, recalculer hTheoriques sur tout le mois
+  if(dateAvenantStr){
+    let hTheoriquesMois=0;
+    const premierJourMois=new Date(fiche.annee,fiche.mois,1);
+    const dernierJourMois=new Date(fiche.annee,fiche.mois+1,0);
+    const semJoursCptM={};
+    const semTheoriquesVuesM=new Set();
+    for(let d=new Date(premierJourMois);d<=dernierJourMois;d.setDate(d.getDate()+1)){
+      const dateStr=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+      const prevus=getHeuresPrevues(c,new Date(d));
+      const jFake={date:dateStr,jourSemaine:d.getDay(),heureDebPrev:prevus.debut==='prévu'?null:prevus.debut,heureFinPrev:prevus.fin,planVarPrevu:!!(prevus.planVar)};
+      if(jFake.heureDebPrev&&jFake.heureFinPrev){
+        hTheoriquesMois+=(toM(jFake.heureFinPrev)-toM(jFake.heureDebPrev))/60;
+      } else if(sourceActif.th==='plan'&&sourceActif.planType==='var'&&sourceActif.planVar){
+        const semKeyTh=getSemISO(dateStr);
+        const agKeyTh=getKeyAgenda(semKeyTh,getSemAnnee(dateStr));
+        const typeSemTh=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKeyTh];
+        const volTh=typeSemTh?sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemTh):null;
+        const jourIdxTh=d.getDay()===0?6:d.getDay()-1;
+        if(volTh&&volTh.jours&&volTh.jours[jourIdxTh]){
+          if(!semJoursCptM[semKeyTh]) semJoursCptM[semKeyTh]=0;
+          if(semJoursCptM[semKeyTh]<(volTh.j||1)){
+            hTheoriquesMois+=volTh.h/volTh.j;
+            semJoursCptM[semKeyTh]++;
+          }
+        }
+      } else if(sourceActif.th==='plan'&&sourceActif.planType==='min'){
+        const jourIdxTh=d.getDay()===0?6:d.getDay()-1;
+        if(sourceActif.joursMin&&sourceActif.joursMin[jourIdxTh]){
+          if(!semJoursCptM[getSemISO(dateStr)]) semJoursCptM[getSemISO(dateStr)]=0;
+          if(semJoursCptM[getSemISO(dateStr)]<(sourceActif.jMaxMin||4)){
+            hTheoriquesMois+=sourceActif.hMin/sourceActif.jMaxMin;
+            semJoursCptM[getSemISO(dateStr)]++;
+          }
+        }
+      }
+    }
+    if(hTheoriquesMois>0) hTheoriques=hTheoriquesMois;
+  }
   if(hTheoriques<=0) hTheoriques=hMensu;
          
   // Pré-calcul des heures d'absence par semaine (pour ajuster le seuil des heures comp)
