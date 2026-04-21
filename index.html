@@ -5579,33 +5579,44 @@ function majFichesCgAm(anneeDebut){
     });
            
 // Traiter les fériés non cochés dans les congés AM
-    // Si un férié non coché est entouré de congés → conges-non (ou reste ferie si acquis)
+    // Un férié reste ferie sauf si jour ouvrable avant/après est en arret/abs-enfant/conges-non
     Object.values(c.fiches).forEach(fiche=>{
       if(fiche.valide) return;
       fiche.jours.forEach(jour=>{
         if(jour.date<periodeDebut||jour.date>periodeFin) return;
-        if(jour.statut) return; // déjà traité
+        if(jour.statut) return;
         if(!isFerie(jour.date,c)) return;
-        // Vérifier si entouré de congés
-        const parts=jour.date.split('-').map(Number);
-        const d=new Date(parts[0],parts[1]-1,parts[2]);
-        const veilleD=new Date(d);veilleD.setDate(veilleD.getDate()-1);
-        const lendD=new Date(d);lendD.setDate(lendD.getDate()+1);
-        const veilleKey=veilleD.getFullYear()+'-'+String(veilleD.getMonth()+1).padStart(2,'0');
-        const lendKey=lendD.getFullYear()+'-'+String(lendD.getMonth()+1).padStart(2,'0');
-        const veilleStr=veilleD.getFullYear()+'-'+String(veilleD.getMonth()+1).padStart(2,'0')+'-'+String(veilleD.getDate()).padStart(2,'0');
-        const lendStr=lendD.getFullYear()+'-'+String(lendD.getMonth()+1).padStart(2,'0')+'-'+String(lendD.getDate()).padStart(2,'0');
-        const veilleJour=c.fiches[veilleKey]?.jours.find(j=>j.date===veilleStr);
-        const lendJour=c.fiches[lendKey]?.jours.find(j=>j.date===lendStr);
-        const veilleConges=['conges-acq','conges-anticipe','conges-non'].includes(veilleJour?.statut);
-        const lendConges=['conges-acq','conges-anticipe','conges-non'].includes(lendJour?.statut);
-        if(!veilleConges&&!lendConges) return; // pas entouré de congés
-        const veilleAcquis=['conges-acq','conges-anticipe'].includes(veilleJour?.statut);
-        const lendAcquis=['conges-acq','conges-anticipe'].includes(lendJour?.statut);
-        if(veilleAcquis&&lendAcquis){
-          // Reste férié (couvert par les acquis)
-          return;
+        // Chercher le jour ouvrable prévu avant et après
+        const statutsDeduit=['conges-non','arret','abs-enfant'];
+        const statutsRemuneres=['prevu','travaille','abs-partielle','abs-rem','conges-acq','conges-anticipe','ferie'];
+        // Chercher vers l'arrière
+        let statutPrev=null;
+        const dPrev=new Date(jour.date.split('-')[0],parseInt(jour.date.split('-')[1])-1,parseInt(jour.date.split('-')[2]));
+        for(let i=1;i<=14;i++){
+          dPrev.setDate(dPrev.getDate()-1);
+          const ds=dPrev.getFullYear()+'-'+String(dPrev.getMonth()+1).padStart(2,'0')+'-'+String(dPrev.getDate()).padStart(2,'0');
+          const mk=dPrev.getFullYear()+'-'+String(dPrev.getMonth()+1).padStart(2,'0');
+          const jPrev=c.fiches[mk]?.jours.find(j=>j.date===ds);
+          if(jPrev){
+            const sp=jPrev.statut||getStatutPrevu(c,jPrev);
+            if(sp!=='repos'&&sp!=='non-prevu'&&sp!=='hors-contrat'){statutPrev=jPrev.statut||sp;break;}
+          }
         }
+        // Chercher vers l'avant
+        let statutNext=null;
+        const dNext=new Date(jour.date.split('-')[0],parseInt(jour.date.split('-')[1])-1,parseInt(jour.date.split('-')[2]));
+        for(let i=1;i<=14;i++){
+          dNext.setDate(dNext.getDate()+1);
+          const ds=dNext.getFullYear()+'-'+String(dNext.getMonth()+1).padStart(2,'0')+'-'+String(dNext.getDate()).padStart(2,'0');
+          const mk=dNext.getFullYear()+'-'+String(dNext.getMonth()+1).padStart(2,'0');
+          const jNext=c.fiches[mk]?.jours.find(j=>j.date===ds);
+          if(jNext){
+            const sp=jNext.statut||getStatutPrevu(c,jNext);
+            if(sp!=='repos'&&sp!=='non-prevu'&&sp!=='hors-contrat'){statutNext=jNext.statut||sp;break;}
+          }
+        }
+        // Si entouré de jours rémunérés → reste férié
+        if(!statutsDeduit.includes(statutPrev)&&!statutsDeduit.includes(statutNext)) return;
         // Sinon congés non acquis
         jour.statut='conges-non';
       });
