@@ -463,7 +463,7 @@ input[type=time].fi{width:auto;min-width:92px}
           if(cidx!==-1)S.contrats[cidx]=c;
           localStorage.setItem('cam_c',JSON.stringify(S.contrats));
           if(window.FB_USER&&window.fbSaveData){
-            window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
+            window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
               .catch(e=>console.error('Save supprAvenant:',e));
           }
         }
@@ -563,7 +563,7 @@ function saveParams(){
   S.params.indemEntretien.sort((a,b)=>a.debut.localeCompare(b.debut));
   localStorage.setItem('cam_params',JSON.stringify(S.params));
   if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[],params:S.params,congesAM:S.congesAM||{}})
+    window.fbSaveData(window.FB_USER.uid,{contrats:[],params:S.params,congesAM:{}})
       .catch(e=>console.error('Save params:',e));
   }
   toast('✓ Paramètres enregistrés');
@@ -885,7 +885,7 @@ function pointer(id,type){
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
+    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
       .catch(e=>console.error('Save pointer:',e));
   }
 
@@ -905,7 +905,7 @@ function pointer(id,type){
   }
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[S.contrats.find(x=>x.id==id)],params:{},congesAM:S.congesAM||{}})
+    window.fbSaveData(window.FB_USER.uid,{contrats:[S.contrats.find(x=>x.id==id)],params:{},congesAM:{}})
       .catch(e=>console.error('Save pointer2:',e));
   }
 
@@ -1639,12 +1639,12 @@ function initFichesContrat(c){
     const key=annee+'-'+String(mois+1).padStart(2,'0');
     if(!c.fiches[key]){c.fiches[key]=creerFiche(c,annee,mois);modifie=true;}
   });
-if(modifie){
+  if(modifie){
     const idx=S.contrats.findIndex(x=>x.id==c.id);
     if(idx!==-1) S.contrats[idx]=c;
     localStorage.setItem('cam_c',JSON.stringify(S.contrats));
     if(window.FB_USER&&window.fbSaveData){
-      window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
+      window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
         .catch(e=>console.error('Save initFiches:',e));
     }
   }
@@ -2130,7 +2130,11 @@ function enregistrerFiche(contratId,key){
   if(cidx!==-1)S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
-  saveToFirestore().then(()=>{
+    window.fbSaveData(window.FB_USER.uid,{
+      contrats:[c],
+      params:{},
+      congesAM:{}
+    }).then(()=>{
       S.ficheModifiee=false;
       toast('Feuille enregistrée ✓');
     }).catch(()=>toast('⚠ Erreur de sauvegarde'));
@@ -2142,6 +2146,7 @@ function enregistrerFiche(contratId,key){
   }
 }
  function majRecapFiche(contratId,key){
+  console.log('majRecapFiche appelé pour:', key);
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c||!c.fiches||!c.fiches[key])return;
   const fiche=c.fiches[key];
@@ -2391,13 +2396,11 @@ function validerFiche(contratId,key){
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   // Mettre à jour les statuts congés dans toutes les fiches
   const anneeAm=getAnneeAmPourDate(key);
-  if(S.congesAM&&S.congesAM[anneeAm]) majFichesCgAm(anneeAm,false);
+  if(S.congesAM&&S.congesAM[anneeAm]) majFichesCgAm(anneeAm);
   if(window.FB_USER&&window.fbSaveData){
-    const cMaj=S.contrats.find(x=>x.id==contratId);
-    window.fbSaveData(window.FB_USER.uid,{contrats:[cMaj],params:{},congesAM:{}})
+    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
       .catch(e=>console.error('Save validerFiche:',e));
   }
-  saveCongesAM();
   toast('Feuille de '+MOIS[c.fiches[key].mois]+' validée !');
   renderDetTab(contratId,'presence');
 }
@@ -2444,6 +2447,7 @@ function calcCongesContrat(c){
 
     // Regrouper les jours par semaine ISO
     const semaines={}; // {semKey: {jours:[], estTerminee:bool}}
+    let joursHorsPlanning=0; // jours travaillés hors planning (comp)
     let joursArretTotal=0;
 
     Object.entries(c.fiches).forEach(([key,fiche])=>{
@@ -2459,7 +2463,8 @@ function calcCongesContrat(c){
         const semKey=getSemISO(j.date)+'-'+getSemAnnee(j.date);
         if(!semaines[semKey]) semaines[semKey]={jours:[]};
         semaines[semKey].jours.push({statut,heureDebReel:j.heureDebReel,date:j.date});
-    
+        // Jours hors planning (travaillés en extra)
+        if(statut==='travaille'&&getStatutPrevu(c,j)==='non-prevu') joursHorsPlanning++;
         if(statut==='arret') joursArretTotal++;
       });
     });
@@ -2482,41 +2487,23 @@ function calcCongesContrat(c){
       const semTerminee=dernierDimanche<now;
 
       // Compter les absences non rémunérées
-    const absNonRem=jours.filter(j=>['abs-non','conges-non'].includes(j.statut)).length;
+     const absNonRem=jours.filter(j=>['abs-am','abs-non','conges-non'].includes(j.statut)).length;
       const absArret=jours.filter(j=>j.statut==='arret').length;
 
       if(semTerminee){
-        // Pour plan var : calcul existant
-        if(c.th==='plan'&&c.planType==='var'){
-          const prorata=Math.max(0,(joursMax-absNonRem)/joursMax);
-          totalSemaines+=prorata;
-          totalSemainesArret+=absArret>0?absArret/joursMax:0;
-        } else {
-          // Pour fixe/sem/min : compter uniquement les jours prévus travaillés
-          const joursPrevus=jours.filter(j=>{
-            if(['prevu','travaille','abs-partielle','abs-rem','conges-acq','conges-anticipe','arret','abs-non'].includes(j.statut)) return true;
-           if(j.statut==='ferie'){
-              const jourIdx=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])).getDay();
-              const jourIdxISO=jourIdx===0?6:jourIdx-1;
-              // Vérifier si ce jour est prévu au contrat (indépendamment du statut férié)
-              if(c.th==='fixe'&&c.joursFixe) return !!(c.joursFixe[jourIdxISO]);
-              if(c.th==='sem'&&c.semTypes) return c.semTypes.some(st=>st.jours&&st.jours[jourIdxISO]);
-              return false;
-            }
-            return false;
-          }).length;
-          if(joursPrevus>0){
-            const prorata=Math.max(0,(joursPrevus-absNonRem)/joursMax);
-            totalSemaines+=prorata;
-            totalSemainesArret+=absArret>0?absArret/joursMax:0;
-          }
-        }
+        // Semaine terminée : (joursMax - absNonRem) / joursMax
+        const prorata=Math.max(0,(joursMax-absNonRem)/joursMax);
+        totalSemaines+=prorata;
+        totalSemainesArret+=absArret>0?absArret/joursMax:0;
       } else {
         // Semaine en cours : jours effectivement travaillés / joursMax
         const joursTravailles=jours.filter(j=>j.heureDebReel).length;
         totalSemaines+=joursTravailles/joursMax;
       }
     });
+
+    // Ajouter les jours hors planning regroupés en semaines
+    totalSemaines+=Math.floor(joursHorsPlanning/joursMax);
 
     // Calcul congés
     const cgNormaux=(totalSemaines/4)*2.5;
@@ -2532,7 +2519,7 @@ function calcCongesContrat(c){
     }
 
     // Arrondir au supérieur seulement si toutes les fiches de l'année sont validées
-   const dernierMoisRef=new Date(anneeRef+1,5,1); // 1er juin = après mai
+    const dernierMoisRef=new Date(anneeRef+1,4,1); // juin de l'année suivante
     // Arrondi supérieur seulement si on est après la fin de l'année de référence
     // ET toutes les fiches existantes de l'année sont validées
     const apresFinRef=now>finRef;
@@ -2571,6 +2558,7 @@ function calcCongesContrat(c){
 function toMins(t){return toM(t);}
          
 function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAvenantStr,periodeAv,ficheComplete){
+         console.log('calcRecapFiche appelé periodeAv:',periodeAv,'nb jours:',fiche.jours.length,'dateAvenantStr:',dateAvenantStr);
   // Filtrer les jours si une période est spécifiée
  if(dateDebPeriode||dateFinPeriode){
     const joursDansPeriode=fiche.jours.filter(j=>{
@@ -2578,6 +2566,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       if(dateFinPeriode&&j.date>dateFinPeriode) return false;
       return true;
     });
+    console.log('filtre appliqué: joursDansPeriode:', joursDansPeriode.length, 'dateDebPeriode:', dateDebPeriode, 'dateFinPeriode:', dateFinPeriode);
     const ficheFiltre={...fiche,jours:joursDansPeriode};
     return calcRecapFiche(c,ficheFiltre,null,null,dateRefStr||dateDebPeriode,dateAvenantStr,periodeAv,ficheComplete||fiche);
   }
@@ -2767,6 +2756,7 @@ const hParSemainePrecMois={};
 hTheoriques=hTheoriques/60;
   // Pour les périodes d'avenant, recalculer hTheoriques sur tout le mois
   if(dateAvenantStr){
+           console.log('calcul hTheoriquesMois pour période:', periodeAv, 'dateAvenantStr:', dateAvenantStr);
     let hTheoriquesMois=0;
     const premierJourMois=new Date(fiche.annee,fiche.mois,1);
     const dernierJourMois=new Date(fiche.annee,fiche.mois+1,0);
@@ -2778,6 +2768,7 @@ hTheoriques=hTheoriques/60;
       const jFake={date:dateStr,jourSemaine:d.getDay(),heureDebPrev:prevus.debut==='prévu'?null:prevus.debut,heureFinPrev:prevus.fin,planVarPrevu:!!(prevus.planVar)};
       if(jFake.heureDebPrev&&jFake.heureFinPrev){
         const contrib=(toM(jFake.heureFinPrev)-toM(jFake.heureDebPrev))/60;
+        console.log(dateStr,'contrib:',contrib,'debut:',jFake.heureDebPrev,'fin:',jFake.heureFinPrev);
         hTheoriquesMois+=contrib;
       } else if(sourceActif.th==='plan'&&sourceActif.planType==='var'&&sourceActif.planVar){
         const semKeyTh=getSemISO(dateStr);
@@ -2803,6 +2794,7 @@ hTheoriques=hTheoriques/60;
         }
       }
     }
+   console.log('hTheoriquesMois calculé:', hTheoriquesMois, 'periodeAv:', periodeAv);
     if(hTheoriquesMois>0) hTheoriques=hTheoriquesMois;
            // Calculer hAbs pour les jours hors période
     let hAbsHorsPeriode=0;
@@ -2816,6 +2808,7 @@ hTheoriques=hTheoriques/60;
       const prevusHP=getHeuresPrevues(c,new Date(d),sourceActif);
       if(prevusHP.debut&&prevusHP.fin){
         const contribHP=(toM(prevusHP.fin)-toM(prevusHP.debut))/60;
+        console.log(dateStr,'hAbsHorsPeriode contrib:',contribHP,'periodeAv:',periodeAv);
         hAbsHorsPeriode+=contribHP;
       }
     }
@@ -2963,6 +2956,7 @@ hTheoriques=hTheoriques/60;
         const spHC=getStatutPrevu(c,j);
         if(spHC==='prevu') horsContratDeduit=true;
       }
+     if(j._horsContratAvenant) console.log(j.date,'_horsContratAvenant horsContratDeduit:',horsContratDeduit);
       if(horsContratDeduit) absDeduites.push('hors-contrat');
     }
     if(absEnfantDeductible) absDeduites.push('abs-enfant');
@@ -3007,6 +3001,7 @@ hTheoriques=hTheoriques/60;
       const doit52=c.tc==='52'&&(statutsDeduit52.includes(statutPrev)||statutsDeduit52.includes(statutNext));
       const doitTjrs=statutsDeduitTjrs.includes(statutPrev)||statutsDeduitTjrs.includes(statutNext);
       if(doitTjrs||doit52){
+        console.log(j.date,'férié déduit doitTjrs:',doitTjrs,'doit52:',doit52,'statutPrev:',statutPrev,'statutNext:',statutNext);
         absDeduites.push('ferie');
       }
     }
@@ -3128,6 +3123,7 @@ hTheoriques=hTheoriques/60;
       } else {
         hAbsJour=hPrev; // journée entière
       }
+    if(hAbsJour>0) console.log(j.date,'hAbsJour:',hAbsJour.toFixed(2),'statut:',statut);         
       hAbs+=hAbsJour;
     }
 
@@ -3193,18 +3189,12 @@ const forfait=indem.parJour||2.65;
     const tauxHAbs=(hMensu*txNet)/hTheoriques;
     montantAbsences=parseFloat((tauxHAbs*hAbs).toFixed(2));
   }
+  joursEnMoins=hMoyParJour>0&&txNet>0?parseFloat((montantAbsences/txNet/hMoyParJour).toFixed(1)):0;
+  nbJoursTrav=parseFloat((nbJoursMoisContrat+joursEnPlus-joursEnMoins).toFixed(1));
+ 
   // Heures à déduire = montantAbsences / txNet
   const hAbsDeduit=txNet>0?parseFloat((montantAbsences/txNet).toFixed(2)):0;
-  // Jours en moins : exclure les abs-partielles (comptent pour 1 jour)
-  const hAbsPartielles=fiche.jours.filter(j=>j.statut==='abs-partielle').reduce((t,j)=>{
-    if(j.heureDebPrev&&j.heureFinPrev&&j.heureDebReel&&j.heureFinReel){
-      return t+Math.max(0,(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60-(toM(j.heureFinReel)-toM(j.heureDebReel))/60);
-    }
-    return t+(j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:0);
-  },0);
-  const tauxHAbsJ=hTheoriques>0?(hMensu*txNet)/hTheoriques:txNet;
-  const montantAbsSansPartielles=Math.max(0,montantAbsences-parseFloat((tauxHAbsJ*hAbsPartielles).toFixed(2)));
-  joursEnMoins=hMoyParJour>0&&txNet>0?parseFloat((montantAbsSansPartielles/txNet/hMoyParJour).toFixed(1)):0;
+  joursEnMoins=hMoyParJour>0&&txNet>0?parseFloat((montantAbsences/txNet/hMoyParJour).toFixed(1)):0;
   nbJoursTrav=parseFloat((nbJoursMoisContrat+joursEnPlus-joursEnMoins).toFixed(1));
 
   // Montant h. comp : brut majoré → net → + exonération charges (11.31% du brut majoré)
@@ -3865,7 +3855,7 @@ function creerAgenda(cid){
   if(cidx!==-1)S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
+    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
       .catch(e=>console.error('Save creerAgenda:',e));
   }
   const agWrap=document.getElementById('agenda-wrap-'+cid);
@@ -4235,7 +4225,7 @@ function validerModifAgenda(cid,agid){
   }
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
+    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
       .catch(e=>console.error('Save agenda:',e));
   }
   toast('Agenda enregistré ✓');
@@ -4265,7 +4255,7 @@ function supprimerAgenda(cid,agid){
   if(cidx!==-1)S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
+    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
       .catch(e=>console.error('Save supprimerAgenda:',e));
   }
   const agWrap2=document.getElementById('agenda-wrap-'+cid);
@@ -4468,7 +4458,7 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
     localStorage.setItem('cam_c',JSON.stringify(S.contrats));
     const cModif=S.contrats.find(x=>x.id==idCible);
     if(window.FB_USER&&window.fbSaveData&&cModif){
-      window.fbSaveData(window.FB_USER.uid,{contrats:[cModif],params:{},congesAM:S.congesAM||{}})
+      window.fbSaveData(window.FB_USER.uid,{contrats:[cModif],params:{},congesAM:{}})
         .catch(e=>console.error('Save valider modif:',e));
     }
     const bs=document.getElementById('btn-signe');
@@ -4499,7 +4489,7 @@ toast('Contrat '+nom+' enregistré !');
  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   const cNew=S.contrats.find(x=>x.id==newId);
   if(window.FB_USER&&window.fbSaveData&&cNew){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[cNew],params:{},congesAM:S.congesAM||{}})
+    window.fbSaveData(window.FB_USER.uid,{contrats:[cNew],params:{},congesAM:{}})
       .catch(e=>console.error('Save valider new:',e));
   }
   const bs=document.getElementById('btn-signe');
@@ -4567,7 +4557,7 @@ function validerAvenant(){
   if(cidx!==-1)S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
+    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
       .catch(e=>console.error('Save validerAvenant:',e));
   }
   toast('Avenant n°'+av.num+' enregistré ✓');
@@ -4725,7 +4715,7 @@ function creerAvenant(id){
   if(cidx!==-1)S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
+    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
       .catch(e=>console.error('Save creerAvenant:',e));
   }
   ouvrirFormulaireAvenant(id,newAv.id);
@@ -4930,7 +4920,7 @@ function signerAvenant(){
   if(cidx!==-1)S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
+    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
       .catch(e=>console.error('Save avenant:',e));
   }
   toast('⏳ Signature en cours...');
@@ -5299,7 +5289,7 @@ function calcSeuilAcquis(c, anneeDebut, premierJourPose){
   return Math.min(30, seuil);
 }
 
-function majFichesCgAm(anneeDebut, sauvegarder=true){
+function majFichesCgAm(anneeDebut){
   const data=S.congesAM[anneeDebut];
   if(!data)return;
 
@@ -5321,9 +5311,9 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
     });
     S.contrats.forEach((c,i)=>{if(c.fiches)S.contrats[i]=c;});
     localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-    if(sauvegarder&&window.FB_USER&&window.fbSaveData){
-      S.contrats.filter(c=>c.fiches&&c.signe&&!c.cloture).forEach(c=>{
-        window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
+    if(window.FB_USER&&window.fbSaveData){
+      S.contrats.filter(c=>c.fiches).forEach(c=>{
+        window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
           .catch(e=>console.error('Save majFichesCgAm:',e));
       });
     }
@@ -5574,51 +5564,7 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
         cur.setDate(cur.getDate()+1);
       }
     });
-           
-// Traiter les fériés non cochés dans les congés AM
-    // Un férié reste ferie sauf si jour ouvrable avant/après est en arret/abs-enfant/conges-non
-    Object.values(c.fiches).forEach(fiche=>{
-      if(fiche.valide) return;
-      fiche.jours.forEach(jour=>{
-        if(jour.date<periodeDebut||jour.date>periodeFin) return;
-        if(jour.statut) return;
-        if(!isFerie(jour.date,c)) return;
-        // Chercher le jour ouvrable prévu avant et après
-        const statutsDeduit=['conges-non','arret','abs-enfant'];
-        const statutsRemuneres=['prevu','travaille','abs-partielle','abs-rem','conges-acq','conges-anticipe','ferie'];
-        // Chercher vers l'arrière
-        let statutPrev=null;
-        const dPrev=new Date(jour.date.split('-')[0],parseInt(jour.date.split('-')[1])-1,parseInt(jour.date.split('-')[2]));
-        for(let i=1;i<=14;i++){
-          dPrev.setDate(dPrev.getDate()-1);
-          const ds=dPrev.getFullYear()+'-'+String(dPrev.getMonth()+1).padStart(2,'0')+'-'+String(dPrev.getDate()).padStart(2,'0');
-          const mk=dPrev.getFullYear()+'-'+String(dPrev.getMonth()+1).padStart(2,'0');
-          const jPrev=c.fiches[mk]?.jours.find(j=>j.date===ds);
-          if(jPrev){
-            const sp=jPrev.statut||getStatutPrevu(c,jPrev);
-            if(sp!=='repos'&&sp!=='non-prevu'&&sp!=='hors-contrat'){statutPrev=jPrev.statut||sp;break;}
-          }
-        }
-        // Chercher vers l'avant
-        let statutNext=null;
-        const dNext=new Date(jour.date.split('-')[0],parseInt(jour.date.split('-')[1])-1,parseInt(jour.date.split('-')[2]));
-        for(let i=1;i<=14;i++){
-          dNext.setDate(dNext.getDate()+1);
-          const ds=dNext.getFullYear()+'-'+String(dNext.getMonth()+1).padStart(2,'0')+'-'+String(dNext.getDate()).padStart(2,'0');
-          const mk=dNext.getFullYear()+'-'+String(dNext.getMonth()+1).padStart(2,'0');
-          const jNext=c.fiches[mk]?.jours.find(j=>j.date===ds);
-          if(jNext){
-            const sp=jNext.statut||getStatutPrevu(c,jNext);
-            if(sp!=='repos'&&sp!=='non-prevu'&&sp!=='hors-contrat'){statutNext=jNext.statut||sp;break;}
-          }
-        }
-        // Si entouré de jours rémunérés → reste férié
-        if(!statutsDeduit.includes(statutPrev)&&!statutsDeduit.includes(statutNext)) return;
-        // Sinon congés non acquis
-        jour.statut='conges-non';
-      });
-    });
-           
+
    // Traiter les fériés non pointés encadrés par des congés
     Object.values(c.fiches).forEach(fiche=>{
       if(fiche.valide) return;
@@ -5651,14 +5597,14 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
   S.contrats.forEach((c,i)=>{if(c.fiches)S.contrats[i]=c;});
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   // Sauvegarder chaque contrat modifié individuellement
- if(sauvegarder&&window.FB_USER&&window.fbSaveData){
-    S.contrats.filter(c=>c.fiches&&c.signe&&!c.cloture).forEach(c=>{
+  if(window.FB_USER&&window.fbSaveData){
+    S.contrats.filter(c=>c.fiches).forEach(c=>{
       window.fbSaveData(window.FB_USER.uid,{
-        contrats:[c],params:{},congesAM:S.congesAM||{}
+        contrats:[c],params:{},congesAM:{}
       }).catch(e=>console.error('Save contrat:',e));
     });
   }
-  if(sauvegarder) saveCongesAM();
+  saveCongesAM();
   if(joursPoses.length>0)toast('\u2705 Cong\u00E9s mis \u00E0 jour');
 }
 function majCgAmEnfants(anneeDebut,val){
