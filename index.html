@@ -1943,13 +1943,13 @@ const statutPrevuJ=getStatutPrevu(c,j);
    ${avenantDuMois?`
     <div class="card" style="margin-top:10px">
       <div class="ctitle">Période du 1er au ${new Date(dateDebAv.split('-')[0],dateDebAv.split('-')[1]-1,dateDebAv.split('-')[2]-1).getDate()} ${label}</div>
-      <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <table id="recap1-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
         ${buildRecapHtml(recap)}
       </table>
     </div>
     <div class="card" style="margin-top:10px">
       <div class="ctitle">Période du ${parseInt(dateDebAv.split('-')[2])} au ${new Date(parseInt(annee),mois+1,0).getDate()} ${label}</div>
-      <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <table id="recap2-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
         ${buildRecapHtml(recap2)}
       </table>
     </div>
@@ -2467,7 +2467,7 @@ function calcCongesContrat(c){
       const semTerminee=dernierDimanche<now;
 
       // Compter les absences non rémunérées
-      const absNonRem=jours.filter(j=>['abs-am','abs-non'].includes(j.statut)).length;
+     const absNonRem=jours.filter(j=>['abs-am','abs-non','conges-non'].includes(j.statut)).length;
       const absArret=jours.filter(j=>j.statut==='arret').length;
 
       if(semTerminee){
@@ -2538,6 +2538,7 @@ function calcCongesContrat(c){
 function toMins(t){return toM(t);}
          
 function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAvenantStr,periodeAv,ficheComplete){
+         console.log('calcRecapFiche appelé periodeAv:',periodeAv,'nb jours:',fiche.jours.length,'dateAvenantStr:',dateAvenantStr);
   // Filtrer les jours si une période est spécifiée
  if(dateDebPeriode||dateFinPeriode){
     const joursDansPeriode=fiche.jours.filter(j=>{
@@ -2545,12 +2546,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       if(dateFinPeriode&&j.date>dateFinPeriode) return false;
       return true;
     });
-    const joursHorsPeriode=dateAvenantStr?fiche.jours.filter(j=>{
-      if(dateDebPeriode&&j.date<dateDebPeriode) return true;
-      if(dateFinPeriode&&j.date>dateFinPeriode) return true;
-      return false;
-    }).map(j=>({...j,statut:'hors-contrat'})):[];
-    const ficheFiltre={...fiche,jours:[...joursDansPeriode,...joursHorsPeriode]};
+    console.log('filtre appliqué: joursDansPeriode:', joursDansPeriode.length, 'dateDebPeriode:', dateDebPeriode, 'dateFinPeriode:', dateFinPeriode);
+    const ficheFiltre={...fiche,jours:joursDansPeriode};
     return calcRecapFiche(c,ficheFiltre,null,null,dateRefStr||dateDebPeriode,dateAvenantStr,periodeAv,ficheComplete||fiche);
   }
   // ficheComplete = fiche non filtrée pour hTheoriques
@@ -2858,8 +2855,8 @@ hTheoriques=hTheoriques/60;
     let statut=j.statut||getStatutPrevu(c,j);
     if(dateAvenantStr&&statut!=='hors-contrat'){
       const dateJ=j.date;
-      if(periodeAv==='avant'&&dateJ>=dateAvenantStr){statut='hors-contrat';console.log(j.date,'→ hors-contrat avant');}
-      if(periodeAv==='apres'&&dateJ<dateAvenantStr){statut='hors-contrat';console.log(j.date,'→ hors-contrat apres');}
+      if(periodeAv==='avant'&&dateJ>=dateAvenantStr){statut='hors-contrat';j._horsContratAvenant=true;}
+      if(periodeAv==='apres'&&dateJ<dateAvenantStr){statut='hors-contrat';j._horsContratAvenant=true;}
     }
     const estPresent=statut==='prevu'||statut==='travaille'||statut==='abs-partielle'||statut==='abs-rem'||(!j.statut&&j.heureDebReel)||(statut==='travaille'&&!j.heureDebPrev);
 
@@ -2876,11 +2873,12 @@ hTheoriques=hTheoriques/60;
     const absDeduites=['abs-am','arret','abs-non','abs-partielle'];
            
    // hors-contrat : déduit même si la semaine n'était pas prévu travaillée
-   if(statut==='hors-contrat'){
+  if(statut==='hors-contrat'){
       let horsContratDeduit=false;
       if(j._horsContratAvenant){
         const prevusHC=getHeuresPrevues(c,new Date(j.date),sourceActif);
         if(prevusHC.debut&&prevusHC.fin) horsContratDeduit=true;
+        // Pour les jours hors période avenant, ne pas utiliser heureDebPrev/heureFinPrev
       } else if(j.heureDebPrev&&j.heureFinPrev){
         horsContratDeduit=true;
       } else if(c.th==='plan'&&(c.planVar||c.planType==='min')){
