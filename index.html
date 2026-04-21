@@ -462,10 +462,7 @@ input[type=time].fi{width:auto;min-width:92px}
           const cidx=S.contrats.findIndex(x=>x.id==cid);
           if(cidx!==-1)S.contrats[cidx]=c;
           localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-          if(window.FB_USER&&window.fbSaveData){
-            window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
-              .catch(e=>console.error('Save supprAvenant:',e));
-          }
+          saveToFirestore();
         }
       }
       S.enAvenant=null;
@@ -562,10 +559,7 @@ function saveParams(){
   S.params.coefficients.sort((a,b)=>a.debut.localeCompare(b.debut));
   S.params.indemEntretien.sort((a,b)=>a.debut.localeCompare(b.debut));
   localStorage.setItem('cam_params',JSON.stringify(S.params));
-  if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[],params:S.params,congesAM:{}})
-      .catch(e=>console.error('Save params:',e));
-  }
+  saveToFirestore();
   toast('✓ Paramètres enregistrés');
   renderParams();
 }
@@ -659,10 +653,7 @@ async function resetMotDePasse(){
 function entrer(){ window.entrerApresAuth({uid:'test-'+Date.now(),displayName:'Test',email:'test@test.com'}); }
 async function deconn(){
   showLoader('Déconnexion...');
-  if(window.FB_USER&&window.fbSaveData){
-    await window.fbSaveData(window.FB_USER.uid,{contrats:S.contrats,params:S.params||{},congesAM:S.congesAM||{}})
-      .catch(e=>console.error('Save deconn:',e));
-  }
+  await saveToFirestore();
   if(window.fbLogout) await window.fbLogout();
   hideLoader();
   window.FB_USER=null;
@@ -884,10 +875,7 @@ function pointer(id,type){
   const cidx=S.contrats.findIndex(x=>x.id==id);
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-  if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
-      .catch(e=>console.error('Save pointer:',e));
-  }
+  saveToFirestore();
 
   // Si jour non prévu ou repos et qu'on pointe → passer à "travaillé"
   const statutActuelPtr=jour.statut||getStatutPrevu(c,jour);
@@ -904,10 +892,7 @@ function pointer(id,type){
     S.contrats[cidx2].fiches[key]=fiche;
   }
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-  if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[S.contrats.find(x=>x.id==id)],params:{},congesAM:{}})
-      .catch(e=>console.error('Save pointer2:',e));
-  }
+  saveToFirestore();
 
   // Rafraîchir la page aujourd'hui
   renderAuj();
@@ -1535,10 +1520,10 @@ function creerFiche(c,annee,mois){
 }
 
 
-function getHeuresPrevues(c, date, sourceForce){
+function getHeuresPrevues(c, date){
   // Trouver la version active (contrat ou avenant) à cette date
   const dateStr=date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0');
-  const source=sourceForce||getVersionActive(c, date);
+  const source=getVersionActive(c, date);
 
   const jourSemaine = date.getDay();
   const jourIdx = jourSemaine === 0 ? 6 : jourSemaine - 1;
@@ -1643,10 +1628,7 @@ function initFichesContrat(c){
     const idx=S.contrats.findIndex(x=>x.id==c.id);
     if(idx!==-1) S.contrats[idx]=c;
     localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-    if(window.FB_USER&&window.fbSaveData){
-      window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
-        .catch(e=>console.error('Save initFiches:',e));
-    }
+    saveToFirestore();
   }
 }
 
@@ -1901,27 +1883,7 @@ const statutPrevuJ=getStatutPrevu(c,j);
   const anticipeAutorise=c.cgAnticipe==='oui';
 
   // Récap
-  const avenantDuMois=c.avenants&&c.avenants.find(av=>{
-    if(!av.signe||!av.dateAvenant) return false;
-    const [ay,am,ad]=av.dateAvenant.split('-').map(Number);
-    const dateAv=new Date(ay,am-1,ad);
-    const debutMois=new Date(parseInt(annee),mois,1);
-    const finMois=new Date(parseInt(annee),mois+1,0);
-    return dateAv>debutMois&&dateAv<=finMois;
-  });
-  let recap, recap2, dateDebAv;
-  if(avenantDuMois){
-    dateDebAv=avenantDuMois.dateAvenant;
-    const veille=new Date(dateDebAv);
-    veille.setDate(veille.getDate()-1);
-    const veilleStr=veille.getFullYear()+'-'+String(veille.getMonth()+1).padStart(2,'0')+'-'+String(veille.getDate()).padStart(2,'0');
-    const finMoisStr=parseInt(annee)+'-'+String(mois+1).padStart(2,'0')+'-'+String(new Date(parseInt(annee),mois+1,0).getDate()).padStart(2,'0');
-    const debutMoisStr=annee+'-'+String(mois+1).padStart(2,'0')+'-01';
-   recap=calcRecapFiche(c,fiche,debutMoisStr,veilleStr,debutMoisStr,dateDebAv,'avant',fiche);
-    recap2=calcRecapFiche(c,fiche,dateDebAv,finMoisStr,dateDebAv,dateDebAv,'apres',fiche);
-  } else {
-    recap=calcRecapFiche(c,fiche);
-  }
+  const recap=calcRecapFiche(c,fiche);
   cont.innerHTML=
 
   cont.innerHTML=`
@@ -1958,31 +1920,12 @@ const statutPrevuJ=getStatutPrevu(c,j);
         ${!anticipeAutorise?`<span style="font-size:11px;color:var(--al)">(non autorisé au contrat — <button class="btn bd bsm" onclick="toast('Créez un avenant pour autoriser la prise anticipée')">?</button>)</span>`:''}
       </div>
     </div>`:''}
-   ${avenantDuMois?`
-    <div class="card" style="margin-top:10px">
-      <div class="ctitle">Période du 1er au ${new Date(dateDebAv.split('-')[0],dateDebAv.split('-')[1]-1,dateDebAv.split('-')[2]-1).getDate()} ${label}</div>
-      <table id="recap1-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
-        ${buildRecapHtml(recap)}
-      </table>
-    </div>
-    <div class="card" style="margin-top:10px">
-      <div class="ctitle">Période du ${parseInt(dateDebAv.split('-')[2])} au ${new Date(parseInt(annee),mois+1,0).getDate()} ${label}</div>
-      <table id="recap2-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
-        ${buildRecapHtml(recap2)}
-      </table>
-    </div>
-    <div class="card" style="margin-top:10px">
-      <div class="ctitle">Cumul — ${label}</div>
-      <table id="recap-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
-        ${buildRecapCumul(recap,recap2)}
-      </table>
-    </div>`:`
     <div class="card" style="margin-top:10px">
       <div class="ctitle">Récapitulatif — ${label}</div>
       <table id="recap-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
         ${buildRecapHtml(recap)}
       </table>
-    </div>`}
+    </div>
     <div style="text-align:center;padding:14px 0">
       ${fiche.valide
         ?`<span style="color:var(--vt);font-size:13px;font-weight:600">✓ Feuille validée — lecture seule</span>
@@ -2146,40 +2089,12 @@ function enregistrerFiche(contratId,key){
   }
 }
  function majRecapFiche(contratId,key){
-  console.log('majRecapFiche appelé pour:', key);
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c||!c.fiches||!c.fiches[key])return;
-  const fiche=c.fiches[key];
-  const [ay,am]=key.split('-').map(Number);
-  const avenantDuMois=c.avenants&&c.avenants.find(av=>{
-    if(!av.signe||!av.dateAvenant) return false;
-    const [avy,avm,avd]=av.dateAvenant.split('-').map(Number);
-    const dateAv=new Date(avy,avm-1,avd);
-    const debutMois=new Date(ay,am-1,1);
-    const finMois=new Date(ay,am,0);
-    return dateAv>debutMois&&dateAv<=finMois;
-  });
-  if(avenantDuMois){
-    const dateDebAv=avenantDuMois.dateAvenant;
-    const debutMoisStr=ay+'-'+String(am).padStart(2,'0')+'-01';
-    const finMoisStr=ay+'-'+String(am).padStart(2,'0')+'-'+String(new Date(ay,am,0).getDate()).padStart(2,'0');
-    const veille=new Date(dateDebAv);
-    veille.setDate(veille.getDate()-1);
-    const veilleStr=veille.getFullYear()+'-'+String(veille.getMonth()+1).padStart(2,'0')+'-'+String(veille.getDate()).padStart(2,'0');
-    const recap=calcRecapFiche(c,fiche,debutMoisStr,veilleStr,debutMoisStr,dateDebAv,'avant');
-    const recap2=calcRecapFiche(c,fiche,dateDebAv,finMoisStr,dateDebAv,dateDebAv,'apres');
-    const el1=document.getElementById('recap1-'+contratId+'-'+key);
-    const el2=document.getElementById('recap2-'+contratId+'-'+key);
-    const elC=document.getElementById('recap-'+contratId+'-'+key);
-    if(el1) el1.innerHTML=buildRecapHtml(recap);
-    if(el2) el2.innerHTML=buildRecapHtml(recap2);
-    if(elC) elC.innerHTML=buildRecapCumul(recap,recap2);
-  } else {
-    const recap=calcRecapFiche(c,fiche);
-    const el=document.getElementById('recap-'+contratId+'-'+key);
-    if(!el)return;
-    el.innerHTML=buildRecapHtml(recap);
-  }
+  const recap=calcRecapFiche(c,c.fiches[key]);
+  const el=document.getElementById('recap-'+contratId+'-'+key);
+  if(!el)return;
+  el.innerHTML=buildRecapHtml(recap);
 }
 
 function buildRecapHtml(recap){
@@ -2212,30 +2127,7 @@ function buildRecapHtml(recap){
   return html;
 }
 
-function buildRecapCumul(r1,r2){
-  const ligneG=(label,val,gras,color)=>'<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2);'+(gras?'font-weight:700':'')+'">'+(label||'')+'</td><td style="padding:7px 4px;font-weight:'+(gras?'700':'600')+';text-align:right;'+(color?'color:'+color:'')+'">'+(val||'')+'</td></tr>';
-  const nbJoursTrav=parseFloat(r1.nbJoursTrav||0)+parseFloat(r2.nbJoursTrav||0);
-  const hNormales=Math.max(0,(r1.hMensu||0)-(r1.hAbsDeduit||0))+Math.max(0,(r2.hMensu||0)-(r2.hAbsDeduit||0));
-  const hComp=parseFloat(r1.hComp||0)+parseFloat(r2.hComp||0);
-  const hSup=parseFloat(r1.hSup||0)+parseFloat(r2.hSup||0);
-  const salaireNet=parseFloat(r1.salaireNet||0)+parseFloat(r2.salaireNet||0);
-  const indemE=parseFloat(r1.indemEntretienTotal||0)+parseFloat(r2.indemEntretienTotal||0);
-  const indemR=parseFloat(r1.indemRepasTotal||0)+parseFloat(r2.indemRepasTotal||0);
-  const indemK=parseFloat(r1.indemKmTotal||0)+parseFloat(r2.indemKmTotal||0);
-  const montantCompNet=parseFloat(r1.montantCompNet||0)+parseFloat(r2.montantCompNet||0);
-  const montantSupNet=parseFloat(r1.montantSupNet||0)+parseFloat(r2.montantSupNet||0);
-  let html='';
-  html+=ligneG('Jours travaillés', nbJoursTrav.toFixed(1)+' j');
-  html+=ligneG('Heures normales à déclarer', hNormales.toFixed(2)+' h', true);
-  if(hComp>0) html+=ligneG('Heures complémentaires', hComp.toFixed(2)+' h'+(montantCompNet>0?' — '+montantCompNet.toFixed(2)+' € (exo.+11,31%)':''), true);
-  if(hSup>0) html+=ligneG('Heures supplémentaires', hSup.toFixed(2)+' h'+(montantSupNet>0?' — '+montantSupNet.toFixed(2)+' € (exo.+11,31%)':''), true);
-  html+=ligneG('Salaire net à déclarer', salaireNet.toFixed(2)+' €', true, 'var(--m)');
-  if(indemE>0) html+=ligneG('Indem. entretien', indemE.toFixed(2)+' €');
-  if(indemR>0) html+=ligneG('Indem. repas', indemR.toFixed(2)+' €');
-  if(indemK>0) html+=ligneG('Indem. km', indemK.toFixed(2)+' €');
-  return html;
-}
-         
+
 function majFicheStatut(contratId,key,idx,val){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c||!c.fiches||!c.fiches[key])return;
@@ -2351,9 +2243,7 @@ function majFicheRepas(contratId,key,idx,ri,checked){
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-  S.ficheModifiee=true;
-  const bandeau=document.getElementById('bandeau-non-enregistre');
-  if(bandeau) bandeau.style.display='block';
+  saveToFirestore();
 }
 
 function validerFiche(contratId,key){
@@ -2487,7 +2377,7 @@ function calcCongesContrat(c){
       const semTerminee=dernierDimanche<now;
 
       // Compter les absences non rémunérées
-     const absNonRem=jours.filter(j=>['abs-am','abs-non','conges-non'].includes(j.statut)).length;
+      const absNonRem=jours.filter(j=>['abs-am','abs-non'].includes(j.statut)).length;
       const absArret=jours.filter(j=>j.statut==='arret').length;
 
       if(semTerminee){
@@ -2557,34 +2447,8 @@ function calcCongesContrat(c){
 
 function toMins(t){return toM(t);}
          
-function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAvenantStr,periodeAv,ficheComplete){
-         console.log('calcRecapFiche appelé periodeAv:',periodeAv,'nb jours:',fiche.jours.length,'dateAvenantStr:',dateAvenantStr);
-  // Filtrer les jours si une période est spécifiée
- if(dateDebPeriode||dateFinPeriode){
-    const joursDansPeriode=fiche.jours.filter(j=>{
-      if(dateDebPeriode&&j.date<dateDebPeriode) return false;
-      if(dateFinPeriode&&j.date>dateFinPeriode) return false;
-      return true;
-    });
-    console.log('filtre appliqué: joursDansPeriode:', joursDansPeriode.length, 'dateDebPeriode:', dateDebPeriode, 'dateFinPeriode:', dateFinPeriode);
-    const ficheFiltre={...fiche,jours:joursDansPeriode};
-    return calcRecapFiche(c,ficheFiltre,null,null,dateRefStr||dateDebPeriode,dateAvenantStr,periodeAv,ficheComplete||fiche);
-  }
-  // ficheComplete = fiche non filtrée pour hTheoriques
-  // Calculer hTheoriques depuis le contrat et l'agenda (indépendamment de la fiche filtrée)
-  const fichePourTheoriques=ficheComplete||fiche;
-  const dateRefVersion=dateRefStr?new Date(dateRefStr):new Date(fiche.annee,fiche.mois,1);
-  const sourceActif=getVersionActive(c, dateRefVersion);
-         
-// Détecter un changement d'avenant dans ce mois
-  const debutMois=new Date(fiche.annee,fiche.mois,1);
-  const finMois=new Date(fiche.annee,fiche.mois+1,0);
-  const avenantDuMois=c.avenants&&c.avenants.find(av=>{
-    if(!av.signe||!av.dateAvenant) return false;
-    const [ay,am,ad]=av.dateAvenant.split('-').map(Number);
-    const dateAv=new Date(ay,am-1,ad);
-    return dateAv>debutMois&&dateAv<=finMois;
-  });
+function calcRecapFiche(c,fiche){
+  const sourceActif=getVersionActive(c, new Date(fiche.annee,fiche.mois,1));
   const txBrut=sourceActif.txBrut||0;
   const dateStr=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0')+'-01';
   const coeff=getParamAt('coefficients',dateStr);
@@ -2593,8 +2457,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const majSup=(sourceActif.majSup||0)/100;
   const hMensu=sourceActif.hMensu||0;
   const reposHebdo=sourceActif.reposHebdo||0;
-
-// Nb jours prévus dans ce mois (calculé depuis la fiche)
+  // Nb jours prévus dans ce mois (calculé depuis la fiche)
   let nbJoursPrevu=0;
   fiche.jours.forEach(j=>{
     const sp=getStatutPrevu(c,j);
@@ -2754,66 +2617,6 @@ const hParSemainePrecMois={};
     }
   });
 hTheoriques=hTheoriques/60;
-  // Pour les périodes d'avenant, recalculer hTheoriques sur tout le mois
-  if(dateAvenantStr){
-           console.log('calcul hTheoriquesMois pour période:', periodeAv, 'dateAvenantStr:', dateAvenantStr);
-    let hTheoriquesMois=0;
-    const premierJourMois=new Date(fiche.annee,fiche.mois,1);
-    const dernierJourMois=new Date(fiche.annee,fiche.mois+1,0);
-    const semJoursCptM={};
-    const semTheoriquesVuesM=new Set();
-    for(let d=new Date(premierJourMois);d<=dernierJourMois;d.setDate(d.getDate()+1)){
-      const dateStr=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-      const prevus=getHeuresPrevues(c,new Date(d),sourceActif);
-      const jFake={date:dateStr,jourSemaine:d.getDay(),heureDebPrev:prevus.debut==='prévu'?null:prevus.debut,heureFinPrev:prevus.fin,planVarPrevu:!!(prevus.planVar)};
-      if(jFake.heureDebPrev&&jFake.heureFinPrev){
-        const contrib=(toM(jFake.heureFinPrev)-toM(jFake.heureDebPrev))/60;
-        console.log(dateStr,'contrib:',contrib,'debut:',jFake.heureDebPrev,'fin:',jFake.heureFinPrev);
-        hTheoriquesMois+=contrib;
-      } else if(sourceActif.th==='plan'&&sourceActif.planType==='var'&&sourceActif.planVar){
-        const semKeyTh=getSemISO(dateStr);
-        const agKeyTh=getKeyAgenda(semKeyTh,getSemAnnee(dateStr));
-        const typeSemTh=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKeyTh];
-        const volTh=typeSemTh?sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemTh):null;
-        const jourIdxTh=d.getDay()===0?6:d.getDay()-1;
-        if(volTh&&volTh.jours&&volTh.jours[jourIdxTh]){
-          if(!semJoursCptM[semKeyTh]) semJoursCptM[semKeyTh]=0;
-          if(semJoursCptM[semKeyTh]<(volTh.j||1)){
-            hTheoriquesMois+=volTh.h/volTh.j;
-            semJoursCptM[semKeyTh]++;
-          }
-        }
-      } else if(sourceActif.th==='plan'&&sourceActif.planType==='min'){
-        const jourIdxTh=d.getDay()===0?6:d.getDay()-1;
-        if(sourceActif.joursMin&&sourceActif.joursMin[jourIdxTh]){
-          if(!semJoursCptM[getSemISO(dateStr)]) semJoursCptM[getSemISO(dateStr)]=0;
-          if(semJoursCptM[getSemISO(dateStr)]<(sourceActif.jMaxMin||4)){
-            hTheoriquesMois+=sourceActif.hMin/sourceActif.jMaxMin;
-            semJoursCptM[getSemISO(dateStr)]++;
-          }
-        }
-      }
-    }
-   console.log('hTheoriquesMois calculé:', hTheoriquesMois, 'periodeAv:', periodeAv);
-    if(hTheoriquesMois>0) hTheoriques=hTheoriquesMois;
-           // Calculer hAbs pour les jours hors période
-    let hAbsHorsPeriode=0;
-    for(let d=new Date(premierJourMois);d<=dernierJourMois;d.setDate(d.getDate()+1)){
-      const dateStr=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-      const dansPeriode=(!dateDebPeriode||dateStr>=dateDebPeriode)&&(!dateFinPeriode||dateStr<=dateFinPeriode);
-      // Note: à ce stade dateDebPeriode/dateFinPeriode sont null (appel récursif)
-      // On utilise dateAvenantStr et periodeAv
-      const horsperiode=(periodeAv==='avant'&&dateStr>=dateAvenantStr)||(periodeAv==='apres'&&dateStr<dateAvenantStr);
-      if(!horsperiode) continue;
-      const prevusHP=getHeuresPrevues(c,new Date(d),sourceActif);
-      if(prevusHP.debut&&prevusHP.fin){
-        const contribHP=(toM(prevusHP.fin)-toM(prevusHP.debut))/60;
-        console.log(dateStr,'hAbsHorsPeriode contrib:',contribHP,'periodeAv:',periodeAv);
-        hAbsHorsPeriode+=contribHP;
-      }
-    }
-    hAbs+=hAbsHorsPeriode;
-  }
   if(hTheoriques<=0) hTheoriques=hMensu;
          
   // Pré-calcul des heures d'absence par semaine (pour ajuster le seuil des heures comp)
@@ -2872,12 +2675,7 @@ hTheoriques=hTheoriques/60;
   });
 
   fiche.jours.forEach(j=>{
-    let statut=j.statut||getStatutPrevu(c,j);
-    if(dateAvenantStr&&statut!=='hors-contrat'){
-      const dateJ=j.date;
-      if(periodeAv==='avant'&&dateJ>=dateAvenantStr){statut='hors-contrat';j._horsContratAvenant=true;}
-      if(periodeAv==='apres'&&dateJ<dateAvenantStr){statut='hors-contrat';j._horsContratAvenant=true;}
-    }
+    const statut=j.statut||getStatutPrevu(c,j);
     const estPresent=statut==='prevu'||statut==='travaille'||statut==='abs-partielle'||statut==='abs-rem'||(!j.statut&&j.heureDebReel)||(statut==='travaille'&&!j.heureDebPrev);
 
     // ── Jours travaillés ──
@@ -2893,13 +2691,9 @@ hTheoriques=hTheoriques/60;
     const absDeduites=['abs-am','arret','abs-non','abs-partielle'];
            
    // hors-contrat : déduit même si la semaine n'était pas prévu travaillée
-  if(statut==='hors-contrat'){
+    if(statut==='hors-contrat'){
       let horsContratDeduit=false;
-      if(j._horsContratAvenant){
-        const prevusHC=getHeuresPrevues(c,new Date(j.date),sourceActif);
-        if(prevusHC.debut&&prevusHC.fin) horsContratDeduit=true;
-        // Pour les jours hors période avenant, ne pas utiliser heureDebPrev/heureFinPrev
-      } else if(j.heureDebPrev&&j.heureFinPrev){
+      if(j.heureDebPrev&&j.heureFinPrev){
         horsContratDeduit=true;
       } else if(c.th==='plan'&&(c.planVar||c.planType==='min')){
         const semKeyHC=getSemISO(j.date);
@@ -2956,7 +2750,6 @@ hTheoriques=hTheoriques/60;
         const spHC=getStatutPrevu(c,j);
         if(spHC==='prevu') horsContratDeduit=true;
       }
-     if(j._horsContratAvenant) console.log(j.date,'_horsContratAvenant horsContratDeduit:',horsContratDeduit);
       if(horsContratDeduit) absDeduites.push('hors-contrat');
     }
     if(absEnfantDeductible) absDeduites.push('abs-enfant');
@@ -3000,10 +2793,7 @@ hTheoriques=hTheoriques/60;
       const statutNext=getNextJourPrevuF(j.date);
       const doit52=c.tc==='52'&&(statutsDeduit52.includes(statutPrev)||statutsDeduit52.includes(statutNext));
       const doitTjrs=statutsDeduitTjrs.includes(statutPrev)||statutsDeduitTjrs.includes(statutNext);
-      if(doitTjrs||doit52){
-        console.log(j.date,'férié déduit doitTjrs:',doitTjrs,'doit52:',doit52,'statutPrev:',statutPrev,'statutNext:',statutNext);
-        absDeduites.push('ferie');
-      }
+      if(doitTjrs||doit52) absDeduites.push('ferie');
     }
     const estAbsDeduite=absDeduites.includes(statut);
  
@@ -3050,15 +2840,7 @@ hTheoriques=hTheoriques/60;
     if(estAbsDeduite){
       let hAbsJour=0;
       let hPrev;
-      if(j._horsContratAvenant){
-        // Recalculer les heures prévues avec la bonne version source
-        const prevusHC=getHeuresPrevues(c,new Date(j.date),sourceActif);
-        if(prevusHC.debut&&prevusHC.fin){
-          hPrev=(toM(prevusHC.fin)-toM(prevusHC.debut))/60;
-        } else {
-          hPrev=0;
-        }
-      } else if(j.heureDebPrev&&j.heureFinPrev){
+      if(j.heureDebPrev&&j.heureFinPrev){
         hPrev=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
       } else if(c.th==='plan'&&c.planType==='min'){
         const semKeyAbs=getSemISO(j.date);
@@ -3123,7 +2905,6 @@ hTheoriques=hTheoriques/60;
       } else {
         hAbsJour=hPrev; // journée entière
       }
-    if(hAbsJour>0) console.log(j.date,'hAbsJour:',hAbsJour.toFixed(2),'statut:',statut);         
       hAbs+=hAbsJour;
     }
 
@@ -3189,18 +2970,12 @@ const forfait=indem.parJour||2.65;
     const tauxHAbs=(hMensu*txNet)/hTheoriques;
     montantAbsences=parseFloat((tauxHAbs*hAbs).toFixed(2));
   }
+  joursEnMoins=hMoyParJour>0&&txNet>0?parseFloat((montantAbsences/txNet/hMoyParJour).toFixed(1)):0;
+  nbJoursTrav=parseFloat((nbJoursMoisContrat+joursEnPlus-joursEnMoins).toFixed(1));
+ 
   // Heures à déduire = montantAbsences / txNet
   const hAbsDeduit=txNet>0?parseFloat((montantAbsences/txNet).toFixed(2)):0;
-  // Jours en moins : exclure les abs-partielles (comptent pour 1 jour)
-  const hAbsPartielles=fiche.jours.filter(j=>j.statut==='abs-partielle').reduce((t,j)=>{
-    if(j.heureDebPrev&&j.heureFinPrev&&j.heureDebReel&&j.heureFinReel){
-      return t+Math.max(0,(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60-(toM(j.heureFinReel)-toM(j.heureDebReel))/60);
-    }
-    return t+(j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:0);
-  },0);
-  const tauxHAbsJ=hTheoriques>0?(hMensu*txNet)/hTheoriques:txNet;
-  const montantAbsSansPartielles=Math.max(0,montantAbsences-parseFloat((tauxHAbsJ*hAbsPartielles).toFixed(2)));
-  joursEnMoins=hMoyParJour>0&&txNet>0?parseFloat((montantAbsSansPartielles/txNet/hMoyParJour).toFixed(1)):0;
+  joursEnMoins=hMoyParJour>0&&txNet>0?parseFloat((montantAbsences/txNet/hMoyParJour).toFixed(1)):0;
   nbJoursTrav=parseFloat((nbJoursMoisContrat+joursEnPlus-joursEnMoins).toFixed(1));
 
   // Montant h. comp : brut majoré → net → + exonération charges (11.31% du brut majoré)
@@ -3860,12 +3635,8 @@ function creerAgenda(cid){
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-  if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
-      .catch(e=>console.error('Save creerAgenda:',e));
-  }
-  const agWrap=document.getElementById('agenda-wrap-'+cid);
-  if(agWrap) agWrap.innerHTML=renderAgendas({...source,id:c.id});
+  saveToFirestore();
+  document.getElementById('agenda-wrap-'+cid).innerHTML=renderAgendas({...source,id:c.id});
 }
          
 function renderAgendas(c){
@@ -4260,12 +4031,8 @@ function supprimerAgenda(cid,agid){
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-  if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
-      .catch(e=>console.error('Save supprimerAgenda:',e));
-  }
-  const agWrap2=document.getElementById('agenda-wrap-'+cid);
-  if(agWrap2) agWrap2.innerHTML=renderAgendas({...source,id:c.id});
+  saveToFirestore();
+  document.getElementById('agenda-wrap-'+cid).innerHTML=renderAgendas({...source,id:c.id});
 }
 // ══ CALCULS ══
 function calc(){
@@ -4462,11 +4229,7 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
     if(idx!==-1)S.contrats[idx]={...S.contrats[idx],...data};
     S.dernierContratId=idCible;S.enEd=null;toast('Contrat '+nom+' modifié !');
     localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-    const cModif=S.contrats.find(x=>x.id==idCible);
-    if(window.FB_USER&&window.fbSaveData&&cModif){
-      window.fbSaveData(window.FB_USER.uid,{contrats:[cModif],params:{},congesAM:{}})
-        .catch(e=>console.error('Save valider modif:',e));
-    }
+    saveToFirestore();
     const bs=document.getElementById('btn-signe');
 if(bs){bs.style.display='inline-flex';bs.style.cssText='display:inline-flex;background:#3a6b4a;color:#e8f5ee;border:none;padding:9px 20px;border-radius:24px;font-size:14px;font-weight:600;cursor:pointer;font-family:Calibri,sans-serif;align-items:center;gap:6px';}
            
@@ -4492,12 +4255,8 @@ S.contrats.push({
 });
 S.dernierContratId=newId;
 toast('Contrat '+nom+' enregistré !');
- localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-  const cNew=S.contrats.find(x=>x.id==newId);
-  if(window.FB_USER&&window.fbSaveData&&cNew){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[cNew],params:{},congesAM:{}})
-      .catch(e=>console.error('Save valider new:',e));
-  }
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  saveToFirestore();
   const bs=document.getElementById('btn-signe');
   if(bs){bs.style.display='inline-flex';bs.style.cssText='display:inline-flex;background:#3a6b4a;color:#e8f5ee;border:none;padding:9px 20px;border-radius:24px;font-size:14px;font-weight:600;cursor:pointer;font-family:Calibri,sans-serif;align-items:center;gap:6px';}
 }
@@ -4562,10 +4321,7 @@ function validerAvenant(){
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-  if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
-      .catch(e=>console.error('Save validerAvenant:',e));
-  }
+  saveToFirestore();
   toast('Avenant n°'+av.num+' enregistré ✓');
   // Rester sur le formulaire, mettre à jour S.enAvenant avec les données fraîches
   // Rafraîchir le bouton signer
@@ -4720,10 +4476,7 @@ function creerAvenant(id){
   const cidx=S.contrats.findIndex(x=>x.id==id);
   if(cidx!==-1)S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-  if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:{}})
-      .catch(e=>console.error('Save creerAvenant:',e));
-  }
+  saveToFirestore();
   ouvrirFormulaireAvenant(id,newAv.id);
 }
 
@@ -5307,13 +5060,12 @@ function majFichesCgAm(anneeDebut){
       const periodeDebut=String(anneeDebut)+'-05-01';
       const periodeFin=String(anneeDebut+1)+'-04-30';
       Object.values(c.fiches).forEach(fiche=>{
-      if(fiche.valide) return;
-      fiche.jours.forEach(j=>{
-        if(j.date<periodeDebut||j.date>periodeFin)return;
-        const statutsConges=['conges-acq','conges-non','conges-am','conges-anticipe'];
-        if(statutsConges.includes(j.statut)) j.statut=null;
+        fiche.jours.forEach(j=>{
+          if(j.date<periodeDebut||j.date>periodeFin)return;
+          const statutsConges=['conges-acq','conges-non','conges-am','conges-anticipe'];
+          if(statutsConges.includes(j.statut)) j.statut=null;
+        });
       });
-    });
     });
     S.contrats.forEach((c,i)=>{if(c.fiches)S.contrats[i]=c;});
     localStorage.setItem('cam_c',JSON.stringify(S.contrats));
@@ -5497,20 +5249,11 @@ function majFichesCgAm(anneeDebut){
         if(c.dateDeb&&dateStr<c.dateDeb){cur.setDate(cur.getDate()+1);continue;}
         if(!c.fiches[moisKey])c.fiches[moisKey]=creerFiche(c,cur.getFullYear(),cur.getMonth());
         const fiche=c.fiches[moisKey];
-        if(fiche.valide){cur.setDate(cur.getDate()+1);continue;}
         const jourIdx=fiche.jours.findIndex(j=>j.date===dateStr);
         if(jourIdx===-1){cur.setDate(cur.getDate()+1);continue;}
         const jour=fiche.jours[jourIdx];
 
-      if(premierTrav&&dateStr>=premierTrav) decompteCommence=true;
-        // Si la veille est déjà décomptée, le décompte a commencé
-        if(!decompteCommence){
-          const veilleD=new Date(cur);veilleD.setDate(veilleD.getDate()-1);
-          const veilleStr2=veilleD.getFullYear()+'-'+String(veilleD.getMonth()+1).padStart(2,'0')+'-'+String(veilleD.getDate()).padStart(2,'0');
-          const veilleKey2=veilleD.getFullYear()+'-'+String(veilleD.getMonth()+1).padStart(2,'0');
-          const veilleJour2=c.fiches[veilleKey2]?.jours.find(j=>j.date===veilleStr2);
-          if(['conges-acq','conges-anticipe','conges-non'].includes(veilleJour2?.statut)) decompteCommence=true;
-        }
+        if(premierTrav&&dateStr>=premierTrav) decompteCommence=true;
 
         if(estRepos){
           // Repos hebdo : garde son statut
@@ -5532,16 +5275,10 @@ function majFichesCgAm(anneeDebut){
             const lendKey=lendStr.getFullYear()+'-'+String(lendStr.getMonth()+1).padStart(2,'0');
             const veilleJour=c.fiches[veilleKey]?.jours.find(j=>j.date===veilleStr.getFullYear()+'-'+String(veilleStr.getMonth()+1).padStart(2,'0')+'-'+String(veilleStr.getDate()).padStart(2,'0'));
             const lendJour=c.fiches[lendKey]?.jours.find(j=>j.date===lendStr.getFullYear()+'-'+String(lendStr.getMonth()+1).padStart(2,'0')+'-'+String(lendStr.getDate()).padStart(2,'0'));
-           const veilleAcquis=['conges-acq','conges-anticipe'].includes(veilleJour?.statut);
+            const veilleAcquis=['conges-acq','conges-anticipe'].includes(veilleJour?.statut);
             const lendAcquis=['conges-acq','conges-anticipe'].includes(lendJour?.statut);
-            const veilleConges=['conges-acq','conges-anticipe','conges-non'].includes(veilleJour?.statut);
-            const lendConges=['conges-acq','conges-anticipe','conges-non'].includes(lendJour?.statut);
             if(veilleAcquis&&lendAcquis){
               // Reste férié (entouré de jours acquis)
-              cur.setDate(cur.getDate()+1);continue;
-            }
-            if(!veilleConges&&!lendConges){
-              // Non entouré de congés → reste férié
               cur.setDate(cur.getDate()+1);continue;
             }
             // Sinon décompté comme congé (acquis ou non)
@@ -5570,43 +5307,9 @@ function majFichesCgAm(anneeDebut){
         cur.setDate(cur.getDate()+1);
       }
     });
-           
-// Traiter les fériés non cochés dans les congés AM
-    // Si un férié non coché est entouré de congés → conges-non (ou reste ferie si acquis)
-    Object.values(c.fiches).forEach(fiche=>{
-      if(fiche.valide) return;
-      fiche.jours.forEach(jour=>{
-        if(jour.date<periodeDebut||jour.date>periodeFin) return;
-        if(jour.statut) return; // déjà traité
-        if(!isFerie(jour.date,c)) return;
-        // Vérifier si entouré de congés
-        const parts=jour.date.split('-').map(Number);
-        const d=new Date(parts[0],parts[1]-1,parts[2]);
-        const veilleD=new Date(d);veilleD.setDate(veilleD.getDate()-1);
-        const lendD=new Date(d);lendD.setDate(lendD.getDate()+1);
-        const veilleKey=veilleD.getFullYear()+'-'+String(veilleD.getMonth()+1).padStart(2,'0');
-        const lendKey=lendD.getFullYear()+'-'+String(lendD.getMonth()+1).padStart(2,'0');
-        const veilleStr=veilleD.getFullYear()+'-'+String(veilleD.getMonth()+1).padStart(2,'0')+'-'+String(veilleD.getDate()).padStart(2,'0');
-        const lendStr=lendD.getFullYear()+'-'+String(lendD.getMonth()+1).padStart(2,'0')+'-'+String(lendD.getDate()).padStart(2,'0');
-        const veilleJour=c.fiches[veilleKey]?.jours.find(j=>j.date===veilleStr);
-        const lendJour=c.fiches[lendKey]?.jours.find(j=>j.date===lendStr);
-        const veilleConges=['conges-acq','conges-anticipe','conges-non'].includes(veilleJour?.statut);
-        const lendConges=['conges-acq','conges-anticipe','conges-non'].includes(lendJour?.statut);
-        if(!veilleConges&&!lendConges) return; // pas entouré de congés
-        const veilleAcquis=['conges-acq','conges-anticipe'].includes(veilleJour?.statut);
-        const lendAcquis=['conges-acq','conges-anticipe'].includes(lendJour?.statut);
-        if(veilleAcquis&&lendAcquis){
-          // Reste férié (couvert par les acquis)
-          return;
-        }
-        // Sinon congés non acquis
-        jour.statut='conges-non';
-      });
-    });
-           
+
    // Traiter les fériés non pointés encadrés par des congés
     Object.values(c.fiches).forEach(fiche=>{
-      if(fiche.valide) return;
       fiche.jours.forEach(jour=>{
         if(jour.date<periodeDebut||jour.date>periodeFin) return;
         if(jour.statut) return;
