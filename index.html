@@ -584,7 +584,8 @@ const S={
   contrats:JSON.parse(localStorage.getItem('cam_c')||'[]'),
   congesAM:JSON.parse(localStorage.getItem('cam_cgam')||'{}'),
   tc:null,th:null,planType:null,nbSem:0,enEd:null,enCours:null,detTab:'contrat',
-  params:null
+  params:null,
+  cgAmModifie:false
 };
 
          function getParamAt(type, dateStr){
@@ -758,6 +759,10 @@ function showLoginTab(tab){
 
 // ══ NAVIGATION ══
 function goTo(p){
+  if(S.cgAmModifie){
+    if(!confirm('Les congés Ass\'Mat ont des modifications non enregistrées. Continuer sans enregistrer ?')) return;
+    S.cgAmModifie=false;
+  }
   if(S.ficheModifiee){
     if(!confirm('Des modifications non enregistrées seront perdues. Continuer ?')) return;
     S.ficheModifiee=false;
@@ -4940,6 +4945,10 @@ function signerAvenant(){
          
 // ══ CONGÉS ASS'MAT NAV ══
 function goToCgAm(){
+  if(S.ficheModifiee){
+    if(!confirm('Des modifications non enregistrées seront perdues. Continuer ?')) return;
+    S.ficheModifiee=false;
+  }
   PAGES.forEach(p=>{const el=document.getElementById(p);if(el)el.style.display='none';});
   const pgcgam=document.getElementById('pg-cgam');
   if(!pgcgam){console.error('pg-cgam not found');return;}
@@ -5064,16 +5073,15 @@ function buildCgAmDetail(anneeDebut,data){
       // Ferié cochable si non couvert par les acquis du meilleur contrat
       const ferieNonCouvert=isFerNonTrav&&!ferieCouvretParAcquis(dateStr,anneeDebut,data);
 
-      const isPose=(data.jours[dateStr]==='pose');
+     const isPose=(data.jours[dateStr]==='pose');
       // Couleur de fond
       let bg='#fff',color='var(--tx)',cursor='pointer',border='1px solid #e0d8d0';
       if(isReposH){bg='#f0f0f0';color='var(--tx3)';cursor='not-allowed';}
-      if(isFerNonTrav&&!ferieNonCouvert&&!isPose){bg='#fff8e1';color='#854F0B';} // jaune si couvert
+      if(isFerNonTrav&&!isPose){bg='#fff8e1';color='#854F0B';} // jaune pour tous les fériés non travaillés
+      if(isFerNonTrav&&!ferieNonCouvert&&!isPose){cursor='not-allowed';} // non cliquable si acquis
       if(isFerNonTrav&&isReposH){cursor='not-allowed';}
       if(isPose){bg='var(--vt)';color='#fff';border='none';}
-      // Ferié non couvert = blanc et cochable comme un jour normal
-      if(ferieNonCouvert&&!isPose){bg='#fff';color='var(--tx)';}
-      const clickable=(!isReposH&&!(isFerNonTrav&&isReposH))||ferieNonCouvert;
+      const clickable=!isReposH&&!(isFerNonTrav&&!ferieNonCouvert)&&!(isFerNonTrav&&isReposH);
       joursHtml+=`<div onclick="${clickable?`toggleCgAm(${anneeDebut},'${dateStr}')`:''}"
         style="display:inline-flex;flex-direction:column;align-items:center;width:34px;margin:1px;padding:4px 0;border-radius:6px;cursor:${cursor};background:${bg};color:${color};border:${border};user-select:none;min-height:40px;justify-content:center;font-size:10px">
         <span style="font-weight:600;line-height:1">${JOURS_INIT[jourIdx]}</span>
@@ -5089,6 +5097,8 @@ function buildCgAmDetail(anneeDebut,data){
   }
 
   const ok=nb===30&&nbSamedis===5;
+  const feriesDecochesMsg=S._cgAmFeriesDecoches>0?`<div style="background:#fff3cd;color:#856404;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:8px">⚠ ${S._cgAmFeriesDecoches} jour(s) férié(s) ont été décochés automatiquement car ils sont désormais acquis. Veuillez cocher des jours supplémentaires.</div>`:'';
+  S._cgAmFeriesDecoches=0;
   const alertHtml=nb>30?`<div style="background:#fdecea;color:var(--al);padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">⚠ ${nb} jours cochés — maximum 30</div>`:
     nb===30&&nbSamedis!==5?`<div style="background:#fff8e1;color:#854F0B;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">⚠ ${nbSamedis} samedi(s) — il en faut exactement 5</div>`:
     ok?`<div style="background:var(--vtc);color:var(--vt);padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">✓ 30 jours posés dont 5 samedis — calendrier validé !</div>`:
@@ -5096,8 +5106,9 @@ function buildCgAmDetail(anneeDebut,data){
 
   return `<div style="padding:14px">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
-      <button class="btn bs bsm" onclick="retourCgAmList()">← Retour</button>
+     <button class="btn bs bsm" onclick="retourCgAmList()">← Retour</button>
       <span style="font-weight:700;font-size:15px;color:var(--m)">Pose des congés ${anneeDebut}/${anneeFin}</span>
+      <button class="btn bp bsm" id="btn-save-cgam" onclick="enregistrerCgAm()">💾 Enregistrer</button>
       <span style="font-size:13px;font-weight:600;color:${ok?'var(--vt)':'var(--tx2)'}">${nb}/30 — ${nbSamedis}/5</span>
     </div>
     ${new Date().getFullYear()<=anneeDebut?`<div style="background:#f5f0ff;border:1px solid #c4b5fd;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:#5b21b6">📌 Ces congés sont à planifier pour l’année — à fixer impérativement avant le 1er mars.</div>`:""}
@@ -5111,7 +5122,7 @@ function buildCgAmDetail(anneeDebut,data){
     </div>
     <div class="card">
       <div class="ctitle" style="margin-bottom:4px">Calendrier des congés — 1er mai ${anneeDebut} au 30 avril ${anneeFin}</div>
-      ${alertHtml}
+      ${feriesDecochesMsg}${alertHtml}
       <div style="font-size:11px;color:var(--tx3);margin-bottom:10px">
         Cliquez sur les jours pour les cocher (vert).<br>
         30 jours dont <strong>exactement 5 samedis</strong>.<br>
@@ -5246,6 +5257,17 @@ function toggleCgAm(anneeDebut,dateStr){
   if(!S.congesAM) S.congesAM={};
   if(!S.congesAM[anneeDebut]) S.congesAM[anneeDebut]={enfants:0,jours:{}};
   const data=S.congesAM[anneeDebut];
+  // Bloquer si férié acquis (couvert par au moins un contrat)
+  const contratsActifsT=S.contrats.filter(c=>c.signe&&!c.cloture);
+  const isFerNonTravT=contratsActifsT.length>0&&contratsActifsT.every(c=>{
+    if(!isFerie(dateStr,c)) return false;
+    const p=dateStr.split('-');const mmdd=p[1]+'-'+p[2];
+    return !(c.feriesTravailles||[]).includes(mmdd);
+  });
+  if(isFerNonTravT&&!ferieCouvretParAcquis(dateStr,anneeDebut,data)){
+    toast('⚠ Ce jour férié est acquis — il ne peut pas être coché comme jour de congé');
+    return;
+  }
   const joursCoches=Object.keys(data.jours).filter(k=>data.jours[k]==='pose').length;
   if(data.jours[dateStr]==='pose'){
     delete data.jours[dateStr];
@@ -5264,7 +5286,8 @@ function toggleCgAm(anneeDebut,dateStr){
     data.jours[dateStr]='pose';
   }
   S.congesAM[anneeDebut]=data;
-  saveCongesAM();
+  S.cgAmModifie=true;
+  localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM));
   majFichesCgAm(anneeDebut);
   ouvrirCgAm(anneeDebut);
 }
@@ -5644,6 +5667,31 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
   });
   S.contrats.forEach((c,i)=>{if(c.fiches)S.contrats[i]=c;});
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+
+  // Décocher les fériés cochés qui sont devenus acquis (non cochables)
+  const dataAM=S.congesAM[anneeDebut];
+  if(dataAM&&dataAM.jours){
+    const contratsActifsD=S.contrats.filter(c=>c.signe&&!c.cloture);
+    let feriesDecoches=0;
+    Object.keys(dataAM.jours).forEach(dateStr=>{
+      if(dataAM.jours[dateStr]!=='pose') return;
+      const isFerNonTravD=contratsActifsD.length>0&&contratsActifsD.every(c=>{
+        if(!isFerie(dateStr,c)) return false;
+        const p=dateStr.split('-');const mmdd=p[1]+'-'+p[2];
+        return !(c.feriesTravailles||[]).includes(mmdd);
+      });
+      if(isFerNonTravD&&!ferieCouvretParAcquis(dateStr,anneeDebut,dataAM)){
+        delete dataAM.jours[dateStr];
+        feriesDecoches++;
+      }
+    });
+    if(feriesDecoches>0){
+      S.congesAM[anneeDebut]=dataAM;
+      // Afficher le message d'invitation à recocher
+      S._cgAmFeriesDecoches=(S._cgAmFeriesDecoches||0)+feriesDecoches;
+    }
+  }
+
   // Sauvegarder chaque contrat modifié individuellement
  if(sauvegarder&&window.FB_USER&&window.fbSaveData){
     S.contrats.filter(c=>c.fiches&&c.signe&&!c.cloture).forEach(c=>{
@@ -5662,6 +5710,12 @@ function majCgAmEnfants(anneeDebut,val){
   saveCongesAM();
 }
 
+function enregistrerCgAm(){
+  saveCongesAM();
+  S.cgAmModifie=false;
+  toast('✓ Congés enregistrés');
+}
+         
 function saveCongesAM(){
   // Ne pas sauvegarder si congesAM est vide (évite d'écraser les données)
   if(!S.congesAM||!Object.keys(S.congesAM).length) return;
