@@ -5437,7 +5437,7 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
   }
 
   // Trouver le dernier jour décompté = jour ouvrable précédant la reprise
-  function dernierJourDecompte(c,finPeriode,joursPoses){
+  function dernierJourDecompte(c,finPeriode,joursPoses,joursAM){
     // Trouver la 1ère date de reprise après finPeriode
     const fin=new Date(finPeriode);
     let cur=new Date(fin);
@@ -5477,7 +5477,38 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
         }
         tmp.setDate(tmp.getDate()+1);
       }
-      if(tousNonPrevus) return finPeriode; // semaine non prévue → on s'arrête à la fin de la période
+    // Vérifier via l'agenda si les semaines entre fin et reprise sont non travaillées
+      let semainesNonTravaillees=true;
+      let tmpAgenda=new Date(apresFinStr);
+      while(tmpAgenda<=avantReprise){
+        const dsA=tmpAgenda.getFullYear()+'-'+String(tmpAgenda.getMonth()+1).padStart(2,'0')+'-'+String(tmpAgenda.getDate()).padStart(2,'0');
+       const semNumA=getSemISO(dsA);
+        const semAnA=getSemAnnee(dsA);
+        const semKeyA=semAnA+'-S'+String(semNumA).padStart(2,'0');
+        const sourceA=getVersionActive(c,tmpAgenda);
+        const agendasA=sourceA.agendas||c.agendas||[];
+        const agendaA=agendasA.find(ag=>{
+          const deb=new Date(ag.dateDebut);
+          const fin2=new Date(ag.dateFin);
+          return tmpAgenda>=deb&&tmpAgenda<=fin2;
+        });
+        if(agendaA&&agendaA.semaines&&agendaA.semaines[semKeyA]){
+          semainesNonTravaillees=false;break;
+        }
+        // Avancer d'une semaine
+        tmpAgenda.setDate(tmpAgenda.getDate()+7);
+      }
+     if(semainesNonTravaillees){
+        // Vérifier que ces jours ne sont pas dans la période de congés AM cochée
+        let dansCongesAM=false;
+        let tmpC2=new Date(apresFinStr);
+        while(tmpC2<=avantReprise){
+          const dsC2=tmpC2.getFullYear()+'-'+String(tmpC2.getMonth()+1).padStart(2,'0')+'-'+String(tmpC2.getDate()).padStart(2,'0');
+          if(joursAM&&joursAM[dsC2]==='pose'){dansCongesAM=true;break;}
+          tmpC2.setDate(tmpC2.getDate()+1);
+        }
+        if(!dansCongesAM) return finPeriode; // semaine non travaillée hors congés → on s'arrête
+      }
     }
     // Dernier jour décompté = veille de la reprise
     const veille=new Date(reprise);
@@ -5509,7 +5540,7 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
 
     periodes.forEach(({debut,fin})=>{
       const premierTrav=premierJourTravaille(c,debut,fin);
-      const dernierDecompte=dernierJourDecompte(c,fin,joursPoses);
+     const dernierDecompte=dernierJourDecompte(c,fin,joursPoses,data.jours);
 
       // Quota disponible = acquis jusqu'à fin du mois précédant le début
       const debutDate=new Date(debut);
