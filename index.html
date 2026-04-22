@@ -2486,11 +2486,36 @@ function calcCongesContrat(c){
       const absArret=jours.filter(j=>j.statut==='arret').length;
 
       if(semTerminee){
-        // Pour plan var : calcul existant
+        // Pour plan var : calcul par semaine avec jours possibles réels
         if(c.th==='plan'&&c.planType==='var'){
-          const prorata=Math.max(0,(joursMax-absNonRem)/joursMax);
-          totalSemaines+=prorata;
-          totalSemainesArret+=absArret>0?absArret/joursMax:0;
+          // Identifier le volume actif pour cette semaine
+          // (on prend le volume dont les jours correspondent aux jours présents)
+          const joursActifs=jours.filter(j=>!['hors-contrat','repos','non-prevu'].includes(j.statut||getStatutPrevu(c,j)));
+          if(joursActifs.length===0){totalSemaines+=0;} // semaine sans jours actifs
+          else {
+            // Trouver le volume actif : celui dont les jours possibles couvrent cette semaine
+            // On prend le volume avec le plus de jours possibles parmi ceux qui matchent
+            let jMaxSem=joursMax; // fallback
+            if(c.planVar){
+              // Vérifier quel volume est actif selon l'agenda (via typeSemTh)
+              // Sinon prendre le volume dont les jours possibles incluent les jours actifs
+              const joursIdx=joursActifs.map(j=>{
+                const jj=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])).getDay();
+                return jj===0?6:jj-1;
+              });
+              // Trouver le volume dont tous les jours actifs sont possibles
+              const volMatch=c.planVar.find(v=>v.jours&&joursIdx.every(idx=>v.jours[idx]));
+              if(volMatch) jMaxSem=volMatch.j||joursMax;
+            }
+            // Compter les jours actifs (prévu, travaillé, congés, abs) hors hors-contrat
+            const joursComptesSem=joursActifs.filter(j=>
+              ['prevu','travaille','abs-partielle','abs-rem','conges-acq','conges-anticipe','arret','abs-non','ferie'].includes(j.statut||getStatutPrevu(c,j))
+            ).length;
+            const prorataActifs=Math.min(joursComptesSem,jMaxSem); // plafonné au max du volume
+            const prorata=Math.max(0,(prorataActifs-absNonRem)/jMaxSem);
+            totalSemaines+=prorata;
+            totalSemainesArret+=absArret>0?absArret/jMaxSem:0;
+          }
         } else {
           // Pour fixe/sem/min : compter uniquement les jours prévus travaillés
           const joursPrevus=jours.filter(j=>{
