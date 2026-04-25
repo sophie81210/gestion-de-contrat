@@ -2603,6 +2603,55 @@ if(['conges-acq','conges-anticipe'].includes(statutJ)){
       anneeRef,anneeRefFin:anneeRef+1
     };
   }
+  // Recalculer les pris par année d'acquisition (pas par date de pose)
+  // Collecter tous les jours conges-acq et conges-anticipe dans l'ordre chronologique
+  const tousJoursConges=[];
+  Object.entries(c.fiches).forEach(([key,fiche])=>{
+    if(!fiche.valide) return;
+    fiche.jours.forEach(j=>{
+      if(j.statut==='conges-acq'||j.statut==='conges-anticipe'){
+        tousJoursConges.push({date:j.date,statut:j.statut});
+      }
+    });
+  });
+  tousJoursConges.sort((a,b)=>a.date.localeCompare(b.date));
+
+  // Attribuer les jours aux années de référence dans l'ordre
+  const anneesRef=Object.keys(c.conges).map(Number).sort();
+  let restantParAnnee={};
+  anneesRef.forEach(ar=>{restantParAnnee[ar]=c.conges[ar].acquis||0;});
+  // Réinitialiser les pris
+  anneesRef.forEach(ar=>{c.conges[ar].pris=0;});
+
+  tousJoursConges.forEach(j=>{
+    if(j.statut==='conges-acq'){
+      // Attribuer à la première année qui a encore des jours disponibles
+      for(const ar of anneesRef){
+        if(restantParAnnee[ar]>0){
+          c.conges[ar].pris++;
+          restantParAnnee[ar]--;
+          break;
+        }
+      }
+    } else if(j.statut==='conges-anticipe'){
+      // Attribuer à l'année en cours d'acquisition
+      const dateJ=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
+      for(const ar of anneesRef){
+        const debutRef=new Date(ar,5,1);
+        const finRef=new Date(ar+1,4,31);
+        if(dateJ>=debutRef&&dateJ<=finRef){
+          c.conges[ar].pris++;
+          break;
+        }
+      }
+    }
+  });
+
+  // Recalculer les restants
+  anneesRef.forEach(ar=>{
+    c.conges[ar].restants=Math.max(0,(c.conges[ar].acquis||0)-c.conges[ar].pris);
+  });
+
   c.congesCourants=c.conges[anneeRefDebut]||{acquis:0,pris:0,restants:0};
 }
 
