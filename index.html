@@ -5264,13 +5264,21 @@ function buildCgAmDetail(anneeDebut,data){
     moisCur=new Date(annee,moisIdx+1,1);
   }
 
-  const ok=nb===30&&nbSamedis===5;
+  // Calculer les jours de fractionnement (max sur tous les contrats)
+  let joursFragMax=0;
+  if(data.fractionnement){
+    S.contrats.filter(c=>c.signe&&!c.cloture).forEach(c=>{
+      joursFragMax=Math.max(joursFragMax,calcJoursFractionnement(c,anneeDebut));
+    });
+  }
+  const joursMax=30+joursFragMax;
+  const ok=nb===joursMax&&nbSamedis===5;
   const feriesDecochesMsg=S._cgAmFeriesDecoches>0?`<div style="background:#fff3cd;color:#856404;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:8px">⚠ ${S._cgAmFeriesDecoches} jour(s) férié(s) ont été décochés automatiquement car ils sont désormais acquis. Veuillez cocher des jours supplémentaires.</div>`:'';
   S._cgAmFeriesDecoches=0;
-  const alertHtml=nb>30?`<div style="background:#fdecea;color:var(--al);padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">⚠ ${nb} jours cochés — maximum 30</div>`:
-    nb===30&&nbSamedis!==5?`<div style="background:#fff8e1;color:#854F0B;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">⚠ ${nbSamedis} samedi(s) — il en faut exactement 5</div>`:
-    ok?`<div style="background:var(--vtc);color:var(--vt);padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">✓ 30 jours posés dont 5 samedis — calendrier validé !</div>`:
-    `<div style="font-size:12px;color:var(--tx3);margin-bottom:10px">${nb}/30 jours cochés</div>`;
+  const alertHtml=nb>joursMax?`<div style="background:#fdecea;color:var(--al);padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">⚠ ${nb} jours cochés — maximum ${joursMax}</div>`:
+    nb===joursMax&&nbSamedis!==5?`<div style="background:#fff8e1;color:#854F0B;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">⚠ ${nbSamedis} samedi(s) — il en faut exactement 5</div>`:
+    ok?`<div style="background:var(--vtc);color:var(--vt);padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">✓ ${joursMax} jours posés dont 5 samedis — calendrier validé !</div>`:
+    `<div style="font-size:12px;color:var(--tx3);margin-bottom:10px">${nb}/${joursMax} jours cochés</div>`;
 
   return `<div style="padding:14px">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
@@ -5286,6 +5294,12 @@ function buildCgAmDetail(anneeDebut,data){
         <input type="number" min="0" max="15" value="${data.enfants||0}"
           style="width:60px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:14px;margin-top:6px"
           onchange="majCgAmEnfants(${anneeDebut},this.value)">
+      </div>
+      <div class="fg" style="margin-bottom:0;margin-top:8px">
+        <label class="fl">Jours de fractionnement</label>
+        <input type="checkbox" ${data.fractionnement?'checked':''}
+          style="margin-top:8px;width:18px;height:18px"
+          onchange="majCgAmFractionnement(${anneeDebut},this.checked)">
       </div>
     </div>
     <div class="card">
@@ -5453,7 +5467,14 @@ function toggleCgAm(anneeDebut,dateStr){
   if(data.jours[dateStr]==='pose'){
     delete data.jours[dateStr];
   } else {
-    if(joursCoches>=30){toast('Maximum 30 jours de congés');return;}
+    let joursFragMaxT=0;
+    if(data.fractionnement){
+      S.contrats.filter(c=>c.signe&&!c.cloture).forEach(c=>{
+        joursFragMaxT=Math.max(joursFragMaxT,calcJoursFractionnement(c,anneeDebut));
+      });
+    }
+    const joursMaxT=30+joursFragMaxT;
+    if(joursCoches>=joursMaxT){toast('Maximum '+joursMaxT+' jours de congés');return;}
     const parts=dateStr.split('-');
     const jourDate=new Date(parseInt(parts[0]),parseInt(parts[1])-1,parseInt(parts[2]));
     if(jourDate.getDay()===6){
@@ -5996,6 +6017,30 @@ if(tousNonPrevus){
   }
   if(sauvegarder) saveCongesAM();
 }
+         
+function calcJoursFractionnement(c, anneeDebut){
+  // Total acquis (années terminées uniquement)
+  let totalAcquis=0;
+  Object.values(c.conges||{}).forEach(cg=>{
+    if(cg.estTerminee) totalAcquis+=cg.acquis||0;
+  });
+  if(totalAcquis===0) return 0;
+  // Jours acquis posés jusqu'au 31 octobre
+  let poséesJusquOct=0;
+  const limiteOct=(anneeDebut+1)+'-10-31';
+  Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
+    if(!fiche.valide) return;
+    fiche.jours.forEach(j=>{
+      if(j.date>limiteOct) return;
+      if(j.statut==='conges-acq') poséesJusquOct++;
+    });
+  });
+  const restants=totalAcquis-poséesJusquOct;
+  if(restants>6) return 2;
+  if(restants>=3&&restants<=5) return 1;
+  return 0;
+}
+         
 function majCgAmEnfants(anneeDebut,val){
   if(!S.congesAM) S.congesAM={};
   if(!S.congesAM[anneeDebut]) S.congesAM[anneeDebut]={enfants:0,jours:{}};
