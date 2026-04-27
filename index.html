@@ -2207,7 +2207,8 @@ function buildRecapHtml(recap){
   }
   if(parseFloat(recap.hComp)>0) html+=ligneG('Heures complémentaires', recap.hComp+' h'+(recap.montantCompNet>0?' — '+recap.montantCompNet.toFixed(2)+' € (exo.+11,31%)':''), true);
   if(parseFloat(recap.hSup||0)>0) html+=ligneG('Heures supplémentaires', recap.hSup+' h'+(recap.montantSupNet>0?' — '+recap.montantSupNet.toFixed(2)+' € (exo.+11,31%)':''), true);
-  html+=ligneG('Salaire net à déclarer', recap.salaireNet+' €', true, 'var(--m)');
+  if(parseFloat(recap.indemCongeMois||0)>0) html+=ligneG('Indemnité congés payés ('+recap.indemCongeNbJours+' j)', recap.indemCongeMois.toFixed(2)+' €', true, 'var(--m)');
+  html+=ligneG('Salaire net à déclarer', (parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)).toFixed(2)+' €', true, 'var(--m)');
   if(parseFloat(recap.indemEntretienTotal)>0) html+=ligneG('Indem. entretien', recap.indemEntretienTotal+' €');
   if(parseFloat(recap.indemRepasTotal)>0) html+=ligneG('Indem. repas', recap.indemRepasTotal+' €');
   if(parseFloat(recap.indemKmTotal||0)>0) html+=ligneG('Indem. km', recap.indemKmTotal+' €');
@@ -3337,6 +3338,49 @@ const forfait=indem.parJour||2.65;
 
   // Note si données contrat manquantes
   const donneesManquantes=(!txBrut||(c.tc!=='occ'&&!hMensu));
+
+  // Indemnité de congés payés (contrats 46 sem ou moins)
+  let indemCongeMois=0;
+  let indemCongeNbJours=0;
+  if(c.tc!=='52'&&c.tc!=='occ'&&c.dateCg){
+    const moisKey=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0');
+    const anneeAm=getAnneeAmPourDate(moisKey);
+    const anneeAcq=anneeAm-1; // année d'acquisition = année AM - 1
+    const ind=calcIndemniteConges(c,anneeAcq);
+    if(ind){
+      if(c.dateCg==='chaque'){
+        // Compter les conges-acq posés CE mois
+        const nbAcqMois=fiche.jours.filter(j=>j.statut==='conges-acq').length;
+        if(nbAcqMois>0){
+          indemCongeNbJours=nbAcqMois;
+          indemCongeMois=parseFloat((ind.montantJournalierNet*nbAcqMois).toFixed(2));
+        }
+        // En juin : ajouter les anticipés posés avant mai
+        if(fiche.mois===5){ // juin = mois 5 (0-indexé)
+          let nbAnticipe=0;
+          const limiteMai=fiche.annee+'-05-01';
+          Object.entries(c.fiches||{}).forEach(([k,f])=>{
+            if(!f.valide) return;
+            f.jours.forEach(j=>{
+              if(j.date>=limiteMai) return;
+              if(j.statut==='conges-anticipe') nbAnticipe++;
+            });
+          });
+          if(nbAnticipe>0){
+            indemCongeNbJours+=nbAnticipe;
+            indemCongeMois=parseFloat((indemCongeMois+ind.montantJournalierNet*nbAnticipe).toFixed(2));
+          }
+        }
+      } else if(c.dateCg==='juin'&&fiche.mois===5){
+        indemCongeNbJours=ind.acquis;
+        indemCongeMois=ind.meilleurNet;
+      } else if(c.dateCg==='principale'){
+        // Détecter la prise principale (≥12 jours ouvrables consécutifs)
+        // TODO : à implémenter
+      }
+    }
+  }
+
   return{
     donneesManquantes, hMensu, hComp:hComp.toFixed(2), hSup:hSup.toFixed(2),
     isOcc:c.tc==='occ',
@@ -3351,7 +3395,8 @@ const forfait=indem.parJour||2.65;
     txNet:txNet.toFixed(2), txNetExact:txNet, salaireNet,
     indemEntretienTotal:indemEntretienTotal.toFixed(2),
     indemRepasTotal:indemRepasTotal.toFixed(2),
-    indemKmTotal:indemKmTotal.toFixed(2)
+    indemKmTotal:indemKmTotal.toFixed(2),
+    indemCongeMois, indemCongeNbJours
   };
 }
 
