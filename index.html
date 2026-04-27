@@ -4695,7 +4695,49 @@ function validerAvenant(){
 }
          
 // ══ CONGÉS ══
-function getAnneesRef(){
+function calcIndemniteConges(c, anneeRef){
+  // Retourne null si conditions non remplies
+  if(c.tc==='52'||c.tc==='occ') return null;
+  const cg=c.conges?.[anneeRef];
+  if(!cg?.estTerminee) return null;
+  const keyMai=(anneeRef+1)+'-05';
+  if(!c.fiches?.[keyMai]?.valide) return null;
+
+  const dateMai=new Date(anneeRef+1,4,31);
+  const sourceM=getVersionActive(c,dateMai);
+  const txBrutM=sourceM.txBrut||c.txBrut||0;
+
+  // Moyenne hebdo
+  let hHebdo=0;
+  if(sourceM.th==='fixe'||sourceM.th==='sem'){
+    hHebdo=parseFloat(((sourceM.hMensu||c.hMensu)*12/(sourceM.nbSem||c.nbSem||46)).toFixed(2));
+  } else if(sourceM.th==='plan'&&sourceM.planType==='var'&&sourceM.planVar){
+    const totH=sourceM.planVar.reduce((t,v)=>t+(v.h||0)*(v.s||0),0);
+    const totS=sourceM.planVar.reduce((t,v)=>t+(v.s||0),0);
+    hHebdo=totS>0?parseFloat((totH/totS).toFixed(2)):0;
+  } else if(sourceM.th==='plan'&&sourceM.planType==='min'){
+    hHebdo=sourceM.hMin||0;
+  }
+
+  // Méthode du maintien
+  const maintien=parseFloat((hHebdo/6*cg.acquis*txBrutM).toFixed(2));
+
+  // Méthode du 10ème
+  let totalBrut=0;
+  for(let m=6;m<=17;m++){
+    const mois=m>12?m-12:m;
+    const annee=m>12?anneeRef+1:anneeRef;
+    const key=annee+'-'+String(mois).padStart(2,'0');
+    const f=c.fiches?.[key];
+    if(!f?.valide) continue;
+    const r=calcRecapFiche(c,f);
+    const brutMois=parseFloat(((r.hMensu||0)*txBrutM-(r.montantAbsences||0)/((r.txNet||1))*txBrutM+(r.montantCompBrut||0)+(r.montantSupBrut||0)).toFixed(2));
+    totalBrut+=brutMois;
+  }
+  const dixieme=parseFloat((totalBrut*0.1).toFixed(2));
+
+  const params=S.params||{};
+  const coefNet=par
   const now=new Date();const m=now.getMonth()+1;
   const debRef=m>=6?now.getFullYear():now.getFullYear()-1;
   return{ref:debRef+'/'+(debRef+1),acq:(debRef+1)+'/'+(debRef+2)};
@@ -4737,47 +4779,9 @@ function genCumul(c){
       const ficheMai=c.fiches?.[keyMai];
       if(!ficheMai?.valide) return;
 
-      // Source active en mai
-      const dateMai=new Date(anneeRef+1,4,31);
-      const sourceM=getVersionActive(c,dateMai);
-
-      // Moyenne hebdo
-      let hHebdo=0;
-      if(sourceM.th==='fixe'||sourceM.th==='sem'){
-        hHebdo=parseFloat(((sourceM.hMensu||c.hMensu)*12/(sourceM.nbSem||c.nbSem||46)).toFixed(2));
-      } else if(sourceM.th==='plan'&&sourceM.planType==='var'&&sourceM.planVar){
-        const totH=sourceM.planVar.reduce((t,v)=>t+(v.h||0)*(v.s||0),0);
-        const totS=sourceM.planVar.reduce((t,v)=>t+(v.s||0),0);
-        hHebdo=totS>0?parseFloat((totH/totS).toFixed(2)):0;
-      } else if(sourceM.th==='plan'&&sourceM.planType==='min'){
-        hHebdo=sourceM.hMin||0;
-      }
-
-      const txBrutM=sourceM.txBrut||c.txBrut||0;
-
-      // Méthode du maintien = hHebdo/6 * acquis * txBrut
-      const maintien=parseFloat((hHebdo/6*cg.acquis*txBrutM).toFixed(2));
-
-      // Méthode du 10ème = 10% des salaires bruts de l'année
-      let totalBrut=0;
-      for(let m=6;m<=17;m++){
-        const mois=m>12?m-12:m;
-        const annee=m>12?anneeRef+1:anneeRef;
-        const key=annee+'-'+String(mois).padStart(2,'0');
-        const f=c.fiches?.[key];
-        if(!f?.valide) continue;
-        const r=calcRecapFiche(c,f);
-        const brutMois=parseFloat(((r.hMensu||0)*txBrutM-(r.montantAbsences||0)/((r.txNet||1))*txBrutM+(r.montantCompBrut||0)+(r.montantSupBrut||0)).toFixed(2));
-        totalBrut+=brutMois;
-      }
-      const dixieme=parseFloat((totalBrut*0.1).toFixed(2));
-
-      // Meilleure méthode
-      const params=S.params||{};
-      const coefNet=params.coefNet||0.7811975;
-      const meilleur=Math.max(maintien,dixieme);
-      const meilleurNet=parseFloat((meilleur*coefNet).toFixed(2));
-      const nomMethode=maintien>=dixieme?'Méthode du maintien de salaire':'Méthode du 10ème';
+      const ind=calcIndemniteConges(c,anneeRef);
+      if(!ind) return;
+      const {maintien,dixieme,meilleurNet,nomMethode,meilleurBrut}=ind;
 
       html2+=`<div style="background:#fff8e1;border-radius:8px;padding:10px 12px;margin-bottom:10px;margin-top:-4px">
         <div style="font-weight:700;font-size:13px;color:#854F0B;margin-bottom:6px">Indemnité de congés payés ${anneeRef}/${anneeRef+1}</div>
