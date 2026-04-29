@@ -5792,26 +5792,28 @@ if(tousNonPrevus){
     const periodeDebut=String(anneeDebut)+'-05-01';
     const periodeFin=String(anneeDebut+1)+'-04-30';
 
-    // Compter les congés posés validés dans la période AM courante
-    // (pour initialiser compteurTotal avec les pris hors AM courante)
-    let prisValidesAMCourante=0;
-    if(c.conges){
-      Object.entries(c.fiches).forEach(([key,fiche])=>{
-        if(!fiche.valide) return;
-        fiche.jours.forEach(j=>{
-          if(j.date<periodeDebut||j.date>periodeFin) return;
-          if(j.statut==='conges-acq'||j.statut==='conges-anticipe') prisValidesAMCourante++;
-        });
-      });
-    }
-
-    // Initialiser compteurTotal avec les pris hors AM courante
-    // (pris des AM précédentes qui ont consommé les mêmes droits d'acquisition)
+    // Initialiser compteurTotal avec les pris hors AM courante par année d'acquisition
+    // Pour chaque année terminée : pris_total - pris_dans_AM_courante_pour_cette_acquisition
+    // pris_dans_AM_courante = conges-acq validés dans AM courante
+    //                       + conges-anticipe validés dans AM courante avec date <= finRef de l'acquisition
     let compteurTotal=0;
     if(c.conges){
       Object.values(c.conges).forEach(cg=>{
         if(!cg.estTerminee) return;
-        compteurTotal+=Math.max(0,(cg.pris||0)-prisValidesAMCourante);
+        const finRefAcq=new Date(cg.anneeRef+1,4,31); // 31 mai N+1
+        const finRefStr=String(cg.anneeRef+1)+'-05-31';
+        let prisAMCourante=0;
+        Object.entries(c.fiches).forEach(([key,fiche])=>{
+          if(!fiche.valide) return;
+          fiche.jours.forEach(j=>{
+            if(j.date<periodeDebut||j.date>periodeFin) return;
+            // conges-acq : toujours attribués à l'année terminée disponible
+            if(j.statut==='conges-acq') prisAMCourante++;
+            // conges-anticipe : seulement si date <= finRef de cette acquisition
+            else if(j.statut==='conges-anticipe'&&j.date<=finRefStr) prisAMCourante++;
+          });
+        });
+        compteurTotal+=Math.max(0,(cg.pris||0)-prisAMCourante);
       });
     }
     Object.values(c.fiches).forEach(fiche=>{
@@ -5926,7 +5928,6 @@ if(tousNonPrevus){
           const estCongesPose=['conges-acq','conges-anticipe'].includes(jour.statut);
           if(decompteCommence&&estCongesPose){
             compteurTotal++;
-            if(dateStr>='2024-05-01'&&dateStr<='2024-08-01') console.log('[CT validé]',dateStr,jour.statut,'→ ct:',compteurTotal);
           }
           if(decompteCommence&&estFerie){
             const veilleStrV=new Date(cur);veilleStrV.setDate(veilleStrV.getDate()-1);
