@@ -2420,19 +2420,15 @@ function calcCongesContrat(c){
   if(!c.conges) c.conges={};
   const [ddy,ddm,ddd]=c.dateDeb.split('-').map(Number);
   const dateDebContrat=new Date(ddy,ddm-1,ddd);
-  // Utiliser la date du dernier jour de la dernière fiche validée
-  // pour éviter que la date système (2026) ne marque des années comme terminées à tort
-  const fichesValidees=Object.keys(c.fiches).filter(k=>c.fiches[k].valide).sort();
-  let now;
-  if(fichesValidees.length){
-    const dernierMoisValide=fichesValidees[fichesValidees.length-1];
-    const [ny,nm]=dernierMoisValide.split('-').map(Number);
-    // Dernier jour du mois validé
-    now=new Date(ny,nm,0); // jour 0 du mois nm+1 = dernier jour du mois nm
-  } else {
-    now=new Date();
-  }
-  const anneeRefDebut=now.getMonth()>=5?now.getFullYear():now.getFullYear()-1;
+  const now=new Date();
+  // Déterminer la date de la dernière fiche validée
+  const fichesValideesKeys=Object.keys(c.fiches).filter(k=>c.fiches[k].valide).sort();
+  const dernierMoisValide=fichesValideesKeys.length?fichesValideesKeys[fichesValideesKeys.length-1]:null;
+  const dateFinDerniereValide=dernierMoisValide?(()=>{const [ny,nm]=dernierMoisValide.split('-').map(Number);return new Date(ny,nm,0);})():null;
+  // anneeRefDebut : basé sur la dernière fiche validée pour éviter de créer des années fictives
+  // mais si pas de fiche validée, utiliser la date système
+  const nowRef=dateFinDerniereValide||now;
+  const anneeRefDebut=nowRef.getMonth()>=5?nowRef.getFullYear():nowRef.getFullYear()-1;
   const anneeContratDebut=dateDebContrat.getFullYear();
 
   // Calculer jours max par semaine selon type de contrat
@@ -2452,10 +2448,27 @@ function calcCongesContrat(c){
   }
   const joursMax=getJoursMax();
 
+  // Nettoyer les entrées c.conges qui n'ont aucune fiche validée dans leur période
+  // pour éviter les résidus d'anciens calculs
+  Object.keys(c.conges).forEach(ar=>{
+    const arN=parseInt(ar);
+    const debutRefAr=new Date(arN,5,1);
+    const finRefAr=new Date(arN+1,4,31);
+    const aFicheValidee=Object.entries(c.fiches).some(([k,f])=>{
+      if(!f.valide) return false;
+      const [ay,am]=k.split('-').map(Number);
+      const dateF=new Date(ay,am-1,1);
+      return dateF>=debutRefAr&&dateF<=finRefAr;
+    });
+    if(!aFicheValidee) delete c.conges[ar];
+  });
+
   for(let anneeRef=anneeContratDebut-1; anneeRef<=anneeRefDebut; anneeRef++){
     const debutRef=new Date(anneeRef,5,1);
     const finRef=new Date(anneeRef+1,4,31);
-    const estTerminee=finRef<now;
+    // Une année est terminée si sa période est écoulée selon la dernière fiche validée
+    // (et non selon la date système qui peut être bien après la dernière fiche)
+    const estTerminee=dateFinDerniereValide?finRef<=dateFinDerniereValide:finRef<now;
 
     // Regrouper les jours par semaine ISO
     const semaines={}; // {semKey: {jours:[], estTerminee:bool}}
@@ -2590,7 +2603,7 @@ if(['conges-acq','conges-anticipe'].includes(statutJ)){
    const dernierMoisRef=new Date(anneeRef+1,5,1); // 1er juin = après mai
     // Arrondi supérieur seulement si on est après la fin de l'année de référence
     // ET toutes les fiches existantes de l'année sont validées
-    const apresFinRef=now>finRef;
+    const apresFinRef=nowRef>finRef;
     const toutesValidees=apresFinRef&&Object.entries(c.fiches).every(([k,f])=>{
       const [ay,am]=k.split('-').map(Number);
       const dateF=new Date(ay,am-1,1);
