@@ -2431,8 +2431,7 @@ function calcCongesContrat(c){
   const fichesValideesKeys=Object.keys(c.fiches).filter(k=>c.fiches[k].valide).sort();
   const dernierMoisValide=fichesValideesKeys.length?fichesValideesKeys[fichesValideesKeys.length-1]:null;
   const dateFinDerniereValide=dernierMoisValide?(()=>{const [ny,nm]=dernierMoisValide.split('-').map(Number);return new Date(ny,nm,0);})():null;
-  // anneeRefDebut : basé sur la dernière fiche validée pour éviter de créer des années fictives
-  // mais si pas de fiche validée, utiliser la date système
+  // anneeRefDebut basé sur la dernière fiche validée pour éviter de créer des années fictives
   const nowRef=dateFinDerniereValide||now;
   const anneeRefDebut=nowRef.getMonth()>=5?nowRef.getFullYear():nowRef.getFullYear()-1;
   const anneeContratDebut=dateDebContrat.getFullYear();
@@ -2454,8 +2453,7 @@ function calcCongesContrat(c){
   }
   const joursMax=getJoursMax();
 
-  // Nettoyer les entrées c.conges qui n'ont aucune fiche validée dans leur période
-  // pour éviter les résidus d'anciens calculs
+  // Nettoyer les entrées c.conges sans fiches validées pour éviter les résidus
   Object.keys(c.conges).forEach(ar=>{
     const arN=parseInt(ar);
     const debutRefAr=new Date(arN,5,1);
@@ -2472,8 +2470,6 @@ function calcCongesContrat(c){
   for(let anneeRef=anneeContratDebut-1; anneeRef<=anneeRefDebut; anneeRef++){
     const debutRef=new Date(anneeRef,5,1);
     const finRef=new Date(anneeRef+1,4,31);
-    // Une année est terminée si sa période est écoulée selon la dernière fiche validée
-    // (et non selon la date système qui peut être bien après la dernière fiche)
     const estTerminee=dateFinDerniereValide?finRef<=dateFinDerniereValide:finRef<now;
 
     // Regrouper les jours par semaine ISO
@@ -5829,24 +5825,17 @@ if(tousNonPrevus){
       const moisPrecDate=new Date(keyMoisPrec+'-01');
       let quotaAcquis=0;
       if(c.conges){
-        // Compter les jours conges-acq et conges-anticipe validés dans la période AM courante
-        // (ils sont déjà dans compteurTotal, ne pas les déduire deux fois)
-        let prisValidesAMCourante=0;
-        Object.entries(c.fiches).forEach(([key,fiche])=>{
-          if(!fiche.valide) return;
-          fiche.jours.forEach(j=>{
-            if(j.date<periodeDebut||j.date>periodeFin) return;
-            if(j.statut==='conges-acq'||j.statut==='conges-anticipe') prisValidesAMCourante++;
-          });
-        });
-        // quotaAcquis = restants (après tous les pris) + prisValidesAMCourante
-        // (les jours validés dans cette AM sont dans pris ET dans compteurTotal,
-        // on les réajoute pour éviter la double déduction)
         Object.values(c.conges).forEach(cg=>{
           if(!cg.estTerminee) return;
-          quotaAcquis+=(cg.restants||0);
+          const finRef=new Date(cg.anneeRef+1,4,31);
+         if(finRef<debutDate){
+            // Année terminée avant la pose → les pris sont déjà dans compteurTotal via fiches validées
+            quotaAcquis+=(cg.acquis||0);
+          } else {
+            // Année terminée mais pose dans la période → idem
+            quotaAcquis+=(cg.acquis||0);
+          }
         });
-        quotaAcquis+=prisValidesAMCourante;
       }
       // Quota anticipé = jours en cours d'acquisition (année non terminée)
      let quotaAnticipe=0;
@@ -5921,12 +5910,8 @@ if(tousNonPrevus){
           }
         }
        if(fiche.valide){
-          // Incrémenter compteurTotal uniquement pour les jours de congés des fiches validées
-          // (pas les absences, pas les jours travaillés)
-          // Pour contrats 46 sem : les conges-non ne comptent PAS dans le quota
-          const estConge=['conges-acq','conges-anticipe','conges-non'].includes(jour.statut);
-          const estCongesNon46=jour.statut==='conges-non'&&c.tc!=='52';
-          if(decompteCommence&&estConge&&!estCongesNon46){
+          // Incrémenter compteurTotal pour les jours décomptés des fiches validées
+          if(decompteCommence&&!estRepos&&!estFerie){
             compteurTotal++;
           }
           if(decompteCommence&&estFerie){
