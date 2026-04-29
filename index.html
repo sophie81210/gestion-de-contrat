@@ -2420,7 +2420,18 @@ function calcCongesContrat(c){
   if(!c.conges) c.conges={};
   const [ddy,ddm,ddd]=c.dateDeb.split('-').map(Number);
   const dateDebContrat=new Date(ddy,ddm-1,ddd);
-  const now=new Date();
+  // Utiliser la date du dernier jour de la dernière fiche validée
+  // pour éviter que la date système (2026) ne marque des années comme terminées à tort
+  const fichesValidees=Object.keys(c.fiches).filter(k=>c.fiches[k].valide).sort();
+  let now;
+  if(fichesValidees.length){
+    const dernierMoisValide=fichesValidees[fichesValidees.length-1];
+    const [ny,nm]=dernierMoisValide.split('-').map(Number);
+    // Dernier jour du mois validé
+    now=new Date(ny,nm,0); // jour 0 du mois nm+1 = dernier jour du mois nm
+  } else {
+    now=new Date();
+  }
   const anneeRefDebut=now.getMonth()>=5?now.getFullYear():now.getFullYear()-1;
   const anneeContratDebut=dateDebContrat.getFullYear();
 
@@ -5799,16 +5810,22 @@ if(tousNonPrevus){
       const moisPrecDate=new Date(keyMoisPrec+'-01');
       let quotaAcquis=0;
       if(c.conges){
+        // Compter les jours conges-acq et conges-anticipe validés dans la période AM courante
+        // (ils sont déjà dans compteurTotal, ne pas les déduire deux fois)
+        let prisValidesAMCourante=0;
+        Object.entries(c.fiches).forEach(([key,fiche])=>{
+          if(!fiche.valide) return;
+          fiche.jours.forEach(j=>{
+            if(j.date<periodeDebut||j.date>periodeFin) return;
+            if(j.statut==='conges-acq'||j.statut==='conges-anticipe') prisValidesAMCourante++;
+          });
+        });
         Object.values(c.conges).forEach(cg=>{
           if(!cg.estTerminee) return;
-          const finRef=new Date(cg.anneeRef+1,4,31);
-         if(finRef<debutDate){
-            // Année terminée avant la pose → les pris sont déjà dans compteurTotal via fiches validées
-            quotaAcquis+=(cg.acquis||0);
-          } else {
-            // Année terminée mais pose dans la période → idem
-            quotaAcquis+=(cg.acquis||0);
-          }
+          // quota disponible = acquis - pris_hors_AM_courante
+          // pris_hors_AM_courante = pris_total - pris_dans_AM_courante
+          const prisHorsAMCourante=Math.max(0,(cg.pris||0)-prisValidesAMCourante);
+          quotaAcquis+=Math.max(0,(cg.acquis||0)-prisHorsAMCourante);
         });
       }
       // Quota anticipé = jours en cours d'acquisition (année non terminée)
@@ -5885,7 +5902,9 @@ if(tousNonPrevus){
         }
        if(fiche.valide){
           // Incrémenter compteurTotal pour les jours décomptés des fiches validées
-          if(decompteCommence&&!estRepos&&!estFerie){
+          // Pour contrats 46 sem : les conges-non ne comptent PAS dans le quota
+          const estCongesNon46=jour.statut==='conges-non'&&c.tc!=='52';
+          if(decompteCommence&&!estRepos&&!estFerie&&!estCongesNon46){
             compteurTotal++;
           }
           if(decompteCommence&&estFerie){
