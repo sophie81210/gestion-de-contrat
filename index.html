@@ -5788,9 +5788,28 @@ if(tousNonPrevus){
     // (basé sur calcCongesContrat)
     calcCongesContrat(c);
 
-    // Pour chaque période, calculer les jours décomptés
-    // Initialiser avec les jours déjà pris dans les années terminées avant cette année AM
-    let compteurTotal=0; // compteur global sur toute l'année AM
+    // Compter les congés posés validés dans la période AM courante
+    // (pour initialiser compteurTotal avec les pris hors AM courante)
+    let prisValidesAMCourante=0;
+    if(c.conges){
+      Object.entries(c.fiches).forEach(([key,fiche])=>{
+        if(!fiche.valide) return;
+        fiche.jours.forEach(j=>{
+          if(j.date<periodeDebut||j.date>periodeFin) return;
+          if(j.statut==='conges-acq'||j.statut==='conges-anticipe') prisValidesAMCourante++;
+        });
+      });
+    }
+
+    // Initialiser compteurTotal avec les pris hors AM courante
+    // (pris des AM précédentes qui ont consommé les mêmes droits d'acquisition)
+    let compteurTotal=0;
+    if(c.conges){
+      Object.values(c.conges).forEach(cg=>{
+        if(!cg.estTerminee) return;
+        compteurTotal+=Math.max(0,(cg.pris||0)-prisValidesAMCourante);
+      });
+    }
 
     // Retirer d'abord tous les statuts congés de la période AM
     const periodeDebut=String(anneeDebut)+'-05-01';
@@ -5825,23 +5844,10 @@ if(tousNonPrevus){
       const moisPrecDate=new Date(keyMoisPrec+'-01');
       let quotaAcquis=0;
       if(c.conges){
-        // Compter les congés posés validés dans la période AM courante
-        // (ils sont dans cg.pris ET dans compteurTotal → ne pas déduire deux fois)
-        let prisValidesAMCourante=0;
-        Object.entries(c.fiches).forEach(([key,fiche])=>{
-          if(!fiche.valide) return;
-          fiche.jours.forEach(j=>{
-            if(j.date<periodeDebut||j.date>periodeFin) return;
-            if(j.statut==='conges-acq'||j.statut==='conges-anticipe') prisValidesAMCourante++;
-          });
-        });
-        // quotaAcquis = restants (acquis - tous les pris) + pris dans AM courante
-        // (car compteurTotal les recomptera)
         Object.values(c.conges).forEach(cg=>{
           if(!cg.estTerminee) return;
-          quotaAcquis+=(cg.restants||0);
+          quotaAcquis+=(cg.acquis||0);
         });
-        quotaAcquis+=prisValidesAMCourante;
       }
       // Quota anticipé = jours en cours d'acquisition (année non terminée)
      let quotaAnticipe=0;
@@ -5916,12 +5922,8 @@ if(tousNonPrevus){
           }
         }
        if(fiche.valide){
-          // Incrémenter compteurTotal uniquement pour les congés posés des fiches validées
-          // (pas les absences, pas les conges-am)
-          // Pour contrats 46 sem : les conges-non ne comptent PAS dans le quota
-          const estCongesPose=['conges-acq','conges-anticipe','conges-non'].includes(jour.statut);
-          const estCongesNon46=jour.statut==='conges-non'&&c.tc!=='52';
-          if(decompteCommence&&estCongesPose&&!estCongesNon46){
+          // Incrémenter compteurTotal pour les jours décomptés des fiches validées
+          if(decompteCommence&&!estRepos&&!estFerie){
             compteurTotal++;
           }
           if(decompteCommence&&estFerie){
