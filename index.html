@@ -2662,6 +2662,9 @@ if(['conges-acq','conges-anticipe'].includes(statutJ)){
   // Réinitialiser les pris
   anneesRef.forEach(ar=>{c.conges[ar].pris=0;});
 
+  // Réinitialiser prisDansAMSuivante
+  anneesRef.forEach(ar=>{c.conges[ar].prisDansAMSuivante=0;});
+
   tousJoursConges.forEach(j=>{
     if(j.statut==='conges-acq'){
       // Attribuer à la première année qui a encore des jours disponibles
@@ -2669,6 +2672,8 @@ if(['conges-acq','conges-anticipe'].includes(statutJ)){
         if(restantParAnnee[ar]>0){
           c.conges[ar].pris++;
           restantParAnnee[ar]--;
+          // Si ce jour est dans la période AM suivante (après 30 avril ar+1)
+          if(j.date>=String(ar+1)+'-05-01') c.conges[ar].prisDansAMSuivante++;
           break;
         }
       }
@@ -2680,6 +2685,8 @@ if(['conges-acq','conges-anticipe'].includes(statutJ)){
         const finRef=new Date(ar+1,4,31);
         if(dateJ>=debutRef&&dateJ<=finRef){
           c.conges[ar].pris++;
+          // Si ce jour est dans la période AM suivante (après 30 avril ar+1)
+          if(j.date>=String(ar+1)+'-05-01') c.conges[ar].prisDansAMSuivante++;
           break;
         }
       }
@@ -5792,28 +5799,13 @@ if(tousNonPrevus){
     const periodeDebut=String(anneeDebut)+'-05-01';
     const periodeFin=String(anneeDebut+1)+'-04-30';
 
-    // Initialiser compteurTotal avec les pris hors AM courante par année d'acquisition
-    // Pour chaque année terminée : pris_total - pris_dans_AM_courante_pour_cette_acquisition
-    // pris_dans_AM_courante = conges-acq validés dans AM courante
-    //                       + conges-anticipe validés dans AM courante avec date <= finRef de l'acquisition
+    // Initialiser compteurTotal avec les pris hors AM courante
+    // = pris_total - prisDansAMSuivante (calculé par calcCongesContrat)
     let compteurTotal=0;
     if(c.conges){
       Object.values(c.conges).forEach(cg=>{
         if(!cg.estTerminee) return;
-        const finRefAcq=new Date(cg.anneeRef+1,4,31); // 31 mai N+1
-        const finRefStr=String(cg.anneeRef+1)+'-05-31';
-        let prisAMCourante=0;
-        Object.entries(c.fiches).forEach(([key,fiche])=>{
-          if(!fiche.valide) return;
-          fiche.jours.forEach(j=>{
-            if(j.date<periodeDebut||j.date>periodeFin) return;
-            // conges-acq : toujours attribués à l'année terminée disponible
-            if(j.statut==='conges-acq') prisAMCourante++;
-            // conges-anticipe : seulement si date <= finRef de cette acquisition
-            else if(j.statut==='conges-anticipe'&&j.date<=finRefStr) prisAMCourante++;
-          });
-        });
-        compteurTotal+=Math.max(0,(cg.pris||0)-prisAMCourante);
+        compteurTotal+=Math.max(0,(cg.pris||0)-(cg.prisDansAMSuivante||0));
       });
     }
     Object.values(c.fiches).forEach(fiche=>{
