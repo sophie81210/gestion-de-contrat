@@ -3221,13 +3221,33 @@ hTheoriques=hTheoriques/60;
   if(statut==='hors-contrat'){
       let horsContratDeduit=false;
       if(j._horsContratAvenant){
-        const prevusHC=getHeuresPrevues(c,new Date(j.date),sourceActif);
+        // Utiliser la version active à la date du jour (version "opposée" = sa propre version)
+        const sourceHC=getVersionActive(c,new Date(j.date));
+        const prevusHC=getHeuresPrevues(c,new Date(j.date),sourceHC);
         if(prevusHC.debut&&prevusHC.fin){
           horsContratDeduit=true;
         } else {
-          // Semaine 'off' ou non pointée : déduire si le jour est normalement prévu travaillé
-          const spHCav=getStatutPrevu(c,j);
-          if(spHCav==='prevu'||spHCav==='non-prevu') horsContratDeduit=true;
+          // Semaine 'off' ou non pointée : vérifier avec l'agenda de sa propre version
+          const agendasHC=sourceHC.agendas||c.agendas||[];
+          const agHC=agendasHC.find(ag=>{
+            const pm=new Date(new Date(j.date).getFullYear(),new Date(j.date).getMonth(),1);
+            const dm=new Date(new Date(j.date).getFullYear(),new Date(j.date).getMonth()+1,0);
+            return new Date(ag.dateDebut)<=dm&&new Date(ag.dateFin)>=pm;
+          });
+          const semKeyHC2=getSemISO(j.date);
+          const agKeyHC2=getKeyAgenda(semKeyHC2,getSemAnnee(j.date));
+          const typeSemHC2=agHC&&agHC.semaines&&agHC.semaines[agKeyHC2];
+          // Déduire si semaine travaillée (on) ou off ou non pointée avec jour possible
+          if(typeSemHC2==='off'){
+            horsContratDeduit=true;
+          } else if(typeSemHC2){
+            // Semaine pointée : getHeuresPrevues devrait déjà avoir fonctionné
+            horsContratDeduit=true;
+          } else {
+            // Non pointée : jour possiblement travaillé
+            const spHCav=getStatutPrevu(c,j);
+            if(spHCav==='prevu'||spHCav==='non-prevu') horsContratDeduit=true;
+          }
         }
         // Pour les jours hors période avenant, ne pas utiliser heureDebPrev/heureFinPrev
       } else if(j.heureDebPrev&&j.heureFinPrev){
