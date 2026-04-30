@@ -3222,7 +3222,20 @@ hTheoriques=hTheoriques/60;
       let horsContratDeduit=false;
       if(j._horsContratAvenant){
         const prevusHC=getHeuresPrevues(c,new Date(j.date),sourceActif);
-        if(prevusHC.debut&&prevusHC.fin) horsContratDeduit=true;
+        if(prevusHC.debut&&prevusHC.fin){
+          horsContratDeduit=true;
+        } else if(isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))){
+          // Semaine 'off' : déduire si jour normalement travaillé selon la version opposée
+          const dateRefHCAv2=periodeAv==='apres'
+            ? new Date(new Date(dateAvenantStr).getTime()-86400000)
+            : new Date(dateAvenantStr);
+          const sourceHCAv2=getVersionActive(c,dateRefHCAv2);
+          const jourIdxHCAv2=j.jourSemaine===0?6:j.jourSemaine-1;
+          const jourTravailleHCAv2=sourceHCAv2.th==='fixe'?
+            (sourceHCAv2.joursFixe&&sourceHCAv2.joursFixe[jourIdxHCAv2]&&sourceHCAv2.joursFixe[jourIdxHCAv2].d):
+            true;
+          if(jourTravailleHCAv2) horsContratDeduit=true;
+        }
         // Pour les jours hors période avenant, ne pas utiliser heureDebPrev/heureFinPrev
       } else if(j.heureDebPrev&&j.heureFinPrev){
         horsContratDeduit=true;
@@ -3390,10 +3403,23 @@ hTheoriques=hTheoriques/60;
         hPrev=parseFloat((hHebdo/6).toFixed(4));
       
       } else if(j._horsContratAvenant){
-        // Recalculer les heures prévues avec la bonne version source
-        const prevusHC=getHeuresPrevues(c,new Date(j.date),sourceActif);
+        // Recalculer les heures prévues avec la version opposée (sa propre version)
+        const dateRefHCAv=periodeAv==='apres'
+          ? new Date(new Date(dateAvenantStr).getTime()-86400000)
+          : new Date(dateAvenantStr);
+        const sourceHCAv=getVersionActive(c,dateRefHCAv);
+        const prevusHC=getHeuresPrevues(c,new Date(j.date),sourceHCAv);
         if(prevusHC.debut&&prevusHC.fin){
           hPrev=(toM(prevusHC.fin)-toM(prevusHC.debut))/60;
+        } else if(isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))){
+          // Semaine 'off' : utiliser les heures du jour selon la version opposée
+          const jourIdxHCAv=j.jourSemaine===0?6:j.jourSemaine-1;
+          if(sourceHCAv.th==='fixe'&&sourceHCAv.joursFixe&&sourceHCAv.joursFixe[jourIdxHCAv]){
+            const jfHCAv=sourceHCAv.joursFixe[jourIdxHCAv];
+            hPrev=jfHCAv&&jfHCAv.d&&jfHCAv.f?(toM(jfHCAv.f)-toM(jfHCAv.d))/60:0;
+          } else {
+            hPrev=(sourceHCAv.hMensu||0)*12/(sourceHCAv.nbSem||46)/5;
+          }
         } else {
           hPrev=0;
         }
