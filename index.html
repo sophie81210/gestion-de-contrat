@@ -2882,13 +2882,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const ficheFiltre={...fiche,jours:joursDansPeriode};
     return calcRecapFiche(c,ficheFiltre,null,null,dateRefStr||dateDebPeriode,dateAvenantStr,periodeAv,ficheComplete||fiche);
   }
-  // ficheComplete = fiche non filtrée pour hTheoriques
-  // Calculer hTheoriques depuis le contrat et l'agenda (indépendamment de la fiche filtrée)
   const fichePourTheoriques=ficheComplete||fiche;
   const dateRefVersion=dateRefStr?new Date(dateRefStr):new Date(fiche.annee,fiche.mois,1);
   const sourceActif=getVersionActive(c, dateRefVersion);
-         
-// Détecter un changement d'avenant dans ce mois
   const debutMois=new Date(fiche.annee,fiche.mois,1);
   const finMois=new Date(fiche.annee,fiche.mois+1,0);
   const avenantDuMois=c.avenants&&c.avenants.find(av=>{
@@ -2905,16 +2901,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const majSup=(sourceActif.majSup||0)/100;
   const hMensu=sourceActif.hMensu||0;
   const reposHebdo=sourceActif.reposHebdo||0;
-
-// Nb jours prévus dans ce mois (calculé depuis la fiche)
   let nbJoursPrevu=0;
   fiche.jours.forEach(j=>{
     const sp=getStatutPrevu(c,j);
     if(sp==='prevu') nbJoursPrevu++;
   });
-
-  // Fallback : nbJoursMois du contrat ou calcul depuis hMensu
- // Calculer nbJoursMois si non stocké
   let nbJoursMoisCalc=sourceActif.nbJoursMois||0;
   if(!nbJoursMoisCalc){
     const nbSemEff=sourceActif.nbSem||52;
@@ -2935,32 +2926,24 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   if(nbJoursPrevu===0) nbJoursPrevu=nbJoursMoisCalc||Math.round(hMensu/8)||20;
   let hComp=0, hSup=0, hAbs=0;
   const nbJoursMoisContrat=nbJoursMoisCalc>0?nbJoursMoisCalc:(nbJoursPrevu||20);
-  let nbJoursTrav=nbJoursMoisContrat; // base = jours moyens du contrat
+  let nbJoursTrav=nbJoursMoisContrat;
   let joursEnPlus=0;
   let joursEnMoins=0;
   let indemEntretienTotal=0, indemRepasTotal=0, indemKmTotal=0;
   let kmTotal=0;
   let montantAbsences=0;
-
-// Heures théoriques du mois (pour calcul déduction absences)
   let hTheoriques=0;
-         
- // Calcul hebdomadaire pour heures sup (> 45h/sem) et comp planning variable
   const hParSemaine={};
-  const hPrevuParSemaine={}; // volume prévu par semaine (planning variable)
-const hParSemainePrecMois={};
-         
- // Récupérer les heures du mois précédent uniquement pour les semaines à cheval
+  const hPrevuParSemaine={};
+  const hParSemainePrecMois={};
   const moisPrecStr=fiche.mois===0
     ?(fiche.annee-1)+'-12'
     :fiche.annee+'-'+String(fiche.mois).padStart(2,'0');
   const fichePrec=c.fiches&&c.fiches[moisPrecStr];
   if(fichePrec){
-    // Identifier les semaines du mois courant
     const semMoisCourant=new Set(fiche.jours.map(j=>getSemISO(j.date)));
     fichePrec.jours.forEach(j=>{
       const semKey=getSemISO(j.date);
-      // N'ajouter que si cette semaine apparaît aussi dans le mois courant
       if(!semMoisCourant.has(semKey)) return;
       if(j.heureDebReel&&j.heureFinReel&&(j.statut==='prevu'||j.statut==='travaille'||!j.statut)){
         if(!hParSemaine[semKey]) hParSemaine[semKey]=0;
@@ -2983,20 +2966,16 @@ const hParSemainePrecMois={};
     if(j.heureDebReel&&j.heureFinReel&&(j.statut==='prevu'||j.statut==='travaille'||!j.statut)){
       hParSemaine[semKey]+=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
     }
-    // Volume prévu pour la semaine (planning variable)
     if(c.th==='plan'&&c.planType==='var'&&c.planVar&&agendaMois&&!hPrevuParSemaine[semKey]){
       const agKey=getKeyAgenda(semKey,getSemAnnee(j.date));
       const typeSem=agendaMois.semaines&&agendaMois.semaines[agKey];
       const vol=typeSem?c.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
       if(vol) hPrevuParSemaine[semKey]=vol.h;
     }
-    // Volume prévu pour planning fixe (min)
     if(c.th==='plan'&&c.planType==='min'&&!hPrevuParSemaine[semKey]){
       hPrevuParSemaine[semKey]=sourceActif.hMin||0;
     }
   });
-
-// Calculer le nombre moyen de jours par semaine
   let joursMaxMoyen=7;
   if(sourceActif.th==='plan'){
     if(sourceActif.planType==='var'&&sourceActif.planVar){
@@ -3018,17 +2997,20 @@ const hParSemainePrecMois={};
     if(j.heureDebPrev&&j.heureFinPrev){
       hTheoriques+=toM(j.heureFinPrev)-toM(j.heureDebPrev);
     } else if(!j.heureDebPrev&&!j.heureFinPrev&&(c.th==='fixe'||c.th==='sem')){
-      // Semaine 'off' (absence employeur) sur contrat fixe/sem : utiliser les heures fixes du jour
+      // CORRECTION : Semaine 'off' sur contrat fixe/sem
       const semKeyTh=getSemISO(j.date);
       const agKeyTh=getKeyAgenda(semKeyTh,getSemAnnee(j.date));
       const typeSemRaw=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKeyTh];
       if(typeSemRaw==='off'){
-        const jourIdxTh=j.jourSemaine===0?6:j.jourSemaine-1;
-        if(sourceActif.th==='fixe'&&sourceActif.joursFixe&&sourceActif.joursFixe[jourIdxTh]){
+        // Contrat fixe : heures du jour selon joursFixe
+        if(sourceActif.th==='fixe'&&sourceActif.joursFixe){
+          const jourIdxTh=j.jourSemaine===0?6:j.jourSemaine-1;
           const jfTh=sourceActif.joursFixe[jourIdxTh];
           if(jfTh&&jfTh.d&&jfTh.f) hTheoriques+=toM(jfTh.f)-toM(jfTh.d);
-        } else if(sourceActif.th==='sem'&&sourceActif.semTypes){
-          hTheoriques+=(hMensu*12/(sourceActif.nbSem||46))/5*60;
+        } else if(!semTheoriquesVues.has(semKeyTh)){
+          // Contrat sem : moyenne hebdo une seule fois par semaine
+          semTheoriquesVues.add(semKeyTh);
+          hTheoriques+=(hMensu*12/(sourceActif.nbSem||46))*60;
         }
       }
     } else if(c.th==='plan'&&c.planType==='min'){
@@ -3058,7 +3040,6 @@ const hParSemainePrecMois={};
       const volTh=typeSemTh?c.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemTh):null;
       const jourIdxTh=j.jourSemaine===0?6:j.jourSemaine-1;
       if(volTh){
-        // Semaine pointée : vol.h / vol.j si jour coché, limité à vol.j jours par semaine
         if(volTh.jours&&volTh.jours[jourIdxTh]){
           if(!semJoursCpt[semKeyTh]) semJoursCpt[semKeyTh]=0;
           if(semJoursCpt[semKeyTh]<(volTh.j||1)){
@@ -3068,7 +3049,6 @@ const hParSemainePrecMois={};
           }
         }
      } else {
-        // Semaine non pointée : vérifier si au moins un jour possible dans ce mois
         const jourIdxTh=j.jourSemaine===0?6:j.jourSemaine-1;
         const jourPossible=sourceActif.planVar&&sourceActif.planVar.some(v=>v.jours&&v.jours[jourIdxTh]);
         if(jourPossible&&!semTheoriquesVues.has(semKeyTh)){
@@ -3079,7 +3059,7 @@ const hParSemainePrecMois={};
       }
     }
   });
-hTheoriques=hTheoriques/60;
+  hTheoriques=hTheoriques/60;
   // Pour les périodes d'avenant, recalculer hTheoriques sur tout le mois
   if(dateAvenantStr){
     let hTheoriquesMois=0;
@@ -3095,12 +3075,19 @@ hTheoriques=hTheoriques/60;
         const contrib=(toM(jFake.heureFinPrev)-toM(jFake.heureDebPrev))/60;
         hTheoriquesMois+=contrib;
       } else if(!jFake.heureDebPrev&&!jFake.heureFinPrev&&(sourceActif.th==='fixe'||sourceActif.th==='sem')){
+        // CORRECTION : semaine 'off' dans le calcul avenant
         const semKeyTh=getSemISO(dateStr);
         const agKeyTh=getKeyAgenda(semKeyTh,getSemAnnee(dateStr));
         const typeSemRaw=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKeyTh];
-        if(typeSemRaw==='off'&&!semTheoriquesVuesM.has(semKeyTh)){
-          semTheoriquesVuesM.add(semKeyTh);
-          hTheoriquesMois+=(hMensu*12/(sourceActif.nbSem||52));
+        if(typeSemRaw==='off'){
+          if(sourceActif.th==='fixe'&&sourceActif.joursFixe){
+            const jourIdxTh=d.getDay()===0?6:d.getDay()-1;
+            const jfTh=sourceActif.joursFixe[jourIdxTh];
+            if(jfTh&&jfTh.d&&jfTh.f) hTheoriquesMois+=(toM(jfTh.f)-toM(jfTh.d))/60;
+          } else if(!semTheoriquesVuesM.has(semKeyTh)){
+            semTheoriquesVuesM.add(semKeyTh);
+            hTheoriquesMois+=(hMensu*12/(sourceActif.nbSem||46));
+          }
         }
       } else if(sourceActif.th==='plan'&&sourceActif.planType==='var'&&sourceActif.planVar){
         const semKeyTh=getSemISO(dateStr);
@@ -3127,26 +3114,29 @@ hTheoriques=hTheoriques/60;
       }
     }
     if(hTheoriquesMois>0) hTheoriques=hTheoriquesMois;
-           // Calculer hAbs pour les jours hors période
     let hAbsHorsPeriode=0;
     for(let d=new Date(premierJourMois);d<=dernierJourMois;d.setDate(d.getDate()+1)){
       const dateStr=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-      const dansPeriode=(!dateDebPeriode||dateStr>=dateDebPeriode)&&(!dateFinPeriode||dateStr<=dateFinPeriode);
-      // Note: à ce stade dateDebPeriode/dateFinPeriode sont null (appel récursif)
-      // On utilise dateAvenantStr et periodeAv
       const horsperiode=(periodeAv==='avant'&&dateStr>=dateAvenantStr)||(periodeAv==='apres'&&dateStr<dateAvenantStr);
       if(!horsperiode) continue;
       const prevusHP=getHeuresPrevues(c,new Date(d),sourceActif);
       if(prevusHP.debut&&prevusHP.fin){
         const contribHP=(toM(prevusHP.fin)-toM(prevusHP.debut))/60;
         hAbsHorsPeriode+=contribHP;
+      } else if(isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr)))){
+        // CORRECTION : semaine 'off' dans hAbsHorsPeriode
+        const jourIdxHP=d.getDay()===0?6:d.getDay()-1;
+        if(sourceActif.th==='fixe'&&sourceActif.joursFixe&&sourceActif.joursFixe[jourIdxHP]){
+          const jfHP=sourceActif.joursFixe[jourIdxHP];
+          if(jfHP&&jfHP.d&&jfHP.f) hAbsHorsPeriode+=(toM(jfHP.f)-toM(jfHP.d))/60;
+        } else if(sourceActif.th==='sem'){
+          hAbsHorsPeriode+=(hMensu*12/(sourceActif.nbSem||46))/joursMaxMoyen;
+        }
       }
     }
     hAbs+=hAbsHorsPeriode;
   }
   if(hTheoriques<=0) hTheoriques=hMensu;
-         
-  // Pré-calcul des heures d'absence par semaine (pour ajuster le seuil des heures comp)
   const hAbsParSemaine={};
   const hAbsJoursCpt={};
   const hAbsDedJoursCpt={};
@@ -3166,7 +3156,7 @@ hTheoriques=hTheoriques/60;
         const volPre=typeSemPre?c.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemPre):null;
         const jourIdxPre=j.jourSemaine===0?6:j.jourSemaine-1;
         if(volPre&&volPre.jours&&volPre.jours[jourIdxPre]){
-         if(!hAbsJoursCpt[semKeyPre]) hAbsJoursCpt[semKeyPre]=0;
+          if(!hAbsJoursCpt[semKeyPre]) hAbsJoursCpt[semKeyPre]=0;
           if(hAbsJoursCpt[semKeyPre]<(volPre.j||1)){
             hAbsParSemaine[semKeyPre]+=(volPre.h/(volPre.j||1));
             hAbsJoursCpt[semKeyPre]++;
@@ -3181,17 +3171,13 @@ hTheoriques=hTheoriques/60;
       }
     });
   }
-
-  // Compter abs-enfant depuis début d'année de contrat (anniversaire)
   const dateDebContrat=c.dateDeb?new Date(c.dateDeb):new Date();
   const anneeContrat=fiche.annee;
   const moisContrat=dateDebContrat.getMonth();
   const jourContrat=dateDebContrat.getDate();
-  // Début de l'année de contrat en cours
   let debutAnneeCont=new Date(anneeContrat,moisContrat,jourContrat);
   if(debutAnneeCont>new Date(fiche.annee,fiche.mois,28)) debutAnneeCont=new Date(anneeContrat-1,moisContrat,jourContrat);
   let nbAbsEnfantAnneeCont=0;
-  // Compter dans les fiches précédentes de l'année de contrat
   Object.entries(c.fiches||{}).forEach(([k,f])=>{
     if(k===Object.keys(c.fiches).find(kk=>c.fiches[kk]===fiche)) return;
     const [ay,am]=k.split('-').map(Number);
@@ -3200,7 +3186,6 @@ hTheoriques=hTheoriques/60;
       (f.jours||[]).forEach(j=>{if(j.statut==='abs-enfant') nbAbsEnfantAnneeCont++;});
     }
   });
-
   fiche.jours.forEach(j=>{
     let statut=j.statut||getStatutPrevu(c,j);
     if(dateAvenantStr&&statut!=='hors-contrat'){
@@ -3209,36 +3194,29 @@ hTheoriques=hTheoriques/60;
       if(periodeAv==='apres'&&dateJ<dateAvenantStr){statut='hors-contrat';j._horsContratAvenant=true;}
     }
     const estPresent=statut==='prevu'||statut==='travaille'||statut==='abs-partielle'||statut==='abs-rem'||(!j.statut&&j.heureDebReel)||(statut==='travaille'&&!j.heureDebPrev);
-
-    // ── Jours travaillés ──
     if(statut==='travaille'&&getStatutPrevu(c,j)==='non-prevu'){
       joursEnPlus++;
     }
-    // abs-enfant : déductible seulement si < 5 jours dans l'année de contrat
     const nbAbsEnfantCeMois=fiche.jours.slice(0,fiche.jours.indexOf(j)+1).filter(jj=>jj.statut==='abs-enfant').length;
     const absEnfantDeductible=statut==='abs-enfant'&&(nbAbsEnfantAnneeCont+nbAbsEnfantCeMois<=5);
     const estCongesNonAcq52=(statut==='conges-non'&&c.tc==='52');
-    const estCongesNon46Travaille=false; // Les congés non acquis ne sont pas déduits pour les contrats 46 sem
+    const estCongesNon46Travaille=false;
     const estCongesNonDeduit=estCongesNonAcq52||estCongesNon46Travaille;
     const absDeduites=['abs-am','arret','abs-non','abs-partielle'];
-           
-   // hors-contrat : déduit même si la semaine n'était pas prévu travaillée
-  if(statut==='hors-contrat'){
+    if(statut==='hors-contrat'){
       let horsContratDeduit=false;
       if(j._horsContratAvenant){
         const prevusHC=getHeuresPrevues(c,new Date(j.date),sourceActif);
         if(prevusHC.debut&&prevusHC.fin){
           horsContratDeduit=true;
         } else if(isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))){
-          // Semaine 'off' : déduire si jour normalement travaillé selon le contrat
+          // CORRECTION : semaine 'off' dans _horsContratAvenant
           const jourIdxHCAv=j.jourSemaine===0?6:j.jourSemaine-1;
-          const sourceHCAv=getVersionActive(c,new Date(j.date));
-          const jourTravailleHCAv=sourceHCAv.th==='fixe'?
-            (sourceHCAv.joursFixe&&sourceHCAv.joursFixe[jourIdxHCAv]&&sourceHCAv.joursFixe[jourIdxHCAv].d):
+          const jourTravailleHCAv=sourceActif.th==='fixe'?
+            (sourceActif.joursFixe&&sourceActif.joursFixe[jourIdxHCAv]&&sourceActif.joursFixe[jourIdxHCAv].d):
             true;
           if(jourTravailleHCAv) horsContratDeduit=true;
         }
-        // Pour les jours hors période avenant, ne pas utiliser heureDebPrev/heureFinPrev
       } else if(j.heureDebPrev&&j.heureFinPrev){
         horsContratDeduit=true;
       } else if(c.th==='plan'&&(c.planVar||c.planType==='min')){
@@ -3247,15 +3225,13 @@ hTheoriques=hTheoriques/60;
         const typeSemHC=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKeyHC];
         const volHC=c.planType==='var'&&typeSemHC?c.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemHC):null;
         const jourIdxHC=j.jourSemaine===0?6:j.jourSemaine-1;
-       if(volHC&&volHC.jours&&volHC.jours[jourIdxHC]){
-          // Vérifier si le quota sera atteint par les jours dans le contrat
+        if(volHC&&volHC.jours&&volHC.jours[jourIdxHC]){
           const [ay,am]=j.date.split('-').map(Number);
-         const [ddy2,ddm2,ddd2]=c.dateDeb.split('-').map(Number);
+          const [ddy2,ddm2,ddd2]=c.dateDeb.split('-').map(Number);
           const dateDebC=new Date(ddy2,ddm2-1,ddd2);
-          // Compter les jours possibles dans le contrat pour cette semaine
           const semDebut=new Date(ay,am-1,parseInt(j.date.split('-')[2]));
           let joursDansContrat=0;
-         for(let d=1;d<=13;d++){
+          for(let d=1;d<=13;d++){
             const cur=new Date(semDebut);
             cur.setDate(semDebut.getDate()+d);
             const curStr=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
@@ -3270,13 +3246,10 @@ hTheoriques=hTheoriques/60;
             horsContratDeduit=true;
           }
         }
-        
-               // Semaine non pointée : déduire si jour possiblement travaillé
         if(!volHC){
           const jourPossibleHC=c.planType==='var'?c.planVar.some(v=>v.jours&&v.jours[jourIdxHC]):(c.joursMin&&c.joursMin[jourIdxHC]);
           if(jourPossibleHC){
-            // Utiliser la moyenne des jours max
-           let jMaxMoy=sourceActif.jMaxMin||sourceActif.planVar?.reduce((t,v)=>t+(v.j||0)*(v.s||0),0)/(sourceActif.planVar?.reduce((t,v)=>t+(v.s||0),0)||1)||1;
+            let jMaxMoy=sourceActif.jMaxMin||sourceActif.planVar?.reduce((t,v)=>t+(v.j||0)*(v.s||0),0)/(sourceActif.planVar?.reduce((t,v)=>t+(v.s||0),0)||1)||1;
             if(c.planType==='var'&&c.planVar){
               const totalJ=c.planVar.reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
               const totalS=c.planVar.reduce((t,v)=>t+(v.s||0),0);
@@ -3292,27 +3265,23 @@ hTheoriques=hTheoriques/60;
           }
         }
       } else if(c.th!=='plan'){
-        // Contrats non planning : déduire si jour prévu travaillé ou semaine off
+        // CORRECTION : semaine 'off' pour contrats fixe/sem
         const semKeyHCF=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
         if(isAbsenceEmployeur(agendaMois,semKeyHCF)){
-          // Semaine 'off' : déduire si jour normalement travaillé selon le contrat
           const jourIdxHCF=j.jourSemaine===0?6:j.jourSemaine-1;
-          const sourceHCF=getVersionActive(c,new Date(j.date));
-          const jourTravailleHCF=sourceHCF.th==='fixe'?
-            (sourceHCF.joursFixe&&sourceHCF.joursFixe[jourIdxHCF]&&sourceHCF.joursFixe[jourIdxHCF].d):
+          const jourTravailleHCF=sourceActif.th==='fixe'?
+            (sourceActif.joursFixe&&sourceActif.joursFixe[jourIdxHCF]&&sourceActif.joursFixe[jourIdxHCF].d):
             true;
           if(jourTravailleHCF) horsContratDeduit=true;
         } else {
           const spHC=getStatutPrevu(c,j);
-          if(spHC==='prevu'||spHC==='non-prevu') horsContratDeduit=true;
+          if(spHC==='prevu') horsContratDeduit=true;
         }
       }
       if(horsContratDeduit) absDeduites.push('hors-contrat');
     }
     if(absEnfantDeductible) absDeduites.push('abs-enfant');
     if(estCongesNonDeduit) absDeduites.push('conges-non');
-          
-     // Férié : déduit selon conditions
     if(statut==='ferie'&&c.tc!=='occ'){
       const statutsDeduitTjrs=['arret','abs-enfant'];
       const statutsDeduit52=['conges-non'];
@@ -3355,30 +3324,22 @@ hTheoriques=hTheoriques/60;
       }
     }
     const estAbsDeduite=absDeduites.includes(statut);
- 
-   // les déductions de jours seront calculées via montantAbsences après la boucle
-
-    // ── Heures complémentaires / supplémentaires ──
     if(estPresent&&j.heureDebReel&&j.heureFinReel){
       const debReel=toM(j.heureDebReel);
       const finReel=toM(j.heureFinReel);
       const debPrev=j.heureDebPrev?toM(j.heureDebPrev):null;
       const finPrev=j.heureFinPrev?toM(j.heureFinPrev):null;
-     let compJour=0;
+      let compJour=0;
       if(c.tc==='occ'){
-        // Occasionnel : pas d'heures comp, tout en heures normales
         compJour=0;
       } else if(c.th==='plan'&&(c.planType==='var'||c.planType==='min')){
-        // Planning variable : heures comp = dépassement du volume hebdo prévu
         const semKeyJ=getSemISO(j.date);
         const hPrevSem=hPrevuParSemaine[semKeyJ]||0;
         const hAbsS=hAbsParSemaine[semKeyJ]||0;
         const hSeuilCompJ=Math.max(0,hPrevSem-hAbsS);
         const hReelSem=hParSemaine[semKeyJ]||0;
         if(hReelSem>hSeuilCompJ){
-          // Répartir les heures comp proportionnellement sur ce jour
           const hReelJour=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
-          // Heures réelles du mois courant uniquement pour cette semaine
           const hReelSemMois=hReelSem-(hParSemainePrecMois[semKeyJ]||0);
           const ratioJour=hReelSemMois>0?hReelJour/hReelSemMois:0;
           compJour=Math.max(0,hReelSem-hSeuilCompJ)*ratioJour*60;
@@ -3386,37 +3347,32 @@ hTheoriques=hTheoriques/60;
       } else if(debPrev!==null&&finPrev!==null){
         if(debReel<debPrev) compJour+=debPrev-debReel;
         if(finReel>finPrev) compJour+=finReel-finPrev;
-     } else if(c.tc!=='occ'){
+      } else if(c.tc!=='occ'){
         compJour+=finReel-debReel;
       }
-    if(compJour>0){
+      if(compJour>0){
         const hCompJour=compJour/60;
         hComp+=hCompJour;
       }
     }
-
-// ── Absences déduites ──
     if(estAbsDeduite){
       let hAbsJour=0;
       let hPrev;
-      // Congés non acquis sur contrat 52 sem : déduction = hHebdo/6
       if(estCongesNonDeduit){
         const hHebdo=parseFloat(((sourceActif.hHebdo||sourceActif.hMensu*12/52)||0).toFixed(2));
         hPrev=parseFloat((hHebdo/6).toFixed(4));
-      
       } else if(j._horsContratAvenant){
         const prevusHC=getHeuresPrevues(c,new Date(j.date),sourceActif);
         if(prevusHC.debut&&prevusHC.fin){
           hPrev=(toM(prevusHC.fin)-toM(prevusHC.debut))/60;
         } else if(isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))){
-          // Semaine 'off' : même logique que fixe/sem
+          // CORRECTION : semaine 'off' dans hPrev pour _horsContratAvenant
           const jourIdxF=j.jourSemaine===0?6:j.jourSemaine-1;
-          const sourceF=getVersionActive(c,new Date(j.date));
-          if(sourceF.th==='fixe'&&sourceF.joursFixe&&sourceF.joursFixe[jourIdxF]){
-            const jf=sourceF.joursFixe[jourIdxF];
+          if(sourceActif.th==='fixe'&&sourceActif.joursFixe&&sourceActif.joursFixe[jourIdxF]){
+            const jf=sourceActif.joursFixe[jourIdxF];
             hPrev=jf&&jf.d&&jf.f?(toM(jf.f)-toM(jf.d))/60:0;
-          } else if(sourceF.th==='sem'&&sourceF.semTypes){
-            hPrev=(sourceF.hMensu||0)*12/(sourceF.nbSem||46)/5;
+          } else if(sourceActif.th==='sem'&&sourceActif.semTypes){
+            hPrev=(sourceActif.hMensu||0)*12/(sourceActif.nbSem||46)/joursMaxMoyen;
           } else {
             hPrev=0;
           }
@@ -3480,17 +3436,20 @@ hTheoriques=hTheoriques/60;
           }
         }
       } else if(c.th==='fixe'||c.th==='sem'){
-        // Contrat fixe/sem avec semaine 'off' : utiliser les heures du contrat pour ce jour
-        const jourIdxF=j.jourSemaine===0?6:j.jourSemaine-1;
-        const sourceF=getVersionActive(c,new Date(j.date));
-        if(sourceF.th==='fixe'&&sourceF.joursFixe&&sourceF.joursFixe[jourIdxF]){
-          const jf=sourceF.joursFixe[jourIdxF];
-          hPrev=jf&&jf.d&&jf.f?(toM(jf.f)-toM(jf.d))/60:0;
-        } else if(sourceF.th==='sem'&&sourceF.semTypes){
-          // Semaine type : utiliser la moyenne
-          hPrev=(sourceF.hMensu||0)*12/(sourceF.nbSem||46)/5;
+        // CORRECTION : semaine 'off' pour contrats fixe/sem dans hPrev
+        const semKeyHCF=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
+        if(isAbsenceEmployeur(agendaMois,semKeyHCF)){
+          const jourIdxF=j.jourSemaine===0?6:j.jourSemaine-1;
+          if(sourceActif.th==='fixe'&&sourceActif.joursFixe&&sourceActif.joursFixe[jourIdxF]){
+            const jf=sourceActif.joursFixe[jourIdxF];
+            hPrev=jf&&jf.d&&jf.f?(toM(jf.f)-toM(jf.d))/60:0;
+          } else if(sourceActif.th==='sem'&&sourceActif.semTypes){
+            hPrev=(sourceActif.hMensu||0)*12/(sourceActif.nbSem||46)/joursMaxMoyen;
+          } else {
+            hPrev=0;
+          }
         } else {
-          hPrev=0;
+          hPrev=hMensu/(nbJoursMoisContrat||20);
         }
       } else {
         hPrev=hMensu/(nbJoursMoisContrat||20);
@@ -3499,76 +3458,60 @@ hTheoriques=hTheoriques/60;
         const hReel2=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
         hAbsJour=Math.max(0,hPrev-hReel2);
       } else {
-        hAbsJour=hPrev; // journée entière
+        hAbsJour=hPrev;
       }
       hAbs+=hAbsJour;
     }
-
-    // ── Indemnité entretien (uniquement jours de présence effective) ──
     if(estPresent&&(j.heureDebReel||j.heureDebPrev)){
       let hJour=0;
       if(j.heureDebReel&&j.heureFinReel) hJour=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
       else if(j.heureDebPrev&&j.heureFinPrev) hJour=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
-      // Ajouter heures complémentaires de ce jour
       if(j.heureDebReel&&j.heureFinReel&&j.heureDebPrev&&j.heureFinPrev){
         const deb=toM(j.heureDebReel),fin=toM(j.heureFinReel);
         const dp=toM(j.heureDebPrev),fp=toM(j.heureFinPrev);
-        if(deb<dp) hJour+=( dp-deb)/60;
+        if(deb<dp) hJour+=(dp-deb)/60;
         if(fin>fp) hJour+=(fin-fp)/60;
       }
-      // Indemnité entretien : heures réelles uniquement
       let hPourIndem=0;
       if(j.heureDebReel&&j.heureFinReel) hPourIndem=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
       if(hPourIndem>0){
         if(c.indemType==='legal'){
           const indem=getParamAt('indemEntretien',dateStr);
-const tauxH=indem.parHeure||0.425;
-const forfait=indem.parJour||2.65;
+          const tauxH=indem.parHeure||0.425;
+          const forfait=indem.parJour||2.65;
           indemEntretienTotal+=Math.max(forfait, tauxH*hPourIndem);
         } else if(c.indemType==='nego'&&c.indemMontant){
           indemEntretienTotal+=c.indemPer==='journalier'?c.indemMontant:c.indemMontant*hPourIndem;
         }
       }
-      // Repas
       if(c.repas&&j.repas){
         j.repas.forEach((pris,ri)=>{if(pris&&c.repas[ri])indemRepasTotal+=parseFloat(c.repas[ri])||0;});
       }
-      // Km
       if(j.km&&c.km) kmTotal+=j.km;
     }
   });
-
   indemKmTotal=(c.km||0)*kmTotal;
-         
-// Ventilation heures comp → sup par semaine (dépassement 45h)
   Object.keys(hParSemaine).forEach(semKey=>{
     const hSem=hParSemaine[semKey]||0;
     const hPrevSem=hPrevuParSemaine[semKey]||0;
     if(hSem<=0) return;
     const hAbsSem=hAbsParSemaine[semKey]||0;
-    const hSeuilComp=Math.max(0,hPrevSem-hAbsSem); // volume réduit des absences
+    const hSeuilComp=Math.max(0,hPrevSem-hAbsSem);
     const seuilSup=Math.max(45,hPrevSem);
     if(hSem>hSeuilComp){
       const hSupSem=Math.max(0,hSem-seuilSup);
       const hCompSem=Math.max(0,Math.min(hSem,seuilSup)-hSeuilComp);
       hSup+=hSupSem;
       hComp-=hSupSem;
-      // Si hComp est devenu négatif à cause de la ventilation, corriger
       if(hComp<0) hComp=0;
     }
   });
-         
-  // Calcul jours en moins depuis montant absences
   const hMoyParJour=nbJoursMoisContrat>0?hMensu/nbJoursMoisContrat:hMensu/20;
-
-  // Montant absences
   if(hAbs>0&&hTheoriques>0){
     const tauxHAbs=(hMensu*txNet)/hTheoriques;
     montantAbsences=parseFloat((tauxHAbs*hAbs).toFixed(2));
   }
-  // Heures à déduire = montantAbsences / txNet
   const hAbsDeduit=txNet>0?parseFloat((montantAbsences/txNet).toFixed(2)):0;
-  // Jours en moins : exclure les abs-partielles (comptent pour 1 jour)
   const hAbsPartielles=fiche.jours.filter(j=>j.statut==='abs-partielle').reduce((t,j)=>{
     if(j.heureDebPrev&&j.heureFinPrev&&j.heureDebReel&&j.heureFinReel){
       return t+Math.max(0,(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60-(toM(j.heureFinReel)-toM(j.heureDebReel))/60);
@@ -3579,72 +3522,21 @@ const forfait=indem.parJour||2.65;
   const montantAbsSansPartielles=Math.max(0,montantAbsences-parseFloat((tauxHAbsJ*hAbsPartielles).toFixed(2)));
   joursEnMoins=hMoyParJour>0&&txNet>0?parseFloat((montantAbsSansPartielles/txNet/hMoyParJour).toFixed(1)):0;
   nbJoursTrav=parseFloat((nbJoursMoisContrat+joursEnPlus-joursEnMoins).toFixed(1));
-
-  // Montant h. comp : brut majoré → net → + exonération charges (11.31% du brut majoré)
   const montantCompBrutMaj=hComp*(1+majComp)*txBrut;
   const montantCompNet=parseFloat((montantCompBrutMaj*0.7811975 + montantCompBrutMaj*0.1131).toFixed(2));
   const montantSupBrutMaj=hSup*(1+majSup)*txBrut;
   const montantSupNet=parseFloat((montantSupBrutMaj*0.7811975 + montantSupBrutMaj*0.1131).toFixed(2));
   const montantCompBrut=parseFloat(montantCompBrutMaj.toFixed(2));
   const montantSupBrut=parseFloat(montantSupBrutMaj.toFixed(2));
-
   let hBase=c.tc==='occ'?0:hMensu;
   if(c.tc==='occ'){
-    // Occasionnel : heures normales = total heures réelles - heures sup
     const hReelTotal=Object.values(hParSemaine).reduce((t,h)=>t+h,0);
     hBase=Math.max(0,hReelTotal-parseFloat(hSup));
   }
   const salaireNetBrut=(hBase+hComp*(1+majComp)+hSup*(1+majSup))*txNet - montantAbsences;
   const salaireNet=parseFloat(Math.max(0,salaireNetBrut).toFixed(2));
-
-  // Total abs-enfant ce mois
   const nbAbsEnfantMois=fiche.jours.filter(j=>j.statut==='abs-enfant').length;
-
-  // Note si données contrat manquantes
   const donneesManquantes=(!txBrut||(c.tc!=='occ'&&!hMensu));
-
-  // Indemnité de congés payés (contrats 46 sem ou moins)
-  let indemCongeMois=0;
-  let indemCongeNbJours=0;
- if(c.tc!=='52'&&c.tc!=='occ'&&c.dateCg&&periodeAv!=='avant'){
-    const moisKey=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0');
-    const anneeAm=getAnneeAmPourDate(moisKey);
-    const anneeAcq=anneeAm-1; // année d'acquisition = année AM - 1
-    const ind=calcIndemniteConges(c,anneeAcq);
-    if(ind){
-      if(c.dateCg==='chaque'){
-        // Compter les conges-acq posés CE mois
-        const nbAcqMois=fiche.jours.filter(j=>j.statut==='conges-acq').length;
-        if(nbAcqMois>0){
-          indemCongeNbJours=nbAcqMois;
-          indemCongeMois=parseFloat((ind.montantJournalierNet*nbAcqMois).toFixed(2));
-        }
-        // En juin : ajouter les anticipés posés avant mai
-        if(fiche.mois===5){ // juin = mois 5 (0-indexé)
-          let nbAnticipe=0;
-          const limiteMai=fiche.annee+'-05-01';
-          Object.entries(c.fiches||{}).forEach(([k,f])=>{
-            if(!f.valide) return;
-            f.jours.forEach(j=>{
-              if(j.date>=limiteMai) return;
-              if(j.statut==='conges-anticipe') nbAnticipe++;
-            });
-          });
-          if(nbAnticipe>0){
-            indemCongeNbJours+=nbAnticipe;
-            indemCongeMois=parseFloat((indemCongeMois+ind.montantJournalierNet*nbAnticipe).toFixed(2));
-          }
-        }
-      } else if(c.dateCg==='juin'&&fiche.mois===5){
-        indemCongeNbJours=ind.acquis;
-        indemCongeMois=ind.meilleurNet;
-      } else if(c.dateCg==='principale'){
-        // Détecter la prise principale (≥12 jours ouvrables consécutifs)
-        // TODO : à implémenter
-      }
-    }
-  }
-
   return{
     donneesManquantes, hMensu, hComp:hComp.toFixed(2), hSup:hSup.toFixed(2),
     isOcc:c.tc==='occ',
@@ -3659,8 +3551,7 @@ const forfait=indem.parJour||2.65;
     txNet:txNet.toFixed(2), txNetExact:txNet, salaireNet,
     indemEntretienTotal:indemEntretienTotal.toFixed(2),
     indemRepasTotal:indemRepasTotal.toFixed(2),
-    indemKmTotal:indemKmTotal.toFixed(2),
-    indemCongeMois, indemCongeNbJours
+    indemKmTotal:indemKmTotal.toFixed(2)
   };
 }
 
