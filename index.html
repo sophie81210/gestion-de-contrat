@@ -4232,7 +4232,11 @@ function renderAgendas(c){
   }
   const aujourd=new Date();
 
-  return [...c.agendas].reverse().map((ag)=>{
+  const agendasAffiches=[...c.agendas].reverse();
+  let htmlTermines='';
+  let htmlActifs='';
+  
+  agendasAffiches.forEach((ag)=>{
     const dDebut=new Date(ag.dateDebut);
     const dFin=new Date(ag.dateFin);
     const estCommence=dDebut<=aujourd;
@@ -4244,21 +4248,19 @@ function renderAgendas(c){
     const warnings=getAgendaWarnings(c,ag,semaines);
     const warningHtml=warnings.length
       ?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">
-        <div style="margin-bottom:6px;font-style:italic">Remplir la totalité de l'agenda. En raison des semaines incomplètes en début et fin de période, un dépassement du nombre de semaines prévu au contrat pour chaque type d'horaires est possible. Vérifiez que le nombre de semaines minimal prévu pour chacun d'eux soit atteint.</div>
         ${warnings.map(w=>'⚠ '+w).join('<br>')}
       </div>`
       :'';
 
     const calHtml = renderCalAgenda(c,ag,semaines,false);
 
-    // Bouton supprimer uniquement si pas encore commencé
     const btnSuppr=!estCommence
       ?`<button class="btn bd bsm" onclick="supprimerAgenda(${c.id},${ag.id})">Supprimer</button>`
       :'';
 
     const btnModif=`<button class="btn bs bsm" id="btn-modif-${ag.id}" onclick="ouvrirModifAgenda(${c.id},${ag.id})">✏️ Modifier</button>`;
 
-    return `<div id="agenda-${ag.id}">
+    const html=`<div id="agenda-${ag.id}">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:6px">
         <div style="font-size:13px;font-weight:600;color:var(--tx2)">${label}${estCommence&&!estTermine?' <span style="color:var(--m)">(en cours)</span>':''}</div>
         <div style="display:flex;gap:6px">${btnModif}${btnSuppr}</div>
@@ -4267,7 +4269,23 @@ function renderAgendas(c){
       <div id="cal-${ag.id}">${calHtml}</div>
       <div id="modif-zone-${ag.id}" style="display:none"></div>
     </div>`;
-  }).join('<hr style="border:none;border-top:1px solid var(--mb);margin:12px 0">');
+
+    if(estTermine){
+      htmlTermines+=html+'<hr style="border:none;border-top:1px solid var(--mb);margin:12px 0">';
+    } else {
+      htmlActifs+=html+'<hr style="border:none;border-top:1px solid var(--mb);margin:12px 0">';
+    }
+  });
+
+  let result=htmlActifs;
+  if(htmlTermines){
+    const idToggle='toggle-ag-termines-'+c.id;
+    result+=`<div style="margin-top:6px">
+      <button class="btn bd bsm" onclick="const z=document.getElementById('${idToggle}');z.style.display=z.style.display==='none'?'block':'none';this.textContent=z.style.display==='none'?'▶ Voir agendas terminés':'▼ Masquer agendas terminés'">▶ Voir agendas terminés</button>
+      <div id="${idToggle}" style="display:none;margin-top:8px">${htmlTermines}</div>
+    </div>`;
+  }
+  return result;
 }
 
  function getSemsAgenda(ag,c){
@@ -4347,6 +4365,22 @@ function ouvrirModifAgenda(cid,agid){
     }
   }
   if(!ag)return;
+  // Bloquer si des fiches de la période sont validées
+  const dFin=new Date(ag.dateFin);
+  const maintenant=new Date();
+  if(dFin<maintenant){
+    // Vérifier si une fiche de cette période est validée
+    const ficheValideeExiste=Object.entries(c.fiches||{}).some(([k,f])=>{
+      if(!f.valide) return false;
+      const [y,m]=k.split('-').map(Number);
+      const dateF=new Date(y,m-1,1);
+      return dateF>=new Date(ag.dateDebut)&&dateF<=dFin;
+    });
+    if(ficheValideeExiste){
+      toast('⚠ Cet agenda ne peut pas être modifié : des feuilles de présence sont validées sur cette période.');
+      return;
+    }
+  }
 
   // Cacher le calendrier lecture seule
   const calDiv=document.getElementById('cal-'+agid);
@@ -4367,10 +4401,8 @@ function ouvrirModifAgenda(cid,agid){
 if(source.tc!=='52'&&source.th!=='sem'&&!(source.th==='plan'&&source.planType==='var')){
     const compteTrav=Object.values(ag.semaines||{}).filter(v=>v==='on').length;
     const compteOff=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
-    const attenduesTrav=source.nbSem||46;
-    const attenduesOff=47-attenduesTrav;
-    pHtml+=`<div class="pinceau-btn ${pinceau==='on'?'actif':''}" style="background:#e8f5ee;color:#3a6b4a;--brd:#3a6b4a" onclick="setAgendaPinceau(${cid},${agid},'on')">✅ Travaillée <strong>(${compteTrav}/${attenduesTrav})</strong></div>`;
-    pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong>(${compteOff}/${attenduesOff})</strong></div>`;
+    pHtml+=`<div class="pinceau-btn ${pinceau==='on'?'actif':''}" style="background:#e8f5ee;color:#3a6b4a;--brd:#3a6b4a" onclick="setAgendaPinceau(${cid},${agid},'on')">✅ Travaillée <strong>(${compteTrav})</strong></div>`;
+    pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong>(${compteOff})</strong></div>`;
   }
   if(source.th==='sem'&&source.semTypes){
     source.semTypes.forEach((st,i)=>{
@@ -4380,17 +4412,14 @@ if(source.tc!=='52'&&source.th!=='sem'&&!(source.th==='plan'&&source.planType===
     });
     if(source.tc!=='52'){
       const compteOffS=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
-      const attenduesOffS=47-(source.nbSem||46);
-      pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong>(${compteOffS}/${attenduesOffS})</strong></div>`;
+      pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong>(${compteOffS})</strong></div>`;
     }
   }
   if(source.th==='plan'&&source.planType==='fix'){
     const compteTrav=Object.values(ag.semaines||{}).filter(v=>v==='on').length;
     const compteOff=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
-    const attenduesTrav=source.nbSem||46;
-    const attenduesOff=47-attenduesTrav;
-    pHtml+=`<div class="pinceau-btn ${pinceau==='on'?'actif':''}" style="background:#e8f5ee;color:#3a6b4a;--brd:#3a6b4a" onclick="setAgendaPinceau(${cid},${agid},'on')">✅ Travaillée <strong>(${compteTrav}/${attenduesTrav})</strong></div>`;
-    pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong>(${compteOff}/${attenduesOff})</strong></div>`;
+    pHtml+=`<div class="pinceau-btn ${pinceau==='on'?'actif':''}" style="background:#e8f5ee;color:#3a6b4a;--brd:#3a6b4a" onclick="setAgendaPinceau(${cid},${agid},'on')">✅ Travaillée <strong>(${compteTrav})</strong></div>`;
+    pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong>(${compteOff})</strong></div>`;
   }
   if(source.th==='plan'&&source.planType==='var'&&source.planVar){
     source.planVar.forEach((v,i)=>{
@@ -4401,8 +4430,7 @@ if(source.tc!=='52'&&source.th!=='sem'&&!(source.th==='plan'&&source.planType===
     });
    if(source.tc!=='52'){
       const compteOffS=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
-      const attenduesOffS=47-(source.nbSem||46);
-      pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong>(${compteOffS}/${attenduesOffS})</strong></div>`;
+      pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong>(${compteOffS})</strong></div>`;
     }
   }
   pHtml+='</div>';
@@ -4434,37 +4462,29 @@ function setAgendaPinceau(cid,agid,val){
 
 function getAgendaWarnings(c,ag,semaines){
   const warnings=[];
-  const totalSemaines=semaines.length;
-
+  // Avertir si des semaines ne sont pas pointées
+  const nonPointees=semaines.filter(s=>!ag.semaines||!ag.semaines[s.key]).length;
+  if(nonPointees>0)
+    warnings.push(nonPointees+' semaine'+(nonPointees>1?'s':'')+' non pointée'+(nonPointees>1?'s':''));
+  // Vérifier les minimums selon le type
   if(c.th==='sem'&&c.semTypes){
-    // Vérifier chaque type de semaine
     c.semTypes.forEach(st=>{
       const compte=Object.values(ag.semaines||{}).filter(v=>v===st.nom).length;
-      if(compte!==st.nb)
-        warnings.push(st.nom+' : '+compte+' / '+st.nb+' semaines');
+      if(compte<st.nb)
+        warnings.push(st.nom+' : '+compte+' / '+st.nb+' semaines minimum');
     });
-    // Semaines non pointées = semaines hors contrat (repos, congés...)
-    const nonPointees=semaines.filter(s=>!ag.semaines[s.key]).length;
-    const attenduesNonPointees=52-c.semTypes.reduce((acc,st)=>acc+(st.nb||0),0);
-    if(nonPointees!==attenduesNonPointees)
-      warnings.push('Semaines non pointées : '+nonPointees+' / '+attenduesNonPointees+' attendues');
   } else if(c.planType==='var'&&c.planVar){
     c.planVar.forEach((v,i)=>{
       const nom=v.nom||('Volume '+(i+1));
       const compte=Object.values(ag.semaines||{}).filter(x=>x===nom).length;
-      if(compte!==v.s)
-        warnings.push(nom+' : '+compte+' / '+v.s+' semaines');
+      if(compte<v.s)
+        warnings.push(nom+' : '+compte+' / '+v.s+' semaines minimum');
     });
   } else if(c.tc!=='52'){
-    // Contrat fixe 46 sem ou moins
     const travaillees=Object.values(ag.semaines||{}).filter(v=>v==='on').length;
-    const absencesEmployeur=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
     const attendues=c.nbSem||46;
-    const absencesAttendues=47-attendues;
     if(travaillees<attendues)
-      warnings.push('Semaines travaillées : '+travaillees+' / '+attendues+' attendues');
-    if(absencesEmployeur!==absencesAttendues)
-      warnings.push('Semaines absence employeur : '+absencesEmployeur+' / '+absencesAttendues+' attendues');
+      warnings.push('Semaines travaillées : '+travaillees+' / '+attendues+' minimum');
   }
   return warnings;
 }
@@ -4501,13 +4521,13 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId){
 
   // Légende
   let legendeHtml='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;font-size:11px;color:var(--tx2)">';
-  if(c.tc!=='52'||(c.th==='sem'||c.planType==='var')){
-    if(c.tc!=='52'){
+  if(c.tc!=='52'){
+    // Légende "Travaillée" seulement pour contrats fixe (pas pour plan var/sem qui ont leurs propres légendes)
+    if(c.th!=='sem'&&!(c.th==='plan'&&c.planType==='var')){
       legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;background:#e8f5ee;border:1px solid #3a6b4a;border-radius:2px;display:inline-block"></span>Travaillée</span>`;
-      legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;background:var(--mp);border:1px solid var(--mb);border-radius:2px;display:inline-block"></span>Non pointée</span>`;
-      legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;background:#fde8e8;border:1px solid #c0392b;border-radius:2px;display:inline-block"></span>Absence employeur</span>`;
-      legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;background:#f0e8ff;border:1px solid #7b5ea7;border-radius:2px;display:inline-block"></span>Congés</span>`;
     }
+    legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;background:#fde8e8;border:1px solid #c0392b;border-radius:2px;display:inline-block"></span>Absence employeur</span>`;
+    legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;background:#f0e8ff;border:1px solid #7b5ea7;border-radius:2px;display:inline-block"></span>Congés</span>`;
     if(c.th==='sem'&&c.semTypes){
       c.semTypes.forEach((st,i)=>{
         const cc=PLAN_COULEURS[i%PLAN_COULEURS.length];
@@ -4631,8 +4651,13 @@ function validerModifAgenda(cid,agid){
   if(cidx!==-1)S.contrats[cidx]=c;
   const semaines=getSemsAgenda(ag,source);
   const warnings=getAgendaWarnings(source,ag,semaines);
-  if(warnings.length>0){
-    if(!confirm('⚠ Attention :\n'+warnings.join('\n')+'\n\nValider quand même ?'))return;
+  // Vérifier s'il y a des semaines non pointées (bloquant) vs autres warnings (non bloquant)
+  const nonPointeesWarning=warnings.filter(w=>w.includes('non pointée'));
+  const autresWarnings=warnings.filter(w=>!w.includes('non pointée'));
+  if(nonPointeesWarning.length>0){
+    if(!confirm('⚠ Attention :\n'+nonPointeesWarning.join('\n')+'\n\nDes semaines ne sont pas pointées. Valider quand même ?'))return;
+  } else if(autresWarnings.length>0){
+    if(!confirm('⚠ Attention :\n'+autresWarnings.join('\n')+'\n\nLe minimum de semaines n\'est pas atteint. Valider quand même ?'))return;
   }
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
@@ -5254,7 +5279,7 @@ function rafraichirRupture(cid){
   const dateFinContrat=document.getElementById('rp-fin-contrat-'+cid)?.value||c.rupture.dateFinContrat||'';
   const cumulConges=document.getElementById('rp-cumul-conges-'+cid)?.checked||c.rupture.cumulConges||false;
   c._ruptureTemp={motif,dateSignif,dateNotif,delaiPrev:parseInt(delaiPrev)||0,statutPreavis,initiativePreavis,dateFinPreavis,dateFinContrat,cumulConges};
-  const cont=document.getElementById('det-cont-'+cid)||document.querySelector('.det-cont');
+  const cont=document.getElementById('det-content');
   renderRupture(c,cont);
 }
 
@@ -5268,7 +5293,7 @@ function sauvegarderRupture(cid){
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   fbSaveData(window.FB_USER?.uid,{contrats:[c],params:{},congesAM:{}});
-  const cont=document.getElementById('det-cont-'+cid)||document.querySelector('.det-cont');
+  const cont=document.getElementById('det-content');
   renderRupture(c,cont);
   toast('Rupture enregistrée');
 }
@@ -5281,7 +5306,7 @@ function confirmerRupture(cid){
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   fbSaveData(window.FB_USER?.uid,{contrats:[c],params:{},congesAM:{}});
-  const cont=document.getElementById('det-cont-'+cid)||document.querySelector('.det-cont');
+  const cont=document.getElementById('det-content');
   renderRupture(c,cont);
   toast('Rupture confirmée');
 }
@@ -5294,7 +5319,7 @@ function annulerRupture(cid){
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-  const cont=document.getElementById('det-cont-'+cid)||document.querySelector('.det-cont');
+  const cont=document.getElementById('det-content');
   renderRupture(c,cont);
 }
 
@@ -5541,8 +5566,9 @@ function renderRupture(c, cont){
     if(aIndemniteRupture&&dateFinContrat){
       const ir=calcIndemniteRupture(c,dateFinContrat);
       if(ir){
-        lignes.push({label:'Indemnité de rupture (1/80ème)',net:ir.montantNet,brut:ir.montantBrut});
-        totalNet+=ir.montantNet;totalBrut+=ir.montantBrut;
+        // Indemnité de rupture : brut uniquement (non soumise à cotisations)
+        lignes.push({label:'Indemnité de rupture (1/80ème)',brut:ir.montantBrut,brutSeulement:true});
+        totalBrut+=ir.montantBrut;
       }
     }
 
@@ -5551,7 +5577,7 @@ function renderRupture(c, cont){
       <div class="ctitle">Estimation du solde de tout compte au ${dateRef}</div>
       ${lignes.map(l=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid var(--mb)">
         <span>${l.label}</span>
-        <span>${l.net.toFixed(2)} € net <span style="color:var(--tx2);font-size:11px">(${l.brut.toFixed(2)} € brut)</span></span>
+        <span>${l.brutSeulement?l.brut.toFixed(2)+' € brut':l.net.toFixed(2)+' € net <span style="color:var(--tx2);font-size:11px">('+l.brut.toFixed(2)+' € brut)</span>'}</span>
       </div>`).join('')}
       <div style="display:flex;justify-content:space-between;font-size:15px;font-weight:700;margin-top:8px;color:var(--m)">
         <span>Total</span>
