@@ -2995,7 +2995,14 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const semJoursCpt={};
   fiche.jours.forEach(j=>{
     if(j.heureDebPrev&&j.heureFinPrev){
-      hTheoriques+=toM(j.heureFinPrev)-toM(j.heureDebPrev);
+      // Jours de congés : utiliser hSemMoy/6 au lieu des heures prévues
+      const estCongeJ=['conges-acq','conges-anticipe','conges-non'].includes(j.statut);
+      if(estCongeJ){
+        const nbSemJ=sourceActif.nbSem||52;
+        hTheoriques+=(sourceActif.hMensu||0)*12/nbSemJ/6*60;
+      } else {
+        hTheoriques+=toM(j.heureFinPrev)-toM(j.heureDebPrev);
+      }
     } else if(!j.heureDebPrev&&!j.heureFinPrev&&(c.th==='fixe'||c.th==='sem')){
       // CORRECTION : Semaine 'off' sur contrat fixe/sem
       const semKeyTh=getSemISO(j.date);
@@ -3358,9 +3365,47 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     if(estAbsDeduite){
       let hAbsJour=0;
       let hPrev;
-      if(estCongesNonDeduit){
-        const hHebdo=parseFloat(((sourceActif.hHebdo||sourceActif.hMensu*12/52)||0).toFixed(2));
-        hPrev=parseFloat((hHebdo/6).toFixed(4));
+      // Fonction pour obtenir hSemMoy selon la version du contrat et le type de congé
+      const getHSemMoyConge=()=>{
+        let sourceConge;
+        if(c.tc==='52'){
+          // 52 sem : version du mois précédent la pose (pour tous les types de congés)
+          const [jy,jm]=j.date.split('-').map(Number);
+          const moisPrecPose=jm===1?(jy-1)+'-12':jy+'-'+String(jm-1).padStart(2,'0');
+          const dateRefConge=new Date(jy,jm-2,1);
+          sourceConge=getVersionActive(c,dateRefConge);
+        } else if(statut==='conges-acq'){
+          // 46 sem acquis : version au 31 mai de l'année d'acquisition
+          // Trouver l'année d'acquisition pour ce jour
+          const [jy,jm]=j.date.split('-').map(Number);
+          // L'année d'acquisition = anneeRef dans c.conges
+          // Pour conges-acq posé après mai N+1, l'acquisition était N/N+1 → ref = N → 31 mai N+1
+          // On cherche l'année d'acq en regardant c.conges
+          let anneeAcq=jy-1; // par défaut
+          if(c.conges){
+            Object.values(c.conges).forEach(cg=>{
+              if(cg.estTerminee&&cg.pris>0){
+                // Vérifier si ce jour appartient à cette année de pose
+                const debutPose=new Date(cg.anneeRef+1,4,1); // 1er mai N+1
+                const finPose=new Date(cg.anneeRef+2,3,30); // 30 avril N+2
+                const dateJ=new Date(jy,jm-1,parseInt(j.date.split('-')[2]));
+                if(dateJ>=debutPose&&dateJ<=finPose) anneeAcq=cg.anneeRef;
+              }
+            });
+          }
+          // Version au 31 mai de l'année d'acquisition
+          sourceConge=getVersionActive(c,new Date(anneeAcq+1,4,31));
+        } else {
+          // 46 sem anticipé ou non acquis : version en vigueur au moment de la pose
+          sourceConge=sourceActif;
+        }
+        const nbSemConge=sourceConge.nbSem||52;
+        return (sourceConge.hMensu||0)*12/nbSemConge;
+      };
+      const estConge=['conges-acq','conges-anticipe','conges-non'].includes(statut);
+      if(estCongesNonDeduit||estConge){
+        const hSemMoy=getHSemMoyConge();
+        hPrev=parseFloat((hSemMoy/6).toFixed(4));
       } else if(j._horsContratAvenant){
         const prevusHC=getHeuresPrevues(c,new Date(j.date),sourceActif);
         if(prevusHC.debut&&prevusHC.fin){
