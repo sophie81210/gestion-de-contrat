@@ -1289,7 +1289,7 @@ function renderDetTab(id,tab){
         })()}
         <span style="display:inline-flex;align-items:center;gap:5px;padding:8px 14px;background:#e8f5ee;color:#3a6b4a;border-radius:20px;font-size:13px;font-weight:600">✓ Signé</span>`
       :`<button class="btn bp" onclick="modif(${c.id})">Modifier</button>`}
-      <button class="btn bpurple" onclick="toast('Clôture à venir')">Clôturer</button>
+
       <button class="btn bd" onclick="confSuppr(${c.id})">Supprimer</button>
     </div>`;
 }
@@ -1608,7 +1608,7 @@ function renderDetTab(id,tab){
     }
   }
   else if(tab==='rupture'){
-    cont.innerHTML=`<div class="card"><div class="ctitle">Clôture et rupture</div><div style="text-align:center;padding:30px;color:var(--tx2)">Disponible via le bouton "Clôturer"</div></div>`;
+    renderRupture(c, cont);
   }
   else if(tab==='conges'){
     try{
@@ -4944,6 +4944,561 @@ function validerAvenant(){
 }
          
 // ══ CONGÉS ══
+
+// ─── ONGLET RUPTURE ───────────────────────────────────────────────────────────
+
+function getDernieresFicheValidee(c){
+  const fichesValidees=Object.keys(c.fiches||{}).filter(k=>c.fiches[k].valide).sort();
+  return fichesValidees.length?fichesValidees[fichesValidees.length-1]:null;
+}
+
+function getDateSituationAu(c){
+  const dernierMois=getDernieresFicheValidee(c);
+  if(!dernierMois) return null;
+  const [y,m]=dernierMois.split('-').map(Number);
+  return new Date(y,m,0); // dernier jour du mois
+}
+
+function calcBrutTotal(c, dateDebut, dateFin){
+  // Calcule le total des salaires bruts entre deux dates (tous les mois de fiches validées)
+  let total=0;
+  Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
+    if(!fiche.valide) return;
+    const [y,m]=key.split('-').map(Number);
+    const debutMois=new Date(y,m-1,1);
+    const finMois=new Date(y,m,0);
+    if(dateDebut&&finMois<dateDebut) return;
+    if(dateFin&&debutMois>dateFin) return;
+    const r=calcRecapFiche(c,fiche);
+    const source=getVersionActive(c,debutMois);
+    const txBrut=source.txBrut||0;
+    const majComp=(source.majComp||0)/100;
+    const majSup=(source.majSup||0)/100;
+    const brutMois=parseFloat(((r.hBase||0)*txBrut+(r.montantCompBrut||0)+(r.montantSupBrut||0)).toFixed(2));
+    total+=brutMois;
+  });
+  return parseFloat(total.toFixed(2));
+}
+
+function calcSoldeConges52(c, dateRupture){
+  // Pour les 52 sem : solde congés acquis + en cours
+  const params=S.params||{};
+  const coefNet=params.coefNet||0.7811975;
+  const sourcePrecRupture=getVersionActive(c,new Date(dateRupture.getFullYear(),dateRupture.getMonth()-1,1));
+  const txBrut=sourcePrecRupture.txBrut||0;
+  const nbSem=sourcePrecRupture.nbSem||52;
+  const hHebdo=(sourcePrecRupture.hMensu||0)*12/nbSem;
+  const hJour=hHebdo/6;
+  
+  calcCongesContrat(c);
+  let joursAcquisRestants=0, joursEnCoursRestants=0;
+  
+  Object.values(c.conges||{}).forEach(cg=>{
+    if(cg.estTerminee) joursAcquisRestants+=cg.restants||0;
+    else joursEnCoursRestants+=cg.restants||0;
+  });
+  
+  const montantAcquisBrut=parseFloat((joursAcquisRestants*hJour*txBrut).toFixed(2));
+  const montantAcquisNet=parseFloat((montantAcquisBrut*coefNet).toFixed(2));
+  const montantEnCoursBrut=parseFloat((joursEnCoursRestants*hJour*txBrut).toFixed(2));
+  const montantEnCoursNet=parseFloat((montantEnCoursBrut*coefNet).toFixed(2));
+  
+  return {joursAcquisRestants, montantAcquisBrut, montantAcquisNet, joursEnCoursRestants, montantEnCoursBrut, montantEnCoursNet};
+}
+
+function calcSoldeConges46(c){
+  // Pour les 46 sem : jours acquis non versés + jours en cours
+  const params=S.params||{};
+  const coefNet=params.coefNet||0.7811975;
+  
+  calcCongesContrat(c);
+  
+  // Jours acquis non versés : indemnité calculée - montant déjà versé
+  let joursAcquisNonVerses=0, montantAcquisNonVersesBrut=0, montantAcquisNonVersesNet=0;
+  let joursEnCours=0, montantEnCoursBrut=0, montantEnCoursNet=0;
+  
+  Object.entries(c.conges||{}).forEach(([anneeRef,cg])=>{
+    if(cg.estTerminee){
+      const ind=calcIndemniteConges(c,parseInt(anneeRef));
+      if(ind){
+        const dejaPaye=cg.indemVersee||0; // montant déjà versé
+        const restant=Math.max(0,ind.meilleurBrut-dejaPaye);
+        if(restant>0){
+          joursAcquisNonVerses+=cg.restants||0;
+          montantAcquisNonVersesBrut+=restant;
+          montantAcquisNonVersesNet+=parseFloat((restant*coefNet).toFixed(2));
+        }
+      }
+    } else {
+      // En cours d'acquisition : 10ème depuis juin ou maintien
+      joursEnCours+=cg.acqBrut||0;
+    }
+  });
+  
+  // Calcul montant en cours : 10ème des salaires depuis le dernier juin
+  const now=getDateSituationAu(c)||new Date();
+  const anneeRefDebut=now.getMonth()>=5?now.getFullYear():now.getFullYear()-1;
+  const dateJuin=new Date(anneeRefDebut,5,1);
+  const totalBrutDepuisJuin=calcBrutTotal(c,dateJuin,now);
+  const dixiemeEnCours=parseFloat((totalBrutDepuisJuin*0.1).toFixed(2));
+  
+  // Maintien : hJour * jours acquis depuis juin
+  const sourceActuelle=getVersionActive(c,now);
+  const hHebdo=(sourceActuelle.hMensu||0)*12/(sourceActuelle.nbSem||46);
+  const hJour=hHebdo/6;
+  const txBrut=sourceActuelle.txBrut||0;
+  const maintienEnCours=parseFloat(((cg=>cg?cg.acqBrut||0:0)(Object.values(c.conges||{}).find(cg=>!cg.estTerminee))*hJour*txBrut).toFixed(2));
+  
+  montantEnCoursBrut=Math.max(dixiemeEnCours,maintienEnCours);
+  montantEnCoursNet=parseFloat((montantEnCoursBrut*coefNet).toFixed(2));
+  
+  return {joursAcquisNonVerses, montantAcquisNonVersesBrut, montantAcquisNonVersesNet, joursEnCours, montantEnCoursBrut, montantEnCoursNet};
+}
+
+function calcRegularisationDefinitive(c){
+  // Totalise tous les totaux annuels de régularisation
+  const [ddy,ddm]=c.dateDeb?c.dateDeb.split('-').map(Number):[new Date().getFullYear(),new Date().getMonth()+1];
+  const dateDebContrat=new Date(ddy,ddm-1,1);
+  const moisTries=Object.keys(c.fiches||{}).filter(k=>c.fiches[k].valide).sort();
+  
+  // Regrouper par année de contrat
+  const tranches={};
+  moisTries.forEach(key=>{
+    const [ay,am]=key.split('-').map(Number);
+    const dateF=new Date(ay,am-1,1);
+    let idx=0;
+    while(true){
+      const debutTranche=new Date(ddy+idx,ddm-1,1);
+      const finTranche=new Date(ddy+idx+1,ddm-1,1);
+      if(dateF>=debutTranche&&dateF<finTranche) break;
+      idx++;
+      if(idx>20) break;
+    }
+    if(!tranches[idx]) tranches[idx]={mensu:0,prevu:0};
+    const fiche=c.fiches[key];
+    const [ay2,am2]=key.split('-').map(Number);
+    const source=getVersionActive(c,new Date(ay2,am2-1,1));
+    const hMensu=source.hMensu||0;
+    // Heures prévues
+    let hPrevu=0;
+    (fiche.jours||[]).forEach(j=>{
+      const src=getVersionActive(c,new Date(j.date));
+      const agendas=src.agendas||c.agendas||[];
+      const ag=agendas.find(a=>{
+        const pm=new Date(ay2,am2-1,1);
+        const dm=new Date(ay2,am2,0);
+        return new Date(a.dateDebut)<=dm&&new Date(a.dateFin)>=pm;
+      });
+      const semKey=getSemISO(j.date);
+      const agKey=getKeyAgenda(semKey,getSemAnnee(j.date));
+      const typeSem=ag&&ag.semaines&&ag.semaines[agKey];
+      if(typeSem==='off'){tranches[idx].prevu+=0;return;}
+      const estConge=['conges-acq','conges-anticipe','conges-non','conges-am'].includes(j.statut);
+      if(estConge) return;
+      if(j.heureDebPrev&&j.heureFinPrev) hPrevu+=(toMins(j.heureFinPrev)-toMins(j.heureDebPrev))/60;
+    });
+    tranches[idx].mensu+=hMensu;
+    tranches[idx].prevu+=hPrevu;
+  });
+  
+  let totalMensu=0,totalPrevu=0;
+  Object.values(tranches).forEach(t=>{totalMensu+=t.mensu;totalPrevu+=t.prevu;});
+  const diff=totalPrevu-totalMensu;
+  return {totalMensu:parseFloat(totalMensu.toFixed(2)), totalPrevu:parseFloat(totalPrevu.toFixed(2)), diff:parseFloat(diff.toFixed(2))};
+}
+
+function calcDureePreavis(c, dateDebPreavis){
+  // Durée du préavis selon ancienneté
+  const [ddy,ddm,ddd]=c.dateDeb.split('-').map(Number);
+  const dateDebContrat=new Date(ddy,ddm-1,ddd);
+  const diffMs=dateDebPreavis-dateDebContrat;
+  const diffMois=diffMs/(1000*60*60*24*30.44);
+  
+  if(diffMois<3) return {duree:8,unite:'jours',label:'8 jours'};
+  if(diffMois<12) return {duree:15,unite:'jours',label:'15 jours'};
+  return {duree:1,unite:'mois',label:'1 mois calendaire'};
+}
+
+function calcDateFinPreavis(dateDebPreavis, dureePreavis){
+  const d=new Date(dateDebPreavis);
+  if(dureePreavis.unite==='jours'){
+    d.setDate(d.getDate()+dureePreavis.duree);
+  } else {
+    d.setMonth(d.getMonth()+dureePreavis.duree);
+  }
+  d.setDate(d.getDate()-1);
+  return d;
+}
+
+function calcIndemnitePreavis(c, dateDebPreavis, dateFinEffective, dureePreavis){
+  // Calcule l'indemnité de préavis non effectué
+  const dateFinLegale=calcDateFinPreavis(dateDebPreavis,dureePreavis);
+  if(dateFinEffective>=dateFinLegale) return 0;
+  
+  // Jours restants de préavis
+  const joursTotal=(dateFinLegale-dateDebPreavis)/(1000*60*60*24)+1;
+  const joursEffectues=(dateFinEffective-dateDebPreavis)/(1000*60*60*24)+1;
+  const joursRestants=Math.max(0,joursTotal-joursEffectues);
+  
+  const source=getVersionActive(c,dateDebPreavis);
+  const hMensu=source.hMensu||0;
+  const nbSem=source.nbSem||46;
+  const hHebdo=hMensu*12/nbSem;
+  const txBrut=source.txBrut||0;
+  
+  // Indemnité = jours restants * hHebdo/6 * txBrut (valeur journalière)
+  const montantBrut=parseFloat((joursRestants*hHebdo/6*txBrut).toFixed(2));
+  const params=S.params||{};
+  const coefNet=params.coefNet||0.7811975;
+  return {montantBrut, montantNet:parseFloat((montantBrut*coefNet).toFixed(2)), joursRestants};
+}
+
+function calcIndemniteRupture(c, dateFin){
+  // 1/80ème des salaires bruts, ancienneté min 9 mois
+  const [ddy,ddm,ddd]=c.dateDeb.split('-').map(Number);
+  const dateDebContrat=new Date(ddy,ddm-1,ddd);
+  const diffMois=(dateFin-dateDebContrat)/(1000*60*60*24*30.44);
+  if(diffMois<9) return null;
+  const totalBrut=calcBrutTotal(c,null,dateFin);
+  const montantBrut=parseFloat((totalBrut/80).toFixed(2));
+  const params=S.params||{};
+  const coefNet=params.coefNet||0.7811975;
+  return {montantBrut, montantNet:parseFloat((montantBrut*coefNet).toFixed(2)), totalBrut};
+}
+
+function sauvegarderRupture(cid){
+  const c=S.contrats.find(x=>x.id==cid);
+  if(!c) return;
+  if(!c.rupture) c.rupture={};
+  
+  const motif=document.getElementById('rp-motif-'+cid)?.value||'';
+  const dateDebPreavis=document.getElementById('rp-deb-preavis-'+cid)?.value||'';
+  const dateNotif=document.getElementById('rp-date-notif-'+cid)?.value||'';
+  const delaiPrev=parseInt(document.getElementById('rp-delai-prev-'+cid)?.value||'0');
+  const statutPreavis=document.querySelector(`input[name="rp-statut-preavis-${cid}"]:checked`)?.value||'';
+  const initiativePreavis=document.getElementById('rp-initiative-'+cid)?.value||'';
+  const dateFinPreavis=document.getElementById('rp-fin-preavis-'+cid)?.value||'';
+  const dateFinContrat=document.getElementById('rp-fin-contrat-'+cid)?.value||'';
+  const cumulConges=document.getElementById('rp-cumul-conges-'+cid)?.checked||false;
+  
+  c.rupture={motif,dateDebPreavis,dateNotif,delaiPrev,statutPreavis,initiativePreavis,dateFinPreavis,dateFinContrat,cumulConges};
+  
+  const cidx=S.contrats.findIndex(x=>x.id==cid);
+  if(cidx!==-1) S.contrats[cidx]=c;
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  
+  // Recalculer l'affichage
+  renderRupture(c,document.getElementById('det-cont-'+cid));
+  toast('Rupture enregistrée');
+}
+
+function confirmerRupture(cid){
+  const c=S.contrats.find(x=>x.id==cid);
+  if(!c||!c.rupture) return;
+  c.rupture.confirmee=true;
+  const cidx=S.contrats.findIndex(x=>x.id==cid);
+  if(cidx!==-1) S.contrats[cidx]=c;
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  fbSaveData(window.FB_USER?.uid,{contrats:[c],params:{},congesAM:{}});
+  renderRupture(c,document.getElementById('det-cont-'+cid));
+  toast('Rupture confirmée');
+}
+
+function annulerRupture(cid){
+  const c=S.contrats.find(x=>x.id==cid);
+  if(!c) return;
+  c.rupture={};
+  const cidx=S.contrats.findIndex(x=>x.id==cid);
+  if(cidx!==-1) S.contrats[cidx]=c;
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  renderRupture(c,document.getElementById('det-cont-'+cid));
+}
+
+function renderRupture(c, cont){
+  if(!cont) return;
+  const rp=c.rupture||{};
+  
+  // Contrat occasionnel : traitement simplifié
+  if(c.tc==='occ'){
+    const totalBrut=calcBrutTotal(c,null,null);
+    const indemCp=parseFloat((totalBrut*0.1).toFixed(2));
+    const params=S.params||{};
+    const coefNet=params.coefNet||0.7811975;
+    cont.innerHTML=`
+      <div class="card">
+        <div class="ctitle">Rupture — Contrat occasionnel</div>
+        <div style="background:var(--mp);border-radius:8px;padding:12px;margin-bottom:10px">
+          <div style="font-size:13px;color:var(--tx2)">Indemnité de congés payés (10% des salaires versés)</div>
+          <div style="font-size:16px;font-weight:700;margin-top:4px">${indemCp.toFixed(2)} € brut — ${parseFloat((indemCp*coefNet).toFixed(2))} € net</div>
+        </div>
+      </div>`;
+    return;
+  }
+  
+  // Date de situation
+  const dateSit=getDateSituationAu(c);
+  const dateSitStr=dateSit?dateSit.toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'}):'—';
+  
+  // ─── Solde congés ───
+  let soldeCongesHtml='';
+  if(c.tc==='52'){
+    const s=calcSoldeConges52(c, dateSit||new Date());
+    soldeCongesHtml=`
+      <div class="card" style="margin-bottom:10px">
+        <div class="ctitle">Solde des congés</div>
+        <div style="display:grid;gap:6px">
+          <div style="display:flex;justify-content:space-between;font-size:13px">
+            <span>Jours acquis restants</span>
+            <span><strong>${s.joursAcquisRestants} j</strong> — ${s.montantAcquisNet} € net</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:13px">
+            <span>Jours en cours d'acquisition</span>
+            <span><strong>${s.joursEnCoursRestants} j</strong> — ${s.montantEnCoursNet} € net</span>
+          </div>
+        </div>
+      </div>`;
+  } else {
+    const s=calcSoldeConges46(c);
+    soldeCongesHtml=`
+      <div class="card" style="margin-bottom:10px">
+        <div class="ctitle">Solde des congés</div>
+        <div style="display:grid;gap:6px">
+          <div style="display:flex;justify-content:space-between;font-size:13px">
+            <span>Jours acquis non versés</span>
+            <span><strong>${s.joursAcquisNonVerses} j</strong> — ${s.montantAcquisNonVersesNet} € net (${s.montantAcquisNonVersesBrut} € brut)</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:13px">
+            <span>Jours en cours d'acquisition</span>
+            <span><strong>${parseFloat(s.joursEnCours.toFixed(2))} j</strong> — ${s.montantEnCoursNet} € net (${s.montantEnCoursBrut} € brut)</span>
+          </div>
+        </div>
+      </div>`;
+  }
+  
+  // ─── Régularisation définitive (46 sem uniquement) ───
+  let regHtml='';
+  if(c.tc!=='52'){
+    const reg=calcRegularisationDefinitive(c);
+    if(reg.diff>0){
+      regHtml=`
+        <div class="card" style="margin-bottom:10px">
+          <div class="ctitle">Régularisation définitive</div>
+          <div style="display:flex;justify-content:space-between;font-size:13px">
+            <span>Total heures mensualisées</span><span>${reg.totalMensu.toFixed(2)} h</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:13px">
+            <span>Total heures prévues</span><span>${reg.totalPrevu.toFixed(2)} h</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;color:var(--vt);margin-top:6px">
+            <span>Solde à verser</span><span>+${reg.diff.toFixed(2)} h</span>
+          </div>
+        </div>`;
+    } else {
+      regHtml=`
+        <div class="card" style="margin-bottom:10px">
+          <div class="ctitle">Régularisation définitive</div>
+          <div style="font-size:13px;color:var(--tx2)">Aucun solde à verser (heures mensualisées ≥ heures prévues)</div>
+        </div>`;
+    }
+  }
+  
+  // ─── Simulation de rupture ───
+  const motifOptions=['','retrait-enfant','demission','retrait-force','fin-essai'];
+  const motifLabels={'':'— Choisir —','retrait-enfant':'Retrait d\'enfant','demission':'Démission','retrait-force':'Retrait forcé','fin-essai':'Fin de période d\'essai'};
+  
+  const motif=rp.motif||'';
+  const aPreavis=motif==='retrait-enfant'||motif==='demission';
+  const aIndemniteRupture=motif==='retrait-enfant';
+  
+  // Préavis
+  let preavisHtml='';
+  if(aPreavis){
+    const dateDebPreavis=rp.dateDebPreavis?new Date(rp.dateDebPreavis):null;
+    const duree=dateDebPreavis?calcDureePreavis(c,dateDebPreavis):null;
+    const dateFinLegale=dateDebPreavis&&duree?calcDateFinPreavis(dateDebPreavis,duree):null;
+    
+    const statutPreavis=rp.statutPreavis||'';
+    
+    let initiativeHtml='';
+    let dateFinHtml='';
+    if(statutPreavis==='partiel'||statutPreavis==='non-effectue'){
+      initiativeHtml=`
+        <div style="margin-top:8px">
+          <label style="font-size:12px;color:var(--tx2)">À l'initiative de</label>
+          <select id="rp-initiative-${c.id}" onchange="sauvegarderRupture(${c.id})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+            <option value="" ${!rp.initiativePreavis?'selected':''}>— Choisir —</option>
+            <option value="employeur" ${rp.initiativePreavis==='employeur'?'selected':''}>À l'initiative de l'employeur</option>
+            <option value="assmat" ${rp.initiativePreavis==='assmat'?'selected':''}>À l'initiative de l'Ass'Mat</option>
+            <option value="accord" ${rp.initiativePreavis==='accord'?'selected':''}>En accord entre les parties</option>
+          </select>
+        </div>`;
+      if(rp.initiativePreavis&&rp.initiativePreavis!=='accord'){
+        dateFinHtml=`
+          <div style="margin-top:8px">
+            <label style="font-size:12px;color:var(--tx2)">Date de fin du préavis effectué</label>
+            <input type="date" id="rp-fin-preavis-${c.id}" value="${rp.dateFinPreavis||''}" onchange="sauvegarderRupture(${c.id})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+          </div>`;
+      }
+    }
+    
+    if(statutPreavis==='effectue'){
+      dateFinHtml=`
+        <div style="margin-top:8px">
+          <label style="font-size:12px;color:var(--tx2)">Date de fin de contrat</label>
+          <input type="date" id="rp-fin-contrat-${c.id}" value="${rp.dateFinContrat||''}" onchange="sauvegarderRupture(${c.id})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+        </div>`;
+    }
+    
+    preavisHtml=`
+      <div style="margin-top:10px">
+        <label style="font-size:12px;color:var(--tx2)">Date de début de préavis</label>
+        <input type="date" id="rp-deb-preavis-${c.id}" value="${rp.dateDebPreavis||''}" onchange="sauvegarderRupture(${c.id})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+        ${duree?`<div style="font-size:12px;color:var(--tx2);margin-top:4px">Durée légale du préavis : <strong>${duree.label}</strong>${dateFinLegale?' — Fin légale : <strong>'+dateFinLegale.toLocaleDateString('fr-FR')+'</strong>':''}</div>`:''}
+      </div>
+      <div style="margin-top:10px">
+        <label style="font-size:12px;color:var(--tx2)">Statut du préavis</label>
+        <div style="display:flex;gap:12px;margin-top:6px;flex-wrap:wrap">
+          ${['effectue','partiel','non-effectue'].map(s=>`
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+              <input type="radio" name="rp-statut-preavis-${c.id}" value="${s}" ${statutPreavis===s?'checked':''} onchange="sauvegarderRupture(${c.id})">
+              ${s==='effectue'?'Effectué':s==='partiel'?'Partiellement effectué':'Non effectué'}
+            </label>`).join('')}
+        </div>
+        ${initiativeHtml}
+        ${dateFinHtml}
+      </div>
+      <div style="margin-top:8px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+          <input type="checkbox" id="rp-cumul-conges-${c.id}" ${rp.cumulConges?'checked':''} onchange="sauvegarderRupture(${c.id})">
+          Possibilité de cumuler les jours de congés avec les jours de préavis
+        </label>
+      </div>`;
+  }
+  
+  // Fin de période d'essai
+  let essaiHtml='';
+  if(motif==='fin-essai'){
+    const dateNotif=rp.dateNotif?new Date(rp.dateNotif):null;
+    const delai=rp.delaiPrev||0;
+    const dateFinEssai=dateNotif?new Date(dateNotif.getTime()+delai*24*60*60*1000):null;
+    essaiHtml=`
+      <div style="margin-top:10px;display:grid;gap:8px">
+        <div>
+          <label style="font-size:12px;color:var(--tx2)">Date de notification</label>
+          <input type="date" id="rp-date-notif-${c.id}" value="${rp.dateNotif||''}" onchange="sauvegarderRupture(${c.id})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--tx2)">Délai de prévenance (jours)</label>
+          <input type="number" id="rp-delai-prev-${c.id}" value="${rp.delaiPrev||''}" min="0" onchange="sauvegarderRupture(${c.id})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+        </div>
+        ${dateFinEssai?`<div style="font-size:13px;color:var(--tx2)">Date de fin de contrat : <strong>${dateFinEssai.toLocaleDateString('fr-FR')}</strong></div>`:''}
+      </div>`;
+  }
+  
+  // ─── Calcul du solde final ───
+  let soldeHtml='';
+  const dateFinContrat=rp.dateFinContrat?new Date(rp.dateFinContrat):
+    (motif==='fin-essai'&&rp.dateNotif&&rp.delaiPrev?new Date(new Date(rp.dateNotif).getTime()+rp.delaiPrev*24*60*60*1000):null);
+  
+  if(dateSit&&motif){
+    let totalBrut=0, totalNet=0;
+    const params=S.params||{};
+    const coefNet=params.coefNet||0.7811975;
+    const lignes=[];
+    
+    // Solde congés
+    if(c.tc==='52'){
+      const s=calcSoldeConges52(c,dateSit);
+      if(s.montantAcquisBrut>0){lignes.push({label:'Solde congés acquis',net:s.montantAcquisNet,brut:s.montantAcquisBrut});totalNet+=s.montantAcquisNet;totalBrut+=s.montantAcquisBrut;}
+      if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
+    } else {
+      const s=calcSoldeConges46(c);
+      if(s.montantAcquisNonVersesBrut>0){lignes.push({label:'Congés acquis non versés',net:s.montantAcquisNonVersesNet,brut:s.montantAcquisNonVersesBrut});totalNet+=s.montantAcquisNonVersesNet;totalBrut+=s.montantAcquisNonVersesBrut;}
+      if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
+      // Régularisation
+      const reg=calcRegularisationDefinitive(c);
+      if(reg.diff>0){
+        const source=getVersionActive(c,dateSit);
+        const txBrut=source.txBrut||0;
+        const regBrut=parseFloat((reg.diff*txBrut).toFixed(2));
+        const regNet=parseFloat((regBrut*coefNet).toFixed(2));
+        lignes.push({label:'Régularisation définitive',net:regNet,brut:regBrut});
+        totalNet+=regNet;totalBrut+=regBrut;
+      }
+    }
+    
+    // Indemnité préavis
+    if(aPreavis&&(rp.statutPreavis==='partiel'||rp.statutPreavis==='non-effectue')&&rp.initiativePreavis==='employeur'){
+      const dateDebPreavis=rp.dateDebPreavis?new Date(rp.dateDebPreavis):null;
+      if(dateDebPreavis){
+        const duree=calcDureePreavis(c,dateDebPreavis);
+        const dateFinEff=rp.dateFinPreavis?new Date(rp.dateFinPreavis):(rp.statutPreavis==='non-effectue'?dateDebPreavis:null);
+        if(dateFinEff){
+          const ip=calcIndemnitePreavis(c,dateDebPreavis,dateFinEff,duree);
+          if(ip.montantBrut>0){
+            lignes.push({label:`Indemnité de préavis (${ip.joursRestants} j)`,net:ip.montantNet,brut:ip.montantBrut});
+            totalNet+=ip.montantNet;totalBrut+=ip.montantBrut;
+          }
+        }
+      }
+    }
+    
+    // Indemnité de rupture
+    if(aIndemniteRupture&&dateFinContrat){
+      const ir=calcIndemniteRupture(c,dateFinContrat);
+      if(ir){
+        lignes.push({label:'Indemnité de rupture (1/80ème)',net:ir.montantNet,brut:ir.montantBrut});
+        totalNet+=ir.montantNet;totalBrut+=ir.montantBrut;
+      }
+    }
+    
+    soldeHtml=`
+      <div class="card" style="margin-bottom:10px;background:var(--mp)">
+        <div class="ctitle">Estimation du solde de tout compte au ${dateSitStr}</div>
+        ${lignes.map(l=>`
+          <div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid var(--mb)">
+            <span>${l.label}</span>
+            <span>${l.net.toFixed(2)} € net <span style="color:var(--tx2);font-size:11px">(${l.brut.toFixed(2)} € brut)</span></span>
+          </div>`).join('')}
+        <div style="display:flex;justify-content:space-between;font-size:15px;font-weight:700;margin-top:8px;color:var(--m)">
+          <span>Total</span>
+          <span>${totalNet.toFixed(2)} € net <span style="font-size:12px;font-weight:400;color:var(--tx2)">(${totalBrut.toFixed(2)} € brut)</span></span>
+        </div>
+      </div>`;
+  }
+  
+  const confirmeeHtml=rp.confirmee?`
+    <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px">
+      ⚠ Rupture confirmée.
+      <button class="btn bd bsm" style="margin-left:8px" onclick="annulerRupture(${c.id})">✕ Annuler la confirmation</button>
+    </div>`:'';
+  
+  cont.innerHTML=`
+    <div style="font-size:12px;color:var(--tx2);margin-bottom:12px">Situation au <strong>${dateSitStr}</strong></div>
+    ${confirmeeHtml}
+    ${soldeCongesHtml}
+    ${regHtml}
+    
+    <div class="card" style="margin-bottom:10px">
+      <div class="ctitle">Simulation de rupture</div>
+      <div>
+        <label style="font-size:12px;color:var(--tx2)">Motif de la rupture</label>
+        <select id="rp-motif-${c.id}" onchange="sauvegarderRupture(${c.id})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+          ${motifOptions.map(m=>`<option value="${m}" ${motif===m?'selected':''}>${motifLabels[m]}</option>`).join('')}
+        </select>
+      </div>
+      ${preavisHtml}
+      ${essaiHtml}
+    </div>
+    
+    ${soldeHtml}
+    
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn bs" onclick="sauvegarderRupture(${c.id})">💾 Enregistrer</button>
+      ${!rp.confirmee?`<button class="btn bpurple" onclick="confirmerRupture(${c.id})">✓ Confirmer la rupture</button>`:''}
+    </div>`;
+}
+
 function calcIndemniteConges(c, anneeRef){
   // Retourne null si conditions non remplies
   if(c.tc==='52'||c.tc==='occ') return null;
