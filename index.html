@@ -1993,7 +1993,10 @@ function ouvrirFiche(contratId,key){
       if(prev>0) hDeduit='−'+fmtH(prev);
     }
 
-    const repasCell=aRepas?`<td style="padding:2px 4px;font-size:13px;min-width:90px">${
+    // Cases repas uniquement pour jours prévus et absences partielles
+    const jourStatut=j.statut||getStatutPrevu(c,j);
+    const repasVisible=aRepas&&(jourStatut==='prevu'||jourStatut==='travaille'||jourStatut==='abs-partielle'||jourStatut==='abs-rem');
+    const repasCell=repasVisible?`<td style="padding:2px 4px;font-size:13px;min-width:90px">${
       REPAS_SYM.map((sym,ri)=>c.repas&&c.repas[ri]?
         `<label style="cursor:pointer;display:block" title="${REPAS_NOM[ri]}">
           <input type="checkbox" ${j.repas&&j.repas[ri]?'checked':''}
@@ -2001,7 +2004,7 @@ function ouvrirFiche(contratId,key){
             style="width:12px;height:12px;accent-color:var(--m)">
           <span style="font-size:13px">${sym}</span>
         </label>`:'').join('')
-    }</td>`:'';
+    }</td>`:aRepas?'<td style="min-width:90px"></td>':'';
 
     const kmCell=aKm?`<td style="padding:3px 2px">
       <input type="number" style="width:46px;padding:2px 4px;border:1px solid var(--mb);border-radius:3px;font-size:11px"
@@ -2531,6 +2534,15 @@ function majFicheRepas(contratId,key,idx,ri,checked){
   S.ficheModifiee=true;
   const bandeau=document.getElementById('bandeau-non-enregistre');
   if(bandeau) bandeau.style.display='block';
+  // Rafraîchir le récap de la fiche
+  const ficheRep=c.fiches[key];
+  if(ficheRep){
+    const recapEl=document.getElementById('recap-'+contratId+'-'+key);
+    if(recapEl){
+      const recapNew=calcRecapFiche(c,ficheRep);
+      recapEl.outerHTML=buildRecapHtml(recapNew);
+    }
+  }
 }
 
 function validerFiche(contratId,key){
@@ -4317,11 +4329,14 @@ function renderAgendas(c){
       if(semDeb>getNbSemainesAnnee(anneeDeb)){semDeb=1;anneeDeb++;}
     }
 
-    const dernierJour = new Date(
+    // Utiliser dateFin de l'agenda pour _semFin
+    const dateFinAg=ag.dateFin?new Date(ag.dateFin):new Date(
       new Date(ag.dateDebut).getFullYear() + 1,
       new Date(ag.dateDebut).getMonth() + 1,
       0
     );
+    // Prendre le dernier jour du mois de dateFin
+    const dernierJour=new Date(dateFinAg.getFullYear(),dateFinAg.getMonth()+1,0);
     const semFin = getSemISO(dernierJour.toISOString().slice(0,10));
     const anneeFin = getSemAnnee(dernierJour.toISOString().slice(0,10));
 
@@ -4393,7 +4408,7 @@ function ouvrirModifAgenda(cid,agid){
   S.agendaPinceaux[agid]=S.agendaPinceaux[agid]||null;
 
   // Pinceaux
-  let pHtml='<div style="margin:10px 0 8px;font-size:12px;color:var(--tx2);font-style:italic">Sélectionnez un pinceau puis cliquez sur les semaines — recliquez pour effacer</div>';
+  let pHtml='<div style="margin:10px 0 8px;font-size:12px;color:var(--tx2)">Sélectionnez un pinceau puis cliquez sur les semaines — recliquez pour effacer</div>';
   pHtml+='<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px">';
 
   const pinceau=S.agendaPinceaux[agid];
@@ -4401,7 +4416,8 @@ function ouvrirModifAgenda(cid,agid){
 if(source.tc!=='52'&&source.th!=='sem'&&!(source.th==='plan'&&source.planType==='var')){
     const compteTrav=Object.values(ag.semaines||{}).filter(v=>v==='on').length;
     const compteOff=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
-    pHtml+=`<div class="pinceau-btn ${pinceau==='on'?'actif':''}" style="background:#e8f5ee;color:#3a6b4a;--brd:#3a6b4a" onclick="setAgendaPinceau(${cid},${agid},'on')">✅ Travaillée <strong>(${compteTrav})</strong></div>`;
+    const nbSemAttendu=source.nbSem||46;
+    pHtml+=`<div class="pinceau-btn ${pinceau==='on'?'actif':''}" style="background:#e8f5ee;color:#3a6b4a;--brd:#3a6b4a" onclick="setAgendaPinceau(${cid},${agid},'on')">✅ Travaillée <strong>(${compteTrav}/${nbSemAttendu})</strong></div>`;
     pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong>(${compteOff})</strong></div>`;
   }
   if(source.th==='sem'&&source.semTypes){
@@ -4418,6 +4434,7 @@ if(source.tc!=='52'&&source.th!=='sem'&&!(source.th==='plan'&&source.planType===
   if(source.th==='plan'&&source.planType==='fix'){
     const compteTrav=Object.values(ag.semaines||{}).filter(v=>v==='on').length;
     const compteOff=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
+    const attenduesTravFix=source.nbSem||46;
     pHtml+=`<div class="pinceau-btn ${pinceau==='on'?'actif':''}" style="background:#e8f5ee;color:#3a6b4a;--brd:#3a6b4a" onclick="setAgendaPinceau(${cid},${agid},'on')">✅ Travaillée <strong>(${compteTrav})</strong></div>`;
     pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong>(${compteOff})</strong></div>`;
   }
@@ -4462,8 +4479,25 @@ function setAgendaPinceau(cid,agid,val){
 
 function getAgendaWarnings(c,ag,semaines){
   const warnings=[];
-  // Avertir si des semaines ne sont pas pointées
-  const nonPointees=semaines.filter(s=>!ag.semaines||!ag.semaines[s.key]).length;
+  // Avertir si des semaines ne sont pas pointées (ni off, ni colorées en congés)
+  const nonPointees=semaines.filter(s=>{
+    if(ag.semaines&&ag.semaines[s.key]) return false; // pointée
+    // Vérifier si colorée en congés (≥5 jours posés+fériés dans le calendrier AM)
+    if(S.congesAM){
+      let nbJours=0;
+      for(let d=0;d<7;d++){
+        const jour=new Date(s.lundi);
+        jour.setDate(s.lundi.getDate()+d);
+        const dateStr=jour.getFullYear()+'-'+String(jour.getMonth()+1).padStart(2,'0')+'-'+String(jour.getDate()).padStart(2,'0');
+        Object.values(S.congesAM).forEach(cgAm=>{
+          if(cgAm&&cgAm.jours&&cgAm.jours[dateStr]==='pose') nbJours++;
+        });
+        if(isFerie&&isFerie(dateStr,c)) nbJours++;
+      }
+      if(nbJours>=5) return false; // colorée en congés
+    }
+    return true; // vraiment non pointée
+  }).length;
   if(nonPointees>0)
     warnings.push(nonPointees+' semaine'+(nonPointees>1?'s':'')+' non pointée'+(nonPointees>1?'s':''));
   // Vérifier les minimums selon le type
@@ -4495,6 +4529,27 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId){
 // Mois de référence pour la 1ère semaine = mois de dateDebut de l'agenda
   const moisForceDeb = new Date(ag.dateDebut);
   const mKeyForce = moisForceDeb.getFullYear()*100+(moisForceDeb.getMonth()+1);
+
+  // Calculer les 5 semaines les plus chargées en congés (posés + fériés)
+  // Tri par nombre de jours desc, à égalité la plus ancienne en premier
+  const semsCongesScore=semaines.map(s=>{
+    let nb=0;
+    for(let d=0;d<7;d++){
+      const jour=new Date(s.lundi);
+      jour.setDate(s.lundi.getDate()+d);
+      const dateStr=jour.getFullYear()+'-'+String(jour.getMonth()+1).padStart(2,'0')+'-'+String(jour.getDate()).padStart(2,'0');
+      if(S.congesAM){
+        Object.values(S.congesAM).forEach(cgAm=>{
+          if(cgAm&&cgAm.jours&&cgAm.jours[dateStr]==='pose') nb++;
+        });
+      }
+      if(isFerie(dateStr,c)) nb++;
+    }
+    return {key:s.key, nb, lundi:s.lundi};
+  }).filter(x=>x.nb>0);
+  // Trier par nb desc puis par date asc pour les égalités
+  semsCongesScore.sort((a,b)=>b.nb-a.nb||a.lundi-b.lundi);
+  const semsCongesSet=new Set(semsCongesScore.slice(0,5).map(x=>x.key));
 
   semaines.forEach((s, idx)=>{
     let mKey;
@@ -4557,25 +4612,9 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId){
       const lundiVerif=estPremiereSem?dDebAg:s.lundi;
       const verrouillee=isFicheValidee(c,lundiVerif);
 
-      // Détecter si la semaine est une semaine de congés (≥5 jours posés ou fériés)
-      let nbJoursCgAm=0;
-      const lundiSem=s.lundi;
-      for(let d=0;d<7;d++){
-        const jour=new Date(lundiSem);
-        jour.setDate(lundiSem.getDate()+d);
-        const dateStr=jour.getFullYear()+'-'+String(jour.getMonth()+1).padStart(2,'0')+'-'+String(jour.getDate()).padStart(2,'0');
-        // Compter les jours posés dans le calendrier AM
-        if(S.congesAM){
-          let estPose=false;
-          Object.values(S.congesAM).forEach(cgAm=>{
-            if(cgAm&&cgAm.jours&&cgAm.jours[dateStr]==='pose') estPose=true;
-          });
-          if(estPose) nbJoursCgAm++;
-        }
-        // Compter les fériés
-        if(isFerie(dateStr,c)) nbJoursCgAm++;
-      }
-      const estSemConges=nbJoursCgAm>=5;
+      // Détecter si la semaine est parmi les 5 semaines les plus chargées en congés
+      // (calculé une seule fois pour toutes les semaines via semsCongesSet)
+      const estSemConges=semsCongesSet&&semsCongesSet.has(s.key);
 
       let bg='var(--mp)',brd='var(--mb)',txt='var(--tx3)';
       if(estSemConges){
@@ -5506,10 +5545,21 @@ function renderRupture(c, cont){
     const dateNotif=rp.dateNotif?new Date(rp.dateNotif):null;
     const delai=parseInt(rp.delaiPrev)||0;
     const dateFinEssai=dateNotif?new Date(dateNotif.getTime()+delai*24*60*60*1000):null;
+    // Calculer la date max de fin de période d'essai
+    const [ddy2,ddm2,ddd2]=(c.dateDeb||'').split('-').map(Number);
+    const dateDebContratEssai=c.dateDeb?new Date(ddy2,ddm2-1,ddd2):null;
+    const periodeEssaiMois=c.periodeEssai||0;
+    const dateFinPeriodeEssai=dateDebContratEssai&&periodeEssaiMois>0?
+      new Date(ddy2,ddm2-1+periodeEssaiMois,ddd2):null;
+    const dateMaxNotif=dateFinPeriodeEssai?dateFinPeriodeEssai.toISOString().split('T')[0]:'';
+    const erreurEssai=dateNotif&&dateFinPeriodeEssai&&dateNotif>dateFinPeriodeEssai?
+      `<div style="color:var(--al);font-size:12px;margin-top:4px">⚠ La date de notification dépasse la fin de la période d'essai (${dateFinPeriodeEssai.toLocaleDateString('fr-FR')})</div>`:
+      '';
     essaiHtml=`<div style="margin-top:10px;display:grid;gap:8px">
       <div>
-        <label style="font-size:12px;color:var(--tx2)">Date de notification</label>
-        <input type="date" id="rp-date-notif-${cid}" value="${rp.dateNotif||''}" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+        <label style="font-size:12px;color:var(--tx2)">Date de notification${dateFinPeriodeEssai?' (fin période d'essai : '+dateFinPeriodeEssai.toLocaleDateString('fr-FR')+')':''}</label>
+        <input type="date" id="rp-date-notif-${cid}" value="${rp.dateNotif||''}" max="${dateMaxNotif}" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+        ${erreurEssai}
       </div>
       <div>
         <label style="font-size:12px;color:var(--tx2)">Délai de prévenance (jours)</label>
@@ -6032,6 +6082,11 @@ function signerAvenant(){
   // Signer
   av.signe=true;
   av.dateSigne=new Date().toISOString().slice(0,10);
+
+  // Supprimer les agendas du contrat initial dont dateDebut >= dateAvenant (inutiles)
+  if(c.agendas&&av.dateAvenant){
+    c.agendas=c.agendas.filter(ag=>ag.dateDebut<av.dateAvenant);
+  }
 
   // Créer l'agenda si nécessaire
   if(contratNeedAgenda(av)&&(!av.agendas||!av.agendas.length)){
