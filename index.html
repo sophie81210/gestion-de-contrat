@@ -2158,13 +2158,13 @@ const statutPrevuJ=getStatutPrevu(c,j);
     <div class="card" style="margin-top:10px">
       <div class="ctitle">Cumul — ${label}</div>
       <table id="recap-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
-        ${buildRecapCumul(recap,recap2)}
+        ${buildRecapCumul(recap,recap2,calcSoldeToutCompte(c, key))}
       </table>
     </div>`:`
     <div class="card" style="margin-top:10px">
       <div class="ctitle">Récapitulatif — ${label}</div>
       <table id="recap-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
-        ${buildRecapHtml(recap)}
+        ${buildRecapHtml(recap, calcSoldeToutCompte(c, key))}
       </table>
     </div>`}
     <div style="text-align:center;padding:14px 0">
@@ -2361,7 +2361,109 @@ function enregistrerFiche(contratId,key){
   }
 }
 
-function buildRecapHtml(recap){
+
+function calcSoldeToutCompte(c, key){
+  // Vérifie si c'est le mois de fin de contrat et si le mois précédent est validé
+  if(!c.rupture||!c.rupture.confirmee) return null;
+  
+  // Déterminer la date de fin de contrat
+  const rp=c.rupture;
+  let dateFinContrat=null;
+  const motif=rp.motif||'';
+  const aPreavis=motif==='retrait-enfant'||motif==='demission';
+  
+  if(rp.dateFinContrat) dateFinContrat=new Date(rp.dateFinContrat);
+  else if(rp.statutPreavis==='effectue'&&rp.dateSignif){
+    const dateSignif=new Date(rp.dateSignif);
+    const duree=calcDureePreavis(c,dateSignif);
+    dateFinContrat=calcDateFinPreavis(dateSignif,duree,rp.cumulConges||false,c);
+  } else if((rp.statutPreavis==='partiel'||rp.statutPreavis==='non-effectue')&&rp.dateFinPreavis){
+    dateFinContrat=new Date(rp.dateFinPreavis);
+  } else if(motif==='fin-essai'&&rp.dateNotif&&rp.delaiPrev){
+    dateFinContrat=new Date(new Date(rp.dateNotif).getTime()+parseInt(rp.delaiPrev)*24*60*60*1000);
+  } else if(motif==='retrait-force'&&rp.dateSignif){
+    dateFinContrat=new Date(rp.dateSignif);
+  }
+  
+  if(!dateFinContrat) return null;
+  
+  // Vérifier que key correspond au mois de fin de contrat
+  const [ky,km]=key.split('-').map(Number);
+  if(dateFinContrat.getFullYear()!==ky||dateFinContrat.getMonth()+1!==km) return null;
+  
+  // Vérifier que le mois précédent est validé
+  const moisPrecKey=km===1?(ky-1)+'-12':ky+'-'+String(km-1).padStart(2,'0');
+  const moisPrecFiche=c.fiches?.[moisPrecKey];
+  if(!moisPrecFiche?.valide) return null;
+  
+  // Calculer les éléments du solde
+  const params=S.params||{};
+  const coefNet=params.coefNet||0.7811975;
+  const aIndemniteRupture=motif==='retrait-enfant';
+  const aIndemnitePreavis=aPreavis&&(rp.statutPreavis==='non-effectue'||(rp.statutPreavis==='partiel'&&(rp.initiativePreavis==='employeur'||rp.initiativePreavis==='assmat')));
+  
+  // Régularisation définitive (46 sem)
+  let regul=null;
+  if(c.tc!=='52'&&c.tc!=='occ'){
+    const reg=calcRegularisationDefinitive(c);
+    if(reg.diff>0){
+      const source=getVersionActive(c,dateFinContrat);
+      const txBrut=source.txBrut||0;
+      const regBrut=parseFloat((reg.diff*txBrut).toFixed(2));
+      const regNet=parseFloat((regBrut*coefNet).toFixed(2));
+      const hMensuSrc=source.hMensu||0;
+      const nbJoursSrc=parseFloat(((source.nbSem||46)*hMensuSrc/12/(hMensuSrc/((source.joursFixe||[]).filter(j=>j).length||5)||1)).toFixed(2));
+      const hParJour=hMensuSrc>0&&nbJoursSrc>0?hMensuSrc/nbJoursSrc:0;
+      const hRegul=txBrut>0?regBrut/txBrut:0;
+      const joursRegul=hParJour>0?parseFloat((hRegul/hParJour).toFixed(1)):0;
+      regul={hRegul:parseFloat(hRegul.toFixed(2)),joursRegul,montantNet:regNet,montantBrut:regBrut};
+    }
+  }
+  
+  // Indemnité compensatrice de congés
+  let indemConges=null;
+  if(c.tc==='52'){
+    const s=calcSoldeConges52(c,dateFinContrat);
+    const totalNet=(s.montantAcquisNet||0)+(s.montantEnCoursNet||0);
+    const totalBrut=(s.montantAcquisBrut||0)+(s.montantEnCoursBrut||0);
+    if(totalNet>0) indemConges={montantNet:totalNet,montantBrut:totalBrut,
+      label:`Indemnité compensatrice de congés (${s.joursAcquisRestants+s.joursEnCoursRestants} j)`};
+  } else if(c.tc!=='occ'){
+    const s=calcSoldeConges46(c);
+    const totalNet=(s.montantNonVersesNet||0)+(s.montantEnCoursNet||0);
+    const totalBrut=(s.montantNonVersesBrut||0)+(s.montantEnCoursBrut||0);
+    if(totalNet>0) indemConges={montantNet:totalNet,montantBrut:totalBrut,
+      label:`Indemnité compensatrice de congés`};
+  }
+  
+  // Indemnité de préavis
+  let indemPreavis=null;
+  if(aIndemnitePreavis&&rp.dateSignif){
+    const dateSignif=new Date(rp.dateSignif);
+    const duree=calcDureePreavis(c,dateSignif);
+    const dateFinEff=rp.dateFinPreavis?new Date(rp.dateFinPreavis):dateSignif;
+    const ip=calcIndemnitePreavis(c,dateSignif,dateFinEff,duree,rp.cumulConges||false);
+    if(ip.montantBrut>0){
+      indemPreavis={
+        montantNet:ip.montantNet,
+        montantBrut:ip.montantBrut,
+        joursRestants:ip.joursRestants,
+        sens:rp.initiativePreavis==='assmat'?'remboursement':'versement'
+      };
+    }
+  }
+  
+  // Indemnité de rupture
+  let indemRupture=null;
+  if(aIndemniteRupture){
+    const ir=calcIndemniteRupture(c,dateFinContrat);
+    if(ir) indemRupture={montantBrut:ir.montantBrut};
+  }
+  
+  return {regul, indemConges, indemPreavis, indemRupture, dateFinContrat};
+}
+
+function buildRecapHtml(recap, solde){
   if(recap.donneesManquantes) return '<div style="color:var(--al);padding:10px;font-size:13px">Taux horaire ou mensualisation manquants.</div>';
   const ligneG=(label,val,gras,color)=>'<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2);'+(gras?'font-weight:700':'')+'">'+(label||'')+'</td><td style="padding:7px 4px;font-weight:'+(gras?'700':'600')+';text-align:right;'+(color?'color:'+color:'')+'">'+(val||'')+'</td></tr>';
   let html='';
@@ -2389,6 +2491,30 @@ function buildRecapHtml(recap){
   if(parseFloat(recap.indemRepasTotal)>0) html+=ligneG('Indem. repas', recap.indemRepasTotal+' €');
   if(parseFloat(recap.indemKmTotal||0)>0) html+=ligneG('Indem. km', recap.indemKmTotal+' €');
   if((recap.nbAbsEnfantTotal||0)>0) html+=ligneG('Abs. maladie enfant', recap.nbAbsEnfantTotal+'/5 j', false, recap.nbAbsEnfantTotal>=5?'var(--al)':'');
+  
+  // Éléments du solde de tout compte (dernier mois après rupture confirmée)
+  if(solde){
+    html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
+    html+='<tr><td colspan="2" style="padding:6px 4px;font-weight:700;font-size:13px;color:var(--m)">Solde de tout compte</td></tr>';
+    if(solde.regul){
+      html+=ligneG('Régularisation ('+solde.regul.hRegul.toFixed(2)+'h — '+solde.regul.joursRegul+' j)',
+        solde.regul.montantNet.toFixed(2)+' € net', true, 'var(--vt)');
+    }
+    if(solde.indemConges){
+      html+=ligneG(solde.indemConges.label,
+        solde.indemConges.montantNet.toFixed(2)+' € net ('+solde.indemConges.montantBrut.toFixed(2)+' € brut)', true, 'var(--m)');
+    }
+    if(solde.indemPreavis){
+      const sensLabel=solde.indemPreavis.sens==='remboursement'?' (à rembourser)':'';
+      html+=ligneG('Indemnité de préavis ('+solde.indemPreavis.joursRestants+' j)'+sensLabel,
+        solde.indemPreavis.montantNet.toFixed(2)+' € net', true,
+        solde.indemPreavis.sens==='remboursement'?'var(--al)':'var(--m)');
+    }
+    if(solde.indemRupture){
+      html+=ligneG('Indemnité de rupture (1/80ème)',
+        solde.indemRupture.montantBrut.toFixed(2)+' € brut', true, 'var(--m)');
+    }
+  }
   return html;
 }
 
@@ -5101,6 +5227,7 @@ function calcSoldeConges52(c, dateRupture){
   });
   const montantAcquisBrut=parseFloat((joursAcquisRestants*hJour*txBrut).toFixed(2));
   const montantAcquisNet=parseFloat((montantAcquisBrut*coefNet).toFixed(2));
+  joursEnCoursRestants=Math.ceil(joursEnCoursRestants);
   const montantEnCoursBrut=parseFloat((joursEnCoursRestants*hJour*txBrut).toFixed(2));
   const montantEnCoursNet=parseFloat((montantEnCoursBrut*coefNet).toFixed(2));
   return {joursAcquisRestants, montantAcquisBrut, montantAcquisNet, joursEnCoursRestants:parseFloat(joursEnCoursRestants.toFixed(2)), montantEnCoursBrut, montantEnCoursNet};
@@ -5145,7 +5272,7 @@ function calcSoldeConges46(c){
   });
   // Jours en cours d'acquisition
   const cgEnCours=Object.values(c.conges||{}).find(cg=>!cg.estTerminee);
-  if(cgEnCours) joursEnCours=parseFloat((cgEnCours.acqBrut||0).toFixed(2));
+  if(cgEnCours) joursEnCours=Math.ceil(cgEnCours.acqBrut||0);
   // Calcul montant en cours : meilleur entre 10ème et maintien
   const dateSit=getDateSituationAu(c)||new Date();
   const anneeRefDebut=dateSit.getMonth()>=5?dateSit.getFullYear():dateSit.getFullYear()-1;
@@ -7111,4 +7238,27 @@ function toast(msg){
 initJ('j-fixe','fixe');
 </script>
 </body>
-</html>
+</html  if(solde){
+    html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
+    html+='<tr><td colspan="2" style="padding:6px 4px;font-weight:700;font-size:13px;color:var(--m)">Solde de tout compte</td></tr>';
+    if(solde.regul){
+      html+=ligneG('Régularisation ('+solde.regul.hRegul.toFixed(2)+'h — '+solde.regul.joursRegul+' j)',
+        solde.regul.montantNet.toFixed(2)+' € net', true, 'var(--vt)');
+    }
+    if(solde.indemConges){
+      html+=ligneG(solde.indemConges.label,
+        solde.indemConges.montantNet.toFixed(2)+' € net ('+solde.indemConges.montantBrut.toFixed(2)+' € brut)', true, 'var(--m)');
+    }
+    if(solde.indemPreavis){
+      const sensLabel=solde.indemPreavis.sens==='remboursement'?' (à rembourser)':'';
+      html+=ligneG('Indemnité de préavis ('+solde.indemPreavis.joursRestants+' j)'+sensLabel,
+        solde.indemPreavis.montantNet.toFixed(2)+' € net', true,
+        solde.indemPreavis.sens==='remboursement'?'var(--al)':'var(--m)');
+    }
+    if(solde.indemRupture){
+      html+=ligneG('Indemnité de rupture (1/80ème)',
+        solde.indemRupture.montantBrut.toFixed(2)+' € brut', true, 'var(--m)');
+    }
+  }
+  return html;
+}>
