@@ -2666,7 +2666,7 @@ function majFicheRepas(contratId,key,idx,ri,checked){
     const recapEl=document.getElementById('recap-'+contratId+'-'+key);
     if(recapEl){
       const recapNew=calcRecapFiche(c,ficheRep);
-      recapEl.outerHTML=buildRecapHtml(recapNew);
+      recapEl.innerHTML=buildRecapHtml(recapNew, calcSoldeToutCompte(c,key));
     }
   }
 }
@@ -5433,18 +5433,27 @@ function calcIndemniteRupture(c, dateFin){
 function rafraichirRupture(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c) return;
-  // Lire les valeurs des champs sans sauvegarder
   if(!c.rupture) c.rupture={};
+  // Corriger les années à 2 chiffres dans les dates
+  const fixDate=(d)=>{
+    if(!d) return d;
+    const parts=d.split('-');
+    if(parts.length===3&&parseInt(parts[0])<100){
+      parts[0]=String(parseInt(parts[0])+2000);
+      return parts.join('-');
+    }
+    return d;
+  };
   const motif=document.getElementById('rp-motif-'+cid)?.value||c.rupture.motif||'';
-  const dateSignif=document.getElementById('rp-date-signif-'+cid)?.value||c.rupture.dateSignif||'';
-  const dateNotif=document.getElementById('rp-date-notif-'+cid)?.value||c.rupture.dateNotif||'';
-  const delaiPrev=document.getElementById('rp-delai-prev-'+cid)?.value||c.rupture.delaiPrev||'';
+  const dateSignif=fixDate(document.getElementById('rp-date-signif-'+cid)?.value||c.rupture.dateSignif||'');
+  const dateNotif=fixDate(document.getElementById('rp-date-notif-'+cid)?.value||c.rupture.dateNotif||'');
+  const delaiPrev=Math.min(8,parseInt(document.getElementById('rp-delai-prev-'+cid)?.value||c.rupture.delaiPrev||'0')||0);
   const statutPreavis=document.querySelector(`input[name="rp-statut-preavis-${cid}"]:checked`)?.value||c.rupture.statutPreavis||'';
   const initiativePreavis=document.getElementById('rp-initiative-'+cid)?.value||c.rupture.initiativePreavis||'';
-  const dateFinPreavis=document.getElementById('rp-fin-preavis-'+cid)?.value||c.rupture.dateFinPreavis||'';
-  const dateFinContrat=document.getElementById('rp-fin-contrat-'+cid)?.value||c.rupture.dateFinContrat||'';
-  const cumulConges=document.getElementById('rp-cumul-conges-'+cid)?.checked||c.rupture.cumulConges||false;
-  c._ruptureTemp={motif,dateSignif,dateNotif,delaiPrev:parseInt(delaiPrev)||0,statutPreavis,initiativePreavis,dateFinPreavis,dateFinContrat,cumulConges};
+  const dateFinPreavis=fixDate(document.getElementById('rp-fin-preavis-'+cid)?.value||c.rupture.dateFinPreavis||'');
+  const dateFinContrat=fixDate(document.getElementById('rp-fin-contrat-'+cid)?.value||c.rupture.dateFinContrat||'');
+  const cumulConges=document.getElementById('rp-cumul-conges-'+cid)?.checked??c.rupture.cumulConges??false;
+  c._ruptureTemp={motif,dateSignif,dateNotif,delaiPrev,statutPreavis,initiativePreavis,dateFinPreavis,dateFinContrat,cumulConges};
   const cont=document.getElementById('det-content');
   renderRupture(c,cont);
 }
@@ -5480,7 +5489,8 @@ function confirmerRupture(cid){
 function annulerRupture(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c) return;
-  c.rupture={};
+  // Garder les options, juste annuler la confirmation
+  if(c.rupture) c.rupture.confirmee=false;
   delete c._ruptureTemp;
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1) S.contrats[cidx]=c;
@@ -5491,6 +5501,8 @@ function annulerRupture(cid){
 
 function renderRupture(c, cont){
   if(!cont) return;
+  // Si rupture confirmée, utiliser uniquement c.rupture (pas _ruptureTemp)
+  if(c.rupture?.confirmee) delete c._ruptureTemp;
   const rp=c._ruptureTemp||c.rupture||{};
   const cid=c.id;
 
@@ -5625,8 +5637,14 @@ function renderRupture(c, cont){
           erreurDateHtml=`<div style="color:var(--al);font-size:12px;margin-top:4px">⚠ La date de fin de préavis ne peut pas dépasser la date légale (${dateFinLegaleStr})</div>`;
         }
         dateFinHtml=`<div style="margin-top:8px">
-          <label style="font-size:12px;color:var(--tx2)">Date de fin du préavis ${statutPreavis==='non-effectue'?'(= date de signification)':''}</label>
-          <input type="date" id="rp-fin-preavis-${cid}" value="${rp.dateFinPreavis||''}" max="${dateFinLegale?dateFinLegale.toISOString().split('T')[0]:''}" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+          <label style="font-size:12px;color:var(--tx2)">Date de fin du préavis effectué</label>
+          ${(()=>{
+            const valFinPr=rp.dateFinPreavis||'';
+            const ficheFinPrKey=valFinPr?valFinPr.slice(0,7):null;
+            const ficheFinPrValidee=ficheFinPrKey&&c.fiches?.[ficheFinPrKey]?.valide;
+            return '<input type="date" id="rp-fin-preavis-'+cid+'" value="'+valFinPr+'" max="'+(dateFinLegale?dateFinLegale.toISOString().split('T')[0]:'')+'" onchange="rafraichirRupture('+cid+')" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">'
+              +(ficheFinPrValidee?'<div style="color:var(--al);font-size:12px;margin-top:4px">⚠ La fiche de ce mois est déjà validée</div>':'');
+          })()}
           ${erreurDateHtml}
         </div>`;
       }
@@ -5682,17 +5700,21 @@ function renderRupture(c, cont){
     const erreurEssai=dateNotif&&dateFinPeriodeEssai&&dateNotif>dateFinPeriodeEssai?
       `<div style="color:var(--al);font-size:12px;margin-top:4px">⚠ La date de notification dépasse la fin de la période d'essai (${dateFinPeriodeEssai.toLocaleDateString('fr-FR')})</div>`:
       '';
+    // Blocage si fiche déjà validée pour la date de fin
+    const dateFinEssaiStr=dateFinEssai?dateFinEssai.toISOString().split('T')[0]:'';
+    const ficheFinEssaiKey=dateFinEssai?(dateFinEssai.getFullYear()+'-'+String(dateFinEssai.getMonth()+1).padStart(2,'0')):null;
+    const ficheFinEssaiValidee=ficheFinEssaiKey&&c.fiches?.[ficheFinEssaiKey]?.valide;
     essaiHtml=`<div style="margin-top:10px;display:grid;gap:8px">
+      <div>
+        <label style="font-size:12px;color:var(--tx2)">Délai de prévenance si prévu au contrat (max 8 jours)</label>
+        <input type="number" id="rp-delai-prev-${cid}" value="${rp.delaiPrev||''}" min="0" max="8" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+      </div>
       <div>
         <label style="font-size:12px;color:var(--tx2)">Date de notification${dateFinPeriodeEssai?' (fin période d\'essai : '+dateFinPeriodeEssai.toLocaleDateString('fr-FR')+')':''}</label>
         <input type="date" id="rp-date-notif-${cid}" value="${rp.dateNotif||''}" max="${dateMaxNotif}" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
         ${erreurEssai}
       </div>
-      <div>
-        <label style="font-size:12px;color:var(--tx2)">Délai de prévenance (jours)</label>
-        <input type="number" id="rp-delai-prev-${cid}" value="${rp.delaiPrev||''}" min="0" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
-      </div>
-      ${dateFinEssai?`<div style="font-size:13px;color:var(--tx2)">Date de fin de contrat : <strong>${dateFinEssai.toLocaleDateString('fr-FR')}</strong></div>`:''}
+      ${dateFinEssai?`<div style="font-size:13px;color:var(--tx2)">Date de fin de contrat : <strong>${dateFinEssai.toLocaleDateString('fr-FR')}</strong>${ficheFinEssaiValidee?' <span style="color:var(--al)">⚠ Fiche déjà validée</span>':''}</div>`:''}
     </div>`;
   }
 
@@ -5763,8 +5785,7 @@ function renderRupture(c, cont){
   }
 
   const confirmeeHtml=rp.confirmee?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px">
-    ⚠ Rupture confirmée.
-    <button class="btn bd bsm" style="margin-left:8px" onclick="annulerRupture(${cid})">✕ Annuler</button>
+    ✓ Rupture confirmée — <button class="btn bd bsm" style="margin-left:8px" onclick="annulerRupture(${cid})">✕ Annuler la confirmation</button>
   </div>`:'';
 
   cont.innerHTML=`
