@@ -1919,23 +1919,30 @@ function ouvrirFiche(contratId,key){
   });
   // Marquer les jours après la date de fin de contrat comme hors-contrat
   // (si rupture confirmée et mois précédent validé)
-  const soldeCloture=calcSoldeToutCompte(c,key);
-  if(soldeCloture&&soldeCloture.dateFinContrat&&!fiche.valide){
-    const dateFinStr=soldeCloture.dateFinContrat.toISOString().split('T')[0];
-    fiche.jours.forEach(j=>{
-      if(j.date>dateFinStr){
-        if(!j.statut||j.statut==='prevu'||j.statut==='non-prevu'||j.statut==='repos'){
-          j._horsContratCloture=true;
-          j.statut='hors-contrat';
-        }
-      } else {
-        // Réinitialiser si la date a changé
-        if(j._horsContratCloture){
-          delete j._horsContratCloture;
-          delete j.statut;
+  if(c.rupture?.confirmee){
+    const dateFinCloture=getDateFinContrat(c);
+    if(dateFinCloture){
+      const [ky,km]=key.split('-').map(Number);
+      const moisPrecKeyCl=km===1?(ky-1)+'-12':ky+'-'+String(km-1).padStart(2,'0');
+      const moisPrecValideCl=c.fiches?.[moisPrecKeyCl]?.valide;
+      if(moisPrecValideCl&&!fiche.valide){
+        const dateFinStr=dateFinCloture.toISOString().split('T')[0];
+        const [fky,fkm]=key.split('-').map(Number);
+        if(dateFinCloture.getFullYear()===fky&&dateFinCloture.getMonth()+1===fkm){
+          fiche.jours.forEach(j=>{
+            if(j.date>dateFinStr){
+              if(!j.statut||j.statut==='prevu'||j.statut==='non-prevu'||j.statut==='repos'){
+                j._horsContratCloture=true;
+                j.statut='hors-contrat';
+              }
+            } else if(j._horsContratCloture){
+              delete j._horsContratCloture;
+              delete j.statut;
+            }
+          });
         }
       }
-    });
+    }
   }
   const [annee,moisStr]=key.split('-');
   const mois=parseInt(moisStr)-1;
@@ -2382,27 +2389,36 @@ function enregistrerFiche(contratId,key){
 }
 
 
+function getDateFinContrat(c){
+  const rp=c.rupture||{};
+  const motif=rp.motif||'';
+  const aPreavis=motif==='retrait-enfant'||motif==='demission';
+  if(rp.statutPreavis==='effectue'&&rp.dateSignif){
+    const dateSignif=new Date(rp.dateSignif);
+    const duree=calcDureePreavis(c,dateSignif);
+    return calcDateFinPreavis(dateSignif,duree,rp.cumulConges||false,c);
+  }
+  if((rp.statutPreavis==='partiel'||rp.statutPreavis==='non-effectue')&&rp.dateFinPreavis){
+    return new Date(rp.dateFinPreavis);
+  }
+  if(motif==='fin-essai'&&rp.dateNotif&&rp.delaiPrev){
+    return new Date(new Date(rp.dateNotif).getTime()+parseInt(rp.delaiPrev)*24*60*60*1000);
+  }
+  if(motif==='retrait-force'&&rp.dateSignif){
+    return new Date(rp.dateSignif);
+  }
+  return null;
+}
+
 function calcSoldeToutCompte(c, key){
   // Vérifie si c'est le mois de fin de contrat et si le mois précédent est validé
   if(!c.rupture||!c.rupture.confirmee) return null;
   
   // Déterminer la date de fin de contrat
   const rp=c.rupture;
-  let dateFinContrat=null;
   const motif=rp.motif||'';
   const aPreavis=motif==='retrait-enfant'||motif==='demission';
-  
-  if(rp.statutPreavis==='effectue'&&rp.dateSignif){
-    const dateSignif=new Date(rp.dateSignif);
-    const duree=calcDureePreavis(c,dateSignif);
-    dateFinContrat=calcDateFinPreavis(dateSignif,duree,rp.cumulConges||false,c);
-  } else if((rp.statutPreavis==='partiel'||rp.statutPreavis==='non-effectue')&&rp.dateFinPreavis){
-    dateFinContrat=new Date(rp.dateFinPreavis);
-  } else if(motif==='fin-essai'&&rp.dateNotif&&rp.delaiPrev){
-    dateFinContrat=new Date(new Date(rp.dateNotif).getTime()+parseInt(rp.delaiPrev)*24*60*60*1000);
-  } else if(motif==='retrait-force'&&rp.dateSignif){
-    dateFinContrat=new Date(rp.dateSignif);
-  }
+  const dateFinContrat=getDateFinContrat(c);
   
   if(!dateFinContrat) return null;
   
@@ -5491,6 +5507,23 @@ function formaterSaisieDate(input){
   if(v.length>5) v=v.slice(0,5)+'/'+v.slice(5);
   if(v.length>10) v=v.slice(0,10);
   input.value=v;
+  // Vérifier la validité quand la date est complète (10 chars)
+  const errId=input.id+'-err';
+  let errEl=document.getElementById(errId);
+  if(v.length===10){
+    const iso=dateTexteVersISO(v);
+    if(!iso){
+      if(!errEl){errEl=document.createElement('div');errEl.id=errId;errEl.style.cssText='color:var(--al);font-size:11px;margin-top:2px';input.parentNode.appendChild(errEl);}
+      errEl.textContent='⚠ Date invalide';
+      input.style.borderColor='var(--al)';
+    } else {
+      if(errEl) errEl.remove();
+      input.style.borderColor='';
+    }
+  } else {
+    if(errEl) errEl.remove();
+    input.style.borderColor='';
+  }
 }
 
 function rafraichirRupture(cid){
@@ -5522,7 +5555,11 @@ function rafraichirRupture(cid){
   const dateFinPreavis=dateTexteVersISO(document.getElementById('rp-fin-preavis-'+cid)?.value||'')||fixDate(c.rupture.dateFinPreavis||'');
   const dateFinContrat=fixDate(c.rupture.dateFinContrat||'');
   const cumulConges=document.getElementById('rp-cumul-conges-'+cid)?.checked??c.rupture.cumulConges??false;
-  c._ruptureTemp={motif,dateSignif,dateNotif,delaiPrev,statutPreavis,initiativePreavis,dateFinPreavis,dateFinContrat,cumulConges};
+  // Bloquer date de signification antérieure au début de contrat
+  const dateDebContratMin=c.dateDeb||'';
+  const dateSignifFinal=dateSignif&&dateSignif>=dateDebContratMin?dateSignif:'';
+  const dateNotifFinal=dateNotif&&dateNotif>=dateDebContratMin?dateNotif:'';
+  c._ruptureTemp={motif,dateSignif:dateSignifFinal,dateNotif:dateNotifFinal,delaiPrev,statutPreavis,initiativePreavis,dateFinPreavis,dateFinContrat,cumulConges};
   const cont=document.getElementById('det-content');
   renderRupture(c,cont);
 }
