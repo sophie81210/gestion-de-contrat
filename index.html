@@ -236,11 +236,13 @@ input[type=time].fi{width:auto;min-width:92px}
       <button class="tab on" onclick="goTo('auj')">Aujourd&rsquo;hui</button>
       <button class="tab" onclick="goTo('cont')">Contrats</button>
       <button class="tab" onclick="goToCgAm()">Congés Ass’Mat</button>
+      <button class="tab" id="tab-archives" style="display:none" onclick="goTo('arch')">Archives</button>
     </div>
   </div>
 
   <div id="pg-auj" class="content"></div>
   <div id="pg-cont" class="content" style="display:none"></div>
+  <div id="pg-arch" class="content" style="display:none"></div>
 
   <div id="pg-form" class="content" style="display:none">
     <div class="card">
@@ -503,7 +505,7 @@ input[type=time].fi{width:auto;min-width:92px}
 <script>
 const JOURS=['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'];
 const MOIS=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
-const PAGES=['pg-auj','pg-cont','pg-form','pg-det','pg-cgam','pg-params'];
+const PAGES=['pg-auj','pg-cont','pg-form','pg-det','pg-cgam','pg-params','pg-arch'];
 const ADMIN_EMAIL='coeurdassmat@gmail.com';
 const PARAMS_DEFAUT={
   coefficients:[
@@ -772,10 +774,11 @@ function goTo(p){
   if(p!=='form'&&p!=='det') S.enEd=null;
   PAGES.forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
-  const titres={auj:"Aujourd\u2019hui",cont:'Contrats',form:'Nouveau contrat',det:'Fiche contrat'};
+  const titres={auj:"Aujourd\u2019hui",cont:'Contrats',form:'Nouveau contrat',det:'Fiche contrat',arch:'Archives'};
   document.getElementById('hdr-title').textContent=titres[p]||p;
   if(p==='auj'){document.getElementById('pg-auj').style.display='block';document.querySelectorAll('.tab')[0].classList.add('on');renderAuj();}
   else if(p==='cont'){document.getElementById('pg-cont').style.display='block';document.querySelectorAll('.tab')[1].classList.add('on');renderCont();}
+  else if(p==='arch'){document.getElementById('pg-arch').style.display='block';document.getElementById('tab-archives').classList.add('on');renderArch();}
   else if(p==='form'){
     document.getElementById('pg-form').style.display='block';
     if(!S.enEd) resetForm(); // Reset seulement si nouveau contrat
@@ -794,6 +797,9 @@ else if(p==='params'){
          
 // ══ AUJOURD'HUI ══
 function renderAuj(){
+  // Mettre à jour visibilité tab archives
+  const tabArchAuj=document.getElementById('tab-archives');
+  if(tabArchAuj){const hasArch=(S.contrats||[]).some(ct=>ct.archive);tabArchAuj.style.display=hasArch?'block':'none';}
   const c=document.getElementById('pg-auj');
 
   // 🔥 Filtrer uniquement les contrats marqués avec la cloche
@@ -1025,11 +1031,52 @@ function reinitBoutonsMinuit(){
 }
 
 // ══ CONTRATS ══
+function renderArch(){
+  const c=document.getElementById('pg-arch');
+  if(!c)return;
+  const archives=(S.contrats||[]).filter(ct=>ct.archive);
+  if(!archives.length){c.innerHTML='<p style="padding:16px;color:#888">Aucun contrat archivé.</p>';return;}
+  c.innerHTML=archives.map(ct=>`
+  <div class="tuile" onclick="voirC(${ct.id})" style="opacity:.8">
+    ${ct.nom||'?'} <span style="font-size:11px;color:#999;margin-left:8px">[Archivé]</span>
+  </div>`).join('');
+}
+
+function archiverContrat(c){
+  // Supprimer fiches futures à la date de fin
+  const dateFinContrat=getDateFinContrat(c);
+  if(dateFinContrat&&c.fiches){
+    const [fy,fm]=[(dateFinContrat.getFullYear()),dateFinContrat.getMonth()+1];
+    Object.keys(c.fiches).forEach(key=>{
+      const [ky,km]=key.split('-').map(Number);
+      // Supprimer fiches après le mois de fin (pas le mois de fin lui-même)
+      if(ky>fy||(ky===fy&&km>fm)){
+        delete c.fiches[key];
+      }
+    });
+  }
+  // Supprimer agendas démarrant après la fin
+  if(dateFinContrat&&c.agendas){
+    const dateFinStr=dateFinContrat.toISOString().split('T')[0];
+    c.agendas=c.agendas.filter(ag=>!ag.dateDeb||ag.dateDeb<=dateFinStr);
+  }
+  // Marquer archivé
+  c.archive=true;
+  // Retirer de la pointeuse
+  if(S.showTodayMap) S.showTodayMap[c.id]=false;
+  // Afficher/cacher tab archives
+  const tabArch=document.getElementById('tab-archives');
+  if(tabArch) tabArch.style.display='block';
+}
+
 function renderCont(){
   const c = document.getElementById('pg-cont');
 
   // 🔥 On prépare la liste selon la page active
-  let list = S.contrats;
+  // Mettre à jour visibilité tab archives
+  const tabArchCont=document.getElementById('tab-archives');
+  if(tabArchCont){const hasArch=(S.contrats||[]).some(ct=>ct.archive);tabArchCont.style.display=hasArch?'block':'none';}
+  let list = S.contrats.filter(ct=>!ct.archive);
 
  // 🔥 On mappe sur la liste filtrée
   const t = list.map(ct => {
@@ -1091,8 +1138,10 @@ function renderDet(id){
   if(!c){goTo('cont');return;}
   document.getElementById('hdr-title').textContent=c.nom||'Fiche';
   const pg=document.getElementById('pg-det');
-  const tabsHtml=DET_TABS.map(t=>`<button class="det-tab ${t===S.detTab?'on':''}" onclick="switchDetTab('${t}',${id})">${DET_LABELS[t]}</button>`).join('');
+  const tabsHtml=DET_TABS.filter(t=>!(t==='regularisation'&&c.tc==='52')).map(t=>`<button class="det-tab ${t===S.detTab?'on':''}" onclick="switchDetTab('${t}',${id})">${DET_LABELS[t]}</button>`).join('');
   pg.innerHTML=`<div class="det-tabs">${tabsHtml}</div><div id="det-content"></div>`;
+  // Si onglet régularisation non disponible pour 52 sem, basculer
+  if(S.detTab==='regularisation'&&c.tc==='52') S.detTab='presence';
   renderDetTab(id,S.detTab);
 }
 function switchDetTab(tab,id){
@@ -2749,6 +2798,26 @@ function validerFiche(contratId,key){
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   saveToFirestore();
+  // Déclencher archivage si rupture confirmée et fiche du mois de fin validée
+  if(c.rupture&&c.rupture.confirmee){
+    const dateFinContrat=getDateFinContrat(c);
+    if(dateFinContrat){
+      const [fy,fm]=[dateFinContrat.getFullYear(),dateFinContrat.getMonth()+1];
+      const [ky,km]=key.split('-').map(Number);
+      if(ky===fy&&km===fm&&!c.archive){
+        archiverContrat(c);
+        S.contrats[cidx]=c;
+        localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+        saveToFirestore();
+        // Afficher tab archives
+        const tabArch=document.getElementById('tab-archives');
+        if(tabArch) tabArch.style.display='block';
+        toast('Contrat de '+c.nom+' archivé.');
+        goTo('arch');
+        return;
+      }
+    }
+  }
   toast('Feuille de '+MOIS[c.fiches[key].mois]+' validée !');
   renderDetTab(contratId,'presence');
 }
