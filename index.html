@@ -1917,6 +1917,26 @@ function ouvrirFiche(contratId,key){
     j.heureFinPrev=prevus.fin;
     j.planVarPrevu=!!(prevus.planVar);
   });
+  // Marquer les jours après la date de fin de contrat comme hors-contrat
+  // (si rupture confirmée et mois précédent validé)
+  const soldeCloture=calcSoldeToutCompte(c,key);
+  if(soldeCloture&&soldeCloture.dateFinContrat&&!fiche.valide){
+    const dateFinStr=soldeCloture.dateFinContrat.toISOString().split('T')[0];
+    fiche.jours.forEach(j=>{
+      if(j.date>dateFinStr){
+        if(!j.statut||j.statut==='prevu'||j.statut==='non-prevu'||j.statut==='repos'){
+          j._horsContratCloture=true;
+          j.statut='hors-contrat';
+        }
+      } else {
+        // Réinitialiser si la date a changé
+        if(j._horsContratCloture){
+          delete j._horsContratCloture;
+          delete j.statut;
+        }
+      }
+    });
+  }
   const [annee,moisStr]=key.split('-');
   const mois=parseInt(moisStr)-1;
   const label=MOIS[mois]+' '+annee;
@@ -5406,15 +5426,11 @@ function calcIndemnitePreavis(c, dateSignif, dateFinEffective, dureePreavis, cum
     const r=calcRecapFiche(c,ficheSignif);
     if(r.hTheoriques||parseFloat(r.hAbs||0)>0) hTheoriques=parseFloat(r.hMensu||hMensu);
   }
-  // Montant = (hMensu * txNet / hTheoriques) * hPrevu_préavis
+  // Montant = (hMensu * txBrut / hTheoriques) * hPrevu_préavis (non soumis à cotisations)
   const hPrevJour=hHebdo/6;
   const hPrevPreavis=joursRestants*hPrevJour;
-  const tauxJour=(hMensu*(source.txBrut||0)*(source.txNet&&source.txBrut?(parseFloat(source.txNet)/source.txBrut):0.7811975))/hTheoriques;
-  const montantNet=parseFloat((tauxJour*hPrevPreavis).toFixed(2));
-  const montantBrut=parseFloat((joursRestants*hPrevJour*txBrut).toFixed(2));
-  const params=S.params||{};
-  const coefNet=params.coefNet||0.7811975;
-  return {montantBrut, montantNet:parseFloat((montantBrut*coefNet).toFixed(2)), joursRestants};
+  const montantBrut=parseFloat(((hMensu*txBrut/hTheoriques)*hPrevPreavis).toFixed(2));
+  return {montantBrut, montantNet:montantBrut, joursRestants};
 }
 
 function calcIndemniteRupture(c, dateFin){
@@ -5447,12 +5463,17 @@ function corrigerDateRupture(input){
 function dateTexteVersISO(val){
   if(!val) return '';
   val=val.trim();
-  // Accepte JJ/MM/AAAA ou JJ-MM-AAAA
-  const m=val.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-  if(m) return m[3]+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');
-  // Déjà en ISO
-  if(/^\d{4}-\d{2}-\d{2}$/.test(val)) return val;
-  return '';
+  let j,m,y;
+  const match=val.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if(match){j=parseInt(match[1]);m=parseInt(match[2]);y=parseInt(match[3]);}
+  else if(/^\d{4}-\d{2}-\d{2}$/.test(val)){
+    const p=val.split('-').map(Number);y=p[0];m=p[1];j=p[2];
+  } else return '';
+  // Validation plage
+  if(y<2000||y>2099) return '';
+  if(m<1||m>12) return '';
+  if(j<1||j>31) return '';
+  return String(y)+'-'+String(m).padStart(2,'0')+'-'+String(j).padStart(2,'0');
 }
 
 // Convertit AAAA-MM-JJ → JJ/MM/AAAA
