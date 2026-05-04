@@ -4643,7 +4643,7 @@ function renderAgendas(c){
   }
   const aujourd=new Date();
 
-  const agendasAffiches=[...c.agendas].reverse();
+  const agendasAffiches=[...(c.agendas||[])].reverse();
   let htmlTermines='';
   let htmlActifs='';
   
@@ -4656,6 +4656,19 @@ function renderAgendas(c){
       +' → '+dFin.toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
 
     const semaines=getSemsAgenda(ag,c);
+    // Calculer semsCongesSet pour cet agenda (5 semaines les plus chargées en congés)
+    const semsCongesScore=semaines.map(s=>{
+      let nb=0;
+      for(let d=0;d<7;d++){
+        const jour=new Date(s.lundi);
+        jour.setDate(s.lundi.getDate()+d);
+        const dateStr=jour.getFullYear()+'-'+String(jour.getMonth()+1).padStart(2,'0')+'-'+String(jour.getDate()).padStart(2,'0');
+        if(S.congesAM) Object.values(S.congesAM).forEach(cgAm=>{if(cgAm&&cgAm.jours&&cgAm.jours[dateStr]==='pose') nb++;});
+        if(typeof isFerie==='function'&&isFerie(dateStr,c)) nb++;
+      }
+      return{key:s.key,nb};
+    }).filter(x=>x.nb>=5).sort((a,b)=>b.nb-a.nb||(a.key<b.key?-1:1));
+    const semsCongesSet=new Set(semsCongesScore.slice(0,5).map(x=>x.key));
     const warnings=getAgendaWarnings(c,ag,semaines,semsCongesSet);
     const warningHtml=warnings.length
       ?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">
@@ -6624,7 +6637,8 @@ function signerAvenant(){
   // Supprimer agendas obsolètes : ceux qui débutent après ou au même mois que l'avenant
   // mais en conservant ceux qui contiennent des mois avant l'avenant (avenant en cours de mois)
   const debutMoisAvent=av.dateAvenant.slice(0,7)+'-01';
-  if(c.agendas&&av.dateAvenant){
+  if(!c.agendas) c.agendas=[];
+  if(av.dateAvenant){
     c.agendas=c.agendas.filter(ag=>{
       const debAg=ag.dateDebut||ag.dateDeb||'';
       // Conserver si l'agenda a débuté avant le mois de l'avenant
