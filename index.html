@@ -2577,19 +2577,20 @@ function calcRegul52(c, key){
       const [ay,am]=k2.split('-').map(Number);
       const dateF=new Date(ay,am-1,1);
       if(dateF<debutRef||dateF>finRef) return;
-      if(fiche2.valide){
-        const src=getVersionActive(c,dateF);
-        brutAnnuel+=parseFloat(src.hMensu||0)*parseFloat(src.txBrut||0);
-      }
       const src=getVersionActive(c,dateF);
-      const hSemMoyF=(parseFloat(src.hMensu||0)*12)/(parseFloat(src.nbSem||52));
+      const hMensuSrc=parseFloat(src.hMensu||c.hMensu||0);
+      const txBrutSrc=parseFloat(src.txBrut||c.txBrut||0);
+      if(fiche2.valide) brutAnnuel+=hMensuSrc*txBrutSrc;
+      const hSemMoyF=hMensuSrc*12/(parseFloat(src.nbSem||52));
       const hJourCg=hSemMoyF/6;
-      fiche2.jours.forEach(j=>{
+      (fiche2.jours||[]).forEach(j=>{
         if(j.statut!=='conges-acq'&&j.statut!=='conges-anticipe') return;
-        const dateVeille=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
+        const [jy,jm,jd]=j.date.split('-').map(Number);
+        const dateVeille=new Date(jy,jm-1,jd);
         dateVeille.setDate(dateVeille.getDate()-1);
         const srcV=getVersionActive(c,dateVeille);
-        const txNetV=srcV.txNet||(srcV.txBrut?srcV.txBrut*0.7811975:0);
+        const coefNetV=(S.params&&S.params.coefNet)||0.7811975;
+        const txNetV=parseFloat(srcV.txBrut||0)*coefNetV;
         maintienVerse+=hJourCg*txNetV;
       });
     });
@@ -3959,8 +3960,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   let montantCongesNonAcquis=0;
   let nbCongesNonAcquis=0;
   if(c.tc==='52'){
-    const nbSem52=46; // toujours 52 sem pour ce type
-    const hSemMoy52=hMensu*12/(source.nbSem||52);
+    const hSemMoy52=hMensu*12/(sourceActif.nbSem||52);
     const hJourConge=hSemMoy52/6;
     fiche.jours.forEach(j=>{
       if(j.statut==='conges-acq'||j.statut==='conges-anticipe'){
@@ -6236,41 +6236,26 @@ function genCumul(c){
       const finRef=new Date(anneeRef+1,4,31); // 31 mai anneeRef+1
       let maintienVerse=0;
       let brutAnnuel=0;
-      Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
-        if(!fiche.valide) return; // on ne compte que les validées pour le brut
-        const [ay,am]=key.split('-').map(Number);
-        const dateF=new Date(ay,am-1,1);
-        if(dateF<debutRef||dateF>finRef) return;
-        // Brut annuel pour le 10ème
-        const src=getVersionActive(c,dateF);
-        brutAnnuel+=parseFloat(src.hMensu||0)*parseFloat(src.txBrut||0);
-        // Maintien versé : jours conges-acq/anticipe * hSemMoy/6 * txNet veille
-        const hSemMoyF=(parseFloat(src.hMensu||0)*12)/(parseFloat(src.nbSem||52));
-        const hJourCg=hSemMoyF/6;
-        fiche.jours.forEach(j=>{
-          if(j.statut!=='conges-acq'&&j.statut!=='conges-anticipe') return;
-          const dateVeille=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
-          dateVeille.setDate(dateVeille.getDate()-1);
-          const srcV=getVersionActive(c,dateVeille);
-          const txNetV=srcV.txNet||(srcV.txBrut?srcV.txBrut*0.7811975:0);
-          maintienVerse+=hJourCg*txNetV;
-        });
-      });
-      // Aussi les fiches non validées (pour voir avant validation)
-      Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
-        if(fiche.valide) return;
-        const [ay,am]=key.split('-').map(Number);
+      Object.entries(c.fiches||{}).forEach(([kF,ficheF])=>{
+        const [ay,am]=kF.split('-').map(Number);
         const dateF=new Date(ay,am-1,1);
         if(dateF<debutRef||dateF>finRef) return;
         const src=getVersionActive(c,dateF);
-        const hSemMoyF=(parseFloat(src.hMensu||0)*12)/(parseFloat(src.nbSem||52));
+        const hMensuSrc=parseFloat(src.hMensu||c.hMensu||0);
+        const txBrutSrc=parseFloat(src.txBrut||c.txBrut||0);
+        // Brut annuel : fiches validées seulement
+        if(ficheF.valide) brutAnnuel+=hMensuSrc*txBrutSrc;
+        // Maintien : toutes fiches (validées et non validées) pour voir avant validation
+        const hSemMoyF=hMensuSrc*12/(parseFloat(src.nbSem||52));
         const hJourCg=hSemMoyF/6;
-        fiche.jours.forEach(j=>{
+        (ficheF.jours||[]).forEach(j=>{
           if(j.statut!=='conges-acq'&&j.statut!=='conges-anticipe') return;
-          const dateVeille=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
+          const [jy,jm,jd]=j.date.split('-').map(Number);
+          const dateVeille=new Date(jy,jm-1,jd);
           dateVeille.setDate(dateVeille.getDate()-1);
           const srcV=getVersionActive(c,dateVeille);
-          const txNetV=srcV.txNet||(srcV.txBrut?srcV.txBrut*0.7811975:0);
+          const coefNetV=(S.params&&S.params.coefNet)||0.7811975;
+          const txNetV=parseFloat(srcV.txBrut||0)*coefNetV;
           maintienVerse+=hJourCg*txNetV;
         });
       });
