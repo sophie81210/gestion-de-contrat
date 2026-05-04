@@ -2561,7 +2561,7 @@ function buildRecapHtml(recap, solde){
   } else {
     // Partie haute : mensu + absences + taux
     html+=ligneG('Heures mensualisées', (recap.hMensu||0).toFixed(2)+' h'+(recap.txNetExact&&recap.hMensu?' — '+(recap.hMensu*recap.txNetExact).toFixed(2)+' € net':''));
-    if(parseFloat(recap.hAbs)>0) html+=ligneG('Heures d\'absence', recap.hAbsDeduit.toFixed(2)+' h — '+recap.montantAbsences.toFixed(2)+' €','','var(--al)');
+    if(parseFloat(recap.hAbs)>0) html+=ligneG('Heures d\'absence', '− '+recap.hAbsDeduit.toFixed(2)+' h — '+recap.montantAbsences.toFixed(2)+' €','','var(--al)');
     html+=ligneG('Taux horaire net', recap.txNet+' €', true);
     // Séparateur
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
@@ -2578,6 +2578,27 @@ function buildRecapHtml(recap, solde){
   if(parseFloat(recap.indemKmTotal||0)>0) html+=ligneG('Indem. km', recap.indemKmTotal+' €');
   if((recap.nbAbsEnfantTotal||0)>0) html+=ligneG('Abs. maladie enfant', recap.nbAbsEnfantTotal+'/5 j', false, recap.nbAbsEnfantTotal>=5?'var(--al)':'');
   
+  // Ligne total payé
+  {
+    const sNet=parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0);
+    const indemE=parseFloat(recap.indemEntretienTotal||0);
+    const indemR=parseFloat(recap.indemRepasTotal||0);
+    const indemK=parseFloat(recap.indemKmTotal||0);
+    // Indemnités solde si présentes
+    let indemSolde=0;
+    if(solde){
+      if(solde.regul) indemSolde+=parseFloat(solde.regul.montantNet||0);
+      if(solde.indemConges) indemSolde+=parseFloat(solde.indemConges.montantNet||0);
+      if(solde.indemPreavis){
+        // Remboursement = déduire, versement = ajouter
+        indemSolde+=(solde.indemPreavis.sens==='remboursement'?-1:1)*parseFloat(solde.indemPreavis.montantNet||0);
+      }
+      if(solde.indemRupture) indemSolde+=parseFloat(solde.indemRupture.montantBrut||0);
+    }
+    const total=sNet+indemE+indemR+indemK+indemSolde;
+    html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
+    html+=ligneG('Total payé avec indemnités', total.toFixed(2)+' €', true, 'var(--m)');
+  }
   // Éléments du solde de tout compte (dernier mois après rupture confirmée)
   if(solde){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
@@ -2592,8 +2613,9 @@ function buildRecapHtml(recap, solde){
     }
     if(solde.indemPreavis){
       const sensLabel=solde.indemPreavis.sens==='remboursement'?' (à rembourser)':'';
+      const prefixe=solde.indemPreavis.sens==='remboursement'?'− ':'';
       html+=ligneG('Indemnité de préavis ('+solde.indemPreavis.joursRestants+' j)'+sensLabel,
-        solde.indemPreavis.montantNet.toFixed(2)+' € net', true,
+        prefixe+solde.indemPreavis.montantNet.toFixed(2)+' €', true,
         solde.indemPreavis.sens==='remboursement'?'var(--al)':'var(--m)');
     }
     if(solde.indemRupture){
@@ -2758,9 +2780,27 @@ function majFicheRepas(contratId,key,idx,ri,checked){
 }
 
 function validerFiche(contratId,key){
-  if(!confirm('Cette feuille ne pourra plus être modifiée ensuite. Confirmer la validation ?')) return;
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c||!c.fiches||!c.fiches[key])return;
+  // Détecter si c'est la dernière feuille (rupture confirmée + mois de fin)
+  let msgConfirm='Cette feuille ne pourra plus être modifiée ensuite. Confirmer la validation ?';
+  if(c.rupture&&c.rupture.confirmee&&!c.archive){
+    const dateFinContrat=getDateFinContrat(c);
+    if(dateFinContrat){
+      const [fy,fm]=[dateFinContrat.getFullYear(),dateFinContrat.getMonth()+1];
+      const [ky,km]=key.split('-').map(Number);
+      if(ky===fy&&km===fm){
+        msgConfirm='⚠ ATTENTION — Dernière feuille de présence
+
+Après validation, le contrat sera archivé et ne pourra plus être modifié.
+
+Les fiches et agendas futurs seront supprimés.
+
+Confirmer la validation et l'archivage du contrat ?';
+      }
+    }
+  }
+  if(!confirm(msgConfirm)) return;
   let manquant=false;
   let manquantJours=[];
   c.fiches[key].jours.forEach(j=>{
@@ -5843,7 +5883,9 @@ function renderRupture(c, cont){
             const valFinPr=rp.dateFinPreavis||'';
             const ficheFinPrKey=valFinPr?valFinPr.slice(0,7):null;
             const ficheFinPrValidee=ficheFinPrKey&&c.fiches?.[ficheFinPrKey]?.valide;
+            const dateFinPrLocale=valFinPr?(()=>{const p=valFinPr.split('-');return new Date(parseInt(p[0]),parseInt(p[1])-1,parseInt(p[2])).toLocaleDateString('fr-FR');})():'';
             return '<input type="text" id="rp-fin-preavis-'+cid+'" value="'+dateISOversTexte(valFinPr)+'" placeholder="JJ/MM/AAAA" oninput="formaterSaisieDate(this)" onchange="rafraichirRupture('+cid+')" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">'
+              +(valFinPr?'<div style="font-size:12px;color:var(--tx2);margin-top:4px">Fin du préavis effectué : <strong>'+dateFinPrLocale+' inclus</strong></div>':'')
               +(ficheFinPrValidee?'<div style="color:var(--al);font-size:12px;margin-top:4px">⚠ La fiche de ce mois est déjà validée</div>':'');
           })()}
           ${erreurDateHtml}
@@ -5853,7 +5895,7 @@ function renderRupture(c, cont){
 
     if(statutPreavis==='effectue'){
       dateFinHtml=`<div style="margin-top:8px;background:var(--mp);border-radius:6px;padding:8px;font-size:13px">
-        Date de fin de contrat : <strong>${dateFinLegaleStr||'—'}</strong>
+        Date de fin de contrat : <strong>${dateFinLegaleStr?dateFinLegaleStr+' inclus':'—'}</strong>
         ${dateFinLegale?`<input type="hidden" id="rp-fin-contrat-${cid}" value="${dateFinLegale.toISOString().split('T')[0]}">`:'' }
       </div>`;
     }
@@ -5869,7 +5911,7 @@ function renderRupture(c, cont){
           <input type="checkbox" id="rp-cumul-conges-${cid}" ${cumulConges?'checked':''} onchange="rafraichirRupture(${cid})">
           Possibilité de cumuler les jours de congés avec les jours de préavis
         </label>
-        ${dateFinLegale?`<div style="font-size:12px;color:var(--tx2);margin-top:4px">Date de fin de préavis : <strong>${dateFinLegaleStr}</strong></div>`:''}
+        ${dateFinLegale?`<div style="font-size:12px;color:var(--tx2);margin-top:4px">Date de fin de préavis : <strong>${dateFinLegaleStr} inclus</strong></div>`:''}
       </div>
       <div style="margin-top:10px">
         <label style="font-size:12px;color:var(--tx2)">Statut du préavis</label>
@@ -7473,8 +7515,9 @@ initJ('j-fixe','fixe');
     }
     if(solde.indemPreavis){
       const sensLabel=solde.indemPreavis.sens==='remboursement'?' (à rembourser)':'';
+      const prefixe=solde.indemPreavis.sens==='remboursement'?'− ':'';
       html+=ligneG('Indemnité de préavis ('+solde.indemPreavis.joursRestants+' j)'+sensLabel,
-        solde.indemPreavis.montantNet.toFixed(2)+' € net', true,
+        prefixe+solde.indemPreavis.montantNet.toFixed(2)+' €', true,
         solde.indemPreavis.sens==='remboursement'?'var(--al)':'var(--m)');
     }
     if(solde.indemRupture){
