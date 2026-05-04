@@ -4266,7 +4266,10 @@ function calcTot(prefix){
 
 // ══ SEMAINES TYPES ══
 function getSemISO(date){
-  const d=new Date(date);d.setHours(0,0,0,0);
+  // Accepte Date ou string ISO; évite le bug UTC avec les strings
+  let d;
+  if(date instanceof Date) d=new Date(date.getFullYear(),date.getMonth(),date.getDate());
+  else{const p=String(date).split('-').map(Number);d=new Date(p[0],p[1]-1,p[2]);}
   d.setDate(d.getDate()+4-(d.getDay()||7));
   const y=new Date(d.getFullYear(),0,1);
   return Math.ceil((((d-y)/86400000)+1)/7);
@@ -4274,7 +4277,9 @@ function getSemISO(date){
 
          function getSemAnnee(date){
   // Retourne l'année ISO de la semaine (peut différer de l'année calendaire)
-  const d=new Date(date);
+  let d;
+  if(date instanceof Date) d=new Date(date.getFullYear(),date.getMonth(),date.getDate());
+  else{const p=String(date).split('-').map(Number);d=new Date(p[0],p[1]-1,p[2]);}
   d.setDate(d.getDate()+4-(d.getDay()||7));
   return d.getFullYear();
 }
@@ -4651,7 +4656,7 @@ function renderAgendas(c){
       +' → '+dFin.toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
 
     const semaines=getSemsAgenda(ag,c);
-    const warnings=getAgendaWarnings(c,ag,semaines);
+    const warnings=getAgendaWarnings(c,ag,semaines,semsCongesSet);
     const warningHtml=warnings.length
       ?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">
         ${warnings.map(w=>'⚠ '+w).join('<br>')}
@@ -4871,11 +4876,13 @@ function setAgendaPinceau(cid,agid,val){
 }
          
 
-function getAgendaWarnings(c,ag,semaines){
+function getAgendaWarnings(c,ag,semaines,semsCongesSet){
   const warnings=[];
   // Avertir si des semaines ne sont pas pointées (ni off, ni colorées en congés)
   const nonPointees=semaines.filter(s=>{
     if(ag.semaines&&ag.semaines[s.key]) return false; // pointée
+    // Exclure les semaines congés (colorées violet = pointage automatique)
+    if(semsCongesSet&&semsCongesSet.has(s.key)) return false;
     // Vérifier si colorée en congés (≥5 jours posés+fériés dans le calendrier AM)
     if(S.congesAM){
       let nbJours=0;
@@ -5028,10 +5035,12 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId){
       }
 
       const opacite=verrouillee?'opacity:0.4;':'';
-      const clickable=modeModif&&!verrouillee;
-     const onclick=clickable?`onclick="peindreAgenda('${s.key}',${cid},${ag.id})"`:
-        verrouillee?`title="Semaine verrouillée (feuille validée)"`:
-        modeModif?`title="Sélectionnez d'abord un pinceau"`:
+      // Semaines congés : non cliquables (pointées automatiquement)
+      const clickable=modeModif&&!verrouillee&&!estSemConges;
+      const onclick=clickable?`onclick="peindreAgenda('${s.key}',${cid},${ag.id})"`:
+        estSemConges?`title="Semaine de cong\u00E9s (pointage automatique)"`:
+        verrouillee?`title="Semaine verrouill\u00E9e (feuille valid\u00E9e)"`:
+        modeModif?`title="S\u00E9lectionnez d'abord un pinceau"`:
         '';
 
       calHtml+=`<div style="min-width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:4px;font-size:11px;font-weight:600;cursor:${clickable?'pointer':'default'};background:${bg};color:${txt};border:1px solid ${brd};${opacite}" ${onclick}>${s.sem}</div>`;
@@ -5083,7 +5092,7 @@ function validerModifAgenda(cid,agid){
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
   const semaines=getSemsAgenda(ag,source);
-  const warnings=getAgendaWarnings(source,ag,semaines);
+  const warnings=getAgendaWarnings(source,ag,semaines,semsCongesSet);
   // Vérifier s'il y a des semaines non pointées (bloquant) vs autres warnings (non bloquant)
   const nonPointeesWarning=warnings.filter(w=>w.includes('non pointée'));
   const autresWarnings=warnings.filter(w=>!w.includes('non pointée'));
@@ -6612,25 +6621,44 @@ function signerAvenant(){
   av.signe=true;
   av.dateSigne=new Date().toISOString().slice(0,10);
 
-  // Supprimer les agendas du contrat initial dont dateDebut >= dateAvenant (inutiles)
+  // Supprimer agendas obsolètes : ceux qui débutent après ou au même mois que l'avenant
+  // mais en conservant ceux qui contiennent des mois avant l'avenant (avenant en cours de mois)
+  const debutMoisAvent=av.dateAvenant.slice(0,7)+'-01';
   if(c.agendas&&av.dateAvenant){
-    c.agendas=c.agendas.filter(ag=>ag.dateDebut<av.dateAvenant);
+    c.agendas=c.agendas.filter(ag=>{
+      const debAg=ag.dateDebut||ag.dateDeb||'';
+      // Conserver si l'agenda a débuté avant le mois de l'avenant
+      return debAg<debutMoisAvent;
+    });
   }
+  // Faire de même pour les agendas des avenants précédents signés
+  c.avenants.forEach(avPrec=>{
+    if(avPrec.id===avid||!avPrec.signe||!avPrec.agendas) return;
+    avPrec.agendas=avPrec.agendas.filter(ag=>{
+      const debAg=ag.dateDebut||ag.dateDeb||'';
+      return debAg<debutMoisAvent;
+    });
+  });
 
   // Créer l'agenda si nécessaire
   if(contratNeedAgenda(av)&&(!av.agendas||!av.agendas.length)){
-   const parts=av.dateAvenant.split('-');
-  const dRef=new Date(parseInt(parts[0]),parseInt(parts[1])-1,parseInt(parts[2]));
+    const avParts=av.dateAvenant.split('-').map(Number);
+    const dRef=new Date(avParts[0],avParts[1]-1,avParts[2]);
     const dernierMois=new Date(dRef.getFullYear()+1,dRef.getMonth(),0);
-    const premierMoisStr=dRef.toISOString().slice(0,10);
+    const debutMoisAv=av.dateAvenant.slice(0,7)+'-01';
+    const debutParts=debutMoisAv.split('-').map(Number);
+    const dDebut=new Date(debutParts[0],debutParts[1]-1,debutParts[2]);
     const dernierMoisStr=dernierMois.getFullYear()+'-'+String(dernierMois.getMonth()+1).padStart(2,'0')+'-'+String(dernierMois.getDate()).padStart(2,'0');
-   const debutMoisAv=av.dateAvenant.slice(0,7)+'-01';
+    const dFinParts=dernierMoisStr.split('-').map(Number);
+    const dFin=new Date(dFinParts[0],dFinParts[1]-1,dFinParts[2]);
+    // Initialiser c.agendas si besoin (contrat occ sans agendas)
+    if(!c.agendas) c.agendas=[];
     av.agendas=[{
       id:Date.now(),
       dateDebut:debutMoisAv,
       dateFin:dernierMoisStr,
-      _semDebut:{sem:getSemISO(premierMoisStr),annee:getSemAnnee(premierMoisStr)},
-      _semFin:{sem:getSemISO(dernierMoisStr),annee:getSemAnnee(dernierMoisStr)},
+      _semDebut:{sem:getSemISO(dDebut),annee:getSemAnnee(dDebut)},
+      _semFin:{sem:getSemISO(dFin),annee:getSemAnnee(dFin)},
       semaines:{}
     }];
   }
