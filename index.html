@@ -2574,26 +2574,41 @@ function calcRegul52(c, key){
     // Calculer maintien et 10ème
     let maintienVerse=0, brutAnnuel=0;
     const coefNetV52=(S.params&&S.params.coefNet)||0.7811975;
+    const debutAppart52=new Date(anneeRef,4,1);
+    const finAppart52=new Date(anneeRef+1,3,30);
+    const tousAcq52=[];
     Object.entries(c.fiches||{}).forEach(([k2,fiche2])=>{
       const [ay,am]=k2.split('-').map(Number);
       const dateF=new Date(ay,am-1,1);
       const src=getVersionActive(c,dateF);
       const hMensuSrc=parseFloat(src.hMensu||c.hMensu||0);
       const txBrutSrc=parseFloat(src.txBrut||c.txBrut||0);
-      // Brut : fiches validées dans la période d'acquisition seulement
       if(fiche2.valide&&dateF>=debutRef&&dateF<=finRef) brutAnnuel+=hMensuSrc*txBrutSrc;
-      // Maintien : toutes fiches sans limite de date
-      const hSemMoyF=hMensuSrc*12/(parseFloat(src.nbSem||52));
-      const hJourCg=hSemMoyF/6;
       (fiche2.jours||[]).forEach(j=>{
         if(j.statut!=='conges-acq'&&j.statut!=='conges-anticipe') return;
-        const [jy,jm,jd]=j.date.split('-').map(Number);
-        const dateVeille=new Date(jy,jm-1,jd);
-        dateVeille.setDate(dateVeille.getDate()-1);
-        const srcV=getVersionActive(c,dateVeille);
-        const txNetV=parseFloat(srcV.txBrut||0)*coefNetV52;
-        maintienVerse+=hJourCg*txNetV;
+        tousAcq52.push({j,src,hMensuSrc});
       });
+    });
+    tousAcq52.sort((a,b)=>a.j.date.localeCompare(b.j.date));
+    const cgData52=c.conges[anneeRef]||{};
+    let droitsRestants52=cgData52.acquis||0;
+    tousAcq52.forEach(({j,src,hMensuSrc})=>{
+      let appartient=false;
+      const [jy,jm,jd]=j.date.split('-').map(Number);
+      const dateJ=new Date(jy,jm-1,jd);
+      if(j.statut==='conges-anticipe'){
+        appartient=dateJ>=debutAppart52&&dateJ<=finAppart52;
+      } else {
+        if(droitsRestants52>0){appartient=true;droitsRestants52--;}
+      }
+      if(!appartient) return;
+      const hSemMoyF=hMensuSrc*12/(parseFloat(src.nbSem||52));
+      const hJourCg=hSemMoyF/6;
+      const dateVeille=new Date(jy,jm-1,jd);
+      dateVeille.setDate(dateVeille.getDate()-1);
+      const srcV=getVersionActive(c,dateVeille);
+      const txNetV=parseFloat(srcV.txBrut||0)*coefNetV52;
+      maintienVerse+=hJourCg*txNetV;
     });
     maintienVerse=parseFloat(maintienVerse.toFixed(2));
     const coefNet=(S.params&&S.params.coefNet)||0.7811975;
@@ -6258,6 +6273,11 @@ function genCumul(c){
       let maintienVerse=0;
       let brutAnnuel=0;
       const coefNetV=(S.params&&S.params.coefNet)||0.7811975;
+      // Période d'appartenance de l'anneeRef : mai anneeRef → avril anneeRef+1
+      const debutAppart=new Date(anneeRef,4,1);   // 1er mai anneeRef
+      const finAppart=new Date(anneeRef+1,3,30);  // 30 avril anneeRef+1
+      // Collecter tous les jours conges-acq triés par date pour attribution FIFO
+      const tousAcq=[];
       Object.entries(c.fiches||{}).forEach(([kF,ficheF])=>{
         const [ay,am]=kF.split('-').map(Number);
         const dateF=new Date(ay,am-1,1);
@@ -6266,18 +6286,33 @@ function genCumul(c){
         const txBrutSrc=parseFloat(src.txBrut||c.txBrut||0);
         // Brut annuel : fiches validées dans la période d'acquisition seulement
         if(ficheF.valide&&dateF>=debutRef&&dateF<=finRef) brutAnnuel+=hMensuSrc*txBrutSrc;
-        // Maintien : toutes fiches sans limite de date (les congés peuvent être pris après finRef)
-        const hSemMoyF=hMensuSrc*12/(parseFloat(src.nbSem||52));
-        const hJourCg=hSemMoyF/6;
         (ficheF.jours||[]).forEach(j=>{
           if(j.statut!=='conges-acq'&&j.statut!=='conges-anticipe') return;
-          const [jy,jm,jd]=j.date.split('-').map(Number);
-          const dateVeille=new Date(jy,jm-1,jd);
-          dateVeille.setDate(dateVeille.getDate()-1);
-          const srcV=getVersionActive(c,dateVeille);
-          const txNetV=parseFloat(srcV.txBrut||0)*coefNetV;
-          maintienVerse+=hJourCg*txNetV;
+          tousAcq.push({j, src, hMensuSrc});
         });
+      });
+      // Trier par date
+      tousAcq.sort((a,b)=>a.j.date.localeCompare(b.j.date));
+      // Attribution : conges-acq → FIFO sur anneeRef ; conges-anticipe → par date mai→avril
+      let droitsRestants=cg.acquis||0;
+      tousAcq.forEach(({j,src,hMensuSrc})=>{
+        let appartientAnneeRef=false;
+        const [jy,jm,jd]=j.date.split('-').map(Number);
+        const dateJ=new Date(jy,jm-1,jd);
+        if(j.statut==='conges-anticipe'){
+          appartientAnneeRef=dateJ>=debutAppart&&dateJ<=finAppart;
+        } else {
+          // conges-acq : FIFO, attribuer à anneeRef si il reste des droits
+          if(droitsRestants>0){appartientAnneeRef=true;droitsRestants--;}
+        }
+        if(!appartientAnneeRef) return;
+        const hSemMoyF=hMensuSrc*12/(parseFloat(src.nbSem||52));
+        const hJourCg=hSemMoyF/6;
+        const dateVeille=new Date(jy,jm-1,jd);
+        dateVeille.setDate(dateVeille.getDate()-1);
+        const srcV=getVersionActive(c,dateVeille);
+        const txNetV=parseFloat(srcV.txBrut||0)*coefNetV;
+        maintienVerse+=hJourCg*txNetV;
       });
       maintienVerse=parseFloat(maintienVerse.toFixed(2));
       const coefNet=(S.params&&S.params.coefNet)||0.7811975;
