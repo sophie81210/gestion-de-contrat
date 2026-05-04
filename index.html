@@ -2105,7 +2105,7 @@ function ouvrirFiche(contratId,key){
         const vol=getVolumeSem(j._date);
         const volData=vol&&sourceActive.planVar?sourceActive.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===vol):null;
         const volLabel=sourceActive.planType==='min'?(agendaMois?.semaines?.[j.semKey]?(sourceActive.hMin+'h/sem minimum'):'Volume non défini'):(vol?(vol+(volData?' — '+volData.h+'h/sem':'')):'Volume non défini');
-        prevuCell=`<td rowspan="${semRowspan[j.semKey]}" style="padding:4px 6px;font-size:11px;color:var(--tx);vertical-align:middle;text-align:center;border-left:2px solid var(--mb)">${volLabel}</td>`;
+        prevuCell=`<td rowspan="${semRowspan[j.semKey]}" style="padding:4px 6px;font-size:12px;color:var(--tx);vertical-align:middle;text-align:center;border-left:2px solid var(--mb)">${volLabel}</td>`;
       }
       // sinon pas de cellule (fusionnée)
     } else {
@@ -2115,7 +2115,7 @@ const statutPrevuJ=getStatutPrevu(c,j);
         ?`<button onclick="confirmerHeuresPrevues(${contratId},'${key}',${idx})"
             style="width:20px;height:36px;background:#3a6b4a;color:#fff;border:none;border-radius:3px;font-size:12px;cursor:pointer;margin-left:3px;flex-shrink:0"
             title="Confirmer les heures pr\u00E9vues">\u2713</button>`:'';
-      prevuCell=`<td style="padding:3px 4px;font-size:11px;color:var(--tx);white-space:nowrap">
+      prevuCell=`<td style="padding:3px 4px;font-size:12px;color:var(--tx);white-space:nowrap">
         <div style="display:flex;align-items:center">
           <div>${j.heureDebPrev||'\u2014'}<br>${j.heureFinPrev||'\u2014'}</div>
           ${cocheVerte}
@@ -2949,50 +2949,83 @@ function calcCongesContrat(c){
               const volMatch=c.planVar.find(v=>v.jours&&joursIdx.every(idx=>v.jours[idx]));
               if(volMatch) jMaxSem=volMatch.j||joursMax;
             }
-            // Compter les jours actifs (prévu, travaillé, congés, abs) hors hors-contrat
-            const joursComptesSem=joursActifs.filter(j=>
-              ['prevu','travaille','abs-partielle','abs-rem','conges-acq','conges-anticipe','arret','abs-non','ferie'].includes(j.statut||getStatutPrevu(c,j))
-            ).length;
-            const prorataActifs=Math.min(joursComptesSem,jMaxSem); // plafonné au max du volume
-            const prorata=Math.max(0,(prorataActifs-absNonRem)/jMaxSem);
+            // Compter les jours actifs pour plan var
+            // Normaux : prevu, travaille, abs-partielle, abs-rem → 1
+            // conges-acq, conges-anticipe → 1/6
+            // ferie → 1 si dans les jours du volume actif
+            // abs-non, conges-am → 0
+            let joursNormauxPV=0;
+            let joursConges16PV=0;
+            joursActifs.forEach(j=>{
+              const sj=j.statut||getStatutPrevu(c,j);
+              if(['prevu','travaille','abs-partielle','abs-rem'].includes(sj)){
+                joursNormauxPV++;
+              } else if(['conges-acq','conges-anticipe'].includes(sj)){
+                joursConges16PV++;
+              } else if(sj==='ferie'){
+                // Vérifier si le jour est dans le volume actif (jours du planVar)
+                const jourIdx=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])).getDay();
+                const jourIdxISO=jourIdx===0?6:jourIdx-1;
+                const volActif=c.planVar?c.planVar.find(v=>v.jours&&v.jours[jourIdxISO]):null;
+                if(volActif) joursNormauxPV++;
+              }
+              // abs-non, conges-am → ignorés
+            });
+            const contribNormPV=Math.min(joursNormauxPV,jMaxSem)/jMaxSem;
+            const contribCgPV=joursConges16PV*(1/6)/jMaxSem;
+            const contribArretPV=absArret*(0.8)/jMaxSem;
+            const prorata=Math.max(0,contribNormPV+contribCgPV);
             totalSemaines+=prorata;
-            totalSemainesArret+=absArret>0?absArret/jMaxSem:0;
+            totalSemainesArret+=contribArretPV;
           }
         } else {
-          // Pour fixe/sem/min : compter uniquement les jours prévus travaillés
-         const joursPrevus=jours.filter(j=>{
-          const statutJ=j.statut||getStatutPrevu(c,j);
-          if(['prevu','travaille','abs-partielle','abs-rem','arret','abs-non'].includes(statutJ)) return true;
-if(['conges-acq','conges-anticipe'].includes(statutJ)){
-  // Vérifier que le jour est prévu au contrat
-  const jourIdx2=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])).getDay();
-  const jourIdxISO2=jourIdx2===0?6:jourIdx2-1;
-  const sourceJ2=getVersionActive(c,new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])));
-  if(c.th==='fixe'&&sourceJ2.joursFixe) return !!(sourceJ2.joursFixe[jourIdxISO2]);
-  if(c.th==='sem'&&sourceJ2.semTypes) return sourceJ2.semTypes.some(st=>st.jours&&st.jours[jourIdxISO2]);
-  return false;
-}
-           if(statutJ==='ferie'){
+          // Pour fixe/sem/min
+          // joursMaxSem selon la source active
+          const dateRepSem=new Date(jours[0].date.split('-')[0],parseInt(jours[0].date.split('-')[1])-1,parseInt(jours[0].date.split('-')[2]));
+          const sourceSem=getVersionActive(c,dateRepSem);
+          let joursMaxSem=joursMax;
+          if(sourceSem.joursFixe) joursMaxSem=sourceSem.joursFixe.filter(j=>j).length||joursMax;
+          else if(sourceSem.semTypes&&sourceSem.semTypes[0]?.jours) joursMaxSem=sourceSem.semTypes[0].jours.filter(j=>j).length||joursMax;
+
+          // Jours normaux : prevu, travaille, abs-rem, abs-partielle → comptent pour 1
+          // arret → comptabilisé séparément à 0.8
+          // abs-non, conges-am → ne comptent pas
+          // conges-acq, conges-anticipe → comptent pour 1/6 (règle légale)
+          // ferie → compte pour 1 seulement si jour habituellement travaillé
+          let joursNormaux=0;
+          let joursConges16=0; // jours à compter pour 1/6
+
+          jours.forEach(j=>{
+            const statutJ=j.statut||getStatutPrevu(c,j);
+            if(['prevu','travaille','abs-partielle','abs-rem'].includes(statutJ)){
+              joursNormaux++;
+            } else if(['conges-acq','conges-anticipe'].includes(statutJ)){
+              // Toujours 1/6, quelle que soit le jour de la semaine
+              joursConges16++;
+            } else if(statutJ==='ferie'){
+              // Compte pour 1 seulement si le jour est habituellement travaillé
               const jourIdx=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])).getDay();
               const jourIdxISO=jourIdx===0?6:jourIdx-1;
-              // Vérifier si ce jour est prévu au contrat (indépendamment du statut férié)
-             const sourceJF=getVersionActive(c,new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])));
-  if(c.th==='fixe'&&sourceJF.joursFixe) return !!(sourceJF.joursFixe[jourIdxISO]);
-  if(c.th==='sem'&&sourceJF.semTypes) return sourceJF.semTypes.some(st=>st.jours&&st.jours[jourIdxISO]);
-              return false;
+              const sourceJF=getVersionActive(c,new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])));
+              let estTravaille=false;
+              if(c.th==='fixe'&&sourceJF.joursFixe) estTravaille=!!(sourceJF.joursFixe[jourIdxISO]);
+              else if(c.th==='sem'&&sourceJF.semTypes) estTravaille=sourceJF.semTypes.some(st=>st.jours&&st.jours[jourIdxISO]);
+              else if(c.th==='plan'&&c.planType==='min'&&sourceJF.joursFixe) estTravaille=!!(sourceJF.joursFixe[jourIdxISO]);
+              if(estTravaille) joursNormaux++;
             }
-            return false;
-          }).length;
-          if(joursPrevus>0){
-            // Calculer joursMax selon la source active pour cette semaine
-            const dateRepSem=new Date(jours[0].date.split('-')[0],parseInt(jours[0].date.split('-')[1])-1,parseInt(jours[0].date.split('-')[2]));
-            const sourceSem=getVersionActive(c,dateRepSem);
-            let joursMaxSem=joursMax; // fallback
-            if(sourceSem.joursFixe) joursMaxSem=sourceSem.joursFixe.filter(j=>j).length||joursMax;
-            else if(sourceSem.semTypes&&sourceSem.semTypes[0]?.jours) joursMaxSem=sourceSem.semTypes[0].jours.filter(j=>j).length||joursMax;
-            const prorata=Math.max(0,(joursPrevus-absNonRem)/joursMaxSem);
+            // abs-non, conges-am, repos, non-prevu, hors-contrat → ignorés
+          });
+
+          // Contribution en fraction de semaine
+          // Normaux : joursNormaux / joursMaxSem
+          // Congés 1/6 : joursConges16 * (1/6) / joursMaxSem
+          const contributionNormale=joursNormaux/joursMaxSem;
+          const contributionConges=joursConges16*(1/6)/joursMaxSem;
+          const contributionArret=absArret*(0.8)/joursMaxSem;
+          const prorata=Math.max(0,contributionNormale+contributionConges);
+          if(prorata>0||contributionArret>0){
             totalSemaines+=prorata;
-            totalSemainesArret+=absArret>0?absArret/joursMaxSem:0;
+            totalSemainesArret+=contributionArret;
           }
         }
       } else {
