@@ -5527,29 +5527,20 @@ function calcDateFinPreavis(dateSignif, dureePreavis, cumulConges, c){
 }
 
 function calcIndemnitePreavis(c, dateSignif, dateFinEffective, dureePreavis, cumulConges){
-  const dateFinLegale=calcDateFinPreavis(dateSignif,dureePreavis,true,c); // toujours en jours calendaires pour le montant
+  if(!dureePreavis) return {montantBrut:0,montantNet:0,joursRestants:0};
+  const dateFinLegale=calcDateFinPreavis(dateSignif,dureePreavis,true,c);
   if(dateFinEffective>=dateFinLegale) return {montantBrut:0,montantNet:0,joursRestants:0};
   const joursTotal=dureePreavis.unite==='jours'?dureePreavis.duree:Math.round((dateFinLegale-dateSignif)/(1000*60*60*24)+1);
-  const joursEffectues=Math.max(0,Math.round((dateFinEffective-dateSignif)/(1000*60*60*24)));
+  // +1 pour inclure le jour de fin effectif (ex: du 10 au 15 = 6 jours effectués)
+  const joursEffectues=Math.max(0,Math.round((dateFinEffective-dateSignif)/(1000*60*60*24))+1);
   const joursRestants=Math.max(0,joursTotal-joursEffectues);
+  if(joursRestants===0) return {montantBrut:0,montantNet:0,joursRestants:0};
   const source=getVersionActive(c,dateSignif);
   const hMensu=source.hMensu||0;
-  const nbSem=source.nbSem||46;
-  const hHebdo=hMensu*12/nbSem;
   const txBrut=source.txBrut||0;
-  const txNet=source.txNet||0;
-  // hTheoriques du mois de la signification
-  const moisSignif=dateSignif.getFullYear()+'-'+String(dateSignif.getMonth()+1).padStart(2,'0');
-  const ficheSignif=c.fiches?.[moisSignif];
-  let hTheoriques=hMensu; // fallback
-  if(ficheSignif){
-    const r=calcRecapFiche(c,ficheSignif);
-    if(r.hTheoriques||parseFloat(r.hAbs||0)>0) hTheoriques=parseFloat(r.hMensu||hMensu);
-  }
-  // Montant = (hMensu * txBrut / hTheoriques) * hPrevu_préavis (non soumis à cotisations)
-  const hPrevJour=hHebdo/6;
-  const hPrevPreavis=joursRestants*hPrevJour;
-  const montantBrut=parseFloat(((hMensu*txBrut/hTheoriques)*hPrevPreavis).toFixed(2));
+  // Formule : (hMensu × txBrut / nbJoursCalendairesMois) × joursRestants
+  const nbJoursMois=new Date(dateSignif.getFullYear(),dateSignif.getMonth()+1,0).getDate();
+  const montantBrut=parseFloat(((hMensu*txBrut/nbJoursMois)*joursRestants).toFixed(2));
   return {montantBrut, montantNet:montantBrut, joursRestants};
 }
 
