@@ -2631,9 +2631,10 @@ function buildRecapHtml(recap, solde, regul52){
   } else {
     // Partie haute : mensu + absences + taux
     html+=ligneG('Heures mensualisées', (recap.hMensu||0).toFixed(2)+' h'+(recap.txNetExact&&recap.hMensu?' — '+(recap.hMensu*recap.txNetExact).toFixed(2)+' € net':''));
-    if(parseFloat(recap.montantCongesPayesMois||0)>0) html+=ligneG('dont cong\u00E9s pay\u00E9s ('+recap.nbCongesPayesMois+' j)', recap.montantCongesPayesMois.toFixed(2)+' \u20AC net', false, 'var(--vt)');
+    if(parseFloat(recap.montantCongesPayesMois||0)>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont congés payés ('+recap.nbCongesPayesMois+' j) — '+recap.montantCongesPayesMois.toFixed(2)+' € net</td></tr>';
+    if(recap.regul52Fiche) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--m);font-weight:600">Régularisation congés '+recap.regul52Fiche.anneeRef+'/'+(recap.regul52Fiche.anneeRef+1)+' (10ème) — '+recap.regul52Fiche.diff.toFixed(2)+' € net</td></tr>';
     if(parseFloat(recap.hAbs)>0) html+=ligneG('Heures d\'absence', '\u2212 '+recap.hAbsDeduit.toFixed(2)+' h \u2014 '+recap.montantAbsences.toFixed(2)+' \u20AC','','var(--al)');
-    if(parseFloat(recap.montantCongesNonAcquis||0)>0) html+=ligneG('dont cong\u00E9s non acquis ('+recap.nbCongesNonAcquis+' j)', recap.montantCongesNonAcquis.toFixed(2)+' \u20AC d\u00E9duits', false, 'var(--al)');
+    if(parseFloat(recap.montantCongesNonAcquis||0)>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--al)">dont congés non acquis ('+recap.nbCongesNonAcquis+' j) — '+recap.montantCongesNonAcquis.toFixed(2)+' € déduits</td></tr>';
     if(parseFloat(recap.hComp||0)>0||parseFloat(recap.hSup||0)>0) html+=ligneG('Taux horaire net', recap.txNet+' \u20AC', true);
     // Séparateur
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
@@ -2929,6 +2930,16 @@ function validerFiche(contratId,key){
         goTo('arch');
         return;
       }
+    }
+  }
+  // Marquer régularisation 52 versée si applicable
+  if(c.tc==='52'&&c.conges){
+    const recap=calcRecapFiche(c,c.fiches[key]);
+    if(recap.regul52Fiche){
+      const ar=recap.regul52Fiche.anneeRef;
+      if(c.conges[ar]) c.conges[ar].regulVersee=true;
+      localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+      saveToFirestore();
     }
   }
   toast('Feuille de '+MOIS[c.fiches[key].mois]+' validée !');
@@ -3998,7 +4009,33 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     });
     montantCongesPayesMois=parseFloat(montantCongesPayesMois.toFixed(2));
     montantCongesNonAcquis=parseFloat(montantCongesNonAcquis.toFixed(2));
+  }
 
+  // Régularisation 52 sem : afficher sur le mois de paiement (mois suivant dernier conges-acq)
+  let regul52Fiche=null;
+  if(c.tc==='52'&&c.conges){
+    const ficheKey=Object.keys(c.fiches||{}).find(k=>c.fiches[k]===fiche);
+    const [ficheY,ficheM]=ficheKey?ficheKey.split('-').map(Number):[0,0];
+    if(ficheY&&ficheM){
+      const moisPrecM=ficheM===1?12:ficheM-1;
+      const moisPrecY=ficheM===1?ficheY-1:ficheY;
+      const moisPrecKey=moisPrecY+'-'+String(moisPrecM).padStart(2,'0');
+      const moisPrecValide=!!(c.fiches?.[moisPrecKey]?.valide);
+      if(moisPrecValide){
+        Object.entries(c.conges).forEach(([ar,cg])=>{
+          const anneeRef=parseInt(ar);
+          if(cg.regulVersee) return;
+          const butoir=ficheY===anneeRef+1&&ficheM===5;
+          const tousPosDansRef=cg.restants===0;
+          if(!tousPosDansRef&&!butoir) return;
+          const fichePrec=c.fiches?.[moisPrecKey];
+          const precACongesAcq=fichePrec?.jours?.some(j=>j.statut==='conges-acq');
+          if(!precACongesAcq&&!butoir) return;
+          const r=calcRegul52(c,moisPrecKey);
+          if(r&&r.diff>0) regul52Fiche={...r,anneeRef};
+        });
+      }
+    }
   }
 
   return{
@@ -4019,7 +4056,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     indemCongeMois, indemCongeNbJours,
     montantCongesPayesMois, nbCongesPayesMois,
     montantCongesNonAcquis, nbCongesNonAcquis,
-    regul52: null // calculé séparément dans buildRecapHtml si nécessaire
+    regul52Fiche
   };
 }
 
