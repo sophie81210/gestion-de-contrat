@@ -2573,14 +2573,16 @@ function calcRegul52(c, key){
     if(dernierMoisPrise!==key) continue;
     // Calculer maintien et 10ème
     let maintienVerse=0, brutAnnuel=0;
+    const coefNetV52=(S.params&&S.params.coefNet)||0.7811975;
     Object.entries(c.fiches||{}).forEach(([k2,fiche2])=>{
       const [ay,am]=k2.split('-').map(Number);
       const dateF=new Date(ay,am-1,1);
-      if(dateF<debutRef||dateF>finRef) return;
       const src=getVersionActive(c,dateF);
       const hMensuSrc=parseFloat(src.hMensu||c.hMensu||0);
       const txBrutSrc=parseFloat(src.txBrut||c.txBrut||0);
-      if(fiche2.valide) brutAnnuel+=hMensuSrc*txBrutSrc;
+      // Brut : fiches validées dans la période d'acquisition seulement
+      if(fiche2.valide&&dateF>=debutRef&&dateF<=finRef) brutAnnuel+=hMensuSrc*txBrutSrc;
+      // Maintien : toutes fiches sans limite de date
       const hSemMoyF=hMensuSrc*12/(parseFloat(src.nbSem||52));
       const hJourCg=hSemMoyF/6;
       (fiche2.jours||[]).forEach(j=>{
@@ -2589,8 +2591,7 @@ function calcRegul52(c, key){
         const dateVeille=new Date(jy,jm-1,jd);
         dateVeille.setDate(dateVeille.getDate()-1);
         const srcV=getVersionActive(c,dateVeille);
-        const coefNetV=(S.params&&S.params.coefNet)||0.7811975;
-        const txNetV=parseFloat(srcV.txBrut||0)*coefNetV;
+        const txNetV=parseFloat(srcV.txBrut||0)*coefNetV52;
         maintienVerse+=hJourCg*txNetV;
       });
     });
@@ -5358,6 +5359,7 @@ const dRefParts=data.dateDeb.split('-').map(Number);
 const dRef=new Date(dRefParts[0],dRefParts[1]-1,dRefParts[2]);
 // Construire premierMoisStr sans toISOString() pour éviter le bug UTC
 const premierMoisStr=dRef.getFullYear()+'-'+String(dRef.getMonth()+1).padStart(2,'0')+'-01';
+// Fin = dernier jour du mois précédant le mois de début, un an plus tard
 const dernierJour=new Date(dRef.getFullYear()+1,dRef.getMonth(),0);
 const finStr=dernierJour.getFullYear()+'-'+String(dernierJour.getMonth()+1).padStart(2,'0')+'-'+String(dernierJour.getDate()).padStart(2,'0');
 S.contrats.push({
@@ -6250,24 +6252,21 @@ function genCumul(c){
     </div>`;
     // Régularisation congés 52 sem : dès que restants = 0 (même fiche non validée)
     if(c.tc==='52'&&cg.acquis>0&&cg.restants===0){
-      // Recalculer après validation si besoin
-      calcCongesContrat(c);
-      const cgFrais=c.conges[anneeRef];
       // Calculer le maintien versé : parcourir toutes les fiches de l'année de référence
       const debutRef=new Date(anneeRef,5,1); // 1er juin anneeRef
       const finRef=new Date(anneeRef+1,4,31); // 31 mai anneeRef+1
       let maintienVerse=0;
       let brutAnnuel=0;
+      const coefNetV=(S.params&&S.params.coefNet)||0.7811975;
       Object.entries(c.fiches||{}).forEach(([kF,ficheF])=>{
         const [ay,am]=kF.split('-').map(Number);
         const dateF=new Date(ay,am-1,1);
-        if(dateF<debutRef||dateF>finRef) return;
         const src=getVersionActive(c,dateF);
         const hMensuSrc=parseFloat(src.hMensu||c.hMensu||0);
         const txBrutSrc=parseFloat(src.txBrut||c.txBrut||0);
-        // Brut annuel : fiches validées seulement
-        if(ficheF.valide) brutAnnuel+=hMensuSrc*txBrutSrc;
-        // Maintien : toutes fiches (validées et non validées) pour voir avant validation
+        // Brut annuel : fiches validées dans la période d'acquisition seulement
+        if(ficheF.valide&&dateF>=debutRef&&dateF<=finRef) brutAnnuel+=hMensuSrc*txBrutSrc;
+        // Maintien : toutes fiches sans limite de date (les congés peuvent être pris après finRef)
         const hSemMoyF=hMensuSrc*12/(parseFloat(src.nbSem||52));
         const hJourCg=hSemMoyF/6;
         (ficheF.jours||[]).forEach(j=>{
@@ -6276,7 +6275,6 @@ function genCumul(c){
           const dateVeille=new Date(jy,jm-1,jd);
           dateVeille.setDate(dateVeille.getDate()-1);
           const srcV=getVersionActive(c,dateVeille);
-          const coefNetV=(S.params&&S.params.coefNet)||0.7811975;
           const txNetV=parseFloat(srcV.txBrut||0)*coefNetV;
           maintienVerse+=hJourCg*txNetV;
         });
@@ -6655,11 +6653,19 @@ function signerAvenant(){
   if(contratNeedAgenda(av)&&(!av.agendas||!av.agendas.length)){
     const avParts=av.dateAvenant.split('-').map(Number);
     const dRef=new Date(avParts[0],avParts[1]-1,avParts[2]);
-    const dernierMois=new Date(dRef.getFullYear()+1,dRef.getMonth(),0);
+    // Fin = dernier jour du mois précédant le mois de début, un an plus tard
+    // Ex: début novembre → fin octobre de l'année suivante
+    const dernierMois=new Date(dRef.getFullYear()+1,dRef.getMonth()-1+1,0); // dernier jour du mois précédent
+    // Si début en janvier, fin = dernier jour décembre de la même année +1
+    const dernierMoisCorr=dRef.getMonth()===0
+      ? new Date(dRef.getFullYear()+1,0,0) // 31 déc
+      : new Date(dRef.getFullYear()+1,dRef.getMonth(),0); // dernier jour du mois précédent
+    // Correction : fin = mois de début - 1, un an plus tard
+    const finDate=new Date(dRef.getFullYear()+1,dRef.getMonth(),0);
     const debutMoisAv=av.dateAvenant.slice(0,7)+'-01';
     // Construire premierMoisStr sans toISOString() pour éviter le bug UTC
     const premierMoisStr=dRef.getFullYear()+'-'+String(dRef.getMonth()+1).padStart(2,'0')+'-01';
-    const dernierMoisStr=dernierMois.getFullYear()+'-'+String(dernierMois.getMonth()+1).padStart(2,'0')+'-'+String(dernierMois.getDate()).padStart(2,'0');
+    const dernierMoisStr=finDate.getFullYear()+'-'+String(finDate.getMonth()+1).padStart(2,'0')+'-'+String(finDate.getDate()).padStart(2,'0');
     // Initialiser c.agendas si besoin (contrat occ sans agendas)
     if(!c.agendas) c.agendas=[];
     av.agendas=[{
