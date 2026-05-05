@@ -2873,27 +2873,6 @@ function buildRecapHtml(recap, solde, regul52){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
     html+=ligneG('R\u00E9gularisation cong\u00E9s (10\u00E8me)',regul52.diff.toFixed(2)+' \u20AC net',true,'var(--vt)');
   }
-  // Ligne total payé
-  {
-    const sNet=parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)+(recap.regul52Fiche?recap.regul52Fiche.diff:0);
-    const indemE=parseFloat(recap.indemEntretienTotal||0);
-    const indemR=parseFloat(recap.indemRepasTotal||0);
-    const indemK=parseFloat(recap.indemKmTotal||0);
-    // Indemnités solde si présentes
-    let indemSolde=0;
-    if(solde){
-      if(solde.regul) indemSolde+=parseFloat(solde.regul.montantNet||0);
-      if(solde.indemConges) indemSolde+=parseFloat(solde.indemConges.montantNet||0);
-      if(solde.indemPreavis){
-        // Remboursement = déduire, versement = ajouter
-        indemSolde+=(solde.indemPreavis.sens==='remboursement'?-1:1)*parseFloat(solde.indemPreavis.montantNet||0);
-      }
-      if(solde.indemRupture) indemSolde+=parseFloat(solde.indemRupture.montantBrut||0);
-    }
-    const total=sNet+indemE+indemR+indemK+indemSolde;
-    html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
-    html+=ligneG('Total payé avec indemnités', total.toFixed(2)+' €', true, 'var(--m)');
-  }
   // Éléments du solde de tout compte (dernier mois après rupture confirmée)
   if(solde){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
@@ -2917,6 +2896,23 @@ function buildRecapHtml(recap, solde, regul52){
       html+=ligneG('Indemnité de rupture (1/80ème)',
         solde.indemRupture.montantBrut.toFixed(2)+' € brut', true, 'var(--m)');
     }
+  }
+  // Ligne total payé (toujours en bas de tout)
+  {
+    const sNet=parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)+(recap.regul52Fiche?recap.regul52Fiche.diff:0);
+    const indemE=parseFloat(recap.indemEntretienTotal||0);
+    const indemR=parseFloat(recap.indemRepasTotal||0);
+    const indemK=parseFloat(recap.indemKmTotal||0);
+    let indemSolde=0;
+    if(solde){
+      if(solde.regul) indemSolde+=parseFloat(solde.regul.montantNet||0);
+      if(solde.indemConges) indemSolde+=parseFloat(solde.indemConges.montantNet||0);
+      if(solde.indemPreavis) indemSolde+=(solde.indemPreavis.sens==='remboursement'?-1:1)*parseFloat(solde.indemPreavis.montantNet||0);
+      if(solde.indemRupture) indemSolde+=parseFloat(solde.indemRupture.montantBrut||0);
+    }
+    const total=sNet+indemE+indemR+indemK+indemSolde;
+    html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
+    html+=ligneG('Total payé avec indemnités', total.toFixed(2)+' €', true, 'var(--m)');
   }
   return html;
 }
@@ -5751,6 +5747,7 @@ function getDateSituationAu(c){
 
 function calcBrutTotal(c, dateDebut, dateFin){
   let total=0;
+  const coefNetBT=(S.params&&S.params.coefNet)||0.7811975;
   Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
     if(!fiche.valide) return;
     const [y,m]=key.split('-').map(Number);
@@ -5760,11 +5757,13 @@ function calcBrutTotal(c, dateDebut, dateFin){
     if(dateFin&&debutMois>dateFin) return;
     const source=getVersionActive(c,debutMois);
     const txBrut=source.txBrut||0;
-    const majComp=(source.majComp||0)/100;
-    const majSup=(source.majSup||0)/100;
     const r=calcRecapFiche(c,fiche);
     const brutMois=parseFloat(((r.hBase||0)*txBrut+(r.montantCompBrut||0)+(r.montantSupBrut||0)).toFixed(2));
     total+=brutMois;
+    // Ajouter la régularisation 52 sem versée (convertie en brut)
+    if(r.regul52Fiche&&r.regul52Fiche.diff>0){
+      total+=parseFloat((r.regul52Fiche.diff/coefNetBT).toFixed(2));
+    }
   });
   return parseFloat(total.toFixed(2));
 }
@@ -6110,12 +6109,22 @@ function confirmerRupture(cid){
 function annulerRupture(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c) return;
-  // Garder les options, juste annuler la confirmation
   if(c.rupture) c.rupture.confirmee=false;
   delete c._ruptureTemp;
+  // Nettoyer les jours hors-contrat marqués par la clôture
+  Object.values(c.fiches||{}).forEach(fiche=>{
+    if(fiche.valide) return; // ne pas modifier les fiches validées
+    (fiche.jours||[]).forEach(j=>{
+      if(j._horsContratCloture){
+        delete j._horsContratCloture;
+        delete j.statut;
+      }
+    });
+  });
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  saveToFirestore();
   const cont=document.getElementById('det-content');
   renderRupture(c,cont);
 }
@@ -6408,7 +6417,7 @@ function renderRupture(c, cont){
   }
 
   const confirmeeHtml=rp.confirmee?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px">
-    ✓ Rupture confirmée — <button class="btn bd bsm" style="margin-left:8px" onclick="annulerRupture(${cid})">✕ Annuler la confirmation</button>
+    ✓ Rupture confirmée — <button class="btn bd bsm" style="margin-left:8px" onclick="annulerRupture(${cid})">✕ Annuler la confirmation</button> <button class="btn bp bsm" style="margin-left:8px" onclick="sauvegarderRupture(${cid})">💾 Enregistrer</button>
   </div>`:'';
 
   cont.innerHTML=`
