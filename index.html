@@ -1334,7 +1334,9 @@ function renderDetTab(id,tab){
           const avBrouillon=c.avenants&&c.avenants.find(a=>!a.signe);
           return avBrouillon
             ?`<button class="btn bp" style="background:#7c3aed;color:#fff" onclick="creerAvenant(${c.id})">✏️ Modifier l'avenant en cours</button>`
-            :`<button class="btn bp" onclick="creerAvenant(${c.id})">+ Créer un avenant</button>`;
+            :c.rupture?.confirmee
+              ?`<button class="btn bp" disabled style="opacity:0.5;cursor:not-allowed" title="Rupture confirmée — impossible de créer un avenant">+ Créer un avenant</button>`
+              :`<button class="btn bp" onclick="creerAvenant(${c.id})">+ Créer un avenant</button>`;
         })()}
         <span style="display:inline-flex;align-items:center;gap:5px;padding:8px 14px;background:#e8f5ee;color:#3a6b4a;border-radius:20px;font-size:13px;font-weight:600">✓ Signé</span>`
       :`<button class="btn bp" onclick="modif(${c.id})">Modifier</button>`}
@@ -2138,7 +2140,10 @@ function ouvrirFiche(contratId,key){
     } else {
 const statutPrevuJ=getStatutPrevu(c,j);
       const peutAvoirHeures=['prevu','travaille','abs-partielle'].includes(statutPrevuJ);
-      const cocheVerte=!fiche.valide&&peutAvoirHeures&&j.heureDebPrev&&j.heureFinPrev&&!j.heureDebReel&&!j.heureFinReel
+      // Coche verte : seulement si jour prévu sans modification (pas de statut forcé, pas d'heures réelles, pas de congé, pas hors-contrat)
+      const statutForcé=j.statut&&j.statut!==statutPrevuJ;
+      const estCongeOuHors=['conges-acq','conges-anticipe','conges-non','conges-am','hors-contrat','arret','abs-non','abs-am','abs-enfant'].includes(j.statut||statutPrevuJ);
+      const cocheVerte=!fiche.valide&&peutAvoirHeures&&j.heureDebPrev&&j.heureFinPrev&&!j.heureDebReel&&!j.heureFinReel&&!statutForcé&&!estCongeOuHors
         ?`<button onclick="confirmerHeuresPrevues(${contratId},'${key}',${idx})"
             style="width:20px;height:36px;background:#3a6b4a;color:#fff;border:none;border-radius:3px;font-size:12px;cursor:pointer;margin-left:3px;flex-shrink:0"
             title="Confirmer les heures pr\u00E9vues">\u2713</button>`:'';
@@ -4423,9 +4428,13 @@ function selTC(el,v){
   });
   const sdcg=document.getElementById('section-date-cg');
   if(sdcg)sdcg.style.display=v==='46'?'block':'none';
-  // Période d'essai : masquée pour occasionnel
+  // Période d'essai : masquée pour occasionnel, désactivée pour avenant
   const fpe=document.getElementById('f-periode-essai');
-  if(fpe)fpe.closest('.fg').style.display=v==='occ'?'none':'block';
+  if(fpe){
+    fpe.closest('.fg').style.display=v==='occ'?'none':'block';
+    fpe.disabled=!!(S.enAvenant); // non modifiable dans un avenant
+    if(S.enAvenant) fpe.title="La période d\'essai ne peut pas être modifiée dans un avenant";
+  }
   // Horaires : masqués pour occasionnel
   const cardH=document.querySelector('.card:has(#cond-fixe)');
   if(cardH)cardH.style.display=v==='occ'?'none':'block';
@@ -6898,6 +6907,10 @@ function signerAvenant(){
   if(!S.enAvenant){toast('Erreur : pas d\'avenant en cours');return;}
   const {cid,avid}=S.enAvenant;
   const c=S.contrats.find(x=>x.id==cid);
+  if(c?.rupture?.confirmee){
+    toast('⚠ Impossible de signer un avenant : une rupture de contrat est confirmée.');
+    return;
+  }
   if(!c)return;
   const av=c.avenants.find(a=>a.id==avid);
   if(!av)return;
