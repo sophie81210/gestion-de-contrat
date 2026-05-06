@@ -6159,53 +6159,76 @@ function calcDureePreavis(c, dateSignif){
   return {duree:1,unite:'mois',label:'1 mois calendaire'};
 }
 
+function isJourCongeAM(dateStr){
+  if(!S.congesAM) return false;
+  return Object.values(S.congesAM).some(cgAm=>cgAm&&cgAm.jours&&cgAm.jours[dateStr]==='pose');
+}
+
+function dateToStr(d){
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+
+function reporterSiDimanche(d){
+  // Si la date tombe un dimanche (jour de repos), reporter au lundi
+  if(d.getDay()===0) d.setDate(d.getDate()+1);
+  return d;
+}
+
 function calcDateFinPreavis(dateSignif, dureePreavis, cumulConges, c){
-  // Calcule la date de fin de préavis en tenant compte du cumul congés
-  const d=new Date(dateSignif);
+  // Calcule la date de fin de préavis avec suspension pendant les congés AM
+  // Les dimanches inclus dans les congés ne déclenchent pas de décompte supplémentaire
+  const reposH=c?.reposHebdo||0; // 0=dimanche par défaut
+
   if(dureePreavis.unite==='jours'){
     if(cumulConges){
-      // Cumul : on ajoute les jours calendaires directement
+      // Cumul : jours calendaires directs
+      const d=new Date(dateSignif.getFullYear(),dateSignif.getMonth(),dateSignif.getDate());
       d.setDate(d.getDate()+dureePreavis.duree-1);
+      reporterSiDimanche(d);
+      return d;
     } else {
-      // Sans cumul : le préavis est suspendu pendant les congés
+      // Suspension : le préavis ne court pas pendant les congés AM
       let joursRestants=dureePreavis.duree;
-      const cur=new Date(dateSignif);
+      const cur=new Date(dateSignif.getFullYear(),dateSignif.getMonth(),dateSignif.getDate());
       while(joursRestants>0){
-        // Vérifier si ce jour est un jour de congé dans le calendrier AM
-        const dateStr=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
-        let estConge=false;
-        if(S.congesAM){
-          Object.values(S.congesAM).forEach(cgAm=>{
-            if(cgAm&&cgAm.jours&&cgAm.jours[dateStr]==='pose') estConge=true;
-          });
-        }
-        if(!estConge) joursRestants--;
+        const dateStr=dateToStr(cur);
+        if(!isJourCongeAM(dateStr)) joursRestants--;
         if(joursRestants>0) cur.setDate(cur.getDate()+1);
       }
+      reporterSiDimanche(cur);
       return cur;
     }
   } else {
-    // 1 mois calendaire
-    d.setMonth(d.getMonth()+1);
-    d.setDate(d.getDate()-1);
-    if(!cumulConges){
-      // Compter les jours de congés pendant le préavis et prolonger
-      const dateFinLegale=new Date(d);
-      const cur=new Date(dateSignif);
-      let joursConges=0;
-      while(cur<=dateFinLegale){
-        const dateStr=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
-        if(S.congesAM){
-          Object.values(S.congesAM).forEach(cgAm=>{
-            if(cgAm&&cgAm.jours&&cgAm.jours[dateStr]==='pose') joursConges++;
-          });
-        }
-        cur.setDate(cur.getDate()+1);
-      }
-      d.setDate(d.getDate()+joursConges);
+    // 1 mois calendaire : calcul de la date légale de fin (sans congés)
+    const dFin=new Date(dateSignif.getFullYear(),dateSignif.getMonth()+1,dateSignif.getDate()-1);
+    if(cumulConges){
+      reporterSiDimanche(dFin);
+      return dFin;
     }
+    // Sans cumul : suspension pendant les congés AM
+    // On identifie les périodes de congés AM pendant le préavis et on prolonge
+    // en ignorant les dimanches dans les congés (pas de décompte supplémentaire)
+    const cur=new Date(dateSignif.getFullYear(),dateSignif.getMonth(),dateSignif.getDate());
+    let joursPreavisEcoules=0;
+    const dureePreavJours=(dFin-cur)/(1000*60*60*24)+1; // durée en jours calendaires
+    // On fait courir le préavis : on avance jour par jour en sautant les périodes de congés
+    const result=new Date(cur);
+    let joursCourus=0;
+    let iterations=0;
+    while(joursCourus<dureePreavJours&&iterations<500){
+      iterations++;
+      const dateStr=dateToStr(result);
+      if(!isJourCongeAM(dateStr)){
+        joursCourus++;
+        if(joursCourus<dureePreavJours) result.setDate(result.getDate()+1);
+      } else {
+        // Jour de congé : avancer sans compter
+        result.setDate(result.getDate()+1);
+      }
+    }
+    reporterSiDimanche(result);
+    return result;
   }
-  return d;
 }
 
 function calcIndemnitePreavis(c, dateSignif, dateFinEffective, dureePreavis, cumulConges){
@@ -6339,7 +6362,13 @@ function rafraichirRupture(cid){
   const cumulConges=document.getElementById('rp-cumul-conges-'+cid)?.checked??c.rupture.cumulConges??false;
   // Bloquer date de signification antérieure au début de contrat
   const dateDebContratMin=c.dateDeb||'';
-  const dateSignifFinal=dateSignif&&dateSignif>=dateDebContratMin?dateSignif:'';
+  let dateSignifFinal=dateSignif&&dateSignif>=dateDebContratMin?dateSignif:'';
+  // Bloquer signification un dimanche
+  if(dateSignifFinal){
+    const dsP=dateSignifFinal.split('-').map(Number);
+    const dsObj=new Date(dsP[0],dsP[1]-1,dsP[2]);
+    if(dsObj.getDay()===0) dateSignifFinal='';
+  }
   const dateNotifFinal=dateNotif&&dateNotif>=dateDebContratMin?dateNotif:'';
   c._ruptureTemp={motif,dateSignif:dateSignifFinal,dateNotif:dateNotifFinal,delaiPrev,statutPreavis,initiativePreavis,dateFinPreavis,dateFinContrat,cumulConges};
   const cont=document.getElementById('det-content');
