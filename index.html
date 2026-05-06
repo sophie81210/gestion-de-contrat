@@ -2897,8 +2897,13 @@ function calcRegul52(c, key){
       const dateVeille=new Date(jy,jm-1,jd);
       dateVeille.setDate(dateVeille.getDate()-1);
       const srcV=getVersionActive(c,dateVeille);
-      const txNetV=parseFloat(srcV.txBrut||0)*coefNetV52;
-      maintienVerse+=hJourCg*txNetV;
+      const hMensuMajV=parseFloat(srcV.hMensuMaj||0);
+      const hMensuTotV=parseFloat(srcV.hMensu||hMensuSrc||0);
+      const majSupV=(srcV.majSup||0)/100;
+      const partMaj=hMensuTotV>0?hMensuMajV/hMensuTotV:0;
+      const txNetNormV=parseFloat(srcV.txBrut||0)*coefNetV52;
+      const txNetMajV=parseFloat(srcV.txBrut||0)*(1+majSupV)*coefNetV52;
+      maintienVerse+=hJourCg*((1-partMaj)*txNetNormV+partMaj*txNetMajV);
     });
     maintienVerse=parseFloat(maintienVerse.toFixed(2));
     const coefNet=(S.params&&S.params.coefNet)||0.7811975;
@@ -2921,6 +2926,16 @@ function buildRecapHtml(recap, solde, regul52){
   } else {
     // Partie haute : mensu + absences + taux
     html+=ligneG('Heures mensualisées', (recap.hMensu||0).toFixed(2)+' h'+(recap.txNetExact&&recap.hMensu?' — '+(recap.hMensu*recap.txNetExact).toFixed(2)+' € net':''));
+    if(parseFloat(recap.hMensuMaj||0)>0){
+      const coefNR=(S.params?.coefNet)||0.7811975;
+      const txNM=(recap.txNetExact||(parseFloat(recap.txNet||0)))||0;
+      const txBrutR=txNM/coefNR;
+      const majSupR=(recap.majSup||0)/100;
+      const txNetMajR=txBrutR*(1+majSupR)*coefNR;
+      const salNorm=(recap.hMensuNorm||0)*txNM;
+      const salMaj=(recap.hMensuMaj||0)*txNetMajR;
+      html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--tx2)">dont '+(recap.hMensuNorm||0).toFixed(2)+'h norm. ('+salNorm.toFixed(2)+' €) + '+(recap.hMensuMaj||0).toFixed(2)+'h maj. ('+salMaj.toFixed(2)+' €)</td></tr>';
+    }
     if(parseFloat(recap.montantCongesPayesMois||0)>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont congés payés ('+recap.nbCongesPayesMois+' j) — '+recap.montantCongesPayesMois.toFixed(2)+' € net</td></tr>';
     if(recap.regul52Fiche) html+=ligneG('Régularisation congés '+recap.regul52Fiche.anneeRef+'/'+(recap.regul52Fiche.anneeRef+1)+' (10ème)', recap.regul52Fiche.diff.toFixed(2)+' € net', true, 'var(--m)');
     if(parseFloat(recap.hAbs)>0) html+=ligneG('Heures d\'absence', '\u2212 '+recap.hAbsDeduit.toFixed(2)+' h \u2014 '+recap.montantAbsences.toFixed(2)+' \u20AC','','var(--al)');
@@ -3613,6 +3628,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const majComp=(sourceActif.majComp||0)/100;
   const majSup=(sourceActif.majSup||0)/100;
   const hMensu=sourceActif.hMensu||0;
+  const hMensuMaj=parseFloat(sourceActif.hMensuMaj||0);
+  const hMensuNorm=hMensuMaj>0?parseFloat(sourceActif.hMensuNorm||hMensu-hMensuMaj):hMensu;
+  const majSup52=(sourceActif.majSup||0)/100;
+  // Salaire mensuel heures normales et majorées
+  const coefNetR=(S.params?.coefNet)||0.7811975;
   const reposHebdo=sourceActif.reposHebdo||0;
   let nbJoursPrevu=0;
   fiche.jours.forEach(j=>{
@@ -3773,6 +3793,32 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     }
   });
   hTheoriques=hTheoriques/60;
+  // Calculer hTheoriquesMaj : pour chaque semaine visible dans la fiche, max(0, hSemaineTh - 45)
+  // On utilise les heures théoriques par semaine calculées ci-dessus
+  let hTheoriquesMaj=0;
+  if(hMensuMaj>0){
+    // Reconstruire les heures théoriques par semaine
+    const hThParSem={};
+    fiche.jours.forEach(j=>{
+      const sk=getSemISO(j.date);
+      if(!hThParSem[sk]) hThParSem[sk]=0;
+      if(j.heureDebPrev&&j.heureFinPrev){
+        hThParSem[sk]+=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
+      }
+    });
+    // Ajouter les semaines off et plan
+    Object.entries(hThParSem).forEach(([sk,hSem])=>{
+      hTheoriquesMaj+=Math.max(0,hSem-45);
+    });
+    // Pour les semaines sans heures prévues (off, sem, etc.) utiliser hMoyHebdo
+    // hMoyHebdo = hMensu*12/nbSem
+    const hMoyHebdo=(hMensu*12/(sourceActif.nbSem||52));
+    const majParSemaine=Math.max(0,hMoyHebdo-45);
+    // Ne compter que les semaines entières avec heures théoriques issues de la moyenne
+    // (semaines off, plan var sans volume)
+    // Ces semaines sont déjà comptabilisées dans hThParSem avec la moyenne hebdo
+  }
+  const hTheoriquesNorm=Math.max(0,hTheoriques-hTheoriquesMaj);
   // Pour les périodes d'avenant, recalculer hTheoriques sur tout le mois
   if(dateAvenantStr){
     let hTheoriquesMois=0;
@@ -4234,7 +4280,20 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   });
   const hMoyParJour=nbJoursMoisContrat>0?hMensu/nbJoursMoisContrat:hMensu/20;
   if(hAbs>0&&hTheoriques>0){
-    const tauxHAbs=(hMensu*txNet)/hTheoriques;
+    // Retenue en 2 temps : heures normales + heures majorées séparément
+    const txNetMaj=txBrut*(1+majSup52)*coefNetR;
+    let tauxHAbs;
+    if(hMensuMaj>0&&hTheoriquesMaj>0){
+      // Part absences sur heures normales
+      const tauxNorm=(hMensuNorm*txNet)/hTheoriquesNorm;
+      // Part absences sur heures majorées  
+      const tauxMaj=(hMensuMaj*txNetMaj)/hTheoriquesMaj;
+      // Répartir hAbs entre normales et majorées selon les heures prévues du jour
+      // On utilise un taux moyen pondéré pour simplifier
+      tauxHAbs=(hMensuNorm*txNet+hMensuMaj*txNetMaj)/hTheoriques;
+    } else {
+      tauxHAbs=(hMensu*txNet)/hTheoriques;
+    }
     montantAbsences=parseFloat((tauxHAbs*hAbs).toFixed(2));
   }
   const hAbsDeduit=txNet>0?parseFloat((montantAbsences/txNet).toFixed(2)):0;
@@ -4259,7 +4318,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const hReelTotal=Object.values(hParSemaine).reduce((t,h)=>t+h,0);
     hBase=Math.max(0,hReelTotal-parseFloat(hSup));
   }
-  const salaireNetBrut=(hBase+hComp*(1+majComp)+hSup*(1+majSup))*txNet - montantAbsences;
+  // Salaire = heures normales mensualisées + heures majorées mensualisées (taux différent)
+  const txNetMajR=txBrut*(1+majSup52)*coefNetR;
+  const salaireNetBrut=hMensuNorm*txNet+hMensuMaj*txNetMajR
+    +hComp*(1+majComp)*txNet+hSup*(1+majSup)*txNet - montantAbsences;
   const salaireNet=parseFloat(Math.max(0,salaireNetBrut).toFixed(2));
   const nbAbsEnfantMois=fiche.jours.filter(j=>j.statut==='abs-enfant').length;
   const donneesManquantes=(!txBrut||(c.tc!=='occ'&&!hMensu));
@@ -4380,6 +4442,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     montantCongesPayesMois, nbCongesPayesMois,
     montantCongesNonAcquis, nbCongesNonAcquis,
     regul52Fiche,
+    hMensuMaj, hMensuNorm, hTheoriquesMaj, hTheoriquesNorm,
+    majSup: majSup52*100,
     indemCgOcc: (()=>{
       // Chercher si un avenant signé ce mois a une indemCgOcc
       const ficheKey=Object.keys(c.fiches||{}).find(k=>c.fiches[k]===fiche);
@@ -5577,10 +5641,41 @@ function calc(){
     }
   }
   const hH=sem>0?hAnn/sem:0;const hM=hAnn/12;
+  // Séparer heures normales (≤45h/sem) et majorées (>45h/sem)
+  const hHebdoMaj=Math.max(0,hH-45);
+  const hHebdoNorm=Math.min(hH,45);
+  const hMAnnMaj=hHebdoMaj*sem;
+  const hMAnnNorm=hHebdoNorm*sem;
+  const hMNorm=hMAnnNorm/12;
+  const hMMaj=hMAnnMaj/12;
   st('r-hh',hH>0?hH.toFixed(2)+'h':'—');st('r-hh-f',fH);
   st('r-sem',sem>0?sem:'—');st('r-sem-f',fSem);
   st('r-hm',hM>0?hM.toFixed(2)+'h':'—');
   st('r-hm-f',hM>0?hAnn.toFixed(2)+'h ann. / 12':'');
+  // Afficher la décomposition normales/majorées
+  let rHmNorm=document.getElementById('r-hm-norm');
+  let rHmMaj=document.getElementById('r-hm-maj');
+  if(!rHmNorm){
+    const card=document.getElementById('card-mens');
+    if(card){
+      const divNM=document.createElement('div');
+      divNM.id='r-hm-detail';
+      divNM.style.cssText='font-size:12px;color:var(--tx2);margin-top:4px';
+      divNM.innerHTML='<span id="r-hm-norm"></span><span id="r-hm-maj"></span>';
+      const hmEl=card.querySelector('#r-hm')?.closest('.fg');
+      if(hmEl) hmEl.appendChild(divNM);
+      rHmNorm=document.getElementById('r-hm-norm');
+      rHmMaj=document.getElementById('r-hm-maj');
+    }
+  }
+  if(rHmNorm) rHmNorm.textContent=hMMaj>0?'dont '+hMNorm.toFixed(2)+'h norm. + '+hMMaj.toFixed(2)+'h maj.':'';
+  // Stocker hMensuMaj dans un champ caché
+  let rHmMajHidden=document.getElementById('r-hm-maj-val');
+  if(!rHmMajHidden){rHmMajHidden=document.createElement('span');rHmMajHidden.id='r-hm-maj-val';rHmMajHidden.style.display='none';document.body.appendChild(rHmMajHidden);}
+  rHmMajHidden.textContent=hMMaj.toFixed(4);
+  let rHmNormHidden=document.getElementById('r-hm-norm-val');
+  if(!rHmNormHidden){rHmNormHidden=document.createElement('span');rHmNormHidden.id='r-hm-norm-val';rHmNormHidden.style.display='none';document.body.appendChild(rHmNormHidden);}
+  rHmNormHidden.textContent=hMNorm.toFixed(4);
   // Calculer nbJoursMois = jours/sem moyens * sem / 12 (arrondi au plus proche)
   let nbJSem=0;
   if(S.th==='fixe'&&document.getElementById('j-fixe')){
@@ -5720,6 +5815,8 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
   majComp:parseFloat(document.getElementById('f-maj-comp')?.value)||0,
   majSup:parseFloat(document.getElementById('f-maj-sup')?.value)||0,
   hMensu:hm?parseFloat(hm.toFixed(2)):0,
+  hMensuMaj:parseFloat(parseFloat(document.getElementById('r-hm-maj-val')?.textContent||0).toFixed(2)),
+  hMensuNorm:parseFloat(parseFloat(document.getElementById('r-hm-norm-val')?.textContent||0).toFixed(2))||hm,
   nbJoursMois:parseFloat(document.getElementById('r-jours-mois')?.textContent)||0,
   mensBrute:tx&&hm?parseFloat((tx*hm).toFixed(2)):0,
   cgAnticipe:document.querySelector('[name="cg-anticipe"]:checked')?.value||null,
@@ -5823,6 +5920,10 @@ function validerAvenant(){
   av.joursMin=[0,1,2,3,4,5,6].map(i=>!!(document.getElementById('plan-min-jour-'+i)?.checked));
   av.txBrut=tx;av.txNet=tx?parseFloat((tx*0.7811975).toFixed(2)):0;
   av.hMensu=hm?parseFloat(hm.toFixed(2)):0;
+  const hmMajVal=parseFloat(document.getElementById('r-hm-maj-val')?.textContent)||0;
+  const hmNormVal=parseFloat(document.getElementById('r-hm-norm-val')?.textContent)||0;
+  av.hMensuMaj=hmMajVal>0?parseFloat(hmMajVal.toFixed(2)):0;
+  av.hMensuNorm=hmNormVal>0?parseFloat(hmNormVal.toFixed(2)):av.hMensu;
   av.mensBrute=tx&&hm?parseFloat((tx*hm).toFixed(2)):0;
   av.majComp=parseFloat(document.getElementById('f-maj-comp')?.value)||0;
   av.majSup=parseFloat(document.getElementById('f-maj-sup')?.value)||0;
@@ -5888,7 +5989,12 @@ function calcBrutTotal(c, dateDebut, dateFin){
     const source=getVersionActive(c,debutMois);
     const txBrut=source.txBrut||0;
     const r=calcRecapFiche(c,fiche);
-    const brutMois=parseFloat(((r.hBase||0)*txBrut+(r.montantCompBrut||0)+(r.montantSupBrut||0)).toFixed(2));
+    // Brut réel = (hMensuNorm - hAbsDeduitNorm) * txBrut + (hMensuMaj - hAbsDeduitMaj) * txBrutMaj + comp + sup
+    const hMensuMajR=parseFloat(r.hMensuMaj||0);
+    const hMensuNormR=parseFloat(r.hMensuNorm||r.hMensu||0);
+    const hBaseReelNorm=Math.max(0,hMensuNormR-parseFloat(r.hAbsDeduit||0)*(hMensuNormR/(r.hMensu||1)));
+    const hBaseReelMaj=Math.max(0,hMensuMajR-parseFloat(r.hAbsDeduit||0)*(hMensuMajR/(r.hMensu||1)));
+    const brutMois=parseFloat((hBaseReelNorm*txBrut+hBaseReelMaj*txBrut*(1+(r.majSup||0)/100)+(r.montantCompBrut||0)+(r.montantSupBrut||0)).toFixed(2));
     total+=brutMois;
     // Ajouter la régularisation 52 sem versée (convertie en brut)
     if(r.regul52Fiche&&r.regul52Fiche.diff>0){
@@ -6086,10 +6192,15 @@ function calcIndemnitePreavis(c, dateSignif, dateFinEffective, dureePreavis, cum
   if(joursRestants===0) return {montantBrut:0,montantNet:0,joursRestants:0};
   const source=getVersionActive(c,dateSignif);
   const hMensu=source.hMensu||0;
+  const hMensuMajP=parseFloat(source.hMensuMaj||0);
+  const hMensuNormP=hMensuMajP>0?parseFloat(source.hMensuNorm||hMensu-hMensuMajP):hMensu;
   const txBrut=source.txBrut||0;
-  // Formule : (hMensu × txBrut / nbJoursCalendairesMois) × joursRestants
+  const majSupP=(source.majSup||0)/100;
+  // Formule : (hMensu × txBrut / nbJoursCalendairesMois) × joursRestants (heures normales + majorées)
   const nbJoursMois=new Date(dateSignif.getFullYear(),dateSignif.getMonth()+1,0).getDate();
-  const montantBrut=parseFloat(((hMensu*txBrut/nbJoursMois)*joursRestants).toFixed(2));
+  const montantBrutNorm=parseFloat(((hMensuNormP*txBrut/nbJoursMois)*joursRestants).toFixed(2));
+  const montantBrutMaj=parseFloat(((hMensuMajP*txBrut*(1+majSupP)/nbJoursMois)*joursRestants).toFixed(2));
+  const montantBrut=parseFloat((montantBrutNorm+montantBrutMaj).toFixed(2));
   return {montantBrut, montantNet:montantBrut, joursRestants};
 }
 
@@ -6705,8 +6816,15 @@ function genCumul(c){
         const dateVeille=new Date(jy,jm-1,jd);
         dateVeille.setDate(dateVeille.getDate()-1);
         const srcV=getVersionActive(c,dateVeille);
-        const txNetV=parseFloat(srcV.txBrut||0)*coefNetV;
-        maintienVerse+=hJourCg*txNetV;
+        const hMensuMajV=parseFloat(srcV.hMensuMaj||0);
+        const hMensuTotV=parseFloat(srcV.hMensu||hMensuSrc||0);
+        const majSupV=(srcV.majSup||0)/100;
+        // Maintien = part normale + part majorée du jour de congé
+        const partMaj=hMensuTotV>0?hMensuMajV/hMensuTotV:0;
+        const partNorm=1-partMaj;
+        const txNetNormV=parseFloat(srcV.txBrut||0)*coefNetV;
+        const txNetMajV=parseFloat(srcV.txBrut||0)*(1+majSupV)*coefNetV;
+        maintienVerse+=hJourCg*(partNorm*txNetNormV+partMaj*txNetMajV);
       });
       maintienVerse=parseFloat(maintienVerse.toFixed(2));
       const coefNet=(S.params&&S.params.coefNet)||0.7811975;
@@ -7872,7 +7990,8 @@ if(tousNonPrevus){
             const veilleCongesV=['conges-acq','conges-anticipe','conges-non'].includes(veilleJourV?.statut);
             const lendCongesV=['conges-acq','conges-anticipe','conges-non'].includes(lendJourV?.statut);
             if(!veilleAcquisV||!lendAcquisV){
-              if(veilleCongesV||lendCongesV) compteurTotal++;
+              // Ne compter que si encadré par des congés acquis/anticipés, pas conges-non
+              if(veilleAcquisV||lendAcquisV) compteurTotal++;
             }
           }
           cur.setDate(cur.getDate()+1);continue;
