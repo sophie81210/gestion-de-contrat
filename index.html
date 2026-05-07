@@ -4382,8 +4382,17 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   }
   // Salaire = heures normales mensualisées + heures majorées mensualisées (taux différent)
   const txNetMajR=txBrut*(1+majSup52)*coefNetR;
-  const salaireNetBrut=hMensuNorm*txNet+hMensuMaj*txNetMajR
-    +hComp*(1+majComp)*txNet+hSup*(1+majSup)*txNet - montantAbsences;
+  let salaireNetBrut;
+  if(c.tc==='occ'){
+    // Occasionnel : salaire sur heures réelles (hBase = hReel - hSup)
+    const hBaseNormOcc=Math.min(hBase,45); // part normale ≤45h
+    const hBaseMajOcc=Math.max(0,hBase-45); // part majorée >45h
+    salaireNetBrut=hBaseNormOcc*txNet+hBaseMajOcc*txNetMajR
+      +hComp*(1+majComp)*txNet+hSup*(1+majSup)*txNet;
+  } else {
+    salaireNetBrut=hMensuNorm*txNet+hMensuMaj*txNetMajR
+      +hComp*(1+majComp)*txNet+hSup*(1+majSup)*txNet - montantAbsences;
+  }
   const salaireNet=parseFloat(Math.max(0,salaireNetBrut).toFixed(2));
   const nbAbsEnfantMois=fiche.jours.filter(j=>j.statut==='abs-enfant').length;
   const donneesManquantes=(!txBrut||(c.tc!=='occ'&&!hMensu));
@@ -6175,7 +6184,11 @@ function calcRegularisationDefinitive(c){
     const fiche=c.fiches[key];
     const [ay2,am2]=key.split('-').map(Number);
     const source=getVersionActive(c,new Date(ay2,am2-1,1));
-    tranches[idx].mensu+=source.hMensu||0;
+    // Heures payées = hMensu - hAbsDeduit (en heures)
+    const recapMois=calcRecapFiche(c,fiche);
+    const hAbsDedMois=parseFloat(recapMois.hAbsDeduit||0);
+    const hMensuMois=parseFloat(source.hMensu||0);
+    tranches[idx].mensu+=Math.max(0,hMensuMois-hAbsDedMois);
     // Heures prévues (sans off ni congés)
     const agendas=source.agendas||c.agendas||[];
     const ag=agendas.find(a=>{
@@ -6191,7 +6204,9 @@ function calcRegularisationDefinitive(c){
       if(['conges-acq','conges-anticipe','conges-non','conges-am'].includes(j.statut)) return;
       if(j.heureDebPrev&&j.heureFinPrev) hPrevu+=(toMins(j.heureFinPrev)-toMins(j.heureDebPrev))/60;
     });
-    tranches[idx].prevu+=hPrevu;
+    // Déduire les heures d'absence des heures réelles aussi
+    const hAbsReelles=hAbsDedMois*(hPrevu/(hMensuMois||1));
+    tranches[idx].prevu+=Math.max(0,hPrevu-hAbsReelles);
   });
   let totalMensu=0,totalPrevu=0;
   Object.values(tranches).forEach(t=>{totalMensu+=t.mensu;totalPrevu+=t.prevu;});
