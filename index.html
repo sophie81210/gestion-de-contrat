@@ -4407,7 +4407,16 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const ind=calcIndemniteConges(c,anneeAcq);
     if(ind){
       if(c.dateCg==='chaque'){
-        const nbAcqMois=fiche.jours.filter(j=>j.statut==='conges-acq').length;
+        // Compter les jours acquis déjà payés dans les fiches précédentes validées
+        let dejaPayesAcq=0;
+        const moisKeyCur=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0');
+        Object.entries(c.fiches||{}).forEach(([k,f])=>{
+          if(!f.valide||k>=moisKeyCur) return;
+          dejaPayesAcq+=f.jours.filter(j=>j.statut==='conges-acq').length;
+        });
+        const totalAcquis=ind.acquis||0;
+        const resteAPayer=Math.max(0,totalAcquis-dejaPayesAcq);
+        const nbAcqMois=Math.min(fiche.jours.filter(j=>j.statut==='conges-acq').length, resteAPayer);
         if(nbAcqMois>0){
           indemCongeNbJours=nbAcqMois;
           indemCongeMois=parseFloat((ind.montantJournalierNet*nbAcqMois).toFixed(2));
@@ -4431,7 +4440,57 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         indemCongeNbJours=ind.acquis;
         indemCongeMois=ind.meilleurNet;
       } else if(c.dateCg==='principale'){
-        // TODO : à implémenter
+        // Prise principale = première prise avec ≥12 jours consécutifs entre mai et octobre
+        // Indemnité versée sur le mois de début de la prise principale
+        // Si début en mai → reporter en juin
+        const moisKeyP=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0');
+        const debutMaip=new Date(fiche.annee,4,1);  // 1er mai
+        const finOctp=new Date(fiche.annee,9,31);   // 31 octobre
+        // Chercher la prise principale : ≥12 jours conges-acq consécutifs entre mai-oct
+        const joursAcqValides=[];
+        Object.entries(c.fiches||{}).forEach(([k,f])=>{
+          if(!f.valide) return;
+          f.jours.forEach(j=>{
+            if(j.statut!=='conges-acq') return;
+            const dj=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
+            if(dj>=debutMaip&&dj<=finOctp) joursAcqValides.push(j.date);
+          });
+        });
+        joursAcqValides.sort();
+        // Trouver séquence de 12 jours consécutifs
+        let debutPrincipale=null;
+        for(let i=0;i<joursAcqValides.length;i++){
+          // Vérifier si 12 jours consécutifs à partir de i (consécutifs = jours calendaires sans trou > 2j)
+          if(i+11<joursAcqValides.length){
+            const d1=new Date(joursAcqValides[i].split('-')[0],parseInt(joursAcqValides[i].split('-')[1])-1,parseInt(joursAcqValides[i].split('-')[2]));
+            const d12=new Date(joursAcqValides[i+11].split('-')[0],parseInt(joursAcqValides[i+11].split('-')[1])-1,parseInt(joursAcqValides[i+11].split('-')[2]));
+            if((d12-d1)/(1000*60*60*24)<=14){ // 12 jours dans une plage de 14j max (week-ends inclus)
+              debutPrincipale=joursAcqValides[i];
+              break;
+            }
+          }
+        }
+        if(debutPrincipale){
+          const moisDebutPrincipale=debutPrincipale.slice(0,7);
+          // Si début en mai → reporter versement en juin
+          const moisVersement=moisDebutPrincipale.endsWith('-05')?
+            fiche.annee+'-06':moisDebutPrincipale;
+          if(moisKeyP===moisVersement){
+            // Compter les jours acquis de la prise principale (tous les jours acq mai-oct)
+            const nbJoursPrincipale=joursAcqValides.length;
+            if(nbJoursPrincipale>0){
+              indemCongeNbJours=nbJoursPrincipale;
+              indemCongeMois=ind.meilleurNet;
+            }
+          }
+        }
+        // Note sur la fiche de mai : indemnité reportée en juin
+        if(fiche.mois===4){ // mai = mois 4 (0-indexé)
+          const nbAcqMai=fiche.jours.filter(j=>j.statut==='conges-acq').length;
+          if(nbAcqMai>0 && !indemCongeMois){
+            // Ajouter note dans le recap (géré dans buildRecapHtml)
+          }
+        }
       }
     }
   }
