@@ -4023,11 +4023,16 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const estCongesNonAcq52=(statut==='conges-non'&&c.tc==='52');
     const estCongesNon46Travaille=false;
     const estCongesNonDeduit=estCongesNonAcq52||estCongesNon46Travaille;
-    const absDeduites=['abs-am','arret','abs-non','abs-partielle'];
+    const absDeduites=['abs-am','abs-non','abs-partielle']; // arret traité séparément
     if(statut==='hors-contrat'){
       let horsContratDeduit=false;
       if(j._horsContratAvenant){
-        const prevusHC=getHeuresPrevues(c,new Date(j.date),sourceActif);
+        // Pour avenant occ→46/52 : utiliser le nouveau contrat (après avenant) pour les heures prévues
+        let sourceHC=sourceActif;
+        if(sourceActif.tc==='occ'&&avenantDuMois&&avenantDuMois.tc&&avenantDuMois.tc!=='occ'){
+          sourceHC=avenantDuMois; // utiliser les heures du nouvel avenant
+        }
+        const prevusHC=getHeuresPrevues(c,new Date(j.date),sourceHC);
         if(prevusHC.debut&&prevusHC.fin){
           horsContratDeduit=true;
         } else if(isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))){
@@ -4152,7 +4157,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         if(estJourTravaille) absDeduites.push('ferie');
       }
     }
-    const estAbsDeduite=absDeduites.includes(statut);
+    // Arrêt de travail : déduire uniquement si le jour est prévu (pas si non-prévu/repos)
+    const statutPrevuPourArret=getStatutPrevu(c,j);
+    const estArretSurJourPrevu=statut==='arret'&&(statutPrevuPourArret==='prevu'||statutPrevuPourArret==='travaille');
+    const estAbsDeduite=absDeduites.includes(statut)||estArretSurJourPrevu;
     if(estPresent&&j.heureDebReel&&j.heureFinReel){
       const debReel=toM(j.heureDebReel);
       const finReel=toM(j.heureFinReel);
@@ -5387,8 +5395,9 @@ function ouvrirModifAgenda(cid,agid){
       return dateF>=new Date(ag.dateDebut)&&dateF<=dFin;
     });
     if(ficheValideeExiste){
-      toast('⚠ Cet agenda ne peut pas être modifié : des feuilles de présence sont validées sur cette période.');
-      return;
+      if(!confirm('⚠ Des feuilles de présence sont validées sur cette période.\n\nModifier l\'agenda peut affecter les calculs. Continuer quand même ?')){
+        return;
+      }
     }
   }
 
@@ -6693,6 +6702,17 @@ function renderRupture(c, cont){
           <option value="accord" ${rp.initiativePreavis==='accord'?'selected':''}>En accord entre les parties</option>
         </select>
       </div>`;
+      if(rp.initiativePreavis==='accord'){
+        // Accord entre les parties : saisir la date convenue
+        dateFinHtml=`<div style="margin-top:8px">
+          <label style="font-size:12px;color:var(--tx2)">Date de fin convenue entre les parties</label>
+          ${(()=>{
+            const valAccord=rp.dateFinPreavis||'';
+            return '<input type="text" id="rp-fin-preavis-'+cid+'" value="'+dateISOversTexte(valAccord)+'" placeholder="JJ/MM/AAAA" oninput="formaterSaisieDate(this)" onchange="rafraichirRupture('+cid+')" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">'
+              +(valAccord?'<div style="font-size:12px;color:var(--tx2);margin-top:4px">Fin convenue : <strong>'+(()=>{const p=valAccord.split('-');return new Date(parseInt(p[0]),parseInt(p[1])-1,parseInt(p[2])).toLocaleDateString('fr-FR');})()+' inclus</strong></div>':'');
+          })()}
+        </div>`;
+      }
       if(rp.initiativePreavis&&rp.initiativePreavis!=='accord'){
         // Vérifier que la date de fin partielle n'excède pas la date légale
         const dateFinPart=rp.dateFinPreavis?new Date(rp.dateFinPreavis):null;
