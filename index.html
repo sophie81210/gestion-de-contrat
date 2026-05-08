@@ -811,6 +811,9 @@ function goTo(p){
   if(p!=='form'&&p!=='det') S.enEd=null;
   PAGES.forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
+  // Remettre btn-val visible sauf si on reste sur rupture
+  const btnValG=document.getElementById('btn-val');
+  if(btnValG) btnValG.style.display='';
   const titres={auj:"Aujourd\u2019hui",cont:'Contrats',form:'Nouveau contrat',det:'Fiche contrat',arch:'Archives'};
   document.getElementById('hdr-title').textContent=titres[p]||p;
   if(p==='auj'){document.getElementById('pg-auj').style.display='block';document.querySelectorAll('.tab')[0].classList.add('on');renderAuj();}
@@ -4761,8 +4764,35 @@ function selTC(el,v){
   const fpe=document.getElementById('f-periode-essai');
   if(fpe){
     fpe.closest('.fg').style.display=v==='occ'?'none':'block';
-    fpe.disabled=!!(S.enAvenant); // non modifiable dans un avenant
-    if(S.enAvenant) fpe.title="La période d\'essai ne peut pas être modifiée dans un avenant";
+    // Avenant occ→46/52 : activer la période d'essai avec déduction des mois déjà écoulés
+    const isAvenantOccVersClassique=S.enAvenant&&(S.contrats.find(x=>x.id==S.enAvenant)||{}).tc==='occ';
+    fpe.disabled=!!(S.enAvenant&&!isAvenantOccVersClassique);
+    if(S.enAvenant&&!isAvenantOccVersClassique){
+      fpe.title="La période d\'essai ne peut pas être modifiée dans un avenant";
+    } else if(isAvenantOccVersClassique){
+      // Calculer les mois déjà écoulés depuis le début du contrat occ
+      const cOcc=S.contrats.find(x=>x.id==S.enAvenant);
+      if(cOcc&&cOcc.dateDeb){
+        const deb=new Date(cOcc.dateDeb.split('-')[0],parseInt(cOcc.dateDeb.split('-')[1])-1,parseInt(cOcc.dateDeb.split('-')[2]));
+        const now=new Date();
+        const moisEcoules=Math.floor((now-deb)/(1000*60*60*24*30.5));
+        // Période d'essai max selon les jours/sem (déjà calculée dans calc())
+        // Calculer période d'essai max selon les jours/sem (2 mois si >=4j/sem, sinon 3)
+        let joursParSemOcc=0;
+        const joursFixeEl=document.querySelectorAll('#cond-fixe input[type="checkbox"]');
+        joursFixeEl.forEach(cb=>{if(cb.checked) joursParSemOcc++;});
+        if(joursParSemOcc===0){
+          // Essayer depuis semTypes ou planVar
+          const semTypesEls=document.querySelectorAll('.sem-type-jours input:checked');
+          joursParSemOcc=semTypesEls.length||5;
+        }
+        const periodeEssaiMax=joursParSemOcc>=4?2:3;
+        const essaiRestant=Math.max(0,periodeEssaiMax-moisEcoules);
+        fpe.value=essaiRestant;
+        fpe.disabled=false;
+        fpe.title='Période d\'essai : '+periodeEssaiMax+' mois max, diminuée de '+moisEcoules+' mois écoulés = '+essaiRestant+' mois restants';
+      }
+    }
   }
   // Horaires : masqués pour occasionnel
   const cardH=document.querySelector('.card:has(#cond-fixe)');
@@ -8494,6 +8524,26 @@ function majCgAmEnfants(anneeDebut,val){
   saveCongesAM();
 }
 
+function verifier12JoursConsecutifs(anneeAm){
+  // Vérifier ≥12 jours consécutifs entre 1er mai et 31 octobre pour l'année AM
+  const data=S.congesAM&&S.congesAM[anneeAm];
+  if(!data) return false;
+  const debutMai=anneeAm+'-05-01';
+  const finOct=(anneeAm+1)+'-04-30'; // on inclut aussi nov-avril pour couvrir toute l'AM
+  // Filtrer les jours posés entre mai et octobre
+  const jours=Object.keys(data.jours||{})
+    .filter(d=>d>=(anneeAm+'-05-01')&&d<=(anneeAm+'-10-31')&&data.jours[d]==='pose')
+    .sort();
+  if(jours.length<12) return false;
+  // Vérifier séquence de 12 jours dans une plage de 14 jours calendaires
+  for(let i=0;i<=jours.length-12;i++){
+    const d1=new Date(jours[i].split('-')[0],parseInt(jours[i].split('-')[1])-1,parseInt(jours[i].split('-')[2]));
+    const d12=new Date(jours[i+11].split('-')[0],parseInt(jours[i+11].split('-')[1])-1,parseInt(jours[i+11].split('-')[2]));
+    if((d12-d1)/(1000*60*60*24)<=14) return true;
+  }
+  return false;
+}
+
 function enregistrerCgAm(){
   saveCongesAM();
   if(window.FB_USER&&window.fbSaveData){
@@ -8504,7 +8554,19 @@ function enregistrerCgAm(){
     });
   }
   S.cgAmModifie=false;
-  toast('✓ Congés enregistrés');
+  // Vérifier 12 jours consécutifs mai-octobre pour chaque année AM
+  const avertissements=[];
+  Object.keys(S.congesAM||{}).forEach(am=>{
+    const anneeAm=parseInt(am);
+    if(!verifier12JoursConsecutifs(anneeAm)){
+      avertissements.push('⚠ '+anneeAm+'/'+(anneeAm+1)+' : aucune prise de 12 jours consécutifs entre mai et octobre.');
+    }
+  });
+  if(avertissements.length>0){
+    setTimeout(()=>alert('Congés enregistrés.\n\n'+avertissements.join('\n')),300);
+  } else {
+    toast('✓ Congés enregistrés');
+  }
 }
          
 function saveCongesAM(){
@@ -8539,4 +8601,28 @@ function toast(msg){
 initJ('j-fixe','fixe');
 </script>
 </body>
-</html>
+</html  if(solde){
+    html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
+    html+='<tr><td colspan="2" style="padding:6px 4px;font-weight:700;font-size:13px;color:var(--m)">Solde de tout compte</td></tr>';
+    if(solde.regul){
+      html+=ligneG('Régularisation ('+solde.regul.hRegul.toFixed(2)+'h — '+solde.regul.joursRegul+' j)',
+        solde.regul.montantNet.toFixed(2)+' € net', true, 'var(--vt)');
+    }
+    if(solde.indemConges){
+      html+=ligneG(solde.indemConges.label,
+        solde.indemConges.montantNet.toFixed(2)+' € net ('+solde.indemConges.montantBrut.toFixed(2)+' € brut)', true, 'var(--m)');
+    }
+    if(solde.indemPreavis){
+      const sensLabel=solde.indemPreavis.sens==='remboursement'?' (à rembourser)':'';
+      const prefixe=solde.indemPreavis.sens==='remboursement'?'− ':'';
+      html+=ligneG('Indemnité de préavis ('+solde.indemPreavis.joursRestants+' j)'+sensLabel,
+        prefixe+solde.indemPreavis.montantNet.toFixed(2)+' €', true,
+        solde.indemPreavis.sens==='remboursement'?'var(--al)':'var(--m)');
+    }
+    if(solde.indemRupture){
+      html+=ligneG('Indemnité de rupture (1/80ème)',
+        solde.indemRupture.montantBrut.toFixed(2)+' € brut', true, 'var(--m)');
+    }
+  }
+  return html;
+}>
