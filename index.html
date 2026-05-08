@@ -189,6 +189,9 @@ input[type=time].fi{width:auto;min-width:92px}
 .det-tab{padding:10px 12px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:Calibri,sans-serif;background:none;border:none;border-bottom:3px solid transparent;color:rgba(60,30,15,.6);transition:all .2s}
 .det-tab.on{color:var(--m);border-bottom-color:var(--m);background:rgba(107,76,59,.08)}
 @keyframes spin{to{transform:rotate(360deg)}}
+/* ── Supprimer flèches inputs number ── */
+.no-spin::-webkit-outer-spin-button,.no-spin::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.no-spin{-moz-appearance:textfield}
 /* ── Système d'aide ── */
 .help-wrap{position:relative;display:inline-block;vertical-align:middle;margin-left:4px}
 .help-btn{width:18px;height:18px;border-radius:50%;border:1.5px solid var(--m);background:transparent;color:var(--m);font-size:11px;font-weight:700;cursor:pointer;padding:0;line-height:1;display:inline-flex;align-items:center;justify-content:center}
@@ -1327,6 +1330,11 @@ function renderDetTab(id,tab){
   if(!c)return;
   const cont=document.getElementById('det-content');
   if(!cont)return;
+  // Remettre btn-val visible si on quitte la page rupture
+  if(tab!=='rupture'){
+    const btnVal=document.getElementById('btn-val');
+    if(btnVal) btnVal.style.display='';
+  }
 
   if(tab==='contrat'){
   const cv=getVersionActive(c);
@@ -2163,10 +2171,10 @@ function ouvrirFiche(contratId,key){
             style="width:12px;height:12px;accent-color:var(--m)">
           <span style="font-size:13px">${sym}</span>
         </label>`:'').join('')
-    }</td>`:aRepas?'<td style="min-width:90px"></td>':'';
+    }</td>`:aRepas?'<td></td>':'';
 
     const kmCell=aKm?`<td style="padding:3px 2px">
-      <input type="number" style="width:46px;padding:2px 4px;border:1px solid var(--mb);border-radius:3px;font-size:11px"
+      <input type="number" style="width:38px;padding:2px 2px;border:1px solid var(--mb);border-radius:3px;font-size:11px" class="no-spin"
         placeholder="km" value="${j.km||''}"
        ${fiche.valide?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'km',this.value)"`}>
     </td>`:'';
@@ -2177,7 +2185,7 @@ function ouvrirFiche(contratId,key){
     if(!selectedOpts.includes('selected')){
     const moisNum=parseInt(key.split('-')[1]);
     const labelAnticipe=moisNum===5?'CP acquis':'CP anticipés';
-    const lbl={'conges-acq':'CP acquis','conges-non':'CP non acquis','conges-anticipe':labelAnticipe,'conges-am':'Congés AM','travaille':'Travaillé','prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié','abs-rem':'Abs. rém.','abs-enfant':'Abs. maladie enfant','abs-am':'Abs. AM','arret':'Arrêt','hors-contrat':'Hors contrat'};
+    const lbl={'conges-acq':'CP acquis','conges-non':'CP non acquis','conges-anticipe':labelAnticipe,'conges-am':'Congés AM','travaille':'Travaillé','prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié','abs-rem':'Abs. rém.','abs-enfant':'Abs. enf.','abs-am':'Abs. AM','arret':'Arrêt','hors-contrat':'Hors contrat','abs-non':'Abs. non rém.','abs-partielle':'Abs. partielle'};
       selectedOpts=`<option value="${statutActuel}" selected>${lbl[statutActuel]||statutActuel}</option>`+opts;
     }
 
@@ -2297,12 +2305,12 @@ const statutPrevuJ=getStatutPrevu(c,j);
     <div style="width:100%;overflow:hidden">
       <table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed">
         <colgroup>
-          <col style="width:14%"><!-- Jour -->
-          <col style="width:14%"><!-- Prévu -->
-          <col style="width:18%"><!-- Arr./Dép. -->
-          <col style="width:8%"><!-- H± -->
-          ${aRepas?'<col style="width:10%">':''}
-          ${aKm?'<col style="width:8%">':''}
+          <col style="width:11%"><!-- Jour -->
+          <col style="width:13%"><!-- Prévu -->
+          <col style="width:15%"><!-- Réel -->
+          <col style="width:7%"><!-- H± -->
+          ${aRepas?'<col style="width:9%">':''}
+          ${aKm?'<col style="width:7%">':''}
           <col><!-- Statut : reste -->
         </colgroup>
         <thead><tr style="background:var(--mp);position:sticky;top:0">
@@ -5263,7 +5271,9 @@ function renderAgendas(c){
     if(!window._semsCongesSet) window._semsCongesSet={};
     window._semsCongesSet[ag.id]=semsCongesSet;
     const warnings=getAgendaWarnings(c,ag,semaines,semsCongesSet);
-    const warningHtml=warnings.length
+    // Avertissements masqués si en mode modification (S.agendaEnModif)
+    const agendaEnModif=S.agendaEnModif===ag.id;
+    const warningHtml=warnings.length&&!agendaEnModif
       ?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">
         ${warnings.map(w=>'⚠ '+w).join('<br>')}
       </div>`
@@ -5388,21 +5398,9 @@ function ouvrirModifAgenda(cid,agid){
   // Bloquer si des fiches de la période sont validées
   const dFin=new Date(ag.dateFin);
   const maintenant=new Date();
-  if(dFin<maintenant){
-    // Vérifier si une fiche de cette période est validée
-    const ficheValideeExiste=Object.entries(c.fiches||{}).some(([k,f])=>{
-      if(!f.valide) return false;
-      const [y,m]=k.split('-').map(Number);
-      const dateF=new Date(y,m-1,1);
-      return dateF>=new Date(ag.dateDebut)&&dateF<=dFin;
-    });
-    if(ficheValideeExiste){
-      if(!confirm('⚠ Des feuilles de présence sont validées sur cette période.\n\nModifier l\'agenda peut affecter les calculs. Continuer quand même ?')){
-        return;
-      }
-    }
-  }
+  // Pas d'avertissement à l'ouverture de la modification
 
+  S.agendaEnModif=agid; // Marquer l'agenda en cours de modification (masque les warnings)
   // Cacher le calendrier lecture seule
   const calDiv=document.getElementById('cal-'+agid);
   if(calDiv)calDiv.style.display='none';
@@ -5736,6 +5734,7 @@ function validerModifAgenda(cid,agid){
 }
 
 function fermerModifAgenda(cid,agid){
+  if(S.agendaEnModif===agid) delete S.agendaEnModif;
   const zone=document.getElementById('modif-zone-'+agid);
   if(zone){zone.style.display='none';zone.innerHTML='';}
   const calDiv=document.getElementById('cal-'+agid);
@@ -6575,6 +6574,9 @@ function annulerRupture(cid){
 
 function renderRupture(c, cont){
   if(!cont) return;
+  // Masquer le bouton Enregistrer principal (btn-val) sur la page rupture
+  const btnVal=document.getElementById('btn-val');
+  if(btnVal) btnVal.style.display='none';
   // Si rupture confirmée, utiliser uniquement c.rupture (pas _ruptureTemp)
   if(c.rupture?.confirmee) delete c._ruptureTemp;
   const rp=c._ruptureTemp||c.rupture||{};
