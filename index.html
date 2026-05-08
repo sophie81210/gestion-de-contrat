@@ -2171,13 +2171,13 @@ function ouvrirFiche(contratId,key){
     const jourStatut=j.statut||getStatutPrevu(c,j);
     const repasVisible=aRepas&&(jourStatut==='prevu'||jourStatut==='travaille'||jourStatut==='abs-partielle');
     const repasCell=repasVisible?`<td style="padding:2px 4px;font-size:13px;min-width:90px">${
-      REPAS_SYM.map((sym,ri)=>c.repas&&c.repas[ri]?
-        `<label style="cursor:pointer;display:block" title="${REPAS_NOM[ri]}">
+      '<div style="display:flex;gap:4px;flex-wrap:wrap">'+REPAS_SYM.map((sym,ri)=>c.repas&&c.repas[ri]?
+        `<label style="cursor:pointer;display:inline-flex;align-items:center;gap:1px" title="${REPAS_NOM[ri]}">
           <input type="checkbox" ${j.repas&&j.repas[ri]?'checked':''}
             ${fiche.valide?'disabled':`onchange="majFicheRepas(${contratId},'${key}',${idx},${ri},this.checked)"`}
             style="width:12px;height:12px;accent-color:var(--m)">
           <span style="font-size:13px">${sym}</span>
-        </label>`:'').join('')
+        </label>`:'').join('')+'</div>'
     }</td>`:aRepas?'<td></td>':'';
 
     const kmCell=aKm?`<td style="padding:3px 2px">
@@ -5315,7 +5315,7 @@ function renderAgendas(c){
       </div>`
       :'';
 
-    const calHtml = renderCalAgenda(c,ag,semaines,false);
+    const calHtml = renderCalAgenda(c,ag,semaines,false,c.id,source);
 
     const btnSuppr=!estCommence
       ?`<button class="btn bd bsm" onclick="supprimerAgenda(${c.id},${ag.id})">Supprimer</button>`
@@ -5458,7 +5458,9 @@ if(source.tc!=='52'&&source.th!=='sem'&&!(source.th==='plan'&&source.planType===
     const compteOff=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
     const nbSemAttendu=source.nbSem||46;
     pHtml+=`<div class="pinceau-btn ${pinceau==='on'?'actif':''}" style="background:#e8f5ee;color:#3a6b4a;--brd:#3a6b4a" onclick="setAgendaPinceau(${cid},${agid},'on')">✅ Travaillée <strong>(${compteTrav}/${nbSemAttendu})</strong></div>`;
-    pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong>(${compteOff})</strong></div>`;
+    const maxOff=Math.max(0,47-nbSemAttendu);
+    const depasse=compteOff>maxOff;
+    pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong style="color:${depasse?'var(--al)':'inherit'}">(${compteOff}/${maxOff}${depasse?' ⚠':''})</strong></div>`;
   }
   if(source.th==='sem'&&source.semTypes){
     source.semTypes.forEach((st,i)=>{
@@ -5476,7 +5478,9 @@ if(source.tc!=='52'&&source.th!=='sem'&&!(source.th==='plan'&&source.planType===
     const compteOff=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
     const attenduesTravFix=source.nbSem||46;
     pHtml+=`<div class="pinceau-btn ${pinceau==='on'?'actif':''}" style="background:#e8f5ee;color:#3a6b4a;--brd:#3a6b4a" onclick="setAgendaPinceau(${cid},${agid},'on')">✅ Travaillée <strong>(${compteTrav})</strong></div>`;
-    pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong>(${compteOff})</strong></div>`;
+    const maxOff=Math.max(0,47-nbSemAttendu);
+    const depasse=compteOff>maxOff;
+    pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong style="color:${depasse?'var(--al)':'inherit'}">(${compteOff}/${maxOff}${depasse?' ⚠':''})</strong></div>`;
   }
   if(source.th==='plan'&&source.planType==='var'&&source.planVar){
     source.planVar.forEach((v,i)=>{
@@ -5493,7 +5497,7 @@ if(source.tc!=='52'&&source.th!=='sem'&&!(source.th==='plan'&&source.planType===
   pHtml+='</div>';
 
   const semaines=getSemsAgenda(ag,source);
-  const calModif=renderCalAgenda(c,ag,semaines,true,c.id);
+  const calModif=renderCalAgenda(c,ag,semaines,true,c.id,source);
   // Pas d'avertissement pendant la modification
   const calModifSansWarning=calModif.replace(/<div[^>]*background:#fff3cd[^>]*>[\s\S]*?<\/div>/,'');
   pHtml+=calModifSansWarning;
@@ -5565,7 +5569,10 @@ function getAgendaWarnings(c,ag,semaines,semsCongesSet){
   return warnings;
 }
          
-function renderCalAgenda(c,ag,semaines,modeModif,contratId){
+function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
+  // source = version active (avenant) pour th/semTypes/planType/planVar
+  // c = contrat complet pour fiches/id
+  if(!source) source=c; // fallback
   const cid=contratId||c.id;
   const moisMap={};
 // Mois de référence pour la 1ère semaine = mois de dateDebut de l'agenda
@@ -5620,19 +5627,19 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId){
   let legendeHtml='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;font-size:11px;color:var(--tx2)">';
   if(c.tc!=='52'){
     // Légende "Travaillée" seulement pour contrats fixe (pas pour plan var/sem qui ont leurs propres légendes)
-    if(c.th!=='sem'&&!(c.th==='plan'&&c.planType==='var')){
+    if(source.th!=='sem'&&!(source.th==='plan'&&source.planType==='var')){
       legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;background:#e8f5ee;border:1px solid #3a6b4a;border-radius:2px;display:inline-block"></span>Travaillée</span>`;
     }
     legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;background:#fde8e8;border:1px solid #c0392b;border-radius:2px;display:inline-block"></span>Absence employeur</span>`;
     legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;background:#f0e8ff;border:1px solid #7b5ea7;border-radius:2px;display:inline-block"></span>Congés</span>`;
-    if(c.th==='sem'&&c.semTypes){
-      c.semTypes.forEach((st,i)=>{
+    if(source.th==='sem'&&source.semTypes){
+      source.semTypes.forEach((st,i)=>{
         const cc=PLAN_COULEURS[i%PLAN_COULEURS.length];
         legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;background:${cc.bg};border:1px solid ${cc.brd};border-radius:2px;display:inline-block"></span>${st.nom}</span>`;
       });
     }
-    if(c.planType==='var'&&c.planVar){
-      c.planVar.forEach((v,i)=>{
+    if(source.planType==='var'&&source.planVar){
+      source.planVar.forEach((v,i)=>{
         const cc=PLAN_COULEURS[i%PLAN_COULEURS.length];
         const nom=v.nom||('Volume '+(i+1));
         legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;background:${cc.bg};border:1px solid ${cc.brd};border-radius:2px;display:inline-block"></span>${nom}</span>`;
@@ -5663,11 +5670,11 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId){
         bg='#f0e8ff';brd='#7b5ea7';txt='#7b5ea7';
       } else if(val==='off'){
         bg='#fde8e8';brd='#c0392b';txt='#c0392b';
-      } else if(c.th==='sem'&&c.semTypes){
-        const idx=c.semTypes.findIndex(st=>st.nom===val);
+      } else if(source.th==='sem'&&source.semTypes){
+        const idx=source.semTypes.findIndex(st=>st.nom===val);
         if(idx>=0){const cc=PLAN_COULEURS[idx%PLAN_COULEURS.length];bg=cc.bg;brd=cc.brd;txt=cc.txt;}
-      } else if(c.planType==='var'&&c.planVar){
-        const idx=c.planVar.findIndex((v,i)=>(v.nom||'Volume '+(i+1))===val);
+      } else if(source.planType==='var'&&source.planVar){
+        const idx=source.planVar.findIndex((v,i)=>(v.nom||'Volume '+(i+1))===val);
         if(idx>=0){const cc=PLAN_COULEURS[idx%PLAN_COULEURS.length];bg=cc.bg;brd=cc.brd;txt=cc.txt;}
       } else if(val==='on'){
         bg='#e8f5ee';brd='#3a6b4a';txt='#3a6b4a';
@@ -6296,11 +6303,12 @@ function calcRegularisationDefinitive(c){
     const fiche=c.fiches[key];
     const [ay2,am2]=key.split('-').map(Number);
     const source=getVersionActive(c,new Date(ay2,am2-1,1));
-    // Heures payées = hMensu - hAbsDeduit (en heures)
+    // Heures payées = hMensu - hAbsDeduit (en heures équivalentes)
     const recapMois=calcRecapFiche(c,fiche);
     const hAbsDedMois=parseFloat(recapMois.hAbsDeduit||0);
     const hMensuMois=parseFloat(source.hMensu||0);
     tranches[idx].mensu+=Math.max(0,hMensuMois-hAbsDedMois);
+    tranches[idx].hAbsDed=(tranches[idx].hAbsDed||0)+hAbsDedMois;
     // Heures prévues (sans off ni congés)
     const agendas=source.agendas||c.agendas||[];
     const ag=agendas.find(a=>{
@@ -6316,8 +6324,8 @@ function calcRegularisationDefinitive(c){
       if(['conges-acq','conges-anticipe','conges-non','conges-am'].includes(j.statut)) return;
       if(j.heureDebPrev&&j.heureFinPrev) hPrevu+=(toMins(j.heureFinPrev)-toMins(j.heureDebPrev))/60;
     });
-    // Déduire les heures d'absence des heures réelles aussi
-    const hAbsReelles=hAbsDedMois*(hPrevu/(hMensuMois||1));
+    // Déduire les heures d'absence des heures réelles (proportionnellement aux heures prévues)
+    const hAbsReelles=hMensuMois>0?(hAbsDedMois/hMensuMois)*hPrevu:0;
     tranches[idx].prevu+=Math.max(0,hPrevu-hAbsReelles);
   });
   let totalMensu=0,totalPrevu=0;
@@ -7656,13 +7664,8 @@ function buildCgAmDetail(anneeDebut,data){
       const jourSem=jourDate.getDay(); // 0=dim
       const jourIdx=jourSem===0?6:jourSem-1;
       const isReposH=jourSem===reposHebdo;
-      // Vérifier si c'est un férié non travaillé pour TOUS les contrats actifs
-      const isFerNonTrav=contratsActifs.length>0&&contratsActifs.every(c=>{
-        if(!isFerie(dateStr,c)) return false;
-        const p=dateStr.split('-');
-        const mmdd=p[1]+'-'+p[2];
-        return !(c.feriesTravailles||[]).includes(mmdd);
-      });
+      // Vérifier si c'est un férié (toujours jaune dans le calendrier AM, indépendamment du contrat)
+      const isFerNonTrav=contratsActifs.length>0?isFerie(dateStr,contratsActifs[0]||{}):isFerie(dateStr,{});
       // Ferié cochable si non couvert par les acquis du meilleur contrat
       const isPose=(data.jours[dateStr]==='pose');
       // Couleur de fond — tous les fériés non travaillés sont jaunes
