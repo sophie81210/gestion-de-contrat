@@ -1674,15 +1674,19 @@ function renderDetTab(id,tab){
               }
             }
 
-            totMensu+=hMensuReg; totPrevu+=hPrevu;
-            totGenMensu+=hMensuReg; totGenPrevu+=hPrevu;
-            const diff=hPrevu-hMensuReg;
+            totMensu+=montantMensu; totPrevu+=montantPrevu;
+            totGenMensu+=montantMensu; totGenPrevu+=montantPrevu;
+            // Convertir en montants
+            const sourceReg=getVersionActive(c,new Date(debutMois));
+            const txNetReg=parseFloat(sourceReg.txNet||(parseFloat(sourceReg.txBrut||0)*getCoefNet())||0);
+            const montantMensu=parseFloat((hMensuReg*txNetReg).toFixed(2));
+            const montantPrevu=parseFloat((hPrevu*txNetReg).toFixed(2));
+            const diff=montantPrevu-montantMensu;
             const dc=diff>0?'var(--vt)':diff<0?'var(--al)':'var(--tx2)';
             return `<tr style="border-bottom:1px solid var(--mb)">
               <td style="padding:7px 4px;font-size:13px">${moisLabel}</td>
-              <td style="padding:7px 4px;font-size:13px;text-align:center">${hMensuReg.toFixed(2)}h</td>
-              <td style="padding:7px 4px;font-size:13px;text-align:center">${hPrevu.toFixed(2)}h</td>
-              <td style="padding:7px 4px;font-size:13px;font-weight:600;text-align:center;color:${dc}">${diff>0?'+':''}${diff.toFixed(2)}h</td>
+              <td style="padding:7px 4px;font-size:13px;text-align:center">${montantMensu.toFixed(2)} €</td>
+              <td style="padding:7px 4px;font-size:13px;text-align:center">${montantPrevu.toFixed(2)} €</td>
             </tr>`;
           }).join('');
 
@@ -1693,16 +1697,14 @@ function renderDetTab(id,tab){
             <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
               <thead><tr style="background:var(--mp)">
                 <th style="padding:7px 4px;text-align:left;font-size:12px">Mois</th>
-                <th style="padding:7px 4px;font-size:12px;text-align:center">H. mensual.</th>
-                <th style="padding:7px 4px;font-size:12px;text-align:center">H. prévues</th>
-                <th style="padding:7px 4px;font-size:12px;text-align:center">Différence</th>
+                <th style="padding:7px 4px;font-size:12px;text-align:center">Sal. mensualisé</th>
+                <th style="padding:7px 4px;font-size:12px;text-align:center">Sal. versé</th>
               </tr></thead>
               <tbody>${lignes}</tbody>
               <tfoot><tr style="background:var(--mp);font-weight:700">
                 <td style="padding:7px 4px;font-size:13px">Total année ${tIdx+1}</td>
-                <td style="padding:7px 4px;font-size:13px;text-align:center">${totMensu.toFixed(2)}h</td>
-                <td style="padding:7px 4px;font-size:13px;text-align:center">${totPrevu.toFixed(2)}h</td>
-                <td style="padding:7px 4px;font-size:14px;font-weight:700;text-align:center;color:${dcT}">${diffT>0?'+':''}${diffT.toFixed(2)}h</td>
+                <td style="padding:7px 4px;font-size:13px;text-align:center">${totMensu.toFixed(2)} €</td>
+                <td style="padding:7px 4px;font-size:13px;text-align:center">${totPrevu.toFixed(2)} €</td>
               </tr></tfoot>
             </table></div>
           </div>`;
@@ -1715,9 +1717,9 @@ function renderDetTab(id,tab){
             <div style="display:flex;justify-content:space-between;align-items:center">
               <div class="ctitle" style="margin:0">Total général</div>
               <div style="display:flex;gap:16px;font-size:13px">
-                <span>Mensual. : <strong>${totGenMensu.toFixed(2)}h</strong></span>
-                <span>Prévues : <strong>${totGenPrevu.toFixed(2)}h</strong></span>
-                <span style="color:${dcGen};font-weight:700">${diffGen>0?'+':''}${diffGen.toFixed(2)}h</span>
+                <span>Sal. mensualisé : <strong>${totGenMensu.toFixed(2)} €</strong></span>
+                <span>Sal. versé : <strong>${totGenPrevu.toFixed(2)} €</strong></span>
+                <span style="color:${dcGen};font-weight:700">${diffGen>0?'+':''}${diffGen.toFixed(2)} €</span>
               </div>
             </div>
           </div>
@@ -3628,9 +3630,8 @@ function calcCongesContrat(c){
       const dateJ=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
       const moisJ=dateJ.getMonth()+1; // 1-12
       let attribue=false;
-      if(c.tc==='52'&&moisJ===5){
-        // Pour 52 sem : les conges-acq de mai appartiennent à l'année dont la période d'acquisition se termine en mai
-        // = anneeRef tel que anneeRef+1 == année du jour (ex: mai 2025 → anneeRef 2024)
+      if(moisJ===5&&c.tc!=='occ'){
+        // Pour tous les contrats (52 sem et 46 sem) : conges-acq de mai appartiennent à l'année qui se termine en mai
         const arMai=dateJ.getFullYear()-1;
         if(c.conges[arMai]&&restantParAnnee[arMai]>0){
           c.conges[arMai].pris++;
@@ -3639,8 +3640,8 @@ function calcCongesContrat(c){
           attribue=true;
         }
       }
+      // FIFO standard pour tous les autres cas
       if(!attribue){
-        // FIFO standard
         for(const ar of anneesRef){
           if(restantParAnnee[ar]>0){
             c.conges[ar].pris++;
@@ -3651,14 +3652,13 @@ function calcCongesContrat(c){
         }
       }
     } else if(j.statut==='conges-anticipe'){
-      // Attribuer à l'année en cours d'acquisition
+      // Attribuer à l'année en cours d'acquisition (juin ar → mai ar+1)
       const dateJ=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
       for(const ar of anneesRef){
-        const debutRef=new Date(ar,5,1);
-        const finRef=new Date(ar+1,4,31);
+        const debutRef=new Date(ar,5,1);  // 1er juin ar
+        const finRef=new Date(ar+1,4,31); // 31 mai ar+1
         if(dateJ>=debutRef&&dateJ<=finRef){
           c.conges[ar].pris++;
-          // Si ce jour est dans la période AM suivante (après 30 avril ar+1)
           if(j.date>=String(ar+1)+'-05-01') c.conges[ar].prisDansAMSuivante++;
           break;
         }
@@ -4449,7 +4449,14 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const nbAcqMois=Math.min(fiche.jours.filter(j=>j.statut==='conges-acq').length, resteAPayer);
         if(nbAcqMois>0){
           indemCongeNbJours=nbAcqMois;
-          indemCongeMois=parseFloat((ind.montantJournalierNet*nbAcqMois).toFixed(2));
+          // Mai : paiement en maintien de salaire (taux mai × hSemMoy/6)
+          if(fiche.mois===4){
+            const hSemMoyMai=(hMensu*12/(sourceActif.nbSem||46));
+            const hJourCgMai=hSemMoyMai/6;
+            indemCongeMois=parseFloat((hJourCgMai*txNet*nbAcqMois).toFixed(2));
+          } else {
+            indemCongeMois=parseFloat((ind.montantJournalierNet*nbAcqMois).toFixed(2));
+          }
         }
         if(fiche.mois===5){
           let nbAnticipe=0;
@@ -7115,6 +7122,29 @@ function genCumul(c){
       </div>`;
     }
 
+    // Régularisation 46 sem : encart après calcul fin mai (comme 52 sem)
+    // Montant déjà versé en mai (maintien) déduit du total CCN
+    if(c.tc!=='52'&&c.tc!=='occ'&&cg.estTerminee){
+      // Montant déjà versé en mai si dateCg='chaque' ou 'principale'
+      const keyMaiRegul=(anneeRef+1)+'-05';
+      const ficheMaiRegul=c.fiches?.[keyMaiRegul];
+      if(ficheMaiRegul?.valide&&(c.dateCg==='chaque'||c.dateCg==='principale')){
+        const recapMaiRegul=calcRecapFiche(c,ficheMaiRegul);
+        const dejaVerseEnMai=recapMaiRegul.indemCongeMois||0;
+        if(dejaVerseEnMai>0){
+          const ind2=calcIndemniteConges(c,anneeRef);
+          if(ind2){
+            const soldeApresmai=Math.max(0,ind2.meilleurNet-dejaVerseEnMai);
+            const nbJoursRestants=Math.max(0,ind2.acquis-(ficheMaiRegul.jours.filter(j=>j.statut==='conges-acq').length));
+            if(soldeApresmai>0){
+              html2+=`<div style="background:#fff8e1;border-radius:8px;padding:8px 12px;margin-bottom:6px;margin-top:-4px;font-size:12px;color:#854F0B">
+                Versé en mai : ${dejaVerseEnMai.toFixed(2)} € — Solde ${anneeRef}/${anneeRef+1} : <strong>${soldeApresmai.toFixed(2)} € net</strong> (${nbJoursRestants} j restants)
+              </div>`;
+            }
+          }
+        }
+      }
+    }
     // Indemnité de congés juste après l'année terminée
     if(c.tc!=='52'&&c.tc!=='occ'&&cg.estTerminee){
       // Vérifier que la fiche de mai est validée
@@ -8115,26 +8145,9 @@ if(tousNonPrevus){
     const periodeDebut=String(anneeDebut)+'-05-01';
     const periodeFin=String(anneeDebut+1)+'-04-30';
 
-    // Initialiser compteurTotal avec les pris hors AM courante
-    // = pris_total - prisDansAMSuivante (calculé par calcCongesContrat)
-    let compteurTotal=0;
-    if(c.conges){
-      Object.values(c.conges).forEach(cg=>{
-        if(!cg.estTerminee) return;
-        compteurTotal+=Math.max(0,(cg.pris||0)-(cg.prisDansAMSuivante||0));
-      });
-    }
+    // compteurTotal sera initialisé dans chaque boucle de période
     // Pour 52 sem : ajouter les conges-acq de mai de l'AM précédente (période de pose à cheval)
-    // Ces jours sont dans l'AM anneeDebut-1 mais font partie de la pose de l'AM anneeDebut
-    if(c.tc==='52'){
-      const maisKey=String(anneeDebut)+'-05'; // mai anneeDebut
-      const ficheMai=c.fiches?.[maisKey];
-      if(ficheMai?.valide){
-        ficheMai.jours.forEach(j=>{
-          if(j.statut==='conges-acq') compteurTotal++;
-        });
-      }
-    }
+    // Le bloc mai est maintenant géré dans chaque boucle de période via compteurTotal=cg.pris
     Object.values(c.fiches).forEach(fiche=>{
       if(fiche.valide) return;
       fiche.jours.forEach(j=>{
@@ -8145,6 +8158,19 @@ if(tousNonPrevus){
     });
 
     periodes.forEach(({debut,fin})=>{
+      // compteurTotal initial = jours déjà pris de la cagnotte pour cette période
+      let compteurTotal=0;
+      if(c.conges){
+        const debutDateObj=new Date(debut);
+        Object.values(c.conges).forEach(cg=>{
+          const debutPoseCg=new Date(cg.anneeRef+1,4,1);
+          const finPoseCg=new Date(cg.anneeRef+2,3,30);
+          const debutAcqCg=new Date(cg.anneeRef,5,1);
+          const finAcqCg=new Date(cg.anneeRef+1,4,31);
+          const dansCagnotte=(debutDateObj>=debutAcqCg&&debutDateObj<=finAcqCg)||(debutDateObj>=debutPoseCg&&debutDateObj<=finPoseCg);
+          if(dansCagnotte) compteurTotal=cg.pris||0;
+        });
+      }
       const premierTrav=premierJourTravaille(c,debut,fin);
      // Limiter dernierDecompte au jour avant le début de la prochaine période
       let dernierDecompte=dernierJourDecompte(c,fin,joursPoses,data.jours);
@@ -8164,10 +8190,16 @@ if(tousNonPrevus){
       // Chercher anneeRef correspondante
       const moisPrecDate=new Date(keyMoisPrec+'-01');
       let quotaAcquis=0;
+      const estMaiPose=new Date(debut).getMonth()===4; // la pose débute en mai
       if(c.conges){
         Object.values(c.conges).forEach(cg=>{
-          if(!cg.estTerminee) return;
-          quotaAcquis+=(cg.acquis||0);
+          if(cg.estTerminee){
+            quotaAcquis+=(cg.acquis||0);
+          } else if(estMaiPose&&cg.anneeRef===new Date(debut).getFullYear()-1){
+            // En mai : l'année anneeRef se termine fin mai → ses acquis comptent comme quota acquis
+            // Utiliser acqBrut arrondi comme pour le 52 sem
+            quotaAcquis+=cg.acquis!==undefined?cg.acquis:Math.floor(cg.acqBrut||0);
+          }
         });
       }
       // Quota anticipé = jours en cours d'acquisition (année non terminée)
@@ -8256,11 +8288,7 @@ if(tousNonPrevus){
           }
         }
        if(fiche.valide){
-          // Incrémenter compteurTotal uniquement pour les congés posés des fiches validées
-          const estCongesPose=['conges-acq','conges-anticipe'].includes(jour.statut);
-          if(decompteCommence&&estCongesPose){
-            compteurTotal++;
-          }
+          // Ne pas recompter les fiches validées : déjà inclus dans compteurTotal initial (cg.pris)
           if(decompteCommence&&estFerie&&jour.statut==='ferie'){
             const veilleStrV=new Date(cur);veilleStrV.setDate(veilleStrV.getDate()-1);
             const lendStrV=new Date(cur);lendStrV.setDate(lendStrV.getDate()+1);
@@ -8339,9 +8367,11 @@ if(tousNonPrevus){
                 if(ficheAvDeb?.anticipeActif!==undefined) anticipeOkVal=c.cgAnticipe==='oui'&&ficheAvDeb.anticipeActif!==false;
               }
               const anticipeOk=anticipeOkVal;
+              const estMai=cur.getMonth()===4; // mai = mois 4 (0-indexé)
               if(compteurTotal<=quotaAcquis){
                 jour.statut='conges-acq';
-              } else if(anticipeOk&&compteurTotal<=quotaAnticipeTotal){
+              } else if(!estMai&&anticipeOk&&compteurTotal<=quotaAnticipeTotal){
+                // En mai : jamais conges-anticipe (soit acquis soit non acquis)
                 jour.statut='conges-anticipe';
               } else {
                 jour.statut='conges-non';
@@ -8363,9 +8393,10 @@ if(tousNonPrevus){
                 const ficheAvDeb2=c.fiches?.[moisAvDebKey2];
                 anticipeOk=c.cgAnticipe==='oui'&&(ficheAvDeb2?.anticipeActif!==false);
               }
+              const estMai2=cur.getMonth()===4;
               if(compteurTotal<=quotaAcquis){
                 jour.statut='conges-acq';
-              } else if(anticipeOk&&compteurTotal<=quotaAnticipeTotal){
+              } else if(!estMai2&&anticipeOk&&compteurTotal<=quotaAnticipeTotal){
                 jour.statut='conges-anticipe';
               } else {
                 jour.statut='conges-non';
