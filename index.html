@@ -1675,14 +1675,36 @@ function renderDetTab(id,tab){
             }
 
             // Col 1 : salaire mensualisé - montant absences
-            // Col 2 : (hPrevu - hAbsDeduit) × txNet
+            // Col 2 : heures réellement "payables" × txNet
+            //   = jours prévus travaillés (hors congés, abs non rem, abs enfant, arrêt)
+            //   + heures réelles abs partielles (pas les heures prévues ce jour)
+            //   + abs rémunérées (heures prévues)
+            //   + fériés prévus au contrat
             const ficheMois=c.fiches?.[key];
             const recapMois=ficheMois?calcRecapFiche(c,ficheMois):null;
             const montantAbsMois=parseFloat(recapMois?.montantAbsences||0);
-            const hAbsDedMois=parseFloat(recapMois?.hAbsDeduit||0);
             const txNetMois=parseFloat(recapMois?.txNetExact||0);
             const montantMensu=parseFloat(Math.max(0,hMensuReg*txNetMois-montantAbsMois).toFixed(2));
-            const montantPrevu=parseFloat(Math.max(0,(hPrevu-hAbsDedMois)*txNetMois).toFixed(2));
+            // Calculer les heures réelles payables
+            let hReel=0;
+            if(ficheMois){
+              const statutsExclus=['conges-acq','conges-anticipe','conges-non','conges-am',
+                'abs-non','abs-enfant','arret','non-prevu','repos','hors-contrat'];
+              ficheMois.jours.forEach(j=>{
+                if(j.date<debutMois||j.date>finMois) return;
+                const statut=j.statut||getStatutPrevu(c,j);
+                if(statutsExclus.includes(statut)) return;
+                if(statut==='abs-partielle'){
+                  // Heures réelles saisies (pas les prévues)
+                  if(j.heureDebReel&&j.heureFinReel){
+                    hReel+=Math.max(0,(toMins(j.heureFinReel)-toMins(j.heureDebReel))/60);
+                  }
+                } else if(j.heureDebPrev&&j.heureFinPrev){
+                  hReel+=Math.max(0,(toMins(j.heureFinPrev)-toMins(j.heureDebPrev))/60);
+                }
+              });
+            }
+            const montantPrevu=parseFloat((hReel*txNetMois).toFixed(2));
             totMensu+=montantMensu; totPrevu+=montantPrevu;
             totGenMensu+=montantMensu; totGenPrevu+=montantPrevu;
             const diff=montantPrevu-montantMensu;
