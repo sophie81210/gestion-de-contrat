@@ -3628,8 +3628,8 @@ function calcCongesContrat(c){
       const dateJ=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
       const moisJ=dateJ.getMonth()+1; // 1-12
       let attribue=false;
-      if(c.tc==='52'&&moisJ===5){
-        // Pour 52 sem uniquement : les conges-acq de mai appartiennent à l'année dont la période d'acquisition se termine en mai
+      if(moisJ===5&&c.tc!=='occ'){
+        // Pour tous les contrats (52 sem et 46 sem) : conges-acq de mai appartiennent à l'année qui se termine en mai
         const arMai=dateJ.getFullYear()-1;
         if(c.conges[arMai]&&restantParAnnee[arMai]>0){
           c.conges[arMai].pris++;
@@ -3638,7 +3638,6 @@ function calcCongesContrat(c){
           attribue=true;
         }
       }
-      // Pour 46 sem : les conges-anticipe de mai sont déjà gérés séparément
       // FIFO standard pour tous les autres cas
       if(!attribue){
         for(const ar of anneesRef){
@@ -3652,13 +3651,17 @@ function calcCongesContrat(c){
       }
     } else if(j.statut==='conges-anticipe'){
       // Attribuer à l'année en cours d'acquisition
+      // Pour les anticipés de mai (46 sem) : appartiennent à l'année dont la pose débute en mai
+      // debutRef étendu à mai (pas juin) pour couvrir les anticipés de mai
       const dateJ=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
+      const moisJ=dateJ.getMonth()+1;
       for(const ar of anneesRef){
-        const debutRef=new Date(ar,5,1);
-        const finRef=new Date(ar+1,4,31);
+        // Pour mai : l'anticipé appartient à l'année ar si mai ar+1 = mois du jour
+        // Pour les autres mois : période normale juin ar → mai ar+1
+        const debutRef=moisJ===5?new Date(ar+1,4,1):new Date(ar,5,1); // mai ar+1 ou juin ar
+        const finRef=new Date(ar+1,4,31); // mai ar+1
         if(dateJ>=debutRef&&dateJ<=finRef){
           c.conges[ar].pris++;
-          // Si ce jour est dans la période AM suivante (après 30 avril ar+1)
           if(j.date>=String(ar+1)+'-05-01') c.conges[ar].prisDansAMSuivante++;
           break;
         }
@@ -4449,7 +4452,14 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const nbAcqMois=Math.min(fiche.jours.filter(j=>j.statut==='conges-acq').length, resteAPayer);
         if(nbAcqMois>0){
           indemCongeNbJours=nbAcqMois;
-          indemCongeMois=parseFloat((ind.montantJournalierNet*nbAcqMois).toFixed(2));
+          // Mai : paiement en maintien de salaire (taux mai × hSemMoy/6)
+          if(fiche.mois===4){
+            const hSemMoyMai=(hMensu*12/(sourceActif.nbSem||46));
+            const hJourCgMai=hSemMoyMai/6;
+            indemCongeMois=parseFloat((hJourCgMai*txNet*nbAcqMois).toFixed(2));
+          } else {
+            indemCongeMois=parseFloat((ind.montantJournalierNet*nbAcqMois).toFixed(2));
+          }
         }
         if(fiche.mois===5){
           let nbAnticipe=0;
@@ -7115,6 +7125,29 @@ function genCumul(c){
       </div>`;
     }
 
+    // Régularisation 46 sem : encart après calcul fin mai (comme 52 sem)
+    // Montant déjà versé en mai (maintien) déduit du total CCN
+    if(c.tc!=='52'&&c.tc!=='occ'&&cg.estTerminee){
+      // Montant déjà versé en mai si dateCg='chaque' ou 'principale'
+      const keyMaiRegul=(anneeRef+1)+'-05';
+      const ficheMaiRegul=c.fiches?.[keyMaiRegul];
+      if(ficheMaiRegul?.valide&&(c.dateCg==='chaque'||c.dateCg==='principale')){
+        const recapMaiRegul=calcRecapFiche(c,ficheMaiRegul);
+        const dejaVerseEnMai=recapMaiRegul.indemCongeMois||0;
+        if(dejaVerseEnMai>0){
+          const ind2=calcIndemniteConges(c,anneeRef);
+          if(ind2){
+            const soldeApresmai=Math.max(0,ind2.meilleurNet-dejaVerseEnMai);
+            const nbJoursRestants=Math.max(0,ind2.acquis-(ficheMaiRegul.jours.filter(j=>j.statut==='conges-acq').length));
+            if(soldeApresmai>0){
+              html2+=`<div style="background:#fff8e1;border-radius:8px;padding:8px 12px;margin-bottom:6px;margin-top:-4px;font-size:12px;color:#854F0B">
+                Versé en mai : ${dejaVerseEnMai.toFixed(2)} € — Solde ${anneeRef}/${anneeRef+1} : <strong>${soldeApresmai.toFixed(2)} € net</strong> (${nbJoursRestants} j restants)
+              </div>`;
+            }
+          }
+        }
+      }
+    }
     // Indemnité de congés juste après l'année terminée
     if(c.tc!=='52'&&c.tc!=='occ'&&cg.estTerminee){
       // Vérifier que la fiche de mai est validée
