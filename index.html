@@ -743,6 +743,12 @@ else S.params=JSON.parse(localStorage.getItem('cam_params')||'null')||JSON.parse
       localStorage.setItem('cam_c',JSON.stringify(S.contrats));
       localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM||{}));
       initToutesLesFiches();
+      // Recalculer les statuts congés pour toutes les années AM
+      if(S.congesAM){
+        Object.keys(S.congesAM).forEach(am=>{
+          majFichesCgAm(parseInt(am),false);
+        });
+      }
       renderAuj();
     }
   }catch(e){console.error('Load:',e);}
@@ -2679,7 +2685,8 @@ function calcFicheSolde(c){
       // Calculer maintien versé sur les jours effectivement pris (hors restants)
       const debutAppart=new Date(anneeRef,4,1);
       const finAppart=new Date(anneeRef+2,3,30);
-      let maintienVerse=0, brutAnnuel=0;
+      let maintienVerse=0;
+      const brutAnnuel=calcBrutTotal(c, debutRef, finRef);
       const debutRef=new Date(anneeRef,5,1);
       const finRef=new Date(anneeRef+1,4,31);
       const tousAcq=[];
@@ -2687,7 +2694,7 @@ function calcFicheSolde(c){
         if(!fiche.valide) return;
         const [ay,am]=k.split('-').map(Number);
         const dateF=new Date(ay,am-1,1);
-        if(dateF>=debutRef&&dateF<=finRef) brutAnnuel+=hMensu*txBrut;
+        // brutAnnuel calculé via calcBrutTotal
         (fiche.jours||[]).forEach(j=>{
           if(j.statut==='conges-acq') tousAcq.push({j,dateF});
           else if(j.statut==='conges-anticipe'){
@@ -2733,13 +2740,7 @@ function calcFicheSolde(c){
       // Calcul maintien vs 10ème sur les restants
       const debutRef=new Date(anneeRef,5,1);
       const finRef=new Date(anneeRef+1,4,31);
-      let brutAnnuel=0;
-      Object.entries(c.fiches||{}).forEach(([k,fiche])=>{
-        if(!fiche.valide) return;
-        const [ay,am]=k.split('-').map(Number);
-        const dF=new Date(ay,am-1,1);
-        if(dF>=debutRef&&dF<=finRef) brutAnnuel+=hMensu*txBrut;
-      });
+      const brutAnnuel=calcBrutTotal(c, debutRef, finRef);
       const montantMaintien=parseFloat((restants*hJourCg*txNet).toFixed(2));
       const dixiemeBrut=parseFloat((brutAnnuel/10).toFixed(2));
       const dixiemeNet=parseFloat((dixiemeBrut*coefNet).toFixed(2));
@@ -2856,7 +2857,8 @@ function calcRegul52(c, key){
     });
     if(dernierMoisPrise!==key) continue;
     // Calculer maintien et 10ème
-    let maintienVerse=0, brutAnnuel=0;
+    let maintienVerse=0;
+    const brutAnnuel=calcBrutTotal(c, debutRef, finRef);
     const coefNetV52=(S.params&&S.params.coefNet)||0.7811975;
     const debutAppart52=new Date(anneeRef,4,1);
     const finAppart52=new Date(anneeRef+1,3,30);
@@ -2867,7 +2869,7 @@ function calcRegul52(c, key){
       const src=getVersionActive(c,dateF);
       const hMensuSrc=parseFloat(src.hMensu||c.hMensu||0);
       const txBrutSrc=parseFloat(src.txBrut||c.txBrut||0);
-      if(fiche2.valide&&dateF>=debutRef&&dateF<=finRef) brutAnnuel+=hMensuSrc*txBrutSrc;
+      // brutAnnuel calculé via calcBrutTotal
       // Ajouter régularisation 52 versée ce mois au brutAnnuel (pour futur 10ème)
       if(fiche2.valide&&dateF>=debutRef&&dateF<=finRef){
         const coefNetBrut52=(S.params&&S.params.coefNet)||0.7811975;
@@ -2897,8 +2899,13 @@ function calcRegul52(c, key){
       const dateVeille=new Date(jy,jm-1,jd);
       dateVeille.setDate(dateVeille.getDate()-1);
       const srcV=getVersionActive(c,dateVeille);
-      const txNetV=parseFloat(srcV.txBrut||0)*coefNetV52;
-      maintienVerse+=hJourCg*txNetV;
+      const hMensuMajV=parseFloat(srcV.hMensuMaj||0);
+      const hMensuTotV=parseFloat(srcV.hMensu||hMensuSrc||0);
+      const majSupV=(srcV.majSup||0)/100;
+      const partMaj=hMensuTotV>0?hMensuMajV/hMensuTotV:0;
+      const txNetNormV=parseFloat(srcV.txBrut||0)*coefNetV52;
+      const txNetMajV=parseFloat(srcV.txBrut||0)*(1+majSupV)*coefNetV52;
+      maintienVerse+=hJourCg*((1-partMaj)*txNetNormV+partMaj*txNetMajV);
     });
     maintienVerse=parseFloat(maintienVerse.toFixed(2));
     const coefNet=(S.params&&S.params.coefNet)||0.7811975;
@@ -2921,6 +2928,16 @@ function buildRecapHtml(recap, solde, regul52){
   } else {
     // Partie haute : mensu + absences + taux
     html+=ligneG('Heures mensualisées', (recap.hMensu||0).toFixed(2)+' h'+(recap.txNetExact&&recap.hMensu?' — '+(recap.hMensu*recap.txNetExact).toFixed(2)+' € net':''));
+    if(parseFloat(recap.hMensuMaj||0)>0){
+      const coefNR=(S.params?.coefNet)||0.7811975;
+      const txNM=(recap.txNetExact||(parseFloat(recap.txNet||0)))||0;
+      const txBrutR=txNM/coefNR;
+      const majSupR=(recap.majSup||0)/100;
+      const txNetMajR=txBrutR*(1+majSupR)*coefNR;
+      const salNorm=(recap.hMensuNorm||0)*txNM;
+      const salMaj=(recap.hMensuMaj||0)*txNetMajR;
+      html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--tx2)">dont '+(recap.hMensuNorm||0).toFixed(2)+'h norm. ('+salNorm.toFixed(2)+' €) + '+(recap.hMensuMaj||0).toFixed(2)+'h maj. ('+salMaj.toFixed(2)+' €)</td></tr>';
+    }
     if(parseFloat(recap.montantCongesPayesMois||0)>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont congés payés ('+recap.nbCongesPayesMois+' j) — '+recap.montantCongesPayesMois.toFixed(2)+' € net</td></tr>';
     if(recap.regul52Fiche) html+=ligneG('Régularisation congés '+recap.regul52Fiche.anneeRef+'/'+(recap.regul52Fiche.anneeRef+1)+' (10ème)', recap.regul52Fiche.diff.toFixed(2)+' € net', true, 'var(--m)');
     if(parseFloat(recap.hAbs)>0) html+=ligneG('Heures d\'absence', '\u2212 '+recap.hAbsDeduit.toFixed(2)+' h \u2014 '+recap.montantAbsences.toFixed(2)+' \u20AC','','var(--al)');
@@ -3229,6 +3246,11 @@ function validerFiche(contratId,key){
       saveToFirestore();
     }
   }
+  // Recalculer les statuts congés pour les mois suivants non validés
+  const anneeAmVal=getAnneeAmPourDate(key);
+  majFichesCgAm(anneeAmVal, false);
+  const anneeAmValSuivante=getAnneeAmPourDate(key.split('-')[0]+'-'+(parseInt(key.split('-')[1])+1<13?String(parseInt(key.split('-')[1])+1).padStart(2,'0'):'01'));
+  if(anneeAmValSuivante!==anneeAmVal) majFichesCgAm(anneeAmValSuivante, false);
   toast('Feuille de '+MOIS[c.fiches[key].mois]+' validée !');
   // Avertissement 30 avril à la validation de février
   const [kvy,kvm]=key.split('-').map(Number);
@@ -3548,14 +3570,29 @@ function calcCongesContrat(c){
 
   tousJoursConges.forEach(j=>{
     if(j.statut==='conges-acq'){
-      // Attribuer à la première année qui a encore des jours disponibles
-      for(const ar of anneesRef){
-        if(restantParAnnee[ar]>0){
-          c.conges[ar].pris++;
-          restantParAnnee[ar]--;
-          // Si ce jour est dans la période AM suivante (après 30 avril ar+1)
-          if(j.date>=String(ar+1)+'-05-01') c.conges[ar].prisDansAMSuivante++;
-          break;
+      const dateJ=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
+      const moisJ=dateJ.getMonth()+1; // 1-12
+      let attribue=false;
+      if(c.tc==='52'&&moisJ===5){
+        // Pour 52 sem : les conges-acq de mai appartiennent à l'année dont la période d'acquisition se termine en mai
+        // = anneeRef tel que anneeRef+1 == année du jour (ex: mai 2025 → anneeRef 2024)
+        const arMai=dateJ.getFullYear()-1;
+        if(c.conges[arMai]&&restantParAnnee[arMai]>0){
+          c.conges[arMai].pris++;
+          restantParAnnee[arMai]--;
+          c.conges[arMai].prisDansAMSuivante++;
+          attribue=true;
+        }
+      }
+      if(!attribue){
+        // FIFO standard
+        for(const ar of anneesRef){
+          if(restantParAnnee[ar]>0){
+            c.conges[ar].pris++;
+            restantParAnnee[ar]--;
+            if(j.date>=String(ar+1)+'-05-01') c.conges[ar].prisDansAMSuivante++;
+            break;
+          }
         }
       }
     } else if(j.statut==='conges-anticipe'){
@@ -3613,6 +3650,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const majComp=(sourceActif.majComp||0)/100;
   const majSup=(sourceActif.majSup||0)/100;
   const hMensu=sourceActif.hMensu||0;
+  const hMensuMaj=parseFloat(sourceActif.hMensuMaj||0);
+  const hMensuNorm=hMensuMaj>0?parseFloat(sourceActif.hMensuNorm||hMensu-hMensuMaj):hMensu;
+  const majSup52=(sourceActif.majSup||0)/100;
+  // Salaire mensuel heures normales et majorées
+  const coefNetR=(S.params?.coefNet)||0.7811975;
   const reposHebdo=sourceActif.reposHebdo||0;
   let nbJoursPrevu=0;
   fiche.jours.forEach(j=>{
@@ -3706,8 +3748,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const hMoyJourGlobal=(sourceActif.nbSem&&sourceActif.nbSem>0)?(hMensu*12/sourceActif.nbSem)/joursMaxMoyen:hMensu/20;
   const semTheoriquesVues=new Set();
   const semJoursCpt={};
+  const hSemMoyTh=(hMensu*12/(sourceActif.nbSem||52));
+  const hJourCgTh=(hSemMoyTh/6)*60; // en minutes, pour hTheoriques
   fiche.jours.forEach(j=>{
-    if(j.heureDebPrev&&j.heureFinPrev){
+    if(j.statut==='conges-non'||j.statut==='conges-acq'||j.statut==='conges-anticipe'){
+      // Jours de congés (acquis, anticipés ou non acquis) : toujours hSemMoy/6
+      hTheoriques+=hJourCgTh;
+    } else if(j.heureDebPrev&&j.heureFinPrev){
       hTheoriques+=toM(j.heureFinPrev)-toM(j.heureDebPrev);
     } else if(!j.heureDebPrev&&!j.heureFinPrev&&(c.th==='fixe'||c.th==='sem')){
       // CORRECTION : Semaine 'off' sur contrat fixe/sem
@@ -3773,6 +3820,32 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     }
   });
   hTheoriques=hTheoriques/60;
+  // Calculer hTheoriquesMaj : pour chaque semaine visible dans la fiche, max(0, hSemaineTh - 45)
+  // On utilise les heures théoriques par semaine calculées ci-dessus
+  let hTheoriquesMaj=0;
+  if(hMensuMaj>0){
+    // Reconstruire les heures théoriques par semaine
+    const hThParSem={};
+    fiche.jours.forEach(j=>{
+      const sk=getSemISO(j.date);
+      if(!hThParSem[sk]) hThParSem[sk]=0;
+      if(j.heureDebPrev&&j.heureFinPrev){
+        hThParSem[sk]+=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
+      }
+    });
+    // Ajouter les semaines off et plan
+    Object.entries(hThParSem).forEach(([sk,hSem])=>{
+      hTheoriquesMaj+=Math.max(0,hSem-45);
+    });
+    // Pour les semaines sans heures prévues (off, sem, etc.) utiliser hMoyHebdo
+    // hMoyHebdo = hMensu*12/nbSem
+    const hMoyHebdo=(hMensu*12/(sourceActif.nbSem||52));
+    const majParSemaine=Math.max(0,hMoyHebdo-45);
+    // Ne compter que les semaines entières avec heures théoriques issues de la moyenne
+    // (semaines off, plan var sans volume)
+    // Ces semaines sont déjà comptabilisées dans hThParSem avec la moyenne hebdo
+  }
+  const hTheoriquesNorm=Math.max(0,hTheoriques-hTheoriquesMaj);
   // Pour les périodes d'avenant, recalculer hTheoriques sur tout le mois
   if(dateAvenantStr){
     let hTheoriquesMois=0;
@@ -4234,7 +4307,20 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   });
   const hMoyParJour=nbJoursMoisContrat>0?hMensu/nbJoursMoisContrat:hMensu/20;
   if(hAbs>0&&hTheoriques>0){
-    const tauxHAbs=(hMensu*txNet)/hTheoriques;
+    // Retenue en 2 temps : heures normales + heures majorées séparément
+    const txNetMaj=txBrut*(1+majSup52)*coefNetR;
+    let tauxHAbs;
+    if(hMensuMaj>0&&hTheoriquesMaj>0){
+      // Part absences sur heures normales
+      const tauxNorm=(hMensuNorm*txNet)/hTheoriquesNorm;
+      // Part absences sur heures majorées  
+      const tauxMaj=(hMensuMaj*txNetMaj)/hTheoriquesMaj;
+      // Répartir hAbs entre normales et majorées selon les heures prévues du jour
+      // On utilise un taux moyen pondéré pour simplifier
+      tauxHAbs=(hMensuNorm*txNet+hMensuMaj*txNetMaj)/hTheoriques;
+    } else {
+      tauxHAbs=(hMensu*txNet)/hTheoriques;
+    }
     montantAbsences=parseFloat((tauxHAbs*hAbs).toFixed(2));
   }
   const hAbsDeduit=txNet>0?parseFloat((montantAbsences/txNet).toFixed(2)):0;
@@ -4259,7 +4345,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const hReelTotal=Object.values(hParSemaine).reduce((t,h)=>t+h,0);
     hBase=Math.max(0,hReelTotal-parseFloat(hSup));
   }
-  const salaireNetBrut=(hBase+hComp*(1+majComp)+hSup*(1+majSup))*txNet - montantAbsences;
+  // Salaire = heures normales mensualisées + heures majorées mensualisées (taux différent)
+  const txNetMajR=txBrut*(1+majSup52)*coefNetR;
+  const salaireNetBrut=hMensuNorm*txNet+hMensuMaj*txNetMajR
+    +hComp*(1+majComp)*txNet+hSup*(1+majSup)*txNet - montantAbsences;
   const salaireNet=parseFloat(Math.max(0,salaireNetBrut).toFixed(2));
   const nbAbsEnfantMois=fiche.jours.filter(j=>j.statut==='abs-enfant').length;
   const donneesManquantes=(!txBrut||(c.tc!=='occ'&&!hMensu));
@@ -4380,6 +4469,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     montantCongesPayesMois, nbCongesPayesMois,
     montantCongesNonAcquis, nbCongesNonAcquis,
     regul52Fiche,
+    hMensuMaj, hMensuNorm, hTheoriquesMaj, hTheoriquesNorm,
+    majSup: majSup52*100,
     indemCgOcc: (()=>{
       // Chercher si un avenant signé ce mois a une indemCgOcc
       const ficheKey=Object.keys(c.fiches||{}).find(k=>c.fiches[k]===fiche);
@@ -5577,10 +5668,41 @@ function calc(){
     }
   }
   const hH=sem>0?hAnn/sem:0;const hM=hAnn/12;
+  // Séparer heures normales (≤45h/sem) et majorées (>45h/sem)
+  const hHebdoMaj=Math.max(0,hH-45);
+  const hHebdoNorm=Math.min(hH,45);
+  const hMAnnMaj=hHebdoMaj*sem;
+  const hMAnnNorm=hHebdoNorm*sem;
+  const hMNorm=hMAnnNorm/12;
+  const hMMaj=hMAnnMaj/12;
   st('r-hh',hH>0?hH.toFixed(2)+'h':'—');st('r-hh-f',fH);
   st('r-sem',sem>0?sem:'—');st('r-sem-f',fSem);
   st('r-hm',hM>0?hM.toFixed(2)+'h':'—');
   st('r-hm-f',hM>0?hAnn.toFixed(2)+'h ann. / 12':'');
+  // Afficher la décomposition normales/majorées
+  let rHmNorm=document.getElementById('r-hm-norm');
+  let rHmMaj=document.getElementById('r-hm-maj');
+  if(!rHmNorm){
+    const card=document.getElementById('card-mens');
+    if(card){
+      const divNM=document.createElement('div');
+      divNM.id='r-hm-detail';
+      divNM.style.cssText='font-size:12px;color:var(--tx2);margin-top:4px';
+      divNM.innerHTML='<span id="r-hm-norm"></span><span id="r-hm-maj"></span>';
+      const hmEl=card.querySelector('#r-hm')?.closest('.fg');
+      if(hmEl) hmEl.appendChild(divNM);
+      rHmNorm=document.getElementById('r-hm-norm');
+      rHmMaj=document.getElementById('r-hm-maj');
+    }
+  }
+  if(rHmNorm) rHmNorm.textContent=hMMaj>0?'dont '+hMNorm.toFixed(2)+'h norm. + '+hMMaj.toFixed(2)+'h maj.':'';
+  // Stocker hMensuMaj dans un champ caché
+  let rHmMajHidden=document.getElementById('r-hm-maj-val');
+  if(!rHmMajHidden){rHmMajHidden=document.createElement('span');rHmMajHidden.id='r-hm-maj-val';rHmMajHidden.style.display='none';document.body.appendChild(rHmMajHidden);}
+  rHmMajHidden.textContent=hMMaj.toFixed(4);
+  let rHmNormHidden=document.getElementById('r-hm-norm-val');
+  if(!rHmNormHidden){rHmNormHidden=document.createElement('span');rHmNormHidden.id='r-hm-norm-val';rHmNormHidden.style.display='none';document.body.appendChild(rHmNormHidden);}
+  rHmNormHidden.textContent=hMNorm.toFixed(4);
   // Calculer nbJoursMois = jours/sem moyens * sem / 12 (arrondi au plus proche)
   let nbJSem=0;
   if(S.th==='fixe'&&document.getElementById('j-fixe')){
@@ -5720,6 +5842,8 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
   majComp:parseFloat(document.getElementById('f-maj-comp')?.value)||0,
   majSup:parseFloat(document.getElementById('f-maj-sup')?.value)||0,
   hMensu:hm?parseFloat(hm.toFixed(2)):0,
+  hMensuMaj:parseFloat(parseFloat(document.getElementById('r-hm-maj-val')?.textContent||0).toFixed(2)),
+  hMensuNorm:parseFloat(parseFloat(document.getElementById('r-hm-norm-val')?.textContent||0).toFixed(2))||hm,
   nbJoursMois:parseFloat(document.getElementById('r-jours-mois')?.textContent)||0,
   mensBrute:tx&&hm?parseFloat((tx*hm).toFixed(2)):0,
   cgAnticipe:document.querySelector('[name="cg-anticipe"]:checked')?.value||null,
@@ -5823,6 +5947,10 @@ function validerAvenant(){
   av.joursMin=[0,1,2,3,4,5,6].map(i=>!!(document.getElementById('plan-min-jour-'+i)?.checked));
   av.txBrut=tx;av.txNet=tx?parseFloat((tx*0.7811975).toFixed(2)):0;
   av.hMensu=hm?parseFloat(hm.toFixed(2)):0;
+  const hmMajVal=parseFloat(document.getElementById('r-hm-maj-val')?.textContent)||0;
+  const hmNormVal=parseFloat(document.getElementById('r-hm-norm-val')?.textContent)||0;
+  av.hMensuMaj=hmMajVal>0?parseFloat(hmMajVal.toFixed(2)):0;
+  av.hMensuNorm=hmNormVal>0?parseFloat(hmNormVal.toFixed(2)):av.hMensu;
   av.mensBrute=tx&&hm?parseFloat((tx*hm).toFixed(2)):0;
   av.majComp=parseFloat(document.getElementById('f-maj-comp')?.value)||0;
   av.majSup=parseFloat(document.getElementById('f-maj-sup')?.value)||0;
@@ -5888,7 +6016,12 @@ function calcBrutTotal(c, dateDebut, dateFin){
     const source=getVersionActive(c,debutMois);
     const txBrut=source.txBrut||0;
     const r=calcRecapFiche(c,fiche);
-    const brutMois=parseFloat(((r.hBase||0)*txBrut+(r.montantCompBrut||0)+(r.montantSupBrut||0)).toFixed(2));
+    // Brut réel = (hMensuNorm - hAbsDeduitNorm) * txBrut + (hMensuMaj - hAbsDeduitMaj) * txBrutMaj + comp + sup
+    const hMensuMajR=parseFloat(r.hMensuMaj||0);
+    const hMensuNormR=parseFloat(r.hMensuNorm||r.hMensu||0);
+    const hBaseReelNorm=Math.max(0,hMensuNormR-parseFloat(r.hAbsDeduit||0)*(hMensuNormR/(r.hMensu||1)));
+    const hBaseReelMaj=Math.max(0,hMensuMajR-parseFloat(r.hAbsDeduit||0)*(hMensuMajR/(r.hMensu||1)));
+    const brutMois=parseFloat((hBaseReelNorm*txBrut+hBaseReelMaj*txBrut*(1+(r.majSup||0)/100)+(r.montantCompBrut||0)+(r.montantSupBrut||0)).toFixed(2));
     total+=brutMois;
     // Ajouter la régularisation 52 sem versée (convertie en brut)
     if(r.regul52Fiche&&r.regul52Fiche.diff>0){
@@ -6026,53 +6159,76 @@ function calcDureePreavis(c, dateSignif){
   return {duree:1,unite:'mois',label:'1 mois calendaire'};
 }
 
+function isJourCongeAM(dateStr){
+  if(!S.congesAM) return false;
+  return Object.values(S.congesAM).some(cgAm=>cgAm&&cgAm.jours&&cgAm.jours[dateStr]==='pose');
+}
+
+function dateToStr(d){
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+
+function reporterSiDimanche(d){
+  // Si la date tombe un dimanche (jour de repos), reporter au lundi
+  if(d.getDay()===0) d.setDate(d.getDate()+1);
+  return d;
+}
+
 function calcDateFinPreavis(dateSignif, dureePreavis, cumulConges, c){
-  // Calcule la date de fin de préavis en tenant compte du cumul congés
-  const d=new Date(dateSignif);
+  // Calcule la date de fin de préavis avec suspension pendant les congés AM
+  // Les dimanches inclus dans les congés ne déclenchent pas de décompte supplémentaire
+  const reposH=c?.reposHebdo||0; // 0=dimanche par défaut
+
   if(dureePreavis.unite==='jours'){
     if(cumulConges){
-      // Cumul : on ajoute les jours calendaires directement
+      // Cumul : jours calendaires directs
+      const d=new Date(dateSignif.getFullYear(),dateSignif.getMonth(),dateSignif.getDate());
       d.setDate(d.getDate()+dureePreavis.duree-1);
+      reporterSiDimanche(d);
+      return d;
     } else {
-      // Sans cumul : le préavis est suspendu pendant les congés
+      // Suspension : le préavis ne court pas pendant les congés AM
       let joursRestants=dureePreavis.duree;
-      const cur=new Date(dateSignif);
+      const cur=new Date(dateSignif.getFullYear(),dateSignif.getMonth(),dateSignif.getDate());
       while(joursRestants>0){
-        // Vérifier si ce jour est un jour de congé dans le calendrier AM
-        const dateStr=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
-        let estConge=false;
-        if(S.congesAM){
-          Object.values(S.congesAM).forEach(cgAm=>{
-            if(cgAm&&cgAm.jours&&cgAm.jours[dateStr]==='pose') estConge=true;
-          });
-        }
-        if(!estConge) joursRestants--;
+        const dateStr=dateToStr(cur);
+        if(!isJourCongeAM(dateStr)) joursRestants--;
         if(joursRestants>0) cur.setDate(cur.getDate()+1);
       }
+      reporterSiDimanche(cur);
       return cur;
     }
   } else {
-    // 1 mois calendaire
-    d.setMonth(d.getMonth()+1);
-    d.setDate(d.getDate()-1);
-    if(!cumulConges){
-      // Compter les jours de congés pendant le préavis et prolonger
-      const dateFinLegale=new Date(d);
-      const cur=new Date(dateSignif);
-      let joursConges=0;
-      while(cur<=dateFinLegale){
-        const dateStr=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
-        if(S.congesAM){
-          Object.values(S.congesAM).forEach(cgAm=>{
-            if(cgAm&&cgAm.jours&&cgAm.jours[dateStr]==='pose') joursConges++;
-          });
-        }
-        cur.setDate(cur.getDate()+1);
-      }
-      d.setDate(d.getDate()+joursConges);
+    // 1 mois calendaire : calcul de la date légale de fin (sans congés)
+    const dFin=new Date(dateSignif.getFullYear(),dateSignif.getMonth()+1,dateSignif.getDate()-1);
+    if(cumulConges){
+      reporterSiDimanche(dFin);
+      return dFin;
     }
+    // Sans cumul : suspension pendant les congés AM
+    // On identifie les périodes de congés AM pendant le préavis et on prolonge
+    // en ignorant les dimanches dans les congés (pas de décompte supplémentaire)
+    const cur=new Date(dateSignif.getFullYear(),dateSignif.getMonth(),dateSignif.getDate());
+    let joursPreavisEcoules=0;
+    const dureePreavJours=(dFin-cur)/(1000*60*60*24)+1; // durée en jours calendaires
+    // On fait courir le préavis : on avance jour par jour en sautant les périodes de congés
+    const result=new Date(cur);
+    let joursCourus=0;
+    let iterations=0;
+    while(joursCourus<dureePreavJours&&iterations<500){
+      iterations++;
+      const dateStr=dateToStr(result);
+      if(!isJourCongeAM(dateStr)){
+        joursCourus++;
+        if(joursCourus<dureePreavJours) result.setDate(result.getDate()+1);
+      } else {
+        // Jour de congé : avancer sans compter
+        result.setDate(result.getDate()+1);
+      }
+    }
+    reporterSiDimanche(result);
+    return result;
   }
-  return d;
 }
 
 function calcIndemnitePreavis(c, dateSignif, dateFinEffective, dureePreavis, cumulConges){
@@ -6086,10 +6242,15 @@ function calcIndemnitePreavis(c, dateSignif, dateFinEffective, dureePreavis, cum
   if(joursRestants===0) return {montantBrut:0,montantNet:0,joursRestants:0};
   const source=getVersionActive(c,dateSignif);
   const hMensu=source.hMensu||0;
+  const hMensuMajP=parseFloat(source.hMensuMaj||0);
+  const hMensuNormP=hMensuMajP>0?parseFloat(source.hMensuNorm||hMensu-hMensuMajP):hMensu;
   const txBrut=source.txBrut||0;
-  // Formule : (hMensu × txBrut / nbJoursCalendairesMois) × joursRestants
+  const majSupP=(source.majSup||0)/100;
+  // Formule : (hMensu × txBrut / nbJoursCalendairesMois) × joursRestants (heures normales + majorées)
   const nbJoursMois=new Date(dateSignif.getFullYear(),dateSignif.getMonth()+1,0).getDate();
-  const montantBrut=parseFloat(((hMensu*txBrut/nbJoursMois)*joursRestants).toFixed(2));
+  const montantBrutNorm=parseFloat(((hMensuNormP*txBrut/nbJoursMois)*joursRestants).toFixed(2));
+  const montantBrutMaj=parseFloat(((hMensuMajP*txBrut*(1+majSupP)/nbJoursMois)*joursRestants).toFixed(2));
+  const montantBrut=parseFloat((montantBrutNorm+montantBrutMaj).toFixed(2));
   return {montantBrut, montantNet:montantBrut, joursRestants};
 }
 
@@ -6201,7 +6362,13 @@ function rafraichirRupture(cid){
   const cumulConges=document.getElementById('rp-cumul-conges-'+cid)?.checked??c.rupture.cumulConges??false;
   // Bloquer date de signification antérieure au début de contrat
   const dateDebContratMin=c.dateDeb||'';
-  const dateSignifFinal=dateSignif&&dateSignif>=dateDebContratMin?dateSignif:'';
+  let dateSignifFinal=dateSignif&&dateSignif>=dateDebContratMin?dateSignif:'';
+  // Bloquer signification un dimanche
+  if(dateSignifFinal){
+    const dsP=dateSignifFinal.split('-').map(Number);
+    const dsObj=new Date(dsP[0],dsP[1]-1,dsP[2]);
+    if(dsObj.getDay()===0) dateSignifFinal='';
+  }
   const dateNotifFinal=dateNotif&&dateNotif>=dateDebContratMin?dateNotif:'';
   c._ruptureTemp={motif,dateSignif:dateSignifFinal,dateNotif:dateNotifFinal,delaiPrev,statutPreavis,initiativePreavis,dateFinPreavis,dateFinContrat,cumulConges};
   const cont=document.getElementById('det-content');
@@ -6665,7 +6832,8 @@ function genCumul(c){
       const debutRef=new Date(anneeRef,5,1); // 1er juin anneeRef
       const finRef=new Date(anneeRef+1,4,31); // 31 mai anneeRef+1
       let maintienVerse=0;
-      let brutAnnuel=0;
+      // Brut annuel = calcBrutTotal sur la période d'acquisition (juin anneeRef → mai anneeRef+1)
+      const brutAnnuel=calcBrutTotal(c, debutRef, finRef);
       const coefNetV=(S.params&&S.params.coefNet)||0.7811975;
       // Période d'appartenance de l'anneeRef : mai anneeRef → avril anneeRef+1
       const debutAppart=new Date(anneeRef,4,1);   // 1er mai anneeRef
@@ -6679,7 +6847,7 @@ function genCumul(c){
         const hMensuSrc=parseFloat(src.hMensu||c.hMensu||0);
         const txBrutSrc=parseFloat(src.txBrut||c.txBrut||0);
         // Brut annuel : fiches validées dans la période d'acquisition seulement
-        if(ficheF.valide&&dateF>=debutRef&&dateF<=finRef) brutAnnuel+=hMensuSrc*txBrutSrc;
+        // brutAnnuel calculé via calcBrutTotal (pas besoin ici)
         (ficheF.jours||[]).forEach(j=>{
           if(j.statut!=='conges-acq'&&j.statut!=='conges-anticipe') return;
           tousAcq.push({j, src, hMensuSrc});
@@ -6705,8 +6873,15 @@ function genCumul(c){
         const dateVeille=new Date(jy,jm-1,jd);
         dateVeille.setDate(dateVeille.getDate()-1);
         const srcV=getVersionActive(c,dateVeille);
-        const txNetV=parseFloat(srcV.txBrut||0)*coefNetV;
-        maintienVerse+=hJourCg*txNetV;
+        const hMensuMajV=parseFloat(srcV.hMensuMaj||0);
+        const hMensuTotV=parseFloat(srcV.hMensu||hMensuSrc||0);
+        const majSupV=(srcV.majSup||0)/100;
+        // Maintien = part normale + part majorée du jour de congé
+        const partMaj=hMensuTotV>0?hMensuMajV/hMensuTotV:0;
+        const partNorm=1-partMaj;
+        const txNetNormV=parseFloat(srcV.txBrut||0)*coefNetV;
+        const txNetMajV=parseFloat(srcV.txBrut||0)*(1+majSupV)*coefNetV;
+        maintienVerse+=hJourCg*(partNorm*txNetNormV+partMaj*txNetMajV);
       });
       maintienVerse=parseFloat(maintienVerse.toFixed(2));
       const coefNet=(S.params&&S.params.coefNet)||0.7811975;
@@ -7737,6 +7912,17 @@ if(tousNonPrevus){
         compteurTotal+=Math.max(0,(cg.pris||0)-(cg.prisDansAMSuivante||0));
       });
     }
+    // Pour 52 sem : ajouter les conges-acq de mai de l'AM précédente (période de pose à cheval)
+    // Ces jours sont dans l'AM anneeDebut-1 mais font partie de la pose de l'AM anneeDebut
+    if(c.tc==='52'){
+      const maisKey=String(anneeDebut)+'-05'; // mai anneeDebut
+      const ficheMai=c.fiches?.[maisKey];
+      if(ficheMai?.valide){
+        ficheMai.jours.forEach(j=>{
+          if(j.statut==='conges-acq') compteurTotal++;
+        });
+      }
+    }
     Object.values(c.fiches).forEach(fiche=>{
       if(fiche.valide) return;
       fiche.jours.forEach(j=>{
@@ -7779,19 +7965,22 @@ if(tousNonPrevus){
         Object.values(c.conges).forEach(cg=>{
           const debutRef=new Date(cg.anneeRef,5,1);
           const finRef=new Date(cg.anneeRef+1,4,31);
-          if(debutDate>=debutRef&&debutDate<=finRef&&!cg.estTerminee){
-            // 52 sem : dès le 1er mai de la fin d'année ref, les jours en cours comptent comme acquis
-            const debutMaiRef=new Date(cg.anneeRef+1,4,1); // 1er mai anneeRef+1
-            if(c.tc==='52'&&debutDate>=debutMaiRef){
-              // Ajouter au quota acquis (pas anticipe)
+          // Période de pose : mai anneeRef+1 → avril anneeRef+2
+          const debutPose=new Date(cg.anneeRef+1,4,1);  // 1er mai anneeRef+1
+          const finPose=new Date(cg.anneeRef+2,3,30);   // 30 avril anneeRef+2
+          const dansAcquisition=debutDate>=debutRef&&debutDate<=finRef;
+          const dansPose=debutDate>=debutPose&&debutDate<=finPose;
+          if((dansAcquisition||dansPose)&&!cg.estTerminee){
+            if(c.tc==='52'&&dansAcquisition&&debutDate>=debutPose){
+              // Dès le 1er mai : compte comme acquis
               quotaAcquis+=Math.floor(cg.acqBrut||0);
             } else if(c.cgAnticipe==='oui'){
-              // Pour tous les contrats (y compris 52 sem avant le 1er mai) : quota anticipé normal
               quotaAnticipe+=cg.acquis||0;
-              quotaAnticipeBrut+=cg.acqBrut!==undefined?cg.acqBrut:(cg.acquis||0);
+              // Utiliser restants au lieu d'acquis pour éviter de compter les jours déjà pris
+              quotaAnticipeBrut=cg.restants!==undefined?cg.restants:(cg.acqBrut!==undefined?cg.acqBrut:(cg.acquis||0));
             } else if(c.tc==='52'){
-              // 52 sem sans anticipé autorisé mais avant le 1er mai : quota acquis proraté
-              quotaAcquis+=Math.floor(cg.acqBrut||0);
+              // Utiliser restants pour ne pas cumuler les 2 années
+              quotaAcquis+=cg.restants!==undefined?cg.restants:Math.floor(cg.acqBrut||0);
             }
           }
         });
@@ -7872,7 +8061,8 @@ if(tousNonPrevus){
             const veilleCongesV=['conges-acq','conges-anticipe','conges-non'].includes(veilleJourV?.statut);
             const lendCongesV=['conges-acq','conges-anticipe','conges-non'].includes(lendJourV?.statut);
             if(!veilleAcquisV||!lendAcquisV){
-              if(veilleCongesV||lendCongesV) compteurTotal++;
+              // Ne compter que si encadré par des congés acquis/anticipés, pas conges-non
+              if(veilleAcquisV||lendAcquisV) compteurTotal++;
             }
           }
           cur.setDate(cur.getDate()+1);continue;
@@ -7920,7 +8110,23 @@ if(tousNonPrevus){
             // Sinon décompté comme congé (acquis ou non)
             compteurTotal++;
             if(!fiche.valide){
-              const anticipeOk=c.cgAnticipe==='oui'&&(c.fiches[moisKey]?.anticipeActif!==false);
+              // Pour les mois à cheval : vérifier anticipeActif du mois précédent ou courant
+              // On remonte jusqu'au premier mois de la période qui a un anticipeActif explicite
+              const [mkY,mkM]=moisKey.split('-').map(Number);
+              let anticipeOkVal=c.cgAnticipe==='oui'; // défaut
+              // Chercher le mois de début de la pose (debut de la période courante)
+              const debutMoisKey=new Date(debut).getFullYear()+'-'+String(new Date(debut).getMonth()+1).padStart(2,'0');
+              const ficheDebut=c.fiches?.[debutMoisKey];
+              if(ficheDebut&&ficheDebut.anticipeActif!==undefined){
+                anticipeOkVal=c.cgAnticipe==='oui'&&ficheDebut.anticipeActif!==false;
+              } else {
+                // Chercher le mois précédent le début de la pose
+                const [dbY,dbM]=debutMoisKey.split('-').map(Number);
+                const moisAvDebKey=dbM===1?(dbY-1)+'-12':dbY+'-'+String(dbM-1).padStart(2,'0');
+                const ficheAvDeb=c.fiches?.[moisAvDebKey];
+                if(ficheAvDeb?.anticipeActif!==undefined) anticipeOkVal=c.cgAnticipe==='oui'&&ficheAvDeb.anticipeActif!==false;
+              }
+              const anticipeOk=anticipeOkVal;
               if(compteurTotal<=quotaAcquis){
                 jour.statut='conges-acq';
               } else if(anticipeOk&&compteurTotal<=quotaAnticipeTotal){
@@ -7933,7 +8139,18 @@ if(tousNonPrevus){
             // Jour ouvrable décompté
             compteurTotal++;
             if(!fiche.valide){
-              const anticipeOk=c.cgAnticipe==='oui'&&(c.fiches[moisKey]?.anticipeActif!==false);
+              // Même logique que ci-dessus
+              const debutMoisKey2=new Date(debut).getFullYear()+'-'+String(new Date(debut).getMonth()+1).padStart(2,'0');
+              const ficheDebut2=c.fiches?.[debutMoisKey2];
+              let anticipeOk;
+              if(ficheDebut2&&ficheDebut2.anticipeActif!==undefined){
+                anticipeOk=c.cgAnticipe==='oui'&&ficheDebut2.anticipeActif!==false;
+              } else {
+                const [dbY2,dbM2]=debutMoisKey2.split('-').map(Number);
+                const moisAvDebKey2=dbM2===1?(dbY2-1)+'-12':dbY2+'-'+String(dbM2-1).padStart(2,'0');
+                const ficheAvDeb2=c.fiches?.[moisAvDebKey2];
+                anticipeOk=c.cgAnticipe==='oui'&&(ficheAvDeb2?.anticipeActif!==false);
+              }
               if(compteurTotal<=quotaAcquis){
                 jour.statut='conges-acq';
               } else if(anticipeOk&&compteurTotal<=quotaAnticipeTotal){
