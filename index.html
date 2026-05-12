@@ -2271,15 +2271,49 @@ const statutPrevuJ=getStatutPrevu(c,j);
         </div>`
         :`<span style="font-size:11px;color:var(--tx3);font-style:italic">—</span>`}
       </td>
-      <td id="hpm-${contratId}-${key}-${idx}" style="padding:3px 4px;font-size:11px;font-weight:600;color:${hComp?'var(--vt)':'var(--tx3)'}">
-        ${hComp||hSup||(hDeduit?'<span style="color:var(--al)">'+hDeduit+'</span>':'—')}
+      <td id="hpm-${contratId}-${key}-${idx}" style="padding:3px 4px;font-size:11px;font-weight:600">
+        ${(()=>{
+          const estPlanVar=sourceActive.th==='plan'&&(sourceActive.planType==='var'||sourceActive.planType==='min');
+          const estCongesNon46=statutActuel==='conges-non'&&c.tc!=='52';
+          const estCongesNon52=statutActuel==='conges-non'&&c.tc==='52';
+          // Plan var/min : n'afficher que comp/sup
+          if(estPlanVar) return hComp?'<span style="color:var(--vt)">'+hComp+'</span>':(hSup?'<span style="color:var(--vt)">'+hSup+'</span>':'—');
+          // Congés non acquis 46 sem : pas d'affichage en rouge
+          if(estCongesNon46) return '—';
+          // Congés non acquis 52 sem : afficher 1/6 hSemMoy en rouge
+          if(estCongesNon52){
+            const nbSem52=parseFloat(sourceActive.nbSem||52);
+            const hSemMoy52=parseFloat(sourceActive.hMensu||0)*12/nbSem52;
+            const hJour52=(hSemMoy52/6).toFixed(2);
+            return '<span style="color:var(--al)">−'+hJour52+'h</span>';
+          }
+          if(hComp) return '<span style="color:var(--vt)">'+hComp+'</span>';
+          if(hSup) return '<span style="color:var(--vt)">'+hSup+'</span>';
+          // hDeduit : rouge si réellement déduit du salaire, noir sinon
+          if(hDeduit){
+            const statutsDeduits=['abs-non','abs-am','arret','abs-enfant','hors-contrat'];
+            const estDeduit=statutsDeduits.includes(statutActuel);
+            return estDeduit?'<span style="color:var(--al)">'+hDeduit+'</span>':'<span style="color:var(--tx)">'+hDeduit+'</span>';
+          }
+          return '—';
+        })()}
       </td>
-      ${repasCell}${kmCell}
-      <td style="padding:3px 4px">
+      <td style="padding:3px 4px;text-align:right;vertical-align:top">
         <select style="font-size:10px;padding:2px 3px;border:1px solid var(--mb);border-radius:3px;max-width:110px;background:${bg}"
           ${fiche.valide?'disabled':`onchange="majFicheStatut(${contratId},'${key}',${idx},this.value)"`}>
           ${selectedOpts}
         </select>
+        ${(repasVisible||aKm)?`<div style="display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap;margin-top:3px">
+          ${repasVisible?'<div style="display:flex;gap:2px">'+REPAS_SYM.map((sym,ri)=>c.repas&&c.repas[ri]?
+            `<label style="cursor:pointer;display:inline-flex;align-items:center;gap:1px" title="${REPAS_NOM[ri]}">
+              <input type="checkbox" ${j.repas&&j.repas[ri]?'checked':''}
+                ${fiche.valide?'disabled':`onchange="majFicheRepas(${contratId},'${key}',${idx},${ri},this.checked)"`}
+                style="width:11px;height:11px;accent-color:var(--m)">
+              <span style="font-size:12px">${sym}</span>
+            </label>`:'').join('')+'</div>':''}
+          ${aKm?`<input type="number" class="no-spin" style="width:36px;padding:1px 2px;border:1px solid var(--mb);border-radius:3px;font-size:10px" placeholder="km" value="${j.km||''}"
+            ${fiche.valide?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'km',this.value)"`}>`:'  '}
+        </div>`:''}
       </td>
     </tr>`;
   }).join('');
@@ -2342,21 +2376,18 @@ const statutPrevuJ=getStatutPrevu(c,j);
     <div style="width:100%;overflow:hidden">
       <table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed">
         <colgroup>
-          <col style="width:11%"><!-- Jour -->
-          <col style="width:13%"><!-- Prévu -->
+          <col style="width:13%"><!-- Jour -->
+          <col style="width:14%"><!-- Prévu -->
           <col style="width:15%"><!-- Réel -->
-          <col style="width:7%"><!-- H± -->
-          ${aRepas?'<col style="width:9%">':''}
-          ${aKm?'<col style="width:7%">':''}
+          <col style="width:10%"><!-- H± -->
           <col><!-- Statut : reste -->
         </colgroup>
         <thead><tr style="background:var(--mp);position:sticky;top:0">
-          <th style="padding:6px 4px;text-align:left;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Jour</th>
-          <th style="padding:6px 4px;font-size:11px;overflow:hidden;text-overflow:ellipsis">Prévu</th>
-          <th style="padding:6px 4px;font-size:11px;overflow:hidden;text-overflow:ellipsis">Réel</th>
+          <th style="padding:6px 4px;text-align:left;font-size:11px">Jour</th>
+          <th style="padding:6px 4px;font-size:11px">Prévu</th>
+          <th style="padding:6px 4px;font-size:11px">Réel</th>
           <th style="padding:6px 4px;font-size:11px">H±</th>
-          ${repasHeaders}${kmHeader}
-          <th style="padding:6px 4px;font-size:11px;text-align:left">Statut</th>
+          <th style="padding:6px 4px;font-size:11px;text-align:right">Statut</th>
         </tr></thead>
         <tbody>${lignes}</tbody>
       </table>
@@ -8129,11 +8160,18 @@ if(tousNonPrevus){
             tmpOff.setDate(tmpOff.getDate()+(8-jourSemOff));
           }
           if(estAbsenceEmployeur){
-            // Chercher la reprise APRÈS la semaine off
-            let cur2=new Date(avantReprise);
-            cur2.setDate(cur2.getDate()+2); // lundi de la semaine suivante
+            // Semaine off : pas de décompte pendant la semaine off
+            // Chercher la reprise dans la semaine SUIVANTE (1ère semaine travaillée après le off)
+            // Le décompte reprend : tous les jours non prévus avant la reprise effective sont congés
+            // Trouver le premier jour de la semaine après la semaine off
+            let lundiSuivant=new Date(avantReprise);
+            // Avancer jusqu'au lundi de la semaine suivante
+            while(lundiSuivant.getDay()!==1) lundiSuivant.setDate(lundiSuivant.getDate()+1);
+            lundiSuivant.setDate(lundiSuivant.getDate()+7); // semaine d'après
+            // Chercher la première reprise dans cette semaine suivante
             let repriseApresSem=null;
-            for(let i=0;i<60;i++){
+            let cur2=new Date(lundiSuivant);
+            for(let i=0;i<14;i++){
               const ds2=cur2.getFullYear()+'-'+String(cur2.getMonth()+1).padStart(2,'0')+'-'+String(cur2.getDate()).padStart(2,'0');
               const jourSem2=cur2.getDay();
               const reposH2=c.reposHebdo||0;
@@ -8144,7 +8182,7 @@ if(tousNonPrevus){
               cur2.setDate(cur2.getDate()+1);
             }
             if(repriseApresSem){
-              // Le dernier jour décompté = veille de la reprise après la semaine off
+              // Dernier jour décompté = veille de la reprise effective après la semaine off
               const veilleReprise=new Date(repriseApresSem);
               veilleReprise.setDate(veilleReprise.getDate()-1);
               return veilleReprise.getFullYear()+'-'+String(veilleReprise.getMonth()+1).padStart(2,'0')+'-'+String(veilleReprise.getDate()).padStart(2,'0');
