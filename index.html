@@ -2222,7 +2222,7 @@ function ouvrirFiche(contratId,key){
     if(!selectedOpts.includes('selected')){
     const moisNum=parseInt(key.split('-')[1]);
     const labelAnticipe=moisNum===5?'CP acquis':'CP anticipés';
-    const lbl={'conges-acq':'CP acquis','conges-non':'CP non acquis','conges-anticipe':labelAnticipe,'conges-am':'Congés AM','travaille':'Travaillé','prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié','abs-rem':'Abs. rém.','abs-enfant':'Abs. enf.','abs-am':'Abs. non rém.','arret':'Arrêt maladie','hors-contrat':'Hors contrat','abs-non':'Absence non rém.','abs-partielle':'Abs. partielle'};
+    const lbl={'conges-acq':'CP acquis','conges-non':'CP non acquis','conges-anticipe':labelAnticipe,'conges-am':'Congés AM','travaille':'Travaillé','prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié','abs-rem':'Abs. rém.','abs-enfant':'Abs. enf.','abs-am':'Absence non rémunérée','arret':'Arrêt maladie','hors-contrat':'Hors contrat','abs-non':'Absence non rémunérée','abs-partielle':'Abs. partielle'};
       selectedOpts=`<option value="${statutActuel}" selected>${lbl[statutActuel]||statutActuel}</option>`+opts;
     }
 
@@ -2262,10 +2262,10 @@ const statutPrevuJ=getStatutPrevu(c,j);
         <div style="display:flex;align-items:center;gap:3px">
           <div>
             <input type="time" value="${j.heureDebReel||''}"
-              style="width:62px;padding:2px 2px;border:1px solid var(--mb);${inputBorder};border-radius:3px;font-size:11px;display:block;margin-bottom:2px"
+              style="width:68px;padding:2px 2px;border:1px solid var(--mb);${inputBorder};border-radius:3px;font-size:11px;display:block;margin-bottom:2px"
               ${fiche.valide?'disabled':`oninput="majFiche(${contratId},'${key}',${idx},'debReel',this.value)"`}>
             <input type="time" value="${j.heureFinReel||''}"
-              style="width:62px;padding:2px 2px;border:1px solid var(--mb);${inputBorder};border-radius:3px;font-size:11px;display:block"
+              style="width:68px;padding:2px 2px;border:1px solid var(--mb);${inputBorder};border-radius:3px;font-size:11px;display:block"
               ${fiche.valide?'disabled':`oninput="majFiche(${contratId},'${key}',${idx},'finReel',this.value)"`}>
           </div>   
         </div>`
@@ -2376,10 +2376,10 @@ const statutPrevuJ=getStatutPrevu(c,j);
     <div style="width:100%;overflow:hidden">
       <table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed">
         <colgroup>
-          <col style="width:13%"><!-- Jour -->
-          <col style="width:14%"><!-- Prévu -->
-          <col style="width:15%"><!-- Réel -->
-          <col style="width:10%"><!-- H± -->
+          <col style="width:12%"><!-- Jour -->
+          <col style="width:13%"><!-- Prévu -->
+          <col style="width:17%"><!-- Réel -->
+          <col style="width:12%"><!-- H± -->
           <col><!-- Statut : reste -->
         </colgroup>
         <thead><tr style="background:var(--mp);position:sticky;top:0">
@@ -2501,8 +2501,8 @@ function imprimerFiche(contratId,key){
     const statutActuel=j.statut||statutPrevu;
     const statutLbl={'prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié',
       'conges-acq':'CP acquis','conges-non':'CP non acquis','travaille':'Travaillé',
-      'abs-rem':'Abs. rémunérée','abs-enfant':'Abs. maladie enfant','abs-am':'Abs. non rém.',
-      'arret':'Arrêt','abs-partielle':'Abs. partielle','hors-contrat':'Hors contrat'}[statutActuel]||statutActuel;
+      'abs-rem':'Abs. rémunérée','abs-enfant':'Abs. maladie enfant','abs-am':'Absence non rémunérée',
+      'arret':'Arrêt maladie','abs-partielle':'Abs. partielle','hors-contrat':'Hors contrat'}[statutActuel]||statutActuel;
     let hComp='',hDeduit='';
     if(j.heureDebReel&&j.heureFinReel){
       const reel=toM(j.heureFinReel)-toM(j.heureDebReel);
@@ -4035,7 +4035,47 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     }
     hAbs+=hAbsHorsPeriode;
   }
-  if(hTheoriques<=0) hTheoriques=hMensu;
+  // Pour th='sem' ou th='plan' : utiliser la méthode SPAMAF (moyenne par jour)
+  // hTheoriques = totalHeuresAnnuelles / totalJoursAnnuels × nbJoursMois
+  if(hTheoriques<=0||(sourceActif.th==='sem'||sourceActif.th==='plan')){
+    // Calculer le total heures et jours annuels depuis le contrat
+    let totalHAnnuel=0;
+    let totalJAnnuel=0;
+    if(sourceActif.th==='sem'&&sourceActif.semTypes){
+      sourceActif.semTypes.forEach(st=>{
+        const hSem=(st.jours||[]).reduce((s,j)=>j&&j.d&&j.f?s+(toM(j.f)-toM(j.d))/60:s,0);
+        const jSem=(st.jours||[]).filter(j=>j&&j.d).length;
+        const nbFois=parseFloat(st.nb||0);
+        totalHAnnuel+=hSem*nbFois;
+        totalJAnnuel+=jSem*nbFois;
+      });
+    } else if(sourceActif.th==='plan'&&sourceActif.planVar){
+      sourceActif.planVar.forEach(pv=>{
+        const hSem=parseFloat(pv.hTotal||0);
+        const jSem=parseFloat(pv.jours||0);
+        const nbFois=parseFloat(pv.nb||0);
+        totalHAnnuel+=hSem*nbFois;
+        totalJAnnuel+=jSem*nbFois;
+      });
+    } else if(sourceActif.th==='plan'&&sourceActif.planType==='min'){
+      const nbSem=parseFloat(sourceActif.nbSem||52);
+      const hMin=parseFloat(sourceActif.hMin||0);
+      const jMax=parseFloat(sourceActif.jMaxMin||5);
+      totalHAnnuel=hMensu*12;
+      totalJAnnuel=jMax*nbSem;
+    }
+    if(totalHAnnuel>0&&totalJAnnuel>0){
+      const hMoyJour=totalHAnnuel/totalJAnnuel;
+      // Compter les jours théoriques du mois (hors repos, hors hors-contrat)
+      const nbJoursTh=fiche.jours.filter(j=>{
+        const sp=j.statut||getStatutPrevu(c,j);
+        return !['repos','hors-contrat','non-prevu'].includes(sp)&&j.jourSemaine!==(c.reposHebdo||0);
+      }).length;
+      hTheoriques=hMoyJour*nbJoursTh;
+    } else {
+      hTheoriques=hMensu;
+    }
+  }
   const hAbsParSemaine={};
   const hAbsJoursCpt={};
   const hAbsDedJoursCpt={};
