@@ -2222,7 +2222,7 @@ function ouvrirFiche(contratId,key){
     if(!selectedOpts.includes('selected')){
     const moisNum=parseInt(key.split('-')[1]);
     const labelAnticipe=moisNum===5?'CP acquis':'CP anticipés';
-    const lbl={'conges-acq':'CP acquis','conges-non':'CP non acquis','conges-anticipe':labelAnticipe,'conges-am':'Congés AM','travaille':'Travaillé','prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié','abs-rem':'Abs. rém.','abs-enfant':'Abs. enf.','abs-am':'Abs. non rém.','arret':'Arrêt','hors-contrat':'Hors contrat','abs-non':'Abs. non rém.','abs-partielle':'Abs. partielle'};
+    const lbl={'conges-acq':'CP acquis','conges-non':'CP non acquis','conges-anticipe':labelAnticipe,'conges-am':'Congés AM','travaille':'Travaillé','prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié','abs-rem':'Abs. rém.','abs-enfant':'Abs. enf.','abs-am':'Abs. non rém.','arret':'Arrêt maladie','hors-contrat':'Hors contrat','abs-non':'Absence non rém.','abs-partielle':'Abs. partielle'};
       selectedOpts=`<option value="${statutActuel}" selected>${lbl[statutActuel]||statutActuel}</option>`+opts;
     }
 
@@ -2262,10 +2262,10 @@ const statutPrevuJ=getStatutPrevu(c,j);
         <div style="display:flex;align-items:center;gap:3px">
           <div>
             <input type="time" value="${j.heureDebReel||''}"
-              style="width:70px;padding:2px 4px;border:1px solid var(--mb);${inputBorder};border-radius:3px;font-size:11px;display:block;margin-bottom:2px"
+              style="width:62px;padding:2px 2px;border:1px solid var(--mb);${inputBorder};border-radius:3px;font-size:11px;display:block;margin-bottom:2px"
               ${fiche.valide?'disabled':`oninput="majFiche(${contratId},'${key}',${idx},'debReel',this.value)"`}>
             <input type="time" value="${j.heureFinReel||''}"
-              style="width:70px;padding:2px 4px;border:1px solid var(--mb);${inputBorder};border-radius:3px;font-size:11px;display:block"
+              style="width:62px;padding:2px 2px;border:1px solid var(--mb);${inputBorder};border-radius:3px;font-size:11px;display:block"
               ${fiche.valide?'disabled':`oninput="majFiche(${contratId},'${key}',${idx},'finReel',this.value)"`}>
           </div>   
         </div>`
@@ -4087,6 +4087,15 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   });
   fiche.jours.forEach(j=>{
     let statut=j.statut||getStatutPrevu(c,j);
+    // Règle paiement férié : si encadré par arret ou abs-enfant sur jour prévu travaillé
+    if(statut==='ferie'||(!j.statut&&isFerie(j.date,sourceActif))){
+      const prevTrav=getPrevJourPrevuTravaille(c,j.date);
+      const nextTrav=getNextJourPrevuTravaille(c,j.date);
+      const sPrev=prevTrav?getStatutJourFiche(c,prevTrav):null;
+      const sNext=nextTrav?getStatutJourFiche(c,nextTrav):null;
+      if(sPrev==='arret'||sNext==='arret') statut='arret';
+      else if(sPrev==='abs-enfant'||sNext==='abs-enfant') statut='abs-non';
+    }
     if(dateAvenantStr&&statut!=='hors-contrat'){
       const dateJ=j.date;
       if(periodeAv==='avant'&&dateJ>=dateAvenantStr){statut='hors-contrat';j._horsContratAvenant=true;}
@@ -7908,6 +7917,43 @@ function ferieCouvretParAcquis(dateStr, anneeDebut, dataAM) {
     if(prevus && (prevus.debut || prevus.planVar)) return true;
   }
   return false;
+}
+
+function getPrevJourPrevuTravaille(c, dateStr){
+  // Retourne la date du dernier jour prévu travaillé avant dateStr
+  const reposH=c.reposHebdo||0;
+  let cur=new Date(dateStr.split('-')[0],parseInt(dateStr.split('-')[1])-1,parseInt(dateStr.split('-')[2]));
+  for(let i=0;i<14;i++){
+    cur.setDate(cur.getDate()-1);
+    const ds=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
+    if(cur.getDay()===reposH||isFerie(ds,c)) continue;
+    const prevus=getHeuresPrevues(c,cur);
+    if(prevus.debut||prevus.planVar) return ds;
+  }
+  return null;
+}
+
+function getNextJourPrevuTravaille(c, dateStr){
+  // Retourne la date du prochain jour prévu travaillé après dateStr
+  const reposH=c.reposHebdo||0;
+  let cur=new Date(dateStr.split('-')[0],parseInt(dateStr.split('-')[1])-1,parseInt(dateStr.split('-')[2]));
+  for(let i=0;i<14;i++){
+    cur.setDate(cur.getDate()+1);
+    const ds=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
+    if(cur.getDay()===reposH||isFerie(ds,c)) continue;
+    const prevus=getHeuresPrevues(c,cur);
+    if(prevus.debut||prevus.planVar) return ds;
+  }
+  return null;
+}
+
+function getStatutJourFiche(c, dateStr){
+  // Retourne le statut d'un jour dans les fiches
+  const key=dateStr.slice(0,7);
+  const fiche=c.fiches?.[key];
+  if(!fiche) return null;
+  const jour=fiche.jours.find(j=>j.date===dateStr);
+  return jour?.statut||null;
 }
 
 function getPrevJourOuvrable(dateStr, reposHebdo) {
