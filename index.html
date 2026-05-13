@@ -2259,7 +2259,16 @@ function ouvrirFiche(contratId,key){
     let hComp='', hSup='', hDeduit='';
     if(j.heureDebReel&&j.heureFinReel){
       const reel=toM(j.heureFinReel)-toM(j.heureDebReel);
-      if(j.heureDebPrev&&j.heureFinPrev){
+      // Férié non prévu au contrat ou repos passé en travaillé : afficher + sans comparer aux prévues
+      const mmddAff=j.date.slice(5);
+      const feriesTravAff=sourceActive&&sourceActive.feriesTravailles||c.feriesTravailles||[];
+      const jourIdxAff=new Date(j.date).getDay()===0?6:new Date(j.date).getDay()-1;
+      const estFerieNPAff=isFerie(j.date,c)&&statutActuel==='travaille'
+        &&!feriesTravAff.includes(mmddAff)&&!feriesTravAff.includes('variable');
+      const estReposAff=jourIdxAff===(sourceActive&&sourceActive.reposHebdo||c.reposHebdo||0)&&statutActuel==='travaille';
+      if(estFerieNPAff||estReposAff){
+        if(reel>0) hComp='+'+fmtH(reel);
+      } else if(j.heureDebPrev&&j.heureFinPrev){
         const prev=toM(j.heureFinPrev)-toM(j.heureDebPrev);
         const diff=reel-prev;
         if(diff>0) hComp='+'+fmtH(diff);
@@ -3257,7 +3266,7 @@ function majFicheStatut(contratId,key,idx,val){
   // init = réinitialiser au statut prévu (null = calculé depuis le contrat)
   ficheSource.fiches[key].jours[idx].statut=(val==='init')?null:val||null;
   // Si on repasse en non-prévu ou repos, effacer les heures réelles
- const statutsEffacerHeures=['non-prevu','repos','init','abs-enfant','abs-rem','abs-non','abs-am','ferie-non','arret',
+ const statutsEffacerHeures=['non-prevu','repos','ferie','ferie-non','init','abs-enfant','abs-rem','abs-non','abs-am','arret',
     'conges-acq','conges-non','conges-am','conges-anticipe'];
   if(statutsEffacerHeures.includes(val)){
     c.fiches[key].jours[idx].heureDebReel=null;
@@ -4421,23 +4430,30 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       } else if(tcActif!=='occ'){
         compJour+=finReel-debReel;
       }
-      if(compJour>0){
-        const hCompJour=compJour/60;
-        // Jours spéciaux travaillés : isoler dans compteurs dédiés (retirer de hComp)
-        const mmddJ=j.date.slice(5);
-        const statutPrevuJ2=getStatutPrevu(c,j);
-        const jourIdxJ=new Date(j.date).getDay()===0?6:new Date(j.date).getDay()-1;
-        const estFerieJ=isFerie(j.date,c)&&(statut==='travaille');
-        const estReposJ=jourIdxJ===(sourceActif.reposHebdo||0)&&(statut==='travaille');
-        if(estFerieJ&&mmddJ==='05-01'&&(sourceActif.maj1erMai!=null)){
-          hMaj1erMai+=hCompJour;
-        } else if(estFerieJ&&(sourceActif.majFerie!=null)){
-          hMajFerie+=hCompJour;
-        } else if(estReposJ&&(sourceActif.majRepos!=null)){
-          hMajRepos+=hCompJour;
-        } else {
-          hComp+=hCompJour;
+      // Jours spéciaux travaillés : férié non prévu au contrat, repos, 1er mai
+      // → toutes les heures réelles sont majorées (pas de comparaison avec prévues)
+      const mmddJ=j.date.slice(5);
+      const feriesTravJ=sourceActif.feriesTravailles||[];
+      const jourIdxJ=new Date(j.date).getDay()===0?6:new Date(j.date).getDay()-1;
+      const estFerieNonPrevu=isFerie(j.date,c)&&statut==='travaille'
+        &&!feriesTravJ.includes(mmddJ)&&!feriesTravJ.includes('variable');
+      const estReposJ=jourIdxJ===(sourceActif.reposHebdo||c.reposHebdo||0)&&statut==='travaille';
+      if(estFerieNonPrevu||estReposJ){
+        // Heures réelles entières majorées
+        const hReelJourSpec=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
+        if(hReelJourSpec>0){
+          if(estFerieNonPrevu&&mmddJ==='05-01'&&sourceActif.maj1erMai!=null){
+            hMaj1erMai+=hReelJourSpec;
+          } else if(estFerieNonPrevu&&sourceActif.majFerie!=null){
+            hMajFerie+=hReelJourSpec;
+          } else if(estReposJ&&sourceActif.majRepos!=null){
+            hMajRepos+=hReelJourSpec;
+          } else if(compJour>0){
+            hComp+=compJour/60;
+          }
         }
+      } else if(compJour>0){
+        hComp+=compJour/60;
       }
     }
     if(estAbsDeduite){
