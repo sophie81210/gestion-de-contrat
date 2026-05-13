@@ -3870,11 +3870,30 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const semTheoriquesVues=new Set();
   const semJoursCpt={};
   const hSemMoyTh=(hMensu*12/(sourceActif.nbSem||52));
-  const hJourCgTh=(hSemMoyTh/6)*60; // en minutes, pour hTheoriques
+  const hJourCgTh=(hSemMoyTh/6)*60; // en minutes, pour hTheoriques (fallback)
+  const estPSVTh=c.tc==='52'&&((sourceActif.th==='sem')||(sourceActif.th==='plan'&&sourceActif.planType==='var'));
+  // Pour 52 sem plan sem / plan var : calcule les heures de la semaine du jour de congé
+  const getHJourCgTh=(dateStr)=>{
+    if(!estPSVTh) return hJourCgTh;
+    if(!agendaMois||!agendaMois.semaines) return hJourCgTh;
+    const sk=getSemISO(dateStr);
+    const ak=getKeyAgenda(sk,getSemAnnee(dateStr));
+    const typeSem=agendaMois.semaines[ak];
+    if(!typeSem) return hJourCgTh;
+    if(sourceActif.th==='sem'&&sourceActif.semTypes){
+      const st=sourceActif.semTypes.find(t=>t.nom===typeSem);
+      if(st&&st.h) return (parseFloat(st.h)/6)*60;
+    }
+    if(sourceActif.planType==='var'&&sourceActif.planVar){
+      const vol=sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);
+      if(vol&&vol.h) return (parseFloat(vol.h)/6)*60;
+    }
+    return hJourCgTh;
+  };
   fiche.jours.forEach(j=>{
     if(j.statut==='conges-non'||j.statut==='conges-acq'||j.statut==='conges-anticipe'){
-      // Jours de congés (acquis, anticipés ou non acquis) : toujours hSemMoy/6
-      hTheoriques+=hJourCgTh;
+      // Jours de congés : heures de la semaine concernée / 6 (plan sem/var) ou moyenne/6
+      hTheoriques+=getHJourCgTh(j.date);
     } else if(j.heureDebPrev&&j.heureFinPrev){
       hTheoriques+=toM(j.heureFinPrev)-toM(j.heureDebPrev);
     } else if(!j.heureDebPrev&&!j.heureFinPrev&&(c.th==='fixe'||c.th==='sem')){
@@ -4647,14 +4666,34 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     }
   }
 
-  // Calcul "dont congés payés" pour contrats 52 sem (hSemMoy/6 * txNet du mois précédent)
+  // Calcul "dont congés payés" pour contrats 52 sem
+  // Plan sem et plan var : heures de la semaine concernée / 6
+  // Autres : moyenne hebdo / 6
   let montantCongesPayesMois=0;
   let nbCongesPayesMois=0;
   let montantCongesNonAcquis=0;
   let nbCongesNonAcquis=0;
   if(c.tc==='52'){
     const hSemMoy52=hMensu*12/(sourceActif.nbSem||52);
-    const hJourConge=hSemMoy52/6;
+    const estPSV52=(sourceActif.th==='sem')||(sourceActif.th==='plan'&&sourceActif.planType==='var');
+    // Heures de la semaine pour un jour donné (plan sem / plan var), sinon moyenne
+    const getHSemPourJour=(dateStr)=>{
+      if(!estPSV52) return hSemMoy52;
+      if(!agendaMois||!agendaMois.semaines) return hSemMoy52;
+      const sk=getSemISO(dateStr);
+      const ak=getKeyAgenda(sk,getSemAnnee(dateStr));
+      const typeSem=agendaMois.semaines[ak];
+      if(!typeSem) return hSemMoy52;
+      if(sourceActif.th==='sem'&&sourceActif.semTypes){
+        const st=sourceActif.semTypes.find(t=>t.nom===typeSem);
+        if(st&&st.h) return parseFloat(st.h);
+      }
+      if(sourceActif.planType==='var'&&sourceActif.planVar){
+        const vol=sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);
+        if(vol&&vol.h) return parseFloat(vol.h);
+      }
+      return hSemMoy52;
+    };
     fiche.jours.forEach(j=>{
       if(j.statut==='conges-acq'||j.statut==='conges-anticipe'){
         // Taux du mois précédant la pose
@@ -4662,13 +4701,14 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         dateVeille.setDate(dateVeille.getDate()-1);
         const srcVeille=getVersionActive(c,dateVeille);
         const txNetVeille=srcVeille.txNet||(srcVeille.txBrut*getCoefNet())||txNet;
-        montantCongesPayesMois+=hJourConge*txNetVeille;
+        const hSemJ=getHSemPourJour(j.date);
+        montantCongesPayesMois+=(hSemJ/6)*txNetVeille;
         nbCongesPayesMois++;
       } else if(j.statut==='conges-non'){
-        // Congés non acquis : mensualisation / hTheoriques × (hSemMoy/6)
+        // Congés non acquis : mensualisation / hTheoriques × (hSem/6)
         if(hTheoriques>0){
-          const hSemMoyCn=hMensu*12/(sourceActif.nbSem||52);
-          montantCongesNonAcquis+=(hMensu*txNet/hTheoriques)*(hSemMoyCn/6);
+          const hSemJ=getHSemPourJour(j.date);
+          montantCongesNonAcquis+=(hMensu*txNet/hTheoriques)*(hSemJ/6);
         }
         nbCongesNonAcquis++;
       }
@@ -5415,19 +5455,25 @@ function renderAgendas(c){
       +' → '+dFin.toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
 
     const semaines=getSemsAgenda(ag,c);
-    // Calculer semsCongesSet pour cet agenda (5 semaines les plus chargées en congés)
-    const semsCongesScore=semaines.map(s=>{
-      let nb=0;
-      for(let d=0;d<7;d++){
-        const jour=new Date(s.lundi);
-        jour.setDate(s.lundi.getDate()+d);
-        const dateStr=jour.getFullYear()+'-'+String(jour.getMonth()+1).padStart(2,'0')+'-'+String(jour.getDate()).padStart(2,'0');
-        if(S.congesAM) Object.values(S.congesAM).forEach(cgAm=>{if(cgAm&&cgAm.jours&&cgAm.jours[dateStr]==='pose') nb++;});
-        if(typeof isFerie==='function'&&isFerie(dateStr,c)) nb++;
-      }
-      return{key:s.key,nb};
-    }).filter(x=>x.nb>=5).sort((a,b)=>b.nb-a.nb||(a.key<b.key?-1:1));
-    const semsCongesSet=new Set(semsCongesScore.slice(0,5).map(x=>x.key));
+    // Pour plan sem et plan var : pas de semaines congés bloquées (pointage libre)
+    // Pour les autres types : calculer semsCongesSet (5 semaines les plus chargées)
+    const agSource2=(()=>{const r=trouverAgenda(c,ag.id);return r?r.source:c;})();
+    const estPlanSemOuVar=(agSource2.th==='sem')||(agSource2.th==='plan'&&agSource2.planType==='var');
+    let semsCongesSet=null;
+    if(!estPlanSemOuVar){
+      const semsCongesScore=semaines.map(s=>{
+        let nb=0;
+        for(let d=0;d<7;d++){
+          const jour=new Date(s.lundi);
+          jour.setDate(s.lundi.getDate()+d);
+          const dateStr=jour.getFullYear()+'-'+String(jour.getMonth()+1).padStart(2,'0')+'-'+String(jour.getDate()).padStart(2,'0');
+          if(S.congesAM) Object.values(S.congesAM).forEach(cgAm=>{if(cgAm&&cgAm.jours&&cgAm.jours[dateStr]==='pose') nb++;});
+          if(typeof isFerie==='function'&&isFerie(dateStr,c)) nb++;
+        }
+        return{key:s.key,nb};
+      }).filter(x=>x.nb>=5).sort((a,b)=>b.nb-a.nb||(a.key<b.key?-1:1));
+      semsCongesSet=new Set(semsCongesScore.slice(0,5).map(x=>x.key));
+    }
     // Stocker pour peindreAgenda
     if(!window._semsCongesSet) window._semsCongesSet={};
     window._semsCongesSet[ag.id]=semsCongesSet;
@@ -5651,23 +5697,26 @@ function setAgendaPinceau(cid,agid,val){
 function getAgendaWarnings(c,ag,semaines,semsCongesSet){
   const warnings=[];
   // Avertir si des semaines ne sont pas pointées (ni off, ni colorées en congés)
+  const estPSVWarn=(c.th==='sem')||(c.th==='plan'&&c.planType==='var');
   const nonPointees=semaines.filter(s=>{
     if(ag.semaines&&ag.semaines[s.key]) return false; // pointée
-    // Exclure les semaines congés (colorées violet = pointage automatique)
-    if(semsCongesSet&&semsCongesSet.has(s.key)) return false;
-    // Vérifier si colorée en congés (≥5 jours posés+fériés dans le calendrier AM)
-    if(S.congesAM){
-      let nbJours=0;
-      for(let d=0;d<7;d++){
-        const jour=new Date(s.lundi);
-        jour.setDate(s.lundi.getDate()+d);
-        const dateStr=jour.getFullYear()+'-'+String(jour.getMonth()+1).padStart(2,'0')+'-'+String(jour.getDate()).padStart(2,'0');
-        Object.values(S.congesAM).forEach(cgAm=>{
-          if(cgAm&&cgAm.jours&&cgAm.jours[dateStr]==='pose') nbJours++;
-        });
-        if(isFerie&&isFerie(dateStr,c)) nbJours++;
+    // Pour plan sem et plan var : les semaines congés doivent être pointées manuellement
+    // Pour les autres types : exclure les semaines congés (pointage automatique)
+    if(!estPSVWarn){
+      if(semsCongesSet&&semsCongesSet.has(s.key)) return false;
+      if(S.congesAM){
+        let nbJours=0;
+        for(let d=0;d<7;d++){
+          const jour=new Date(s.lundi);
+          jour.setDate(s.lundi.getDate()+d);
+          const dateStr=jour.getFullYear()+'-'+String(jour.getMonth()+1).padStart(2,'0')+'-'+String(jour.getDate()).padStart(2,'0');
+          Object.values(S.congesAM).forEach(cgAm=>{
+            if(cgAm&&cgAm.jours&&cgAm.jours[dateStr]==='pose') nbJours++;
+          });
+          if(isFerie&&isFerie(dateStr,c)) nbJours++;
+        }
+        if(nbJours>=5) return false;
       }
-      if(nbJours>=5) return false; // colorée en congés
     }
     return true; // vraiment non pointée
   }).length;
@@ -5706,26 +5755,29 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
   const moisForceDeb = new Date(ag.dateDebut);
   const mKeyForce = moisForceDeb.getFullYear()*100+(moisForceDeb.getMonth()+1);
 
-  // Calculer les 5 semaines les plus chargées en congés (posés + fériés)
-  // Tri par nombre de jours desc, à égalité la plus ancienne en premier
-  const semsCongesScore=semaines.map(s=>{
-    let nb=0;
-    for(let d=0;d<7;d++){
-      const jour=new Date(s.lundi);
-      jour.setDate(s.lundi.getDate()+d);
-      const dateStr=jour.getFullYear()+'-'+String(jour.getMonth()+1).padStart(2,'0')+'-'+String(jour.getDate()).padStart(2,'0');
-      if(S.congesAM){
-        Object.values(S.congesAM).forEach(cgAm=>{
-          if(cgAm&&cgAm.jours&&cgAm.jours[dateStr]==='pose') nb++;
-        });
+  // Pour plan sem et plan var : pas de semaines congés bloquées (pointage libre)
+  const estPlanSemOuVar2=(source.th==='sem')||(source.th==='plan'&&source.planType==='var');
+  let semsCongesSet=null;
+  if(!estPlanSemOuVar2){
+    // Calculer les 5 semaines les plus chargées en congés (posés + fériés)
+    const semsCongesScore=semaines.map(s=>{
+      let nb=0;
+      for(let d=0;d<7;d++){
+        const jour=new Date(s.lundi);
+        jour.setDate(s.lundi.getDate()+d);
+        const dateStr=jour.getFullYear()+'-'+String(jour.getMonth()+1).padStart(2,'0')+'-'+String(jour.getDate()).padStart(2,'0');
+        if(S.congesAM){
+          Object.values(S.congesAM).forEach(cgAm=>{
+            if(cgAm&&cgAm.jours&&cgAm.jours[dateStr]==='pose') nb++;
+          });
+        }
+        if(isFerie(dateStr,c)) nb++;
       }
-      if(isFerie(dateStr,c)) nb++;
-    }
-    return {key:s.key, nb, lundi:s.lundi};
-  }).filter(x=>x.nb>0);
-  // Trier par nb desc puis par date asc pour les égalités
-  semsCongesScore.sort((a,b)=>b.nb-a.nb||a.lundi-b.lundi);
-  const semsCongesSet=new Set(semsCongesScore.slice(0,5).map(x=>x.key));
+      return {key:s.key, nb, lundi:s.lundi};
+    }).filter(x=>x.nb>0);
+    semsCongesScore.sort((a,b)=>b.nb-a.nb||a.lundi-b.lundi);
+    semsCongesSet=new Set(semsCongesScore.slice(0,5).map(x=>x.key));
+  }
 
   semaines.forEach((s, idx)=>{
     let mKey;
@@ -5849,9 +5901,12 @@ function peindreAgenda(key,cid,agid){
   const res=trouverAgenda(c,agid);
   if(!res)return;
   const {ag,source}=res;
-  // Bloquer si semaine congés (colorée violet)
-  const semsCongesCheck=window._semsCongesSet&&window._semsCongesSet[agid];
-  if(semsCongesCheck&&semsCongesCheck.has(key)){toast('Semaine de congés Ass\'Mat — non modifiable. Si les congés ne sont pas encore posés, vérifiez le calendrier Congés Ass\'Mat.');return;}
+  // Bloquer si semaine congés (colorée violet) — sauf pour plan sem et plan var
+  const estPSV=(source.th==='sem')||(source.th==='plan'&&source.planType==='var');
+  if(!estPSV){
+    const semsCongesCheck=window._semsCongesSet&&window._semsCongesSet[agid];
+    if(semsCongesCheck&&semsCongesCheck.has(key)){toast('Semaine de congés Ass\'Mat — non modifiable. Si les congés ne sont pas encore posés, vérifiez le calendrier Congés Ass\'Mat.');return;}
+  }
   const pinceau=S.agendaPinceaux&&S.agendaPinceaux[agid];
   if(!pinceau){toast('Sélectionnez d\'abord un pinceau');return;}
   if(ag.semaines[key]===pinceau)delete ag.semaines[key];
