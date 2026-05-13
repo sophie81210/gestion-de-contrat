@@ -2129,6 +2129,26 @@ function ouvrirFiche(contratId,key){
     j.heureFinPrev=prevus.fin;
     j.planVarPrevu=!!(prevus.planVar);
   });
+  // Nettoyer les statuts congés orphelins : si un jour a conges-non/acq/anticipe
+  // mais qu'aucun congé n'est posé dans le calendrier AM autour de lui → effacer
+  if(!fiche.valide){
+    fiche.jours.forEach(j=>{
+      if(!['conges-acq','conges-anticipe','conges-non'].includes(j.statut)) return;
+      // Vérifier si un jour est posé dans le calendrier AM dans les 30 jours autour
+      let aDesCongesAutour=false;
+      if(S.congesAM){
+        const dJ=new Date(j.date);
+        for(let delta=-30;delta<=30;delta++){
+          const dTest=new Date(dJ);
+          dTest.setDate(dTest.getDate()+delta);
+          const dsTest=dTest.getFullYear()+'-'+String(dTest.getMonth()+1).padStart(2,'0')+'-'+String(dTest.getDate()).padStart(2,'0');
+          const anneeAm=dTest.getMonth()>=5?dTest.getFullYear():dTest.getFullYear()-1;
+          if(S.congesAM[anneeAm]?.jours?.[dsTest]==='pose'){aDesCongesAutour=true;break;}
+        }
+      }
+      if(!aDesCongesAutour) j.statut=null;
+    });
+  }
   // Marquer les jours après la date de fin de contrat comme hors-contrat
   // (si rupture confirmée et mois précédent validé)
   if(c.rupture?.confirmee){
@@ -8613,7 +8633,6 @@ if(tousNonPrevus){
             // Priorité : voisin arret ou abs-am → ferie-non, non décompté
             const svPrev=getStatutVoisinBoucle(dateStr,-1);
             const svNext=getStatutVoisinBoucle(dateStr,1);
-            console.log('[ferie debug]',dateStr,'svPrev=',svPrev,'svNext=',svNext);
             if(['arret','abs-am'].includes(svPrev)||['arret','abs-am'].includes(svNext)){
               if(!fiche.valide) jour.statut='ferie-non';
               cur.setDate(cur.getDate()+1);continue;
