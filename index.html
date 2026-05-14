@@ -1342,9 +1342,27 @@ function buildFicheContenu(source, c){
     source.maj1erMai!=null?['1er mai travaillé','+'+source.maj1erMai+'%']:null,
   ].filter(Boolean);
 
+  // Infos CDD
+  const typeDureeL=(c.typeDuree==='cdd')?'CDD — Contrat à durée déterminée':'CDI — Contrat à durée indéterminée';
+  const cddMotifL={'remplacement':'Remplacement d\'une assistante maternelle','attente':'Dans l\'attente d\'une place disponible'}[c.cddMotif]||'—';
+  const cddTermeL=c.cddTerme==='precis'?'À terme précis':'À terme imprécis';
+  const cddDateFinL=c.cddDateFin?new Date(c.cddDateFin).toLocaleDateString('fr-FR'):'—';
+  const cddDateMinL=c.cddDateMin?new Date(c.cddDateMin).toLocaleDateString('fr-FR'):'—';
+  const periodeEssaiL=c.typeDuree==='cdd'
+    ?(c.periodeEssaiCdd>0?(c.periodeEssaiCdd+' jours'):'Aucune')
+    :(c.periodeEssai>0?(c.periodeEssai+' mois'):'Aucune');
+
   const lignesBase=[
+    ['Durée du contrat', typeDureeL],
+    ...(c.typeDuree==='cdd'?[
+      ['Motif du CDD', cddMotifL],
+      ['Terme', cddTermeL],
+      ...(c.cddTerme==='precis'?[['Date de fin', cddDateFinL]]:
+         c.cddTerme==='imprecis'?[['Date minimale', cddDateMinL]]:[]),
+      ...(c.cddMotif==='attente'&&c.dateDeb?[['Date limite (9 mois)', (()=>{const d=new Date(c.dateDeb);d.setMonth(d.getMonth()+9);return d.toLocaleDateString('fr-FR');})()]]:[] ),
+    ]:[]),
     ['Date de début',c.dateDeb?new Date(c.dateDeb).toLocaleDateString('fr-FR'):'—'],
-    ['Période d\'essai', c.periodeEssai>0?(c.periodeEssai+' mois'):'Aucune'],
+    ['Période d\'essai', periodeEssaiL],
     ['Type de contrat',tcL],
     ['Type d\'horaires',thL],
     ['Taux horaire brut',source.txBrut?(source.txBrut.toFixed(2)+' €'):'—'],
@@ -1369,6 +1387,17 @@ function buildFicheContenu(source, c){
     <td style="padding:8px 4px;font-weight:600;font-size:13px">${v}</td>
   </tr>`).join('');
 
+  // Boutons CDD
+  const nbProlongations=(c.avenants||[]).filter(av=>av.typeProlongation==='prolongation').length;
+  const cddBoutonsHtml=c.typeDuree==='cdd'&&c.signe?`
+    <div class="card" style="margin-top:10px">
+      <div class="ctitle">Actions CDD</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        ${nbProlongations<2?`<button class="btn bs" onclick="ouvrirProlongationCDD(${c.id})">Prolongation (${nbProlongations}/2)</button>`:''}
+        <button class="btn bs" style="background:var(--vtc);color:var(--vt)" onclick="ouvrirPassageCDI(${c.id})">Passage en CDI</button>
+      </div>
+    </div>`:'' ;
+
   return `
     <div class="card">
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
@@ -1387,7 +1416,8 @@ function buildFicheContenu(source, c){
     ${horairesHtml?`<div class="card">
       <div class="ctitle">Horaires</div>
       ${horairesHtml}
-    </div>`:''}`;
+    </div>`:''}
+    ${cddBoutonsHtml}`;
 }       
 function renderDetTab(id,tab){
   const c=S.contrats.find(x=>x.id==id);
@@ -6688,7 +6718,7 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
         const maxJours2=diffMois2<6?Math.min(diffSem2,14):Math.min(diffSem2,31);
         if(peCDD>maxJours2){toast('Période d\'essai trop longue pour ce CDD (max '+maxJours2+' jours)');return;}
       }
-      if(peCDD>1){toast('Période d\'essai CDD : maximum 1 mois');return;}
+      if(peCDD>31){toast('Période d\'essai CDD : maximum 31 jours');return;}
     }
   }
   if(S.tc!=='occ'&&!S.th){toast('Veuillez choisir un type d\'horaires');return;}
@@ -8031,6 +8061,90 @@ function getDonneesActives(c){
   };
 }
          
+function ouvrirProlongationCDD(cid){
+  const c=S.contrats.find(x=>x.id==cid);
+  if(!c||c.typeDuree!=='cdd') return;
+  const nbProlongations=(c.avenants||[]).filter(av=>av.typeProlongation==='prolongation').length;
+  if(nbProlongations>=2){toast('Maximum 2 prolongations atteint');return;}
+  // Créer un avenant pré-configuré prolongation
+  if(!c.avenants) c.avenants=[];
+  const avid=Date.now();
+  const av={id:avid,num:(c.avenants.length+1),dateAvenant:'',typeProlongation:'prolongation',
+    tc:c.tc,th:c.th,planType:c.planType,txBrut:c.txBrut,txNet:c.txNet,
+    majComp:c.majComp,majSup:c.majSup,majRepos:c.majRepos,majFerie:c.majFerie,maj1erMai:c.maj1erMai,
+    hMensu:c.hMensu,hMensuMaj:c.hMensuMaj,hMensuNorm:c.hMensuNorm,nbSem:c.nbSem,
+    hMin:c.hMin,jMaxMin:c.jMaxMin,joursMin:c.joursMin,joursFixe:c.joursFixe,semTypes:c.semTypes,
+    planVar:c.planVar,nbJoursMois:c.nbJoursMois,mensBrute:c.mensBrute,
+    cddMotif:c.cddMotif,cddTerme:c.cddTerme,cddDateFin:'',cddDateMin:'',
+    feriesTravailles:c.feriesTravailles,cgAnticipe:c.cgAnticipe,dateCg:c.dateCg,
+    indemType:c.indemType,indemMontant:c.indemMontant,indemPer:c.indemPer,repas:c.repas,km:c.km,
+    signe:false};
+  c.avenants.push(av);
+  const cidx=S.contrats.findIndex(x=>x.id==cid);
+  if(cidx!==-1) S.contrats[cidx]=c;
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  ouvrirFormulaireAvenant(cid,avid);
+  // Après ouverture du formulaire, ajouter champs CDD spécifiques
+  setTimeout(()=>{
+    // Masquer les boutons CDI/CDD (prolongation reste CDD)
+    const blocCDI=document.getElementById('ro-cdi');
+    const blocCDD=document.getElementById('ro-cdd');
+    if(blocCDI) blocCDI.style.display='none';
+    if(blocCDD) blocCDD.style.display='none';
+    // Ajouter champ nouvelle date de fin
+    if(!document.getElementById('fg-cdd-prolongation')){
+      const fg=document.createElement('div');
+      fg.className='fg';fg.id='fg-cdd-prolongation';
+      const dateCourante=c.cddDateFin||c.cddDateMin||'';
+      const dateMax=c.cddMotif==='attente'?(()=>{const d=new Date(c.dateDeb);d.setMonth(d.getMonth()+9);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');})():'';
+      fg.innerHTML=`<label class="fl">Nouvelle date de fin (prolongation)</label>
+        <div style="font-size:12px;color:var(--tx2);margin-bottom:4px">Date actuelle : ${dateCourante?new Date(dateCourante).toLocaleDateString('fr-FR'):'—'}</div>
+        <input class="fi" type="date" id="f-cdd-prolongation-datefin" ${dateMax?'max="'+dateMax+'"':''}">
+        ${c.cddMotif==='attente'?'<div class="ibox" style="margin-top:4px">Limite 9 mois : '+new Date(dateMax).toLocaleDateString('fr-FR')+'</div>':'' }`;
+      const dateAvEl=document.getElementById('f-dateavenant');
+      if(dateAvEl) dateAvEl.parentElement.parentElement.after(fg);
+    }
+    toast('Prolongation CDD — Saisissez la nouvelle date de fin et la date d\'effet');
+  },300);
+}
+
+function ouvrirPassageCDI(cid){
+  const c=S.contrats.find(x=>x.id==cid);
+  if(!c||c.typeDuree!=='cdd') return;
+  if(!c.avenants) c.avenants=[];
+  const avid=Date.now();
+  const av={id:avid,num:(c.avenants.length+1),dateAvenant:'',typeProlongation:'cdi',
+    tc:c.tc,th:c.th,planType:c.planType,txBrut:c.txBrut,txNet:c.txNet,
+    majComp:c.majComp,majSup:c.majSup,majRepos:c.majRepos,majFerie:c.majFerie,maj1erMai:c.maj1erMai,
+    hMensu:c.hMensu,hMensuMaj:c.hMensuMaj,hMensuNorm:c.hMensuNorm,nbSem:c.nbSem,
+    hMin:c.hMin,jMaxMin:c.jMaxMin,joursMin:c.joursMin,joursFixe:c.joursFixe,semTypes:c.semTypes,
+    planVar:c.planVar,nbJoursMois:c.nbJoursMois,mensBrute:c.mensBrute,
+    typeDuree:'cdi', // passage en CDI
+    feriesTravailles:c.feriesTravailles,cgAnticipe:c.cgAnticipe,dateCg:c.dateCg,
+    indemType:c.indemType,indemMontant:c.indemMontant,indemPer:c.indemPer,repas:c.repas,km:c.km,
+    signe:false};
+  c.avenants.push(av);
+  const cidx=S.contrats.findIndex(x=>x.id==cid);
+  if(cidx!==-1) S.contrats[cidx]=c;
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  ouvrirFormulaireAvenant(cid,avid);
+  setTimeout(()=>{
+    const blocCDI=document.getElementById('ro-cdi');
+    const blocCDD=document.getElementById('ro-cdd');
+    if(blocCDI){blocCDI.style.display='none';}
+    if(blocCDD){blocCDD.style.display='none';}
+    // Info ancienneté depuis le CDD
+    if(!document.getElementById('fg-cdi-info')){
+      const fg=document.createElement('div');
+      fg.className='fg';fg.id='fg-cdi-info';
+      fg.innerHTML=`<div class="ibox">Passage en CDI — l'ancienneté est calculée depuis le <strong>${c.dateDeb?new Date(c.dateDeb).toLocaleDateString('fr-FR'):'—'}</strong> (début du CDD)</div>`;
+      const dateAvEl=document.getElementById('f-dateavenant');
+      if(dateAvEl) dateAvEl.parentElement.parentElement.after(fg);
+    }
+    toast('Passage en CDI — Saisissez la date d\'effet et vérifiez les conditions');
+  },300);
+}
+
  function ouvrirFormulaireAvenant(cid,avid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c)return;
