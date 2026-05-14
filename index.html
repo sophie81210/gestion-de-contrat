@@ -3260,7 +3260,7 @@ function buildRecapHtml(recap, solde, regul52){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:1px solid var(--mb)"></td></tr>';
   }
   if(parseFloat(recap.hTotalComp||0)>0) html+=ligneG('Total h. complémentaires', parseFloat(recap.hTotalComp).toFixed(2)+' h — '+parseFloat(recap.montantTotalComp||0).toFixed(2)+' €', true, 'var(--tx)');
-  if(parseFloat(recap.hSup||0)>0) html+=ligneG('Total h. supplémentaires', parseFloat(recap.hSup).toFixed(2)+' h — '+parseFloat(recap.montantTotalSup||0).toFixed(2)+' €', true, 'var(--tx)');
+  if(parseFloat(recap.hSup||0)>0) html+=ligneG('Majoration h. supplémentaires ('+parseFloat(recap.hSup).toFixed(2)+' h)', '+'+parseFloat(recap.montantTotalSup||0).toFixed(2)+' €', true, 'var(--tx)');
   if(parseFloat(recap.montantExo||0)>0) html+=ligneG('Exonération de charges (11,31%)', '+'+parseFloat(recap.montantExo).toFixed(2)+' €', false);
   if(parseFloat(recap.indemCongeMois||0)>0) html+=ligneG('Indemnité congés payés ('+recap.indemCongeNbJours+' j)', recap.indemCongeMois.toFixed(2)+' €', true, 'var(--m)');
   html+=ligneG('Salaire net à déclarer', (parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)).toFixed(2)+' €', true, 'var(--m)');
@@ -3385,7 +3385,7 @@ function buildRecapCumul(r1,r2){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:1px solid var(--mb)"></td></tr>';
   }
   if(hTotalComp>0) html+=ligneG('Total h. complémentaires', hTotalComp.toFixed(2)+' h — '+montantTotalComp.toFixed(2)+' €', true, 'var(--tx)');
-  if(hSup>0) html+=ligneG('Total h. supplémentaires', hSup.toFixed(2)+' h — '+montantTotalSup.toFixed(2)+' €', true, 'var(--tx)');
+  if(hSup>0) html+=ligneG('Majoration h. supplémentaires ('+hSup.toFixed(2)+' h)', '+'+montantTotalSup.toFixed(2)+' €', true, 'var(--tx)');
   if(montantExo>0) html+=ligneG('Exonération de charges (11,31%)', '+'+montantExo.toFixed(2)+' €', false);
   html+=ligneG('Salaire net à déclarer', salaireNet.toFixed(2)+' €', true, 'var(--m)');
   if(indemE>0) html+=ligneG('Indem. entretien', indemE.toFixed(2)+' €');
@@ -4824,6 +4824,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     }
   });
   indemKmTotal=(c.km||0)*kmTotal;
+  // hComp contient toutes les heures en plus (comp + sup) via compJour = "jours ordinaires"
+  // Calculer hSup et hCompMaj séparément pour les majorations uniquement
+  let hCompMaj=0; // heures pour majoration comp
   Object.keys(hParSemaine).forEach(semKey=>{
     const hSem=hParSemaine[semKey]||0;
     const hPrevSem=hPrevuParSemaine[semKey]||0;
@@ -4835,19 +4838,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const hSupSem=Math.max(0,hSem-seuilSup);
       const hCompSem=Math.max(0,Math.min(hSem,seuilSup)-hSeuilComp);
       hSup+=hSupSem;
-      hComp-=hSupSem;
-      if(hComp<0) hComp=0;
+      hCompMaj+=hCompSem;
     }
-  });
-  // Correction semaines à cheval : déduire du comp les heures déjà payées le mois précédent
-  Object.keys(hParSemainePrecMois).forEach(semKey=>{
-    const hPrecMois=hParSemainePrecMois[semKey]||0;
-    if(hPrecMois<=0) return;
-    const hPrevSem=hPrevuParSemaine[semKey]||0;
-    const hAbsSem=hAbsParSemaine[semKey]||0;
-    const hSeuilComp=Math.max(0,hPrevSem-hAbsSem);
-    const hPrecEnComp=Math.max(0,hPrecMois-hSeuilComp);
-    hComp=Math.max(0,hComp-hPrecEnComp);
   });
   const hMoyParJour=nbJoursMoisContrat>0?hMensu/nbJoursMoisContrat:hMensu/20;
   if(hAbs>0&&hTheoriques>0){
@@ -4880,9 +4872,12 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   nbJoursTrav=parseFloat((nbJoursMoisContrat+joursEnPlus-joursEnMoins).toFixed(1));
 
   // ── Heures complémentaires et supplémentaires normales ──
-  const hBaseComp=hComp+hSup; // total affiché "jours normaux"
+  // hComp = toutes heures en plus ("jours ordinaires" = comp + sup)
+  // hCompMaj = heures pour majoration comp uniquement (entre seuil comp et 45h)
+  // hSup = heures pour majoration sup uniquement (au-delà de 45h)
+  const hBaseComp=hComp; // total "jours ordinaires" (comp + sup ensemble)
   // Montants base (heures × txNet, sans majoration)
-  const montantBaseComp=parseFloat(((hComp+hSup)*txNet).toFixed(2)); // base jours ordinaires
+  const montantBaseComp=parseFloat((hComp*txNet).toFixed(2)); // base jours ordinaires (comp+sup)
   const montantBaseSup=parseFloat((hSup*txNet).toFixed(2)); // rétrocompat
   const montantBaseFerieNP=parseFloat((hMajFerie*txNet).toFixed(2));
   const montantBaseRepos=parseFloat((hMajRepos*txNet).toFixed(2));
@@ -4890,7 +4885,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
 
   // ── Majorations (surplus dû aux taux) ──
   const majCompPct=majComp; // déjà en décimal
-  const montantMajComp=parseFloat((hComp*majCompPct*txNet).toFixed(2));
+  const montantMajComp=parseFloat((hCompMaj*majCompPct*txNet).toFixed(2)); // majoration sur hCompMaj
   const montantMajSup=parseFloat((hSup*majSup*txNet).toFixed(2));
   const montantMajFerieNP=parseFloat((hMajFerie*majFeriePct*txNet).toFixed(2));
   const montantMajFeriePrevu2=parseFloat((hMajFeriePrevu*majFeriePct*txNet).toFixed(2));
@@ -4898,19 +4893,19 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const montantMaj1erMai=parseFloat((hMaj1erMai*maj1erMaiPct*txNet).toFixed(2));
 
   // ── Exonération de charges (11,31% sur brut des heures hors férié prévu) ──
-  const hExoBrut=(hComp*(1+majCompPct)+hSup*(1+majSup)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))*txBrut;
+  const hExoBrut=(hComp+hCompMaj*majCompPct+hSup*majSup+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))*txBrut;
   const montantExo=parseFloat((hExoBrut*0.1131).toFixed(2));
 
   // ── Totaux comp/sup ──
   const hTotalComp=hComp+hMajFerie+hMajRepos+hMaj1erMai;
   const montantTotalComp=parseFloat((montantBaseComp+montantBaseFerieNP+montantBaseRepos+montantBase1erMai+montantMajComp+montantMajFerieNP+montantMajRepos+montantMaj1erMai).toFixed(2));
-  // Note : montantBaseComp inclut déjà hSup en base
-  const montantTotalSup=parseFloat((montantBaseSup+montantMajSup).toFixed(2));
+  const montantTotalSup=parseFloat((montantMajSup).toFixed(2)); // sup = majorations uniquement
+  const hTotalSup=hSup; // pour affichage
 
   // ── Rétrocompat retour (pour calcBrutTotal et régularisation) ──
   const montantCompBrutMaj=(hComp*(1+majCompPct)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))*txBrut;
   const montantSupBrutMaj=hSup*(1+majSup)*txBrut;
-  const montantCompNet=parseFloat((montantTotalComp+montantExo*(hComp*(1+majCompPct)/((hComp*(1+majCompPct)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))||1))).toFixed(2));
+  const montantCompNet=parseFloat((montantTotalComp+montantExo*(hComp/((hComp+hMajFerie+hMajRepos+hMaj1erMai)||1))).toFixed(2));
   const montantSupNet=parseFloat((montantTotalSup+montantExo*(hSup*(1+majSup)/((hComp*(1+majCompPct)+hSup*(1+majSup)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))||1))).toFixed(2));
   const montantCompBrut=parseFloat(montantCompBrutMaj.toFixed(2));
   const montantSupBrut=parseFloat(montantSupBrutMaj.toFixed(2));
@@ -4939,8 +4934,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     salaireNetBrut=hBaseNormOcc*txNet+hBaseMajOcc*txNetMajR
       +hComp*(1+majComp)*txNet+hSup*(1+majSup)*txNet;
   } else {
+    // hComp = base jours ordinaires (comp+sup ensemble), hCompMaj = pour majoration comp, hSup = pour majoration sup
     salaireNetBrut=hMensuNorm*txNet+hMensuMaj*txNetMajR
-      +hComp*(1+majComp)*txNet+hSup*(1+majSup)*txNet - montantAbsences
+      +hComp*txNet+hCompMaj*majCompPct*txNet+hSup*majSup*txNet - montantAbsences
       +hMajFerie*(1+majFeriePct)*txNet+hMajFeriePrevu*majFeriePct*txNet+hMajRepos*(1+majReposPct)*txNet+hMaj1erMai*(1+maj1erMaiPct)*txNet;
   }
   const salaireNet=parseFloat(Math.max(0,salaireNetBrut).toFixed(2));
