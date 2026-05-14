@@ -301,13 +301,7 @@ input[type=time].fi{width:auto;min-width:92px}
         <div id="cond-cdd-imprecis" class="cond" style="display:none;margin-top:6px">
           <div class="fg" style="margin-bottom:0"><label class="fl">Date minimale du CDD</label><input class="fi" type="date" id="f-cdd-datemin" oninput="calcCDD()"></div>
         </div>
-        <!-- Période d'essai CDD calculée automatiquement -->
-        <div id="cdd-essai-info" style="margin-top:12px;display:none">
-          <div class="fg" style="margin-bottom:0">
-            <label class="fl">Période d'essai (calculée automatiquement)</label>
-            <div class="ibox" id="cdd-essai-txt">—</div>
-          </div>
-        </div>
+
       </div>
 
       <div class="fg">
@@ -326,11 +320,18 @@ input[type=time].fi{width:auto;min-width:92px}
             '<b>CDI :</b> maximum 3 mois pour un accueil de moins de 4 jours par semaine, et 2 mois dans les autres cas.<br><br><b>CDD :</b> maximum 1 jour par semaine prévu, maximum 2 semaines si CDD inférieur à 6 mois, maximum 1 mois au-delà.'
           )" title="Règles période d\'essai">i</span>
         </label>
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <!-- CDI : en mois -->
+        <div id="essai-cdi-wrap" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <input class="fi fi-sm" type="number" id="f-periode-essai" min="0" max="3" step="1" placeholder="0 à 3" style="width:80px" oninput="validerEssai()"> 
           <span style="font-size:13px;color:var(--tx2)">mois</span>
-          <span id="essai-erreur" style="font-size:12px;color:var(--al);display:none"></span>
         </div>
+        <!-- CDD : en jours -->
+        <div id="essai-cdd-wrap" style="display:none;align-items:center;gap:8px;flex-wrap:wrap">
+          <input class="fi fi-sm" type="number" id="f-periode-essai-cdd" min="0" max="31" step="1" placeholder="nb de jours" style="width:100px" oninput="validerEssai()">
+          <span style="font-size:13px;color:var(--tx2)">jours</span>
+          <span id="essai-cdd-max" style="font-size:12px;color:var(--tx2)"></span>
+        </div>
+        <span id="essai-erreur" style="font-size:12px;color:var(--al);display:none;margin-top:4px;display:block"></span>
       </div>
       </div>
     </div>
@@ -3189,7 +3190,11 @@ function buildRecapHtml(recap, solde, regul52){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
     // Partie basse : cumuls
     html+=ligneG('Jours travaillés', recap.nbJoursTrav+' j');
-    html+=ligneG('Heures normales à déclarer', Math.max(0,(recap.hMensu||0)-(recap.hAbsDeduit||0)).toFixed(2)+' h', true);
+    if(parseFloat(recap.nbJoursMoisCalc||0)>0){
+    const estPlanR=(recap.th==='plan');
+    html+=ligneG('Jours mensualisés moyens', parseFloat(recap.nbJoursMoisCalc).toFixed(1)+' j'+(estPlanR?' (jours max)':''));
+  }
+  html+=ligneG('Heures normales à déclarer', Math.max(0,(recap.hMensu||0)-(recap.hAbsDeduit||0)).toFixed(2)+' h', true);
   }
   // ── Section heures complémentaires et majorées ──
   const hasHComp=parseFloat(recap.hBaseComp||0)>0||parseFloat(recap.hMajFerie||0)>0||parseFloat(recap.hMajRepos||0)>0||parseFloat(recap.hMaj1erMai||0)>0;
@@ -3313,6 +3318,11 @@ function buildRecapCumul(r1,r2){
   const hasMajC=(montantMajComp>0||montantMajSup>0||montantMajFerieNP>0||montantMajFeriePrevu2>0||montantMajRepos>0||montantMaj1erMai>0);
   let html='';
   html+=ligneG('Jours travaillés', nbJoursTrav.toFixed(1)+' j');
+  const nbJMoisCalcC=(parseFloat(r1.nbJoursMoisCalc||0)+parseFloat(r2.nbJoursMoisCalc||0))/2;
+  if(nbJMoisCalcC>0){
+    const estPlanC=(r1.th==='plan'||r2.th==='plan');
+    html+=ligneG('Jours mensualisés moyens', nbJMoisCalcC.toFixed(1)+' j'+(estPlanC?' (jours max)':''));
+  }
   html+=ligneG('Heures normales à déclarer', hNormales.toFixed(2)+' h', true);
   if(hasHCompC||hasMajC){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:1px solid var(--mb)"></td></tr>';
@@ -5088,7 +5098,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     montantExo, hTotalComp:hTotalComp.toFixed(2), montantTotalComp, montantTotalSup, hBaseComp:hBaseComp.toFixed(2),
     hAbs:hAbs.toFixed(2), hAbsDeduit, montantAbsences,
     nbJoursTrav:Math.max(0,parseFloat(nbJoursTrav.toFixed(1))),
-    nbJoursMoisContrat, joursEnPlus, joursEnMoins:parseFloat(joursEnMoins.toFixed(1)),
+    th:sourceActif.th, nbJoursMoisContrat, nbJoursMoisCalc, joursEnPlus, joursEnMoins:parseFloat(joursEnMoins.toFixed(1)),
     nbAbsEnfantMois, nbAbsEnfantAnneeCont,
     nbAbsEnfantTotal:nbAbsEnfantAnneeCont+nbAbsEnfantMois,
     txNet:txNet.toFixed(2), txNetExact:txNet, salaireNet,
@@ -5264,19 +5274,21 @@ function resetForm(){
   document.getElementById('ro-cdi')?.classList.add('on');
   document.getElementById('bloc-cdd').style.display='none';
   document.getElementById('bloc-essai-cdi').style.display='block';
+  document.getElementById('essai-cdi-wrap').style.display='flex';
+  document.getElementById('essai-cdd-wrap').style.display='none';
   document.getElementById('ro-occ').style.display='';
-  document.getElementById('cdd-essai-info').style.display='none';
   document.getElementById('cdd-date-max-info').style.display='none';
   document.getElementById('btn-val').textContent='Valider et enregistrer';
 }
 
 // ══ SELECTORS ══
 function validerEssai(){
-  const val=parseFloat(document.getElementById('f-periode-essai')?.value)||0;
+  const isCDD=S.typeDuree==='cdd';
+  const val=isCDD?(parseFloat(document.getElementById('f-periode-essai-cdd')?.value)||0):(parseFloat(document.getElementById('f-periode-essai')?.value)||0);
   const errEl=document.getElementById('essai-erreur');
   if(!errEl) return;
-  const el=document.getElementById('f-periode-essai');
-  if(S.typeDuree==='cdd'){
+  const el=isCDD?document.getElementById('f-periode-essai-cdd'):document.getElementById('f-periode-essai');
+  if(isCDD){
     const dateDeb=document.getElementById('f-datedeb')?.value;
     const terme=S.cddTerme;
     const dateRef=terme==='precis'?document.getElementById('f-cdd-datefin')?.value:document.getElementById('f-cdd-datemin')?.value;
@@ -5292,8 +5304,8 @@ function validerEssai(){
         return;
       }
     }
-    if(val>1){
-      errEl.textContent='Maximum 1 mois pour un CDD';
+    if(val>31){
+      errEl.textContent='Maximum 31 jours pour un CDD';
       errEl.style.display='inline';
       if(el) el.style.borderColor='var(--al)';
       return;
@@ -5315,7 +5327,9 @@ function selTypeDuree(v){
   document.getElementById('ro-cdi').classList.toggle('on',v==='cdi');
   document.getElementById('ro-cdd').classList.toggle('on',v==='cdd');
   document.getElementById('bloc-cdd').style.display=v==='cdd'?'block':'none';
-  document.getElementById('bloc-essai-cdi').style.display=v==='cdd'?'none':'block';
+  document.getElementById('bloc-essai-cdi').style.display='block'; // toujours visible
+  document.getElementById('essai-cdi-wrap').style.display=v==='cdd'?'none':'flex';
+  document.getElementById('essai-cdd-wrap').style.display=v==='cdd'?'flex':'none';
   // Masquer occasionnel pour CDD
   const roOcc=document.getElementById('ro-occ');
   if(roOcc) roOcc.style.display=v==='cdd'?'none':'';
@@ -5371,10 +5385,8 @@ function calcCDD(){
     if(minEl) minEl.removeAttribute('max');
   }
 
-  // Calcul période d'essai CDD
-  const essaiInfo=document.getElementById('cdd-essai-info');
-  const essaiTxt=document.getElementById('cdd-essai-txt');
-  if(!dateDeb||!terme){if(essaiInfo)essaiInfo.style.display='none';return;}
+  // Calcul période d'essai CDD → afficher le max dans le champ
+  if(!dateDeb||!terme) return;
   let dateRef=null;
   if(terme==='precis'){
     const v=document.getElementById('f-cdd-datefin')?.value;
@@ -5383,24 +5395,20 @@ function calcCDD(){
     const v=document.getElementById('f-cdd-datemin')?.value;
     if(v) dateRef=new Date(v);
   }
-  if(!dateRef||!dateDeb){if(essaiInfo)essaiInfo.style.display='none';return;}
+  if(!dateRef||!dateDeb) return;
   const dDebObj=new Date(dateDeb);
-  // Durée du CDD en semaines
   const diffMs=dateRef-dDebObj;
   const diffSem=Math.floor(diffMs/(7*24*3600*1000));
   const diffMois=diffMs/(30.44*24*3600*1000);
-  // 1 jour par semaine prévue, max 2 semaines si CDD < 6 mois, max 1 mois si >= 6 mois
   let maxEssai;
   if(diffMois<6) maxEssai={val:2,unit:'semaines'};
   else maxEssai={val:1,unit:'mois'};
   const essaiJours=Math.min(diffSem,maxEssai.val*(maxEssai.unit==='semaines'?7:30));
-  // Date de fin période d'essai
-  const dateFin=new Date(dDebObj);
-  dateFin.setDate(dateFin.getDate()+essaiJours);
-  const label=essaiJours===1?'1 jour':essaiJours<7?essaiJours+' jours':
-    (essaiJours%7===0?(essaiJours/7)+' semaine'+(essaiJours/7>1?'s':''):(Math.floor(essaiJours/7)+' sem. '+essaiJours%7+' j'));
-  if(essaiTxt) essaiTxt.textContent=label+' — jusqu\'au '+dateFin.toLocaleDateString('fr-FR')+' (max '+maxEssai.val+' '+maxEssai.unit+')';
-  if(essaiInfo) essaiInfo.style.display='block';
+  // Afficher le max dans le champ jours CDD
+  const essaiMaxEl=document.getElementById('essai-cdd-max');
+  if(essaiMaxEl) essaiMaxEl.textContent='max '+essaiJours+' jours ('+maxEssai.val+' '+maxEssai.unit+')';
+  const essaiCddEl=document.getElementById('f-periode-essai-cdd');
+  if(essaiCddEl) essaiCddEl.setAttribute('max', essaiJours);
 }
 
 function selTC(el,v){
@@ -6540,8 +6548,11 @@ function calc(){
   rHmNormHidden.textContent=hMNorm.toFixed(4);
   // Calculer nbJoursMois = jours/sem moyens * sem / 12 (arrondi au plus proche)
   let nbJSem=0;
-  if(S.th==='fixe'&&document.getElementById('j-fixe')){
-    JOURS.forEach((_,i)=>{if(document.getElementById('j-fixe-cb-'+i)?.checked)nbJSem++;});
+  if(S.th==='fixe'){
+    // Compter les jours cochés dans le formulaire
+    let nbJFixe=0;
+    JOURS.forEach((_,i)=>{if(document.getElementById('j-fixe-cb-'+i)?.checked)nbJFixe++;});
+    nbJSem=nbJFixe;
   } else if(S.th==='sem'){
     let totalJ=0,totalS=0;
     document.querySelectorAll('[id^="nbsem-"]').forEach(el=>{
@@ -6644,7 +6655,7 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
     if(!S.cddTerme){toast('Veuillez choisir le terme du CDD');return;}
     if(S.cddTerme==='precis'&&!document.getElementById('f-cdd-datefin')?.value){toast('Veuillez saisir la date de fin du CDD');return;}
     if(S.cddTerme==='imprecis'&&!document.getElementById('f-cdd-datemin')?.value){toast('Veuillez saisir la date minimale du CDD');return;}
-    const peCDD=parseFloat(document.getElementById('f-periode-essai')?.value)||0;
+    const peCDD=parseFloat(document.getElementById('f-periode-essai-cdd')?.value)||0;
     if(peCDD>0){
       const dateDeb2=document.getElementById('f-datedeb')?.value;
       const dateRef2=S.cddTerme==='precis'?document.getElementById('f-cdd-datefin')?.value:document.getElementById('f-cdd-datemin')?.value;
@@ -6701,6 +6712,7 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
   cddTerme:S.typeDuree==='cdd'?S.cddTerme:null,
   cddDateFin:S.typeDuree==='cdd'&&S.cddTerme==='precis'?document.getElementById('f-cdd-datefin')?.value:null,
   cddDateMin:S.typeDuree==='cdd'&&S.cddTerme==='imprecis'?document.getElementById('f-cdd-datemin')?.value:null,
+  periodeEssaiCdd:S.typeDuree==='cdd'?(parseFloat(document.getElementById('f-periode-essai-cdd')?.value)||0):null,
   periodeEssai:(()=>{
     const pe=parseFloat(document.getElementById('f-periode-essai')?.value)||0;
     // Limiter à 2 mois si >=4 jours/sem
