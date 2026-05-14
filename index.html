@@ -7308,6 +7308,7 @@ function rafraichirRupture(cid){
     return d;
   };
   const motif=document.getElementById('rp-motif-'+cid)?.value||c.rupture.motif||'';
+  const initiative=document.querySelector(`input[name="rp-init-${cid}"]:checked`)?.value||c.rupture.initiative||'';
   const dateSignif=dateTexteVersISO(document.getElementById('rp-date-signif-'+cid)?.value||'')||fixDate(c.rupture.dateSignif||'');
   const dateNotif=dateTexteVersISO(document.getElementById('rp-date-notif-'+cid)?.value||'')||fixDate(c.rupture.dateNotif||'');
   const delaiPrev=Math.min(8,parseInt(document.getElementById('rp-delai-prev-'+cid)?.value||c.rupture.delaiPrev||'0')||0);
@@ -7343,7 +7344,7 @@ function rafraichirRupture(cid){
     }
   }
   const dateNotifFinal=dateNotif&&dateNotif>=dateDebContratMin?dateNotif:'';
-  c._ruptureTemp={motif,dateSignif:dateSignifFinal,dateNotif:dateNotifFinal,delaiPrev,statutPreavis,initiativePreavis,dateFinPreavis,dateFinContrat,cumulConges};
+  c._ruptureTemp={motif,initiative,dateSignif:dateSignifFinal,dateNotif:dateNotifFinal,delaiPrev,statutPreavis,initiativePreavis,dateFinPreavis,dateFinContrat,cumulConges};
   const cont=document.getElementById('det-content');
   renderRupture(c,cont);
 }
@@ -7399,8 +7400,242 @@ function annulerRupture(cid){
   renderRupture(c,cont);
 }
 
+function renderRuptureCDD(c, cont){
+  if(!cont) return;
+  const btnVal=document.getElementById('btn-val');
+  if(btnVal) btnVal.style.display='none';
+  if(c.rupture?.confirmee) delete c._ruptureTemp;
+  const rp=c._ruptureTemp||c.rupture||{};
+  const cid=c.id;
+  const params=S.params||{};
+  const coefNet=params.coefNet||0.7811975;
+  const dateSit=getDateSituationAu(c);
+  const dateSitStr=dateSit?dateSit.toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'}):'—';
+  const motif=rp.motif||'';
+
+  // ─── Indemnité de précarité (10% des salaires nets hors exo) ───
+  function calcIndemPrecarite(){
+    let totalNet=0;
+    Object.entries(c.fiches||{}).forEach(([key,f])=>{
+      if(!f.valide) return;
+      const r=calcRecapFiche(c,f);
+      // salaireNetBrut = salaire net sans exonération
+      const sNet=parseFloat(r.salaireNet||0);
+      totalNet+=sNet;
+    });
+    // Ajouter les avenants
+    (c.avenants||[]).forEach(av=>{
+      Object.entries(av.fiches||{}).forEach(([key,f])=>{
+        if(!f.valide) return;
+        const r=calcRecapFiche(c,f);
+        totalNet+=parseFloat(r.salaireNet||0);
+      });
+    });
+    return parseFloat((totalNet*0.1).toFixed(2));
+  }
+
+  // ─── Salaires restants jusqu'à la fin du CDD (rupture employeur autre motif) ───
+  function calcSalairesRestants(dateRupture){
+    const dateFin=c.cddTerme==='precis'?c.cddDateFin:c.cddDateMin;
+    if(!dateFin||!dateRupture) return 0;
+    const dFin=new Date(dateFin);
+    const dRup=new Date(dateRupture);
+    if(dFin<=dRup) return 0;
+    // Nombre de mois complets restants × mensualisation
+    const source=getVersionActive(c,dRup);
+    const hMensu=source.hMensu||0;
+    const txNet=source.txNet||(source.txBrut*getCoefNet())||0;
+    const diffMs=dFin-dRup;
+    const diffMois=diffMs/(30.44*24*3600*1000);
+    return parseFloat((diffMois*hMensu*txNet).toFixed(2));
+  }
+
+  // ─── Solde congés ───
+  let soldeCongesHtml='';
+  if(c.tc==='52'){
+    const s=calcSoldeConges52(c,dateSit||new Date());
+    soldeCongesHtml=`<div class="card" style="margin-bottom:10px">
+      <div class="ctitle">Solde des congés</div>
+      <div style="display:grid;gap:6px">
+        <div style="display:flex;justify-content:space-between;font-size:13px">
+          <span>Jours acquis restants</span>
+          <span><strong>${s.joursAcquisRestants} j</strong> — ${s.montantAcquisNet} € net</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:13px">
+          <span>Jours en cours</span>
+          <span><strong>${s.joursEnCoursRestants} j</strong> — ${s.montantEnCoursNet} € net</span>
+        </div>
+      </div></div>`;
+  } else {
+    const s=calcSoldeConges46(c);
+    soldeCongesHtml=`<div class="card" style="margin-bottom:10px">
+      <div class="ctitle">Solde des congés</div>
+      <div style="display:grid;gap:6px">
+        <div style="display:flex;justify-content:space-between;font-size:13px">
+          <span>Congés acquis non versés</span>
+          <span><strong>${s.joursNonVerses} j</strong> — ${s.montantNonVersesNet} € net</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:13px">
+          <span>En cours d'acquisition</span>
+          <span><strong>${s.joursEnCours} j</strong> — ${s.montantEnCoursNet} € net</span>
+        </div>
+      </div></div>`;
+  }
+
+  // ─── Motifs selon initiative ───
+  const motifEmployeur=[
+    {v:'fin-terme-precis', l:'Fin de CDD à terme précis'},
+    {v:'fin-terme-imprecis', l:'Fin de CDD à terme imprécis'},
+    {v:'fin-essai', l:'Rupture de la période d\'essai'},
+    {v:'faute-grave', l:'Faute grave'},
+    {v:'force-majeure', l:'Cas de force majeure'},
+    {v:'accord-commun', l:'Accord commun'},
+    {v:'autre-motif-emp', l:'Autre motif'},
+  ];
+  const motifAssmat=[
+    {v:'fin-essai-am', l:'Rupture de la période d\'essai'},
+    {v:'embauche-cdi', l:'Proposition d\'embauche en CDI'},
+    {v:'refus-cdi', l:'Refus de passage en CDI équivalent'},
+    {v:'faute-grave-am', l:'Faute grave'},
+    {v:'force-majeure-am', l:'Cas de force majeure'},
+    {v:'accord-commun-am', l:'Accord commun'},
+    {v:'autre-motif-am', l:'Autre motif'},
+  ];
+
+  const initiative=rp.initiative||'';
+  const motifsList=initiative==='employeur'?motifEmployeur:initiative==='assmat'?motifAssmat:[];
+
+  // ─── Préavis CDD ───
+  const aPreavis=['embauche-cdi','accord-commun','accord-commun-am'].includes(motif);
+  const pasPreavis=['fin-essai','fin-essai-am','faute-grave','force-majeure','faute-grave-am','force-majeure-am','fin-terme-precis','fin-terme-imprecis'].includes(motif);
+  const aPrecarite=!['faute-grave','force-majeure','faute-grave-am','force-majeure-am','refus-cdi','autre-motif-am'].includes(motif)&&motif!=='';
+  const aSalairesRestants=motif==='autre-motif-emp';
+  const aAvertissement=motif==='autre-motif-am';
+
+  // Calcul préavis embauche CDI : 1 jour/semaine travaillée, max 2 semaines
+  let preavisHtml='';
+  if(motif==='embauche-cdi'){
+    const dDebCDD=c.dateDeb?new Date(c.dateDeb):null;
+    const dateSignif=rp.dateSignif?new Date(rp.dateSignif):null;
+    if(dDebCDD&&dateSignif){
+      const diffSem=Math.floor((dateSignif-dDebCDD)/(7*24*3600*1000));
+      const joursP=Math.min(diffSem,14);
+      const dateFin=dateSignif?new Date(dateSignif.getTime()+joursP*24*3600*1000):null;
+      preavisHtml=`<div style="margin-top:8px;font-size:13px;color:var(--tx2)">
+        Durée du préavis : <strong>${joursP} jour${joursP>1?'s':''}</strong>
+        ${dateFin?'— Fin le <strong>'+dateFin.toLocaleDateString('fr-FR')+'</strong>':''}
+      </div>`;
+    }
+  } else if(motif==='accord-commun'||motif==='accord-commun-am'){
+    const dateFin=c.cddTerme==='precis'?c.cddDateFin:c.cddDateMin;
+    preavisHtml=`<div style="margin-top:8px">
+      <label style="font-size:12px;color:var(--tx2)">Date de fin convenue (avant le ${dateFin?new Date(dateFin).toLocaleDateString('fr-FR'):'—'})</label>
+      <input type="text" id="rp-fin-preavis-${cid}" value="${dateISOversTexte(rp.dateFinPreavis||'')}" placeholder="JJ/MM/AAAA" oninput="formaterSaisieDate(this)" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+    </div>`;
+  }
+
+  // ─── Solde final CDD ───
+  let soldeHtml='';
+  if(motif){
+    const lignes=[];
+    let totalNet=0,totalBrut=0;
+    // Congés payés
+    if(c.tc==='52'){
+      const s=calcSoldeConges52(c,dateSit||new Date());
+      if(s.montantAcquisBrut>0){lignes.push({label:'Solde congés acquis',net:s.montantAcquisNet,brut:s.montantAcquisBrut});totalNet+=s.montantAcquisNet;totalBrut+=s.montantAcquisBrut;}
+      if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
+    } else {
+      const s=calcSoldeConges46(c);
+      if(s.montantNonVersesBrut>0){lignes.push({label:'Congés acquis non versés',net:s.montantNonVersesNet,brut:s.montantNonVersesBrut});totalNet+=s.montantNonVersesNet;totalBrut+=s.montantNonVersesBrut;}
+      if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
+      const reg=calcRegularisationDefinitive(c);
+      if(reg.diff>0){
+        const src=getVersionActive(c,dateSit||new Date());
+        const regBrut=parseFloat((reg.diff*(src.txBrut||0)).toFixed(2));
+        const regNet=parseFloat((regBrut*coefNet).toFixed(2));
+        lignes.push({label:'Régularisation définitive',net:regNet,brut:regBrut});
+        totalNet+=regNet;totalBrut+=regBrut;
+      }
+    }
+    // Indemnité de précarité
+    if(aPrecarite){
+      const ip=calcIndemPrecarite();
+      if(ip>0){
+        lignes.push({label:'Indemnité de précarité (10%)',net:parseFloat((ip*coefNet).toFixed(2)),brut:ip});
+        totalNet+=parseFloat((ip*coefNet).toFixed(2));totalBrut+=ip;
+      }
+    }
+    // Salaires restants
+    if(aSalairesRestants&&rp.dateSignif){
+      const sr=calcSalairesRestants(rp.dateSignif);
+      if(sr>0){
+        lignes.push({label:'Salaires restants jusqu\'à la fin du CDD',net:sr,brut:parseFloat((sr/coefNet).toFixed(2))});
+        totalNet+=sr;totalBrut+=parseFloat((sr/coefNet).toFixed(2));
+      }
+    }
+    if(lignes.length){
+      soldeHtml=`<div class="card" style="margin-bottom:10px;background:var(--mp)">
+        <div class="ctitle">Estimation du solde de tout compte</div>
+        ${lignes.map(l=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid var(--mb)">
+          <span>${l.label}</span>
+          <span>${l.net.toFixed(2)} € net <span style="color:var(--tx2);font-size:11px">(${l.brut.toFixed(2)} € brut)</span></span>
+        </div>`).join('')}
+        <div style="display:flex;justify-content:space-between;font-size:15px;font-weight:700;margin-top:8px;color:var(--m)">
+          <span>Total</span>
+          <span>${totalNet.toFixed(2)} € net <span style="font-size:12px;font-weight:400;color:var(--tx2)">(${totalBrut.toFixed(2)} € brut)</span></span>
+        </div></div>`;
+    }
+  }
+
+  const confirmeeHtml=rp.confirmee?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px">
+    ✓ Rupture confirmée — <button class="btn bd bsm" style="margin-left:8px" onclick="annulerRupture(${cid})">✕ Annuler</button>
+    <button class="btn bp bsm" style="margin-left:8px" onclick="sauvegarderRupture(${cid})">💾 Enregistrer</button>
+  </div>`:'' ;
+
+  cont.innerHTML=`
+    <div style="font-size:12px;color:var(--tx2);margin-bottom:12px">Situation au <strong>${dateSitStr}</strong></div>
+    ${confirmeeHtml}
+    ${soldeCongesHtml}
+    <div class="card" style="margin-bottom:10px">
+      <div class="ctitle">Rupture du CDD</div>
+      <div>
+        <label style="font-size:12px;color:var(--tx2)">Initiative</label>
+        <div style="display:flex;gap:10px;margin-top:6px;flex-wrap:wrap">
+          ${['employeur','assmat'].map(v=>`
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+              <input type="radio" name="rp-init-${cid}" value="${v}" ${initiative===v?'checked':''} onchange="rafraichirRupture(${cid})">
+              ${v==='employeur'?'Employeur':'Ass\'Mat'}
+            </label>`).join('')}
+        </div>
+      </div>
+      ${initiative?`<div style="margin-top:10px">
+        <label style="font-size:12px;color:var(--tx2)">Motif</label>
+        <select id="rp-motif-${cid}" oninput="corrigerDateRupture(this)" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+          <option value="">— Choisir —</option>
+          ${motifsList.map(m=>`<option value="${m.v}" ${motif===m.v?'selected':''}>${m.l}</option>`).join('')}
+        </select>
+      </div>`:''}
+      ${motif&&!pasPreavis&&!aPreavis?'':''}
+      ${aPreavis?`<div style="margin-top:10px">
+        <label style="font-size:12px;color:var(--tx2)">Date de signification</label>
+        <input type="text" id="rp-date-signif-${cid}" value="${dateISOversTexte(rp.dateSignif||'')}" placeholder="JJ/MM/AAAA" oninput="formaterSaisieDate(this)" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+        ${preavisHtml}
+      </div>`:''}
+      ${pasPreavis?`<div style="margin-top:8px;background:var(--mp);border-radius:6px;padding:8px;font-size:13px">Aucun préavis requis.</div>`:''}
+      ${aAvertissement?`<div style="margin-top:8px;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px;font-size:13px">⚠ L'employeur est en droit de demander des dommages et intérêts. L'Ass'Mat ne perçoit pas l'indemnité de précarité.</div>`:''}
+      ${!aPrecarite&&motif&&!['faute-grave','force-majeure','faute-grave-am','force-majeure-am'].includes(motif)?`<div style="margin-top:8px;font-size:12px;color:var(--tx2)">Pas d'indemnité de précarité dans ce cas.</div>`:''}
+    </div>
+    ${soldeHtml}
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn bs" onclick="sauvegarderRupture(${cid})">💾 Enregistrer</button>
+      ${!rp.confirmee?`<button class="btn bpurple" onclick="confirmerRupture(${cid})">✓ Confirmer la rupture</button>`:''}
+    </div>`;
+}
+
 function renderRupture(c, cont){
   if(!cont) return;
+  // CDD : branche séparée
+  if(c.typeDuree==='cdd') return renderRuptureCDD(c, cont);
   // Masquer le bouton Enregistrer principal (btn-val) sur la page rupture
   const btnVal=document.getElementById('btn-val');
   if(btnVal) btnVal.style.display='none';
@@ -9094,7 +9329,9 @@ if(tousNonPrevus){
       if(c.conges){
         Object.values(c.conges).forEach(cg=>{
           if(!cg.estTerminee) return;
-          quotaAcquis+=(cg.acquis||0);
+          // Utiliser restants (acquis - déjà pris) pour éviter le double décompte
+          // car compteurTotal ne voit pas les jours pris dans des périodes précédentes
+          quotaAcquis+=(cg.restants!==undefined?cg.restants:(cg.acquis||0));
         });
       }
       // Quota anticipé = jours en cours d'acquisition (année non terminée)
@@ -9115,8 +9352,8 @@ if(tousNonPrevus){
               quotaAcquis+=Math.floor(cg.acqBrut||0);
             } else if(c.cgAnticipe==='oui'){
               quotaAnticipe+=cg.acquis||0;
-              // Utiliser restants au lieu d'acquis pour éviter de compter les jours déjà pris
-              quotaAnticipeBrut=cg.restants!==undefined?cg.restants:(cg.acqBrut!==undefined?cg.acqBrut:(cg.acquis||0));
+              // Utiliser acquis (pas restants) car compteurTotal verra les jours pris
+              quotaAnticipeBrut=cg.acqBrut!==undefined?cg.acqBrut:(cg.acquis||0);
             } else if(c.tc==='52'){
               // Utiliser restants pour ne pas cumuler les 2 années
               quotaAcquis+=cg.restants!==undefined?cg.restants:Math.floor(cg.acqBrut||0);
