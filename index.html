@@ -1892,7 +1892,6 @@ function getHeuresPrevues(c, date, sourceForce){
   const semAnnee = getSemAnnee(dateStr);
   const semKey = getKeyAgenda(semISO, semAnnee);
   const typeSem = getTypeSem(agenda, semKey);
-  if(!typeSem) console.log('[getHP]',dateStr,'agenda=',agenda?.dateDebut,'→',agenda?.dateFin,'semKey=',semKey,'typeSem=',typeSem,'agendas.length=',agendas.length);
 
   // ── Semaines types ──
   if(source.th === 'sem' && source.semTypes){
@@ -2128,7 +2127,19 @@ function getStatutPrevu(c,j){
     const dernierMois=new Date(dateJ.getFullYear(),dateJ.getMonth()+1,0);
     return new Date(ag.dateDebut)<=dernierMois&&new Date(ag.dateFin)>=premierMois;
   });
-if(agenda&&Object.keys(agenda.semaines).length>0&&(!agenda.semaines[semKey]||agenda.semaines[semKey]==='off')) return 'non-prevu';
+  // Pour contrats fixe : seul 'off' → non-prévu, semaine absente → prévu
+  // Pour contrats sem et plan : semaine non pointée → non-prévu
+  const thJ=sourceJ.th||c.th;
+  if(agenda&&Object.keys(agenda.semaines).length>0){
+    const valSem=agenda.semaines[semKey];
+    if(thJ==='fixe'){
+      // Fixe : seul 'off' → non-prévu
+      if(valSem==='off') return 'non-prevu';
+    } else {
+      // Sem/plan : semaine non pointée ou 'off' → non-prévu
+      if(!valSem||valSem==='off') return 'non-prevu';
+    }
+  }
   return 'prevu';
 }
          
@@ -2223,7 +2234,6 @@ function ouvrirFiche(contratId,key){
     const dernierMois=new Date(parseInt(annee),mois+1,0);
     return new Date(ag.dateDebut)<=dernierMois && new Date(ag.dateFin)>=premierMois;
   });
-  console.log('[agendaMois]',annee+'-'+(mois+1),'sourceActive.th=',sourceActive.th,'agendasSource.length=',agendasSource.length,'agendaMois=',agendaMois?.dateDebut,'→',agendaMois?.dateFin,'semaines=',Object.keys(agendaMois?.semaines||{}).length);
 
   // Pour planning variable : calculer le volume par semaine ISO
   function getVolumeSem(date){
@@ -2269,12 +2279,17 @@ function ouvrirFiche(contratId,key){
       const mmddAff=j.date.slice(5);
       const feriesTravAff=sourceActive&&sourceActive.feriesTravailles||c.feriesTravailles||[];
       const jourIdxAff=new Date(j.date).getDay()===0?6:new Date(j.date).getDay()-1;
-      const estFerieNPAff=isFerie(j.date,c)&&statutActuel==='travaille'
-        &&!feriesTravAff.includes(mmddAff)&&!feriesTravAff.includes('variable');
+      const estFerieNPAff=isFerie(j.date,c)&&statutActuel==='travaille'&&!(j.heureDebPrev&&j.heureFinPrev);
       const jourSemAff=new Date(j.date).getDay();
       const estReposAff=jourSemAff===(sourceActive&&sourceActive.reposHebdo||c.reposHebdo||0)&&statutActuel==='travaille'&&!isFerie(j.date,c);
       if(estFerieNPAff||estReposAff){
         if(reel>0) hComp='+'+fmtH(reel);
+      } else if(isFerie(j.date,c)&&statutActuel==='travaille'&&j.heureDebPrev&&j.heureFinPrev){
+        // Férié sur jour prévu : afficher uniquement réel-prévu si positif
+        const prev=toM(j.heureFinPrev)-toM(j.heureDebPrev);
+        const diff=reel-prev;
+        if(diff>0) hComp='+'+fmtH(diff);
+        // Si diff<=0 : rien à afficher
       } else if(j.heureDebPrev&&j.heureFinPrev){
         const prev=toM(j.heureFinPrev)-toM(j.heureDebPrev);
         const diff=reel-prev;
@@ -3144,8 +3159,8 @@ function buildRecapHtml(recap, solde, regul52){
   if(hasMaj){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:1px solid var(--mb)"></td></tr>';
     html+='<tr><td colspan="2" style="padding:4px 4px 2px;font-weight:700;color:var(--m);font-size:12px">Majorations</td></tr>';
-    if(parseFloat(recap.montantMajComp||0)>0) html+=ligneG('Heures complémentaires', '+'+parseFloat(recap.montantMajComp).toFixed(2)+' €');
-    if(parseFloat(recap.montantMajSup||0)>0) html+=ligneG('Heures supplémentaires', '+'+parseFloat(recap.montantMajSup).toFixed(2)+' €');
+    if(parseFloat(recap.montantMajComp||0)>0) html+=ligneG('Majoration heures complémentaires', '+'+parseFloat(recap.montantMajComp).toFixed(2)+' €');
+    if(parseFloat(recap.montantMajSup||0)>0) html+=ligneG('Majoration heures supplémentaires', '+'+parseFloat(recap.montantMajSup).toFixed(2)+' €');
     const totalMajFerie=(parseFloat(recap.montantMajFeriePrevu2||0)+parseFloat(recap.montantMajFerieNP||0));
     if(totalMajFerie>0) html+=ligneG('Majoration férié', '+'+totalMajFerie.toFixed(2)+' €');
     if(parseFloat(recap.montantMajRepos||0)>0) html+=ligneG('Majoration repos travaillé', '+'+parseFloat(recap.montantMajRepos).toFixed(2)+' €');
@@ -3264,8 +3279,8 @@ function buildRecapCumul(r1,r2){
   if(hasMajC){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:1px solid var(--mb)"></td></tr>';
     html+='<tr><td colspan="2" style="padding:4px 4px 2px;font-weight:700;color:var(--m);font-size:12px">Majorations</td></tr>';
-    if(montantMajComp>0) html+=ligneG('Heures complémentaires', '+'+montantMajComp.toFixed(2)+' €');
-    if(montantMajSup>0) html+=ligneG('Heures supplémentaires', '+'+montantMajSup.toFixed(2)+' €');
+    if(montantMajComp>0) html+=ligneG('Majoration heures complémentaires', '+'+montantMajComp.toFixed(2)+' €');
+    if(montantMajSup>0) html+=ligneG('Majoration heures supplémentaires', '+'+montantMajSup.toFixed(2)+' €');
     const totalMajFerieC=montantMajFeriePrevu2+montantMajFerieNP;
     if(totalMajFerieC>0) html+=ligneG('Majoration férié', '+'+totalMajFerieC.toFixed(2)+' €');
     if(montantMajRepos>0) html+=ligneG('Majoration repos travaillé', '+'+montantMajRepos.toFixed(2)+' €');
@@ -4341,7 +4356,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const mmddJP=j.date.slice(5);
       const feriesTravJP=sourceActif.feriesTravailles||[];
       const jourSemJP=new Date(j.date).getDay();
-      const estFNPJP=isFerie(j.date,c)&&!feriesTravJP.includes(mmddJP)&&!feriesTravJP.includes('variable');
+      const estFNPJP=isFerie(j.date,c)&&!(j.heureDebPrev&&j.heureFinPrev);
       const estRJP=jourSemJP===(sourceActif.reposHebdo||c.reposHebdo||0)&&!isFerie(j.date,c);
       if((estFNPJP||estRJP)&&getStatutPrevu(c,j)!=='non-prevu') joursEnPlus++;
     }
@@ -4521,7 +4536,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const mmddJ=j.date.slice(5);
       const feriesTravJ=sourceActif.feriesTravailles||[];
       const jourSemJ=new Date(j.date).getDay(); // 0=dim,1=lun...6=sam
-      const estFerieContrat=isFerie(j.date,c)&&statut==='travaille'&&!feriesTravJ.includes(mmddJ)&&!feriesTravJ.includes('variable');
+      const estFerieContrat=isFerie(j.date,c)&&statut==='travaille';
       const estFeriePrevu=estFerieContrat&&!!(j.heureDebPrev&&j.heureFinPrev); // jour prévu au planning qui est aussi férié
       const estFerieNonPrevu=estFerieContrat&&!estFeriePrevu;
       const estReposJ=jourSemJ===(sourceActif.reposHebdo||c.reposHebdo||0)&&statut==='travaille'&&!isFerie(j.date,c);
@@ -4531,8 +4546,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const hPrevJour=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
         if(hReelJourSpec>0){
           if(mmddJ==='05-01'&&sourceActif.maj1erMai!=null){
+            // 1er mai : majoration la plus favorable entre maj1erMai et majRepos si jour de repos
+            const majPctFP=estReposJ?Math.max(maj1erMaiPct,majReposPct):maj1erMaiPct;
             hMaj1erMai+=hReelJourSpec;
           } else if(sourceActif.majFerie!=null){
+            // Majoration la plus favorable entre majFerie et majRepos si cumul
             hMajFeriePrevu+=hReelJourSpec;
           }
         }
@@ -4542,10 +4560,20 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         // Heures réelles entières majorées (avec exo)
         const hReelJourSpec=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
         if(hReelJourSpec>0){
-          if(estFerieNonPrevu&&mmddJ==='05-01'&&sourceActif.maj1erMai!=null){
+          // Majoration la plus favorable si cumul férié + repos
+          const estCumulFerieRepos=estFerieNonPrevu&&estReposJ;
+          if(mmddJ==='05-01'&&sourceActif.maj1erMai!=null){
+            const pctEff=estReposJ?Math.max(maj1erMaiPct,majReposPct):maj1erMaiPct;
             hMaj1erMai+=hReelJourSpec;
-          } else if(estFerieNonPrevu&&sourceActif.majFerie!=null){
-            hMajFerie+=hReelJourSpec;
+          } else if(estFerieNonPrevu){
+            // Si le jour est aussi un jour de repos, prendre le taux le plus favorable
+            const pctFerie=majFeriePct;
+            const pctRepos=estReposJ?majReposPct:0;
+            if(pctRepos>pctFerie){
+              hMajRepos+=hReelJourSpec; // repos plus favorable
+            } else {
+              hMajFerie+=hReelJourSpec;
+            }
           } else if(estReposJ&&sourceActif.majRepos!=null){
             hMajRepos+=hReelJourSpec;
           } else if(compJour>0){
