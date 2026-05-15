@@ -4818,6 +4818,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     }
   });
   indemKmTotal=(c.km||0)*kmTotal;
+  // Calculer les majorations uniquement sur le mois qui contient la FIN de la semaine
+  // = soit semaine complète dans le mois (dimanche dans le mois), soit fin de semaine à cheval
   Object.keys(hParSemaine).forEach(semKey=>{
     const hSem=hParSemaine[semKey]||0;
     const hPrevSem=hPrevuParSemaine[semKey]||0;
@@ -4826,22 +4828,30 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const hSeuilComp=Math.max(0,hPrevSem-hAbsSem);
     const seuilSup=Math.max(45,hPrevSem);
     const hPrecMois=hParSemainePrecMois[semKey]||0;
-    if(hPrecMois>0){
-      // Fin de semaine à cheval : heures de base déjà payées le mois précédent
-      // → calculer HS sur total semaine pour la majoration uniquement, sans toucher hComp
+    // Trouver le dimanche de cette semaine ISO
+    const [semAnnee,semNum]=semKey.split('-S').map(Number);
+    // Lundi de la semaine ISO
+    const jan4=new Date(semAnnee,0,4);
+    const lundiSem=new Date(jan4);
+    lundiSem.setDate(jan4.getDate()-(jan4.getDay()||7)+1+(semNum-1)*7);
+    // Dimanche = lundi + 6
+    const dimancheSem=new Date(lundiSem);
+    dimancheSem.setDate(lundiSem.getDate()+6);
+    const dimancheMois=dimancheSem.getMonth(); // mois du dimanche
+    const estFinSemaine=dimancheMois===fiche.mois; // dimanche dans ce mois = fin de semaine ici
+    if(estFinSemaine){
+      // Semaine complète ou fin de semaine à cheval : calculer toutes les majorations
       const hSupSem=Math.max(0,hSem-seuilSup);
-      const hSupDejaPayee=Math.max(0,hPrecMois-seuilSup);
-      const hSupMaj=Math.max(0,hSupSem-hSupDejaPayee);
-      hSup+=hSupMaj;
-      // Ne pas retirer de hComp : les heures en plus d'avril sont déjà dans hComp via compJour
-    } else {
-      // Semaine normale : calcul standard
-      const hSupSem=Math.max(0,hSem-seuilSup);
-      const hCompSem=Math.max(0,Math.min(hSem,seuilSup)-hSeuilComp);
+      const hCompMajSem=Math.max(0,Math.min(hSem,seuilSup)-hSeuilComp);
       hSup+=hSupSem;
-      hComp-=hSupSem;
-      if(hComp<0) hComp=0;
+      // Pour semaine à cheval (hPrecMois>0) : ne pas retirer hSup de hComp
+      // Pour semaine complète : retirer normalement
+      if(hPrecMois===0){
+        hComp-=hSupSem;
+        if(hComp<0) hComp=0;
+      }
     }
+    // Si début de semaine à cheval (dimanche dans le mois suivant) : pas de majorations ce mois
   });
   const hMoyParJour=nbJoursMoisContrat>0?hMensu/nbJoursMoisContrat:hMensu/20;
   if(hAbs>0&&hTheoriques>0){
