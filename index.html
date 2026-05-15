@@ -1342,27 +1342,9 @@ function buildFicheContenu(source, c){
     source.maj1erMai!=null?['1er mai travaillé','+'+source.maj1erMai+'%']:null,
   ].filter(Boolean);
 
-  // Infos CDD
-  const typeDureeL=(c.typeDuree==='cdd')?'CDD — Contrat à durée déterminée':'CDI — Contrat à durée indéterminée';
-  const cddMotifL={'remplacement':'Remplacement d\'une assistante maternelle','attente':'Dans l\'attente d\'une place disponible'}[c.cddMotif]||'—';
-  const cddTermeL=c.cddTerme==='precis'?'À terme précis':'À terme imprécis';
-  const cddDateFinL=c.cddDateFin?new Date(c.cddDateFin).toLocaleDateString('fr-FR'):'—';
-  const cddDateMinL=c.cddDateMin?new Date(c.cddDateMin).toLocaleDateString('fr-FR'):'—';
-  const periodeEssaiL=c.typeDuree==='cdd'
-    ?(c.periodeEssaiCdd>0?(c.periodeEssaiCdd+' jours'):'Aucune')
-    :(c.periodeEssai>0?(c.periodeEssai+' mois'):'Aucune');
-
   const lignesBase=[
-    ['Durée du contrat', typeDureeL],
-    ...(c.typeDuree==='cdd'?[
-      ['Motif du CDD', cddMotifL],
-      ['Terme', cddTermeL],
-      ...(c.cddTerme==='precis'?[['Date de fin', cddDateFinL]]:
-         c.cddTerme==='imprecis'?[['Date minimale', cddDateMinL]]:[]),
-      ...(c.cddMotif==='attente'&&c.dateDeb?[['Date limite (9 mois)', (()=>{const d=new Date(c.dateDeb);d.setMonth(d.getMonth()+9);return d.toLocaleDateString('fr-FR');})()]]:[] ),
-    ]:[]),
     ['Date de début',c.dateDeb?new Date(c.dateDeb).toLocaleDateString('fr-FR'):'—'],
-    ['Période d\'essai', periodeEssaiL],
+    ['Période d\'essai', c.periodeEssai>0?(c.periodeEssai+' mois'):'Aucune'],
     ['Type de contrat',tcL],
     ['Type d\'horaires',thL],
     ['Taux horaire brut',source.txBrut?(source.txBrut.toFixed(2)+' €'):'—'],
@@ -1387,24 +1369,6 @@ function buildFicheContenu(source, c){
     <td style="padding:8px 4px;font-weight:600;font-size:13px">${v}</td>
   </tr>`).join('');
 
-  // Boutons CDD
-  const nbProlongations=(c.avenants||[]).filter(av=>av.typeProlongation==='prolongation').length;
-  const cddBoutonsHtml=c.typeDuree==='cdd'&&c.signe?`
-    <div class="card" style="margin-top:10px">
-      <div class="ctitle">Actions CDD</div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap">
-        ${nbProlongations<2?`<button class="btn bs" onclick="ouvrirProlongationCDD(${c.id})">Prolongation (${nbProlongations}/2)</button>`:''}
-        <button class="btn bs" style="background:var(--vtc);color:var(--vt)" onclick="ouvrirPassageCDI(${c.id})">Passage en CDI</button>
-      </div>
-    </div>`:'' ;
-
-  // Note si passage en CDI depuis CDD
-  const estPassageCDI=source.typeProlongation==='cdi'&&c.typeDuree==='cdd';
-  const noteCDIHtml=estPassageCDI?`<div class="ibox" style="margin-top:10px">
-    Ce contrat était initialement un CDD depuis le <strong>${c.dateDeb?new Date(c.dateDeb).toLocaleDateString('fr-FR'):'—'}</strong>. 
-    L'ancienneté et la période d'essai sont calculées depuis cette date.
-  </div>`:'';
-
   return `
     <div class="card">
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
@@ -1423,9 +1387,7 @@ function buildFicheContenu(source, c){
     ${horairesHtml?`<div class="card">
       <div class="ctitle">Horaires</div>
       ${horairesHtml}
-    </div>`:''}
-    ${noteCDIHtml}
-    ${cddBoutonsHtml}`;
+    </div>`:''}`;
 }       
 function renderDetTab(id,tab){
   const c=S.contrats.find(x=>x.id==id);
@@ -3305,7 +3267,6 @@ function buildRecapHtml(recap, solde, regul52){
     const indemE=parseFloat(recap.indemEntretienTotal||0);
     const indemR=parseFloat(recap.indemRepasTotal||0);
     const indemK=parseFloat(recap.indemKmTotal||0);
-    const exo=parseFloat(recap.montantExo||0);
     let indemSolde=0;
     if(solde){
       if(solde.regul) indemSolde+=parseFloat(solde.regul.montantNet||0);
@@ -3313,7 +3274,7 @@ function buildRecapHtml(recap, solde, regul52){
       if(solde.indemPreavis) indemSolde+=(solde.indemPreavis.sens==='remboursement'?-1:1)*parseFloat(solde.indemPreavis.montantNet||0);
       if(solde.indemRupture) indemSolde+=parseFloat(solde.indemRupture.montantBrut||0);
     }
-    const total=sNet+exo+indemE+indemR+indemK+indemSolde;
+    const total=sNet+indemE+indemR+indemK+indemSolde;
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
     html+=ligneG('Total payé avec indemnités', total.toFixed(2)+' €', true, 'var(--m)');
   }
@@ -5206,8 +5167,6 @@ function modif(id){
     }
     if(c.tc){const el=document.getElementById('ro-'+c.tc);if(el)selTC(el,c.tc);}
     if(c.th){const el=document.getElementById('ro-'+c.th);if(el)selTH(el,c.th);}
-    // Recalculer après chargement des horaires pour avoir les jours moyens
-    setTimeout(()=>calc(),100);
     // Vider les semaines existantes avant de reremplir
     document.getElementById('sem-wrap').innerHTML='';
     S.nbSem=0;
@@ -5408,11 +5367,6 @@ function selCDDMotif(v){
   S.cddMotif=v;
   document.getElementById('ro-cdd-rem').classList.toggle('on',v==='remplacement');
   document.getElementById('ro-cdd-att').classList.toggle('on',v==='attente');
-  // Cocher le bon radio
-  const rem=document.querySelector('#ro-cdd-rem input[type="radio"]');
-  const att=document.querySelector('#ro-cdd-att input[type="radio"]');
-  if(rem) rem.checked=v==='remplacement';
-  if(att) att.checked=v==='attente';
   calcCDD();
 }
 
@@ -5420,11 +5374,6 @@ function selCDDTerme(v){
   S.cddTerme=v;
   document.getElementById('ro-cdd-precis').classList.toggle('on',v==='precis');
   document.getElementById('ro-cdd-imprecis').classList.toggle('on',v==='imprecis');
-  // Cocher le bon radio
-  const precis=document.querySelector('#ro-cdd-precis input[type="radio"]');
-  const imprecis=document.querySelector('#ro-cdd-imprecis input[type="radio"]');
-  if(precis) precis.checked=v==='precis';
-  if(imprecis) imprecis.checked=v==='imprecis';
   document.getElementById('cond-cdd-precis').style.display=v==='precis'?'block':'none';
   document.getElementById('cond-cdd-imprecis').style.display=v==='imprecis'?'block':'none';
   calcCDD();
@@ -6739,7 +6688,7 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
         const maxJours2=diffMois2<6?Math.min(diffSem2,14):Math.min(diffSem2,31);
         if(peCDD>maxJours2){toast('Période d\'essai trop longue pour ce CDD (max '+maxJours2+' jours)');return;}
       }
-      if(peCDD>31){toast('Période d\'essai CDD : maximum 31 jours');return;}
+      if(peCDD>1){toast('Période d\'essai CDD : maximum 1 mois');return;}
     }
   }
   if(S.tc!=='occ'&&!S.th){toast('Veuillez choisir un type d\'horaires');return;}
@@ -7316,7 +7265,6 @@ function rafraichirRupture(cid){
     return d;
   };
   const motif=document.getElementById('rp-motif-'+cid)?.value||c.rupture.motif||'';
-  const initiative=document.querySelector(`input[name="rp-init-${cid}"]:checked`)?.value||c.rupture.initiative||'';
   const dateSignif=dateTexteVersISO(document.getElementById('rp-date-signif-'+cid)?.value||'')||fixDate(c.rupture.dateSignif||'');
   const dateNotif=dateTexteVersISO(document.getElementById('rp-date-notif-'+cid)?.value||'')||fixDate(c.rupture.dateNotif||'');
   const delaiPrev=Math.min(8,parseInt(document.getElementById('rp-delai-prev-'+cid)?.value||c.rupture.delaiPrev||'0')||0);
@@ -7352,7 +7300,7 @@ function rafraichirRupture(cid){
     }
   }
   const dateNotifFinal=dateNotif&&dateNotif>=dateDebContratMin?dateNotif:'';
-  c._ruptureTemp={motif,initiative,dateSignif:dateSignifFinal,dateNotif:dateNotifFinal,delaiPrev,statutPreavis,initiativePreavis,dateFinPreavis,dateFinContrat,cumulConges};
+  c._ruptureTemp={motif,dateSignif:dateSignifFinal,dateNotif:dateNotifFinal,delaiPrev,statutPreavis,initiativePreavis,dateFinPreavis,dateFinContrat,cumulConges};
   const cont=document.getElementById('det-content');
   renderRupture(c,cont);
 }
@@ -7408,242 +7356,8 @@ function annulerRupture(cid){
   renderRupture(c,cont);
 }
 
-function renderRuptureCDD(c, cont){
-  if(!cont) return;
-  const btnVal=document.getElementById('btn-val');
-  if(btnVal) btnVal.style.display='none';
-  if(c.rupture?.confirmee) delete c._ruptureTemp;
-  const rp=c._ruptureTemp||c.rupture||{};
-  const cid=c.id;
-  const params=S.params||{};
-  const coefNet=params.coefNet||0.7811975;
-  const dateSit=getDateSituationAu(c);
-  const dateSitStr=dateSit?dateSit.toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'}):'—';
-  const motif=rp.motif||'';
-
-  // ─── Indemnité de précarité (10% des salaires nets hors exo) ───
-  function calcIndemPrecarite(){
-    let totalNet=0;
-    Object.entries(c.fiches||{}).forEach(([key,f])=>{
-      if(!f.valide) return;
-      const r=calcRecapFiche(c,f);
-      // salaireNetBrut = salaire net sans exonération
-      const sNet=parseFloat(r.salaireNet||0);
-      totalNet+=sNet;
-    });
-    // Ajouter les avenants
-    (c.avenants||[]).forEach(av=>{
-      Object.entries(av.fiches||{}).forEach(([key,f])=>{
-        if(!f.valide) return;
-        const r=calcRecapFiche(c,f);
-        totalNet+=parseFloat(r.salaireNet||0);
-      });
-    });
-    return parseFloat((totalNet*0.1).toFixed(2));
-  }
-
-  // ─── Salaires restants jusqu'à la fin du CDD (rupture employeur autre motif) ───
-  function calcSalairesRestants(dateRupture){
-    const dateFin=c.cddTerme==='precis'?c.cddDateFin:c.cddDateMin;
-    if(!dateFin||!dateRupture) return 0;
-    const dFin=new Date(dateFin);
-    const dRup=new Date(dateRupture);
-    if(dFin<=dRup) return 0;
-    // Nombre de mois complets restants × mensualisation
-    const source=getVersionActive(c,dRup);
-    const hMensu=source.hMensu||0;
-    const txNet=source.txNet||(source.txBrut*getCoefNet())||0;
-    const diffMs=dFin-dRup;
-    const diffMois=diffMs/(30.44*24*3600*1000);
-    return parseFloat((diffMois*hMensu*txNet).toFixed(2));
-  }
-
-  // ─── Solde congés ───
-  let soldeCongesHtml='';
-  if(c.tc==='52'){
-    const s=calcSoldeConges52(c,dateSit||new Date());
-    soldeCongesHtml=`<div class="card" style="margin-bottom:10px">
-      <div class="ctitle">Solde des congés</div>
-      <div style="display:grid;gap:6px">
-        <div style="display:flex;justify-content:space-between;font-size:13px">
-          <span>Jours acquis restants</span>
-          <span><strong>${s.joursAcquisRestants} j</strong> — ${s.montantAcquisNet} € net</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;font-size:13px">
-          <span>Jours en cours</span>
-          <span><strong>${s.joursEnCoursRestants} j</strong> — ${s.montantEnCoursNet} € net</span>
-        </div>
-      </div></div>`;
-  } else {
-    const s=calcSoldeConges46(c);
-    soldeCongesHtml=`<div class="card" style="margin-bottom:10px">
-      <div class="ctitle">Solde des congés</div>
-      <div style="display:grid;gap:6px">
-        <div style="display:flex;justify-content:space-between;font-size:13px">
-          <span>Congés acquis non versés</span>
-          <span><strong>${s.joursNonVerses} j</strong> — ${s.montantNonVersesNet} € net</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;font-size:13px">
-          <span>En cours d'acquisition</span>
-          <span><strong>${s.joursEnCours} j</strong> — ${s.montantEnCoursNet} € net</span>
-        </div>
-      </div></div>`;
-  }
-
-  // ─── Motifs selon initiative ───
-  const motifEmployeur=[
-    {v:'fin-terme-precis', l:'Fin de CDD à terme précis'},
-    {v:'fin-terme-imprecis', l:'Fin de CDD à terme imprécis'},
-    {v:'fin-essai', l:'Rupture de la période d\'essai'},
-    {v:'faute-grave', l:'Faute grave'},
-    {v:'force-majeure', l:'Cas de force majeure'},
-    {v:'accord-commun', l:'Accord commun'},
-    {v:'autre-motif-emp', l:'Autre motif'},
-  ];
-  const motifAssmat=[
-    {v:'fin-essai-am', l:'Rupture de la période d\'essai'},
-    {v:'embauche-cdi', l:'Proposition d\'embauche en CDI'},
-    {v:'refus-cdi', l:'Refus de passage en CDI équivalent'},
-    {v:'faute-grave-am', l:'Faute grave'},
-    {v:'force-majeure-am', l:'Cas de force majeure'},
-    {v:'accord-commun-am', l:'Accord commun'},
-    {v:'autre-motif-am', l:'Autre motif'},
-  ];
-
-  const initiative=rp.initiative||'';
-  const motifsList=initiative==='employeur'?motifEmployeur:initiative==='assmat'?motifAssmat:[];
-
-  // ─── Préavis CDD ───
-  const aPreavis=['embauche-cdi','accord-commun','accord-commun-am'].includes(motif);
-  const pasPreavis=['fin-essai','fin-essai-am','faute-grave','force-majeure','faute-grave-am','force-majeure-am','fin-terme-precis','fin-terme-imprecis'].includes(motif);
-  const aPrecarite=!['faute-grave','force-majeure','faute-grave-am','force-majeure-am','refus-cdi','autre-motif-am'].includes(motif)&&motif!=='';
-  const aSalairesRestants=motif==='autre-motif-emp';
-  const aAvertissement=motif==='autre-motif-am';
-
-  // Calcul préavis embauche CDI : 1 jour/semaine travaillée, max 2 semaines
-  let preavisHtml='';
-  if(motif==='embauche-cdi'){
-    const dDebCDD=c.dateDeb?new Date(c.dateDeb):null;
-    const dateSignif=rp.dateSignif?new Date(rp.dateSignif):null;
-    if(dDebCDD&&dateSignif){
-      const diffSem=Math.floor((dateSignif-dDebCDD)/(7*24*3600*1000));
-      const joursP=Math.min(diffSem,14);
-      const dateFin=dateSignif?new Date(dateSignif.getTime()+joursP*24*3600*1000):null;
-      preavisHtml=`<div style="margin-top:8px;font-size:13px;color:var(--tx2)">
-        Durée du préavis : <strong>${joursP} jour${joursP>1?'s':''}</strong>
-        ${dateFin?'— Fin le <strong>'+dateFin.toLocaleDateString('fr-FR')+'</strong>':''}
-      </div>`;
-    }
-  } else if(motif==='accord-commun'||motif==='accord-commun-am'){
-    const dateFin=c.cddTerme==='precis'?c.cddDateFin:c.cddDateMin;
-    preavisHtml=`<div style="margin-top:8px">
-      <label style="font-size:12px;color:var(--tx2)">Date de fin convenue (avant le ${dateFin?new Date(dateFin).toLocaleDateString('fr-FR'):'—'})</label>
-      <input type="text" id="rp-fin-preavis-${cid}" value="${dateISOversTexte(rp.dateFinPreavis||'')}" placeholder="JJ/MM/AAAA" oninput="formaterSaisieDate(this)" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
-    </div>`;
-  }
-
-  // ─── Solde final CDD ───
-  let soldeHtml='';
-  if(motif){
-    const lignes=[];
-    let totalNet=0,totalBrut=0;
-    // Congés payés
-    if(c.tc==='52'){
-      const s=calcSoldeConges52(c,dateSit||new Date());
-      if(s.montantAcquisBrut>0){lignes.push({label:'Solde congés acquis',net:s.montantAcquisNet,brut:s.montantAcquisBrut});totalNet+=s.montantAcquisNet;totalBrut+=s.montantAcquisBrut;}
-      if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
-    } else {
-      const s=calcSoldeConges46(c);
-      if(s.montantNonVersesBrut>0){lignes.push({label:'Congés acquis non versés',net:s.montantNonVersesNet,brut:s.montantNonVersesBrut});totalNet+=s.montantNonVersesNet;totalBrut+=s.montantNonVersesBrut;}
-      if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
-      const reg=calcRegularisationDefinitive(c);
-      if(reg.diff>0){
-        const src=getVersionActive(c,dateSit||new Date());
-        const regBrut=parseFloat((reg.diff*(src.txBrut||0)).toFixed(2));
-        const regNet=parseFloat((regBrut*coefNet).toFixed(2));
-        lignes.push({label:'Régularisation définitive',net:regNet,brut:regBrut});
-        totalNet+=regNet;totalBrut+=regBrut;
-      }
-    }
-    // Indemnité de précarité
-    if(aPrecarite){
-      const ip=calcIndemPrecarite();
-      if(ip>0){
-        lignes.push({label:'Indemnité de précarité (10%)',net:parseFloat((ip*coefNet).toFixed(2)),brut:ip});
-        totalNet+=parseFloat((ip*coefNet).toFixed(2));totalBrut+=ip;
-      }
-    }
-    // Salaires restants
-    if(aSalairesRestants&&rp.dateSignif){
-      const sr=calcSalairesRestants(rp.dateSignif);
-      if(sr>0){
-        lignes.push({label:'Salaires restants jusqu\'à la fin du CDD',net:sr,brut:parseFloat((sr/coefNet).toFixed(2))});
-        totalNet+=sr;totalBrut+=parseFloat((sr/coefNet).toFixed(2));
-      }
-    }
-    if(lignes.length){
-      soldeHtml=`<div class="card" style="margin-bottom:10px;background:var(--mp)">
-        <div class="ctitle">Estimation du solde de tout compte</div>
-        ${lignes.map(l=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid var(--mb)">
-          <span>${l.label}</span>
-          <span>${l.net.toFixed(2)} € net <span style="color:var(--tx2);font-size:11px">(${l.brut.toFixed(2)} € brut)</span></span>
-        </div>`).join('')}
-        <div style="display:flex;justify-content:space-between;font-size:15px;font-weight:700;margin-top:8px;color:var(--m)">
-          <span>Total</span>
-          <span>${totalNet.toFixed(2)} € net <span style="font-size:12px;font-weight:400;color:var(--tx2)">(${totalBrut.toFixed(2)} € brut)</span></span>
-        </div></div>`;
-    }
-  }
-
-  const confirmeeHtml=rp.confirmee?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px">
-    ✓ Rupture confirmée — <button class="btn bd bsm" style="margin-left:8px" onclick="annulerRupture(${cid})">✕ Annuler</button>
-    <button class="btn bp bsm" style="margin-left:8px" onclick="sauvegarderRupture(${cid})">💾 Enregistrer</button>
-  </div>`:'' ;
-
-  cont.innerHTML=`
-    <div style="font-size:12px;color:var(--tx2);margin-bottom:12px">Situation au <strong>${dateSitStr}</strong></div>
-    ${confirmeeHtml}
-    ${soldeCongesHtml}
-    <div class="card" style="margin-bottom:10px">
-      <div class="ctitle">Rupture du CDD</div>
-      <div>
-        <label style="font-size:12px;color:var(--tx2)">Initiative</label>
-        <div style="display:flex;gap:10px;margin-top:6px;flex-wrap:wrap">
-          ${['employeur','assmat'].map(v=>`
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
-              <input type="radio" name="rp-init-${cid}" value="${v}" ${initiative===v?'checked':''} onchange="rafraichirRupture(${cid})">
-              ${v==='employeur'?'Employeur':'Ass\'Mat'}
-            </label>`).join('')}
-        </div>
-      </div>
-      ${initiative?`<div style="margin-top:10px">
-        <label style="font-size:12px;color:var(--tx2)">Motif</label>
-        <select id="rp-motif-${cid}" oninput="corrigerDateRupture(this)" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
-          <option value="">— Choisir —</option>
-          ${motifsList.map(m=>`<option value="${m.v}" ${motif===m.v?'selected':''}>${m.l}</option>`).join('')}
-        </select>
-      </div>`:''}
-      ${motif&&!pasPreavis&&!aPreavis?'':''}
-      ${aPreavis?`<div style="margin-top:10px">
-        <label style="font-size:12px;color:var(--tx2)">Date de signification</label>
-        <input type="text" id="rp-date-signif-${cid}" value="${dateISOversTexte(rp.dateSignif||'')}" placeholder="JJ/MM/AAAA" oninput="formaterSaisieDate(this)" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
-        ${preavisHtml}
-      </div>`:''}
-      ${pasPreavis?`<div style="margin-top:8px;background:var(--mp);border-radius:6px;padding:8px;font-size:13px">Aucun préavis requis.</div>`:''}
-      ${aAvertissement?`<div style="margin-top:8px;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px;font-size:13px">⚠ L'employeur est en droit de demander des dommages et intérêts. L'Ass'Mat ne perçoit pas l'indemnité de précarité.</div>`:''}
-      ${!aPrecarite&&motif&&!['faute-grave','force-majeure','faute-grave-am','force-majeure-am'].includes(motif)?`<div style="margin-top:8px;font-size:12px;color:var(--tx2)">Pas d'indemnité de précarité dans ce cas.</div>`:''}
-    </div>
-    ${soldeHtml}
-    <div style="display:flex;gap:8px;margin-top:12px">
-      <button class="btn bs" onclick="sauvegarderRupture(${cid})">💾 Enregistrer</button>
-      ${!rp.confirmee?`<button class="btn bpurple" onclick="confirmerRupture(${cid})">✓ Confirmer la rupture</button>`:''}
-    </div>`;
-}
-
 function renderRupture(c, cont){
   if(!cont) return;
-  // CDD : branche séparée
-  if(c.typeDuree==='cdd') return renderRuptureCDD(c, cont);
   // Masquer le bouton Enregistrer principal (btn-val) sur la page rupture
   const btnVal=document.getElementById('btn-val');
   if(btnVal) btnVal.style.display='none';
@@ -8317,90 +8031,6 @@ function getDonneesActives(c){
   };
 }
          
-function ouvrirProlongationCDD(cid){
-  const c=S.contrats.find(x=>x.id==cid);
-  if(!c||c.typeDuree!=='cdd') return;
-  const nbProlongations=(c.avenants||[]).filter(av=>av.typeProlongation==='prolongation').length;
-  if(nbProlongations>=2){toast('Maximum 2 prolongations atteint');return;}
-  // Créer un avenant pré-configuré prolongation
-  if(!c.avenants) c.avenants=[];
-  const avid=Date.now();
-  const av={id:avid,num:(c.avenants.length+1),dateAvenant:'',typeProlongation:'prolongation',
-    tc:c.tc,th:c.th,planType:c.planType,txBrut:c.txBrut,txNet:c.txNet,
-    majComp:c.majComp,majSup:c.majSup,majRepos:c.majRepos,majFerie:c.majFerie,maj1erMai:c.maj1erMai,
-    hMensu:c.hMensu,hMensuMaj:c.hMensuMaj,hMensuNorm:c.hMensuNorm,nbSem:c.nbSem,
-    hMin:c.hMin,jMaxMin:c.jMaxMin,joursMin:c.joursMin,joursFixe:c.joursFixe,semTypes:c.semTypes,
-    planVar:c.planVar,nbJoursMois:c.nbJoursMois,mensBrute:c.mensBrute,
-    cddMotif:c.cddMotif,cddTerme:c.cddTerme,cddDateFin:'',cddDateMin:'',
-    feriesTravailles:c.feriesTravailles,cgAnticipe:c.cgAnticipe,dateCg:c.dateCg,
-    indemType:c.indemType,indemMontant:c.indemMontant,indemPer:c.indemPer,repas:c.repas,km:c.km,
-    signe:false};
-  c.avenants.push(av);
-  const cidx=S.contrats.findIndex(x=>x.id==cid);
-  if(cidx!==-1) S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-  ouvrirFormulaireAvenant(cid,avid);
-  // Après ouverture du formulaire, ajouter champs CDD spécifiques
-  setTimeout(()=>{
-    // Masquer les boutons CDI/CDD (prolongation reste CDD)
-    const blocCDI=document.getElementById('ro-cdi');
-    const blocCDD=document.getElementById('ro-cdd');
-    if(blocCDI) blocCDI.style.display='none';
-    if(blocCDD) blocCDD.style.display='none';
-    // Ajouter champ nouvelle date de fin
-    if(!document.getElementById('fg-cdd-prolongation')){
-      const fg=document.createElement('div');
-      fg.className='fg';fg.id='fg-cdd-prolongation';
-      const dateCourante=c.cddDateFin||c.cddDateMin||'';
-      const dateMax=c.cddMotif==='attente'?(()=>{const d=new Date(c.dateDeb);d.setMonth(d.getMonth()+9);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');})():'';
-      fg.innerHTML=`<label class="fl">Nouvelle date de fin (prolongation)</label>
-        <div style="font-size:12px;color:var(--tx2);margin-bottom:4px">Date actuelle : ${dateCourante?new Date(dateCourante).toLocaleDateString('fr-FR'):'—'}</div>
-        <input class="fi" type="date" id="f-cdd-prolongation-datefin" ${dateMax?'max="'+dateMax+'"':''}">
-        ${c.cddMotif==='attente'?'<div class="ibox" style="margin-top:4px">Limite 9 mois : '+new Date(dateMax).toLocaleDateString('fr-FR')+'</div>':'' }`;
-      const dateAvEl=document.getElementById('f-dateavenant');
-      if(dateAvEl) dateAvEl.parentElement.parentElement.after(fg);
-    }
-    toast('Prolongation CDD — Saisissez la nouvelle date de fin et la date d\'effet');
-  },300);
-}
-
-function ouvrirPassageCDI(cid){
-  const c=S.contrats.find(x=>x.id==cid);
-  if(!c||c.typeDuree!=='cdd') return;
-  if(!c.avenants) c.avenants=[];
-  const avid=Date.now();
-  const av={id:avid,num:(c.avenants.length+1),dateAvenant:'',typeProlongation:'cdi',
-    tc:c.tc,th:c.th,planType:c.planType,txBrut:c.txBrut,txNet:c.txNet,
-    majComp:c.majComp,majSup:c.majSup,majRepos:c.majRepos,majFerie:c.majFerie,maj1erMai:c.maj1erMai,
-    hMensu:c.hMensu,hMensuMaj:c.hMensuMaj,hMensuNorm:c.hMensuNorm,nbSem:c.nbSem,
-    hMin:c.hMin,jMaxMin:c.jMaxMin,joursMin:c.joursMin,joursFixe:c.joursFixe,semTypes:c.semTypes,
-    planVar:c.planVar,nbJoursMois:c.nbJoursMois,mensBrute:c.mensBrute,
-    typeDuree:'cdi', // passage en CDI
-    feriesTravailles:c.feriesTravailles,cgAnticipe:c.cgAnticipe,dateCg:c.dateCg,
-    indemType:c.indemType,indemMontant:c.indemMontant,indemPer:c.indemPer,repas:c.repas,km:c.km,
-    signe:false};
-  c.avenants.push(av);
-  const cidx=S.contrats.findIndex(x=>x.id==cid);
-  if(cidx!==-1) S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
-  ouvrirFormulaireAvenant(cid,avid);
-  setTimeout(()=>{
-    const blocCDI=document.getElementById('ro-cdi');
-    const blocCDD=document.getElementById('ro-cdd');
-    if(blocCDI){blocCDI.style.display='none';}
-    if(blocCDD){blocCDD.style.display='none';}
-    // Info ancienneté depuis le CDD
-    if(!document.getElementById('fg-cdi-info')){
-      const fg=document.createElement('div');
-      fg.className='fg';fg.id='fg-cdi-info';
-      fg.innerHTML=`<div class="ibox">Passage en CDI — l'ancienneté est calculée depuis le <strong>${c.dateDeb?new Date(c.dateDeb).toLocaleDateString('fr-FR'):'—'}</strong> (début du CDD)</div>`;
-      const dateAvEl=document.getElementById('f-dateavenant');
-      if(dateAvEl) dateAvEl.parentElement.parentElement.after(fg);
-    }
-    toast('Passage en CDI — Saisissez la date d\'effet et vérifiez les conditions');
-  },300);
-}
-
  function ouvrirFormulaireAvenant(cid,avid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c)return;
@@ -9337,8 +8967,6 @@ if(tousNonPrevus){
       if(c.conges){
         Object.values(c.conges).forEach(cg=>{
           if(!cg.estTerminee) return;
-          // Utiliser restants (acquis - déjà pris) pour éviter le double décompte
-          // car compteurTotal ne voit pas les jours pris dans des périodes précédentes
           quotaAcquis+=(cg.acquis||0);
         });
       }
@@ -9360,8 +8988,8 @@ if(tousNonPrevus){
               quotaAcquis+=Math.floor(cg.acqBrut||0);
             } else if(c.cgAnticipe==='oui'){
               quotaAnticipe+=cg.acquis||0;
-              // Utiliser acqBrut car compteurTotal voit les jours déjà pris dans la boucle
-              quotaAnticipeBrut=cg.acqBrut!==undefined?cg.acqBrut:(cg.acquis||0);
+              // Utiliser restants au lieu d'acquis pour éviter de compter les jours déjà pris
+              quotaAnticipeBrut=cg.restants!==undefined?cg.restants:(cg.acqBrut!==undefined?cg.acqBrut:(cg.acquis||0));
             } else if(c.tc==='52'){
               // Utiliser restants pour ne pas cumuler les 2 années
               quotaAcquis+=cg.restants!==undefined?cg.restants:Math.floor(cg.acqBrut||0);
