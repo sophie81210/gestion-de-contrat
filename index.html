@@ -2129,6 +2129,26 @@ function ouvrirFiche(contratId,key){
     j.heureFinPrev=prevus.fin;
     j.planVarPrevu=!!(prevus.planVar);
   });
+  // Nettoyer les statuts congés orphelins : si un jour a conges-non/acq/anticipe
+  // mais qu'aucun congé n'est posé dans le calendrier AM autour de lui → effacer
+  if(!fiche.valide){
+    fiche.jours.forEach(j=>{
+      if(!['conges-acq','conges-anticipe','conges-non'].includes(j.statut)) return;
+      // Vérifier si un jour est posé dans le calendrier AM dans les 30 jours autour
+      let aDesCongesAutour=false;
+      if(S.congesAM){
+        const dJ=new Date(j.date);
+        for(let delta=-30;delta<=30;delta++){
+          const dTest=new Date(dJ);
+          dTest.setDate(dTest.getDate()+delta);
+          const dsTest=dTest.getFullYear()+'-'+String(dTest.getMonth()+1).padStart(2,'0')+'-'+String(dTest.getDate()).padStart(2,'0');
+          const anneeAm=dTest.getMonth()>=5?dTest.getFullYear():dTest.getFullYear()-1;
+          if(S.congesAM[anneeAm]?.jours?.[dsTest]==='pose'){aDesCongesAutour=true;break;}
+        }
+      }
+      if(!aDesCongesAutour) j.statut=null;
+    });
+  }
   // Marquer les jours après la date de fin de contrat comme hors-contrat
   // (si rupture confirmée et mois précédent validé)
   if(c.rupture?.confirmee){
@@ -8502,6 +8522,30 @@ if(tousNonPrevus){
         }
       }
 
+      // Cherche le statut du premier jour significatif dans une direction (pour détection arret/abs-am autour d'un férié)
+      function getStatutVoisinBoucle(dateStr, dir){
+        const d=new Date(dateStr.split('-')[0],parseInt(dateStr.split('-')[1])-1,parseInt(dateStr.split('-')[2]));
+        for(let i=1;i<=14;i++){
+          d.setDate(d.getDate()+dir);
+          const ds=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+          // Ignorer le jour de repos hebdomadaire
+          if(d.getDay()===(c.reposHebdo||0)) continue;
+          const mk=ds.slice(0,7);
+          const jv=c.fiches[mk]?.jours.find(j=>j.date===ds);
+          // Ignorer les fériés et jours non prévus (transparents)
+          if(!jv) continue;
+          const sv=jv.statut;
+          if(['repos','hors-contrat','non-prevu','ferie','ferie-non'].includes(sv)) continue;
+          // Jour sans statut = prévu → le férié est bien encadré par un jour normal, pas d'arrêt
+          if(!sv) return 'prevu';
+          // Jour travaillé ou prévu explicite → pas d'arrêt
+          if(['prevu','travaille','abs-partielle','abs-rem','abs-enfant'].includes(sv)) return sv;
+          // arret ou abs-am → retourner immédiatement
+          return sv;
+        }
+        return null;
+      }
+
       while(cur<=dEnd){
         const dateStr=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
         const jourSem=cur.getDay();
@@ -8593,6 +8637,13 @@ if(tousNonPrevus){
 
         if(decompteCommence){
           if(estFerie){
+            // Priorité : voisin arret ou abs-am → ferie-non, non décompté
+            const svPrev=getStatutVoisinBoucle(dateStr,-1);
+            const svNext=getStatutVoisinBoucle(dateStr,1);
+            if(['arret','abs-am'].includes(svPrev)||['arret','abs-am'].includes(svNext)){
+              if(!fiche.valide) jour.statut='ferie-non';
+              cur.setDate(cur.getDate()+1);continue;
+            }
             // Vérifier si entouré de jours acquis/anticipés
             const veilleStr=new Date(cur);veilleStr.setDate(veilleStr.getDate()-1);
             const lendStr=new Date(cur);lendStr.setDate(lendStr.getDate()+1);
