@@ -2246,8 +2246,8 @@ function ouvrirFiche(contratId,key){
   fiche.jours.forEach(j=>{
     const d=new Date(j.date);
     const prevus=getHeuresPrevues(c,d);
-    j.heureDebPrev=prevus.debut==='prévu'?null:prevus.debut;
-    j.heureFinPrev=prevus.fin;
+    j.heureDebPrev=prevus.debut==='prévu'?null:(prevus.isOff?null:prevus.debut);
+    j.heureFinPrev=prevus.isOff?null:prevus.fin;
     j.planVarPrevu=!!(prevus.planVar);
   });
   // Nettoyer les statuts congés orphelins : si un jour a conges-non/acq/anticipe
@@ -4081,7 +4081,6 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   let hTheoriques=0;
   const hParSemaine={};
   const hPrevuParSemaine={};
-  const hParSemaineFerie={}; // heures prévues fériés/jours off pour calcul HS uniquement
   const hParSemainePrecMois={};
   const moisPrecStr=fiche.mois===0
     ?(fiche.annee-1)+'-12'
@@ -4112,14 +4111,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     if(!hParSemaine[semKey]) hParSemaine[semKey]=0;
     if(j.heureDebReel&&j.heureFinReel&&(j.statut==='prevu'||j.statut==='travaille'||j.statut==='ferie'||!j.statut)){
       hParSemaine[semKey]+=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
-    } else if(!j.statut&&j.heureDebPrev&&j.heureFinPrev&&!(j.heureDebReel&&j.heureFinReel)){
-      // Jour prévu non pointé : compter les heures prévues pour le calcul hebdo HS uniquement
-      if(!hParSemaineFerie[semKey]) hParSemaineFerie[semKey]=0;
-      hParSemaineFerie[semKey]+=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
-    } else if(j.statut==='ferie'&&j.heureDebPrev&&j.heureFinPrev){
-      // Férié prévu non travaillé : heures prévues pour calcul HS uniquement
-      if(!hParSemaineFerie[semKey]) hParSemaineFerie[semKey]=0;
-      hParSemaineFerie[semKey]+=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
+
     }
     if(c.th==='plan'&&c.planType==='var'&&c.planVar&&agendaMois&&!hPrevuParSemaine[semKey]){
       const agKey=getKeyAgenda(semKey,getSemAnnee(j.date));
@@ -4828,20 +4820,16 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const hSem=hParSemaine[semKey]||0;
     if(hSem<=0) return;
     const hPrecMois=hParSemainePrecMois[semKey]||0;
-    const hFerie=hParSemaineFerie[semKey]||0; // heures fériés prévus
     const seuilSup=45;
-    console.log('[forEach]',semKey,'hSem=',hSem,'hPrecMois=',hPrecMois,'hFerie=',hFerie);
     if(hPrecMois>0){
-      // Mois de fin de semaine (à cheval) : calculer HS sur total semaine + fériés
-      const hSupSem=Math.max(0,hSem+hFerie-seuilSup);
+      const hSupSem=Math.max(0,hSem-seuilSup);
       const hSupDejaPayee=Math.max(0,hPrecMois-seuilSup);
       const hSupCeMois=Math.max(0,hSupSem-hSupDejaPayee);
       hSup+=hSupCeMois;
       hComp-=hSupCeMois;
       if(hComp<0) hComp=0;
     } else {
-      // Semaine normale : HS sur total + fériés
-      const hSupSem=Math.max(0,hSem+hFerie-seuilSup);
+      const hSupSem=Math.max(0,hSem-seuilSup);
       hSup+=hSupSem;
       hComp-=hSupSem;
       if(hComp<0) hComp=0;
