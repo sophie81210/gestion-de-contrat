@@ -3544,19 +3544,7 @@ function calcCongesContrat(c){
             });
             const contribNormPV=Math.min(joursNormauxPV,jMaxSem)/jMaxSem;
             const contribCgPV=joursConges16PV*(1/6); // 1/6 de semaine fixe
-            // Calcul calendaire pour plan var aussi
-            let nbJoursCalArretPV=0;
-            if(absArret>0){
-              const [snPV,saPV]=semKey.split('-');
-              const lundiPV=getDateFromSemISO(parseInt(snPV),parseInt(saPV));
-              for(let d=0;d<7;d++){
-                const jcPV=new Date(lundiPV);jcPV.setDate(lundiPV.getDate()+d);
-                const dsPV=jcPV.getFullYear()+'-'+String(jcPV.getMonth()+1).padStart(2,'0')+'-'+String(jcPV.getDate()).padStart(2,'0');
-                const jfPV=jours.find(jj=>jj.date===dsPV);
-                if(jfPV&&jfPV.statut==='arret') nbJoursCalArretPV++;
-              }
-            }
-            const contribArretPV=nbJoursCalArretPV*(0.8/7);
+            const contribArretPV=absArret*(0.8)/jMaxSem;
             const prorata=Math.max(0,contribNormPV+contribCgPV);
             totalSemaines+=prorata;
             totalSemainesArret+=contribArretPV;
@@ -3604,26 +3592,7 @@ function calcCongesContrat(c){
           // Congés 1/6 : joursConges16 * (1/6) / joursMaxSem
           const contributionNormale=joursNormaux/joursMaxSem;
           const contributionConges=joursConges16*(1/6); // 1/6 de semaine fixe, indépendant du nb de jours/sem
-          // Calcul calendaire de l'arrêt : 1 jour calendaire = 0.8/7
-          // Compter les jours calendaires dans la semaine où il y a de l'arrêt
-          let nbJoursCalArret=0;
-          if(absArret>0){
-            // Trouver lundi et dimanche de cette semaine
-            const [snStr,saStr]=semKey.split('-');
-            const lundiSem=getDateFromSemISO(parseInt(snStr),parseInt(saStr));
-            for(let d=0;d<7;d++){
-              const jourCal=new Date(lundiSem);
-              jourCal.setDate(lundiSem.getDate()+d);
-              const dsC=jourCal.getFullYear()+'-'+String(jourCal.getMonth()+1).padStart(2,'0')+'-'+String(jourCal.getDate()).padStart(2,'0');
-              const jourFiche=jours.find(jj=>jj.date===dsC);
-              if(jourFiche&&(jourFiche.statut==='arret'||(!jourFiche.statut&&isFerie(dsC,c)&&(()=>{
-                const pT=getPrevJourPrevuTravaille(c,dsC);
-                const nT=getNextJourPrevuTravaille(c,dsC);
-                return getStatutJourFiche(c,pT)==='arret'||getStatutJourFiche(c,nT)==='arret';
-              })()))) nbJoursCalArret++;
-            }
-          }
-          const contributionArret=nbJoursCalArret*(0.8/7);
+          const contributionArret=absArret*(0.8)/joursMaxSem;
           const prorata=Math.max(0,contributionNormale+contributionConges);
           if(prorata>0||contributionArret>0){
             totalSemaines+=prorata;
@@ -4159,15 +4128,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   fiche.jours.forEach(j=>{
     let statut=j.statut||getStatutPrevu(c,j);
     // Règle paiement férié : si encadré par arret ou abs-enfant sur jour prévu travaillé
-    if(statut==='ferie'||statut==='conges-non'||(!j.statut&&isFerie(j.date,sourceActif))){
-      if(isFerie(j.date,sourceActif)){
-        const prevTrav=getPrevJourPrevuTravaille(c,j.date);
-        const nextTrav=getNextJourPrevuTravaille(c,j.date);
-        const sPrev=prevTrav?getStatutJourFiche(c,prevTrav):null;
-        const sNext=nextTrav?getStatutJourFiche(c,nextTrav):null;
-        if(sPrev==='arret'||sNext==='arret') statut='arret';
-        else if(sPrev==='abs-enfant'||sNext==='abs-enfant') statut='abs-non';
-      }
+    if(statut==='ferie'||(!j.statut&&isFerie(j.date,sourceActif))){
+      const prevTrav=getPrevJourPrevuTravaille(c,j.date);
+      const nextTrav=getNextJourPrevuTravaille(c,j.date);
+      const sPrev=prevTrav?getStatutJourFiche(c,prevTrav):null;
+      const sNext=nextTrav?getStatutJourFiche(c,nextTrav):null;
+      if(sPrev==='arret'||sNext==='arret') statut='arret';
+      else if(sPrev==='abs-enfant'||sNext==='abs-enfant') statut='abs-non';
     }
     if(dateAvenantStr&&statut!=='hors-contrat'){
       const dateJ=j.date;
