@@ -4122,6 +4122,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   let montantAbsences=0;
   let hTheoriques=0;
   const hParSemaine={};
+  const hCompParSemaine={}; // HC par semaine (via compJour)
   const hPrevuParSemaine={};
   const hParSemaineFerie={}; // heures prévues fériés non travaillés pour calcul HS
   const hParSemainePrecMois={};
@@ -4715,10 +4716,12 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             hMajRepos+=hReelJourSpec;
           } else if(compJour>0){
             hComp+=compJour/60;
+            const skC=getSemISO(j.date);if(!hCompParSemaine[skC])hCompParSemaine[skC]=0;hCompParSemaine[skC]+=compJour/60;
           }
         }
       } else if(compJour>0){
         hComp+=compJour/60;
+        const skC2=getSemISO(j.date);if(!hCompParSemaine[skC2])hCompParSemaine[skC2]=0;hCompParSemaine[skC2]+=compJour/60;
       }
     }
     if(estAbsDeduite){
@@ -4847,8 +4850,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // hSup = heures pour majoration HS uniquement
   // hCompMaj = heures HC dont la maj s'applique ce mois
   let hCompMaj=0;
-  let hSupNormal=0; // HS des semaines normales uniquement (pas à cheval)
-  window._hCompVersHS={}; // reset au début du calcul
+  let hSupNormal=0;
+  let hSupCheval=0;
+  const hSupParSemaine={}; // HS par semaine pour calcul hCompMaj
+  window._hCompVersHS={};
   Object.keys(hParSemaine).forEach(semKey=>{
     const hSem=hParSemaine[semKey]||0;
     const hPrevSem=hPrevuParSemaine[semKey]||0;
@@ -4871,9 +4876,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       // Si des HC du mois précédent deviennent HS ce mois, déduire leur maj HC
       const hCompVersHS=Math.min(hCompMajPrecMois,hSupMaj);
       hSup+=hSupMaj;
-      // Les HC de ce mois qui deviennent HS réduisent hCompMaj
-      const hCompCeMois=Math.max(0,hSemCeMois-Math.max(0,hSupMaj-(hPrecMois>seuilSup?hPrecMois-seuilSup:0)));
-      hSupNormal+=Math.min(hSupMaj,hSemCeMois); // pour réduire hCompMaj
+      hSupCheval+=hSupMaj;
+      hSupParSemaine[semKey]=(hSupParSemaine[semKey]||0)+hSupMaj;
       // HS à cheval ne réduisent pas hCompMaj de ce mois
       if(!window._hCompVersHS) window._hCompVersHS={};
       window._hCompVersHS[semKey]=(window._hCompVersHS[semKey]||0)+hCompVersHS;
@@ -4881,11 +4885,16 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       // Semaine normale ou début de semaine à cheval : calcul standard
       const hSupSem=Math.max(0,hSem+hFerie-seuilSup);
       hSup+=hSupSem;
-      hSupNormal+=hSupSem; // tracker les HS des semaines normales
+      hSupNormal+=hSupSem;
+      hSupParSemaine[semKey]=(hSupParSemaine[semKey]||0)+hSupSem;
     }
   });
-  // hCompMaj = hComp - HS des semaines normales uniquement
-  hCompMaj=Math.max(0,hComp-hSupNormal);
+  // hCompMaj = somme par semaine de max(0, hCompSem - hSupParSemaine[semKey])
+  hCompMaj=Object.keys(hCompParSemaine).reduce((total,semKey)=>{
+    const hCompSem=hCompParSemaine[semKey]||0;
+    const hSupSem=hSupParSemaine[semKey]||0;
+    return total+Math.max(0,hCompSem-hSupSem);
+  },0);
   const hMoyParJour=nbJoursMoisContrat>0?hMensu/nbJoursMoisContrat:hMensu/20;
   if(hAbs>0&&hTheoriques>0){
     // Retenue en 2 temps : heures normales + heures majorées séparément
