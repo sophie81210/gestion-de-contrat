@@ -6041,6 +6041,27 @@ function premiereSemaineAgenda(dateDeb, jourReposHebdo){
   return {sem, annee};
 }
          
+
+function getAnneesAmManquantes(ag){
+  if(!S.congesAM) S.congesAM={};
+  const manquantes=[];
+  const dDebut=new Date(ag.dateDebut);
+  const dFin=new Date(ag.dateFin);
+  let cur=new Date(dDebut.getFullYear(),dDebut.getMonth(),1);
+  while(cur<=dFin){
+    const anneeAm=cur.getMonth()>=5?cur.getFullYear():cur.getFullYear()-1;
+    const data=S.congesAM[anneeAm];
+    if(!data||!Object.values(data.jours||{}).some(v=>v==='pose')){
+      if(!manquantes.includes(anneeAm)) manquantes.push(anneeAm);
+    }
+    cur.setMonth(cur.getMonth()+1);
+  }
+  return manquantes;
+}
+
+function alerteCalendrierAM(annees){
+  alerte('⚠ Le calendrier des congés Ass\'Mat n\'est pas rempli pour l\'année : '+annees.map(a=>a+'/'+(a+1)).join(', ')+'.<br><br>Les semaines doivent être identifiées dans l\'onglet "Congés Ass\'Mat", elles pourront être modifiées ultérieurement.');
+}
 function creerAgenda(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c)return;
@@ -6123,10 +6144,7 @@ function creerAgenda(cid){
   let curAm=new Date(dDebutAg.getFullYear(),dDebutAg.getMonth(),1);
   while(curAm<=dFinAg){
     const anneeAm=curAm.getMonth()>=5?curAm.getFullYear():curAm.getFullYear()-1;
-    if(!S.congesAM[anneeAm]){
-      S.congesAM[anneeAm]={enfants:0,jours:{}};
-      toast('Calendrier congés AM '+anneeAm+'/'+(anneeAm+1)+' créé — pensez à le remplir');
-    }
+    if(!S.congesAM[anneeAm]) S.congesAM[anneeAm]={enfants:0,jours:{}};
     curAm.setMonth(curAm.getMonth()+1);
   }
 
@@ -6140,6 +6158,9 @@ function creerAgenda(cid){
   }
   const agWrap=document.getElementById('agenda-wrap-'+cid);
   if(agWrap) agWrap.innerHTML=renderAgendas({...source,id:c.id});
+  // Alerte si calendrier AM non rempli
+  const manquantesCreation=getAnneesAmManquantes(ag);
+  if(manquantesCreation.length>0) alerteCalendrierAM(manquantesCreation);
 }
          
 function renderAgendas(c){
@@ -6298,6 +6319,12 @@ function renderAgendas(c){
 function ouvrirModifAgenda(cid,agid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c)return;
+  // Vérifier calendrier AM à l'ouverture
+  const res0=trouverAgenda(c,agid);
+  if(res0){
+    const manquantesOuv=getAnneesAmManquantes(res0.ag);
+    if(manquantesOuv.length>0){alerteCalendrierAM(manquantesOuv);return;}
+  }
   // Chercher l'agenda dans le contrat ou dans les avenants
   let ag=c.agendas.find(a=>a.id==agid);
   let source=c;
@@ -6612,22 +6639,9 @@ function peindreAgenda(key,cid,agid){
   const res=trouverAgenda(c,agid);
   if(!res)return;
   const {ag,source}=res;
-  // Vérifier si le calendrier AM est rempli pour les années couvertes par cet agenda
-  const dDebutAg=new Date(ag.dateDebut);
-  const dFinAg=new Date(ag.dateFin);
-  let anneesAmManquantes=[];
-  let curAm=new Date(dDebutAg.getFullYear(),dDebutAg.getMonth(),1);
-  while(curAm<=dFinAg){
-    const anneeAm=curAm.getMonth()>=5?curAm.getFullYear():curAm.getFullYear()-1;
-    const dataAm=S.congesAM&&S.congesAM[anneeAm];
-    if(!dataAm||!Object.values(dataAm.jours||{}).some(v=>v==='pose')){
-      if(!anneesAmManquantes.includes(anneeAm)) anneesAmManquantes.push(anneeAm);
-    }
-    curAm.setMonth(curAm.getMonth()+1);
-  }
-  if(anneesAmManquantes.length>0){
-    alerte('⚠ Le calendrier des congés Ass\'Mat n\'est pas rempli pour les années : '+anneesAmManquantes.map(a=>a+'/'+(a+1)).join(', ')+'.<br><br>Les semaines violettes ne seront pas correctement identifiées tant que ce calendrier n\'est pas complété.');
-  }
+  // Bloquer si calendrier AM non rempli
+  const manquantesPeinture=getAnneesAmManquantes(ag);
+  if(manquantesPeinture.length>0){alerteCalendrierAM(manquantesPeinture);return;}
   // Bloquer si semaine congés (colorée violet) — sauf pour plan sem et plan var
   const estPSV=(source.th==='sem')||(source.th==='plan'&&source.planType==='var');
   if(!estPSV){
