@@ -2382,24 +2382,28 @@ function ouvrirFiche(contratId,key){
     semLast[j.semKey]=idx;
   });
 
-  // Pour plan min/var : précalculer le total h+- par semaine (toutes heures en plus)
-  const hCompSemaine={}; // total heures en plus par semaine
+  // Pour plan min/var : précalculer le total h+- par semaine (heures au-delà du quota)
+  const hCompSemaine={};
+  const hReelSemaine={}; // total heures réelles par semaine (ce mois uniquement)
   if(isPlanVar){
     joursSemaines.forEach(j=>{
       if(!j.heureDebReel||!j.heureFinReel) return;
-      const reel=toM(j.heureFinReel)-toM(j.heureDebReel);
-      const prev=j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev)):0;
-      const statutActuelPC=j.statut||(j.statutPrevu||getStatutPrevu(c,j));
-      let contrib=0;
-      if(['non-prevu','repos'].includes(statutActuelPC)&&reel>0){
-        contrib=reel; // jours non prévus : toutes les heures comptent
-      } else if(j.heureDebPrev&&j.heureFinPrev&&!isAbsenceEmployeur(agendaMois,j.semKey)){
-        contrib=Math.max(0,reel-prev); // jours prévus : seulement le dépassement
-      } else if(!j.heureDebPrev&&reel>0){
-        contrib=reel;
+      const reel=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
+      if(!hReelSemaine[j.semKey]) hReelSemaine[j.semKey]=0;
+      hReelSemaine[j.semKey]+=reel;
+    });
+    // Calculer le quota par semaine
+    Object.keys(hReelSemaine).forEach(sk=>{
+      const totalReel=hReelSemaine[sk];
+      let quota=0;
+      if(sourceActive.planType==='min'){
+        quota=parseFloat(sourceActive.hMin||0);
+      } else if(sourceActive.planType==='var'&&agendaMois&&agendaMois.semaines){
+        const typeSemSk=agendaMois.semaines[sk];
+        const volSk=typeSemSk&&sourceActive.planVar?sourceActive.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemSk):null;
+        quota=volSk?parseFloat(volSk.h||0):0;
       }
-      if(!hCompSemaine[j.semKey]) hCompSemaine[j.semKey]=0;
-      hCompSemaine[j.semKey]+=contrib;
+      hCompSemaine[sk]=Math.max(0,totalReel-quota);
     });
   }
 
@@ -2505,7 +2509,9 @@ const statutPrevuJ=getStatutPrevu(c,j);
       </td>`;
     }
 
-    return `<tr style="background:${bg};${border}">
+    const estDimanche=new Date(j.date).getDay()===0;
+    const borderDim=estDimanche?'border-bottom:2px solid var(--mb);':'';
+    return `<tr style="background:${bg};${border}${borderDim}">
       <td style="padding:5px 4px;font-size:12px;font-weight:500;white-space:nowrap;${manquant?'color:var(--al)':''}">${nomJour} ${numJour}</td>
       ${prevuCell}
       <td style="padding:3px 4px">
