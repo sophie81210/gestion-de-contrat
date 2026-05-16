@@ -2375,10 +2375,33 @@ function ouvrirFiche(contratId,key){
   // Calculer rowspan pour chaque semaine (nombre de jours dans ce mois pour cette semaine)
   const semRowspan={};
   const semFirst={}; // index du 1er jour de chaque semaine
+  const semLast={}; // index du dernier jour de chaque semaine
   joursSemaines.forEach((j,idx)=>{
     if(!semRowspan[j.semKey]){semRowspan[j.semKey]=0;semFirst[j.semKey]=idx;}
     semRowspan[j.semKey]++;
+    semLast[j.semKey]=idx;
   });
+
+  // Pour plan min/var : précalculer le total h+- par semaine (toutes heures en plus)
+  const hCompSemaine={}; // total heures en plus par semaine
+  if(isPlanVar){
+    joursSemaines.forEach(j=>{
+      if(!j.heureDebReel||!j.heureFinReel) return;
+      const reel=toM(j.heureFinReel)-toM(j.heureDebReel);
+      const prev=j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev)):0;
+      const statutActuelPC=j.statut||(j.statutPrevu||getStatutPrevu(c,j));
+      let contrib=0;
+      if(['non-prevu','repos'].includes(statutActuelPC)&&reel>0){
+        contrib=reel; // jours non prévus : toutes les heures comptent
+      } else if(j.heureDebPrev&&j.heureFinPrev&&!isAbsenceEmployeur(agendaMois,j.semKey)){
+        contrib=Math.max(0,reel-prev); // jours prévus : seulement le dépassement
+      } else if(!j.heureDebPrev&&reel>0){
+        contrib=reel;
+      }
+      if(!hCompSemaine[j.semKey]) hCompSemaine[j.semKey]=0;
+      hCompSemaine[j.semKey]+=contrib;
+    });
+  }
 
   const lignes=joursSemaines.map((j,idx)=>{
     const numJour=parseInt(j.date.split('-')[2]);
@@ -2504,8 +2527,8 @@ const statutPrevuJ=getStatutPrevu(c,j);
           const estPlanVar=sourceActive.th==='plan'&&(sourceActive.planType==='var'||sourceActive.planType==='min');
           const estCongesNon46=statutActuel==='conges-non'&&c.tc!=='52';
           const estCongesNon52=statutActuel==='conges-non'&&c.tc==='52';
-          // Plan var/min : n'afficher que comp/sup
-          if(estPlanVar) return hComp?'<span style="color:var(--vt)">'+hComp+'</span>':(hSup?'<span style="color:var(--vt)">'+hSup+'</span>':'—');
+          // Plan var/min : cellule individuelle vide (h+- affiché en cellule fusionnée par semaine)
+          if(estPlanVar) return '—';
           // Congés non acquis 46 sem : pas d'affichage en rouge
           if(estCongesNon46) return '—';
           // Congés non acquis 52 sem : afficher 1/6 hSemMoy en rouge
@@ -2526,6 +2549,10 @@ const statutPrevuJ=getStatutPrevu(c,j);
           return '—';
         })()}
       </td>
+      ${isPlanVar&&idx===semFirst[j.semKey]?`<td rowspan="${semRowspan[j.semKey]}" style="padding:3px 4px;font-size:11px;font-weight:600;text-align:center;vertical-align:middle;border-left:1px solid var(--mb)">${(()=>{
+        const tot=hCompSemaine[j.semKey]||0;
+        return tot>0?'<span style="color:var(--vt)">+'+fmtH(tot)+'</span>':'—';
+      })()}</td>`:isPlanVar?'':''}
       <td style="padding:3px 4px;text-align:right;vertical-align:top">
         <select style="font-size:10px;padding:2px 3px;border:1px solid var(--mb);border-radius:3px;max-width:110px;background:${bg}"
           ${fiche.valide?'disabled':`onchange="majFicheStatut(${contratId},'${key}',${idx},this.value)"`}>
