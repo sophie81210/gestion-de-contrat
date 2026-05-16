@@ -6115,9 +6115,25 @@ function creerAgenda(cid){
   };
 
   source.agendas.push(ag);
+
+  // Créer les années AM manquantes couvertes par ce nouvel agenda
+  if(!S.congesAM) S.congesAM={};
+  const dDebutAg=new Date(ag.dateDebut);
+  const dFinAg=new Date(ag.dateFin);
+  let curAm=new Date(dDebutAg.getFullYear(),dDebutAg.getMonth(),1);
+  while(curAm<=dFinAg){
+    const anneeAm=curAm.getMonth()>=5?curAm.getFullYear():curAm.getFullYear()-1;
+    if(!S.congesAM[anneeAm]){
+      S.congesAM[anneeAm]={enfants:0,jours:{}};
+      toast('Calendrier congés AM '+anneeAm+'/'+(anneeAm+1)+' créé — pensez à le remplir');
+    }
+    curAm.setMonth(curAm.getMonth()+1);
+  }
+
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
+  localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM));
   if(window.FB_USER&&window.fbSaveData){
     window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
       .catch(e=>console.error('Save creerAgenda:',e));
@@ -6333,7 +6349,10 @@ if(source.tc!=='52'&&source.th!=='sem'&&!(source.th==='plan'&&source.planType===
     });
     if(source.tc!=='52'){
       const compteOffS=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
-      pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong>(${compteOffS})</strong></div>`;
+      const nbSemSrc=source.nbSem||46;
+      const maxOffS=Math.max(0,47-nbSemSrc);
+      const depasseS=compteOffS>maxOffS;
+      pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong style="color:${depasseS?'var(--al)':'inherit'}">(${compteOffS}/${maxOffS}${depasseS?' ⚠':''})</strong></div>`;
     }
   }
   if(source.th==='plan'&&source.planType==='fix'){
@@ -6354,7 +6373,10 @@ if(source.tc!=='52'&&source.th!=='sem'&&!(source.th==='plan'&&source.planType===
     });
    if(source.tc!=='52'){
       const compteOffS=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
-      pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong>(${compteOffS})</strong></div>`;
+      const nbSemSrc=source.nbSem||46;
+      const maxOffS=Math.max(0,47-nbSemSrc);
+      const depasseS=compteOffS>maxOffS;
+      pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:#fde8e8;color:#c0392b;--brd:#c0392b" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong style="color:${depasseS?'var(--al)':'inherit'}">(${compteOffS}/${maxOffS}${depasseS?' ⚠':''})</strong></div>`;
     }
   }
   pHtml+='</div>';
@@ -6590,6 +6612,22 @@ function peindreAgenda(key,cid,agid){
   const res=trouverAgenda(c,agid);
   if(!res)return;
   const {ag,source}=res;
+  // Vérifier si le calendrier AM est rempli pour les années couvertes par cet agenda
+  const dDebutAg=new Date(ag.dateDebut);
+  const dFinAg=new Date(ag.dateFin);
+  let anneesAmManquantes=[];
+  let curAm=new Date(dDebutAg.getFullYear(),dDebutAg.getMonth(),1);
+  while(curAm<=dFinAg){
+    const anneeAm=curAm.getMonth()>=5?curAm.getFullYear():curAm.getFullYear()-1;
+    const dataAm=S.congesAM&&S.congesAM[anneeAm];
+    if(!dataAm||!Object.values(dataAm.jours||{}).some(v=>v==='pose')){
+      if(!anneesAmManquantes.includes(anneeAm)) anneesAmManquantes.push(anneeAm);
+    }
+    curAm.setMonth(curAm.getMonth()+1);
+  }
+  if(anneesAmManquantes.length>0){
+    alerte('⚠ Le calendrier des congés Ass\'Mat n\'est pas rempli pour les années : '+anneesAmManquantes.map(a=>a+'/'+(a+1)).join(', ')+'.<br><br>Les semaines violettes ne seront pas correctement identifiées tant que ce calendrier n\'est pas complété.');
+  }
   // Bloquer si semaine congés (colorée violet) — sauf pour plan sem et plan var
   const estPSV=(source.th==='sem')||(source.th==='plan'&&source.planType==='var');
   if(!estPSV){
