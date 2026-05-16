@@ -1396,7 +1396,7 @@ function buildFicheContenu(source, c){
     <div class="card" style="margin-top:10px">
       <div class="ctitle">Actions CDD</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
-        ${nbProlongations<2?`<button class="btn bs" onclick="ouvrirProlongationCDD(${c.id})">Prolongation (${nbProlongations}/2)</button>`:''}
+        ${nbProlongations<2&&c.cddTerme==='precis'?`<button class="btn bs" onclick="ouvrirProlongationCDD(${c.id})">Prolongation (${nbProlongations}/2)</button>`:''}
         <button class="btn bs" style="background:var(--vtc);color:var(--vt)" onclick="ouvrirPassageCDI(${c.id})">Passage en CDI</button>
       </div>
     </div>`:'' ;
@@ -2240,6 +2240,33 @@ function ouvrirFiche(contratId,key){
   }
   if(!c.fiches[key])return;
   const fiche=c.fiches[key];
+  // Vérifier que l'agenda est complet à l'ouverture (contrats avec agenda, non validés)
+  if(!fiche.valide&&(c.tc!=='52'||c.th==='plan'||c.th==='sem')&&!(c.tc==='52'&&(c.th==='fixe'||c.th==='min'))){
+    const sourceV=getVersionActive(c,new Date(key+'-01'));
+    const agendasV=sourceV.agendas||c.agendas||[];
+    const [ky,km]=key.split('-').map(Number);
+    const debutMoisV=new Date(ky,km-1,1);
+    const finMoisV=new Date(ky,km,0);
+    const agV=agendasV.find(ag=>new Date(ag.dateDebut)<=finMoisV&&new Date(ag.dateFin)>=debutMoisV);
+    if(agV){
+      const semDuMois=[...new Set(fiche.jours.map(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))))];
+      const semsCongesScoreV=semDuMois.map(sk=>{
+        let nb=0;
+        fiche.jours.forEach(j=>{
+          if(getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))!==sk) return;
+          if(S.congesAM) Object.values(S.congesAM).forEach(cgAm=>{if(cgAm?.jours?.[j.date]==='pose') nb++;});
+          if(isFerie(j.date,c)) nb++;
+        });
+        return {sk,nb};
+      }).filter(x=>x.nb>=5);
+      semsCongesScoreV.sort((a,b)=>b.nb-a.nb);
+      const semsViolettes=new Set(semsCongesScoreV.slice(0,5).map(x=>x.sk));
+      const semNonPointee=semDuMois.find(sk=>!semsViolettes.has(sk)&&!agV.semaines?.[sk]);
+      if(semNonPointee){
+        setTimeout(()=>toast('⚠ Agenda incomplet — certaines semaines ne sont pas encore pointées'),300);
+      }
+    }
+  }
   // Recalculer les heures prévues depuis l'agenda (au cas où l'agenda a été modifié)
   fiche.jours.forEach(j=>{
     const d=new Date(j.date);
@@ -2272,6 +2299,27 @@ function ouvrirFiche(contratId,key){
             }
           });
         }
+      }
+    }
+  }
+  // Fin automatique CDD à terme : marquer jours hors-contrat dès l'ouverture
+  if(c.typeDuree==='cdd'&&!c.rupture?.confirmee){
+    const dateFin=c.cddTerme==='precis'?c.cddDateFin:c.cddDateMin;
+    if(dateFin&&!fiche.valide){
+      const [fky,fkm]=key.split('-').map(Number);
+      const dateFinObj=new Date(dateFin);
+      if(dateFinObj.getFullYear()===fky&&dateFinObj.getMonth()+1===fkm){
+        fiche.jours.forEach(j=>{
+          if(j.date>dateFin){
+            if(!j.statut||j.statut==='prevu'||j.statut==='non-prevu'||j.statut==='repos'){
+              j._horsContratCloture=true;
+              j.statut='hors-contrat';
+            }
+          } else if(j._horsContratCloture&&j.date<=dateFin){
+            delete j._horsContratCloture;
+            delete j.statut;
+          }
+        });
       }
     }
   }
@@ -3578,6 +3626,20 @@ function validerFiche(contratId,key){
       }
     }
   }
+  // Blocage validation dernier mois CDD : motif requis
+  if(c.typeDuree==='cdd'&&!c.rupture?.confirmee){
+    const dateFin=c.cddTerme==='precis'?c.cddDateFin:c.cddDateMin;
+    if(dateFin){
+      const [fky,fkm]=key.split('-').map(Number);
+      const dateFinObj=new Date(dateFin);
+      if(dateFinObj.getFullYear()===fky&&dateFinObj.getMonth()+1===fkm){
+        if(!c.rupture?.motif){
+          alerte('Veuillez renseigner le motif de fin de contrat dans l\'onglet Rupture avant de valider cette feuille.');
+          return;
+        }
+      }
+    }
+  }
   // Détecter si c'est la dernière feuille (rupture confirmée + mois de fin)
   let msgConfirm='Cette feuille ne pourra plus être modifiée ensuite. Confirmer la validation ?';
   if(c.rupture&&c.rupture.confirmee&&!c.archive){
@@ -4863,7 +4925,6 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const seuilSup=Math.max(45,hPrevSem);
     const hPrecMois=hParSemainePrecMois[semKey]||0;
     const hFerie=hParSemaineFerie[semKey]||0; // heures fériés prévus non travaillés
-    console.log('[forEach]',semKey,'hSem=',hSem,'hPrecMois=',hPrecMois,'hSemCeMois=',Math.max(0,hSem-hPrecMois));
     if(hPrecMois>0){
       // Fin de semaine à cheval : hSem inclut les heures du mois précédent via fichePrec
       // → utiliser uniquement les heures de ce mois = hSem - hPrecMois
@@ -6995,6 +7056,15 @@ function validerAvenant(){
   av.majRepos=document.getElementById('f-maj-repos')?.value!==''?parseFloat(document.getElementById('f-maj-repos').value):null;
   av.joursFixe=joursFixe;av.semTypes=semTypes;av.planVar=planVar;
 
+  // Pour les prolongations CDD : sauvegarder la nouvelle date de fin
+  if(av.typeProlongation==='prolongation'){
+    const nouvelleDateFin=document.getElementById('f-cdd-prolongation-datefin')?.value;
+    if(nouvelleDateFin){
+      av.cddDateFin=nouvelleDateFin;
+      c.cddDateFin=nouvelleDateFin; // mettre à jour aussi le contrat principal
+    }
+  }
+
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
@@ -7697,7 +7767,18 @@ function renderRuptureCDD(c, cont){
         <label style="font-size:12px;color:var(--tx2)">Motif</label>
         <select id="rp-motif-${cid}" oninput="corrigerDateRupture(this)" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
           <option value="">— Choisir —</option>
-          ${motifsList.map(m=>`<option value="${m.v}" ${motif===m.v?'selected':''}>${m.l}</option>`).join('')}
+          ${motifsList.map(m=>{
+            // Désactiver fin-essai si la période d'essai est dépassée
+            if((m.v==='fin-essai'||m.v==='fin-essai-am')&&c.periodeEssaiCdd>0){
+              const dateFinEssai=new Date(c.dateDeb);
+              dateFinEssai.setDate(dateFinEssai.getDate()+c.periodeEssaiCdd);
+              const aujourdhui=dateSit||new Date();
+              if(aujourdhui>dateFinEssai){
+                return `<option value="${m.v}" disabled style="color:var(--tx3)">${m.l} (délai dépassé)</option>`;
+              }
+            }
+            return `<option value="${m.v}" ${motif===m.v?'selected':''}>${m.l}</option>`;
+          }).join('')}
         </select>
       </div>`:''}
       ${motif&&!pasPreavis&&!aPreavis?'':''}
@@ -8039,7 +8120,16 @@ function renderRupture(c, cont){
           <option value="retrait-enfant" ${motif==='retrait-enfant'?'selected':''}>Retrait d'enfant</option>
           <option value="demission" ${motif==='demission'?'selected':''}>Démission</option>
           <option value="retrait-force" ${motif==='retrait-force'?'selected':''}>Retrait forcé</option>
-          <option value="fin-essai" ${motif==='fin-essai'?'selected':''}>Fin de période d'essai</option>
+          ${(()=>{
+            if(c.periodeEssai>0){
+              const dateFinEssai=new Date(c.dateDeb);
+              dateFinEssai.setMonth(dateFinEssai.getMonth()+c.periodeEssai);
+              if((dateSit||new Date())>dateFinEssai){
+                return `<option value="fin-essai" disabled style="color:var(--tx3)">Fin de période d'essai (délai dépassé)</option>`;
+              }
+            }
+            return `<option value="fin-essai" ${motif==='fin-essai'?'selected':''}>Fin de période d'essai</option>`;
+          })()}
         </select>
       </div>
       ${preavisHtml}
@@ -9992,28 +10082,4 @@ function alerte(msg){
 initJ('j-fixe','fixe');
 </script>
 </body>
-</html  if(solde){
-    html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
-    html+='<tr><td colspan="2" style="padding:6px 4px;font-weight:700;font-size:13px;color:var(--m)">Solde de tout compte</td></tr>';
-    if(solde.regul){
-      html+=ligneG('Régularisation ('+solde.regul.hRegul.toFixed(2)+'h — '+solde.regul.joursRegul+' j)',
-        solde.regul.montantNet.toFixed(2)+' € net', true, 'var(--vt)');
-    }
-    if(solde.indemConges){
-      html+=ligneG(solde.indemConges.label,
-        solde.indemConges.montantNet.toFixed(2)+' € net ('+solde.indemConges.montantBrut.toFixed(2)+' € brut)', true, 'var(--m)');
-    }
-    if(solde.indemPreavis){
-      const sensLabel=solde.indemPreavis.sens==='remboursement'?' (à rembourser)':'';
-      const prefixe=solde.indemPreavis.sens==='remboursement'?'− ':'';
-      html+=ligneG('Indemnité de préavis ('+solde.indemPreavis.joursRestants+' j)'+sensLabel,
-        prefixe+solde.indemPreavis.montantNet.toFixed(2)+' €', true,
-        solde.indemPreavis.sens==='remboursement'?'var(--al)':'var(--m)');
-    }
-    if(solde.indemRupture){
-      html+=ligneG('Indemnité de rupture (1/80ème)',
-        solde.indemRupture.montantBrut.toFixed(2)+' € brut', true, 'var(--m)');
-    }
-  }
-  return html;
-}>
+</html>
