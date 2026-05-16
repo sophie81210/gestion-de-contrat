@@ -4095,6 +4095,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   let hTheoriques=0;
   const hParSemaine={};
   const hPrevuParSemaine={};
+  const hParSemaineFerie={}; // heures prévues fériés non travaillés pour calcul HS
   const hParSemainePrecMois={};
   const moisPrecStr=fiche.mois===0
     ?(fiche.annee-1)+'-12'
@@ -4125,7 +4126,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     if(!hParSemaine[semKey]) hParSemaine[semKey]=0;
     if(j.heureDebReel&&j.heureFinReel&&(j.statut==='prevu'||j.statut==='travaille'||j.statut==='ferie'||!j.statut)){
       hParSemaine[semKey]+=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
-
+    } else if(!j.heureDebReel&&j.statut==='ferie'&&j.heureDebPrev&&j.heureFinPrev){
+      // Férié prévu non travaillé : heures prévues pour calcul HS uniquement
+      if(!hParSemaineFerie[semKey]) hParSemaineFerie[semKey]=0;
+      hParSemaineFerie[semKey]+=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
     }
     if(c.th==='plan'&&c.planType==='var'&&c.planVar&&agendaMois&&!hPrevuParSemaine[semKey]){
       const agKey=getKeyAgenda(semKey,getSemAnnee(j.date));
@@ -4823,10 +4827,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const hSeuilComp=Math.max(0,hPrevSem-hAbsSem);
     const seuilSup=Math.max(45,hPrevSem);
     const hPrecMois=hParSemainePrecMois[semKey]||0;
+    const hFerie=hParSemaineFerie[semKey]||0; // heures fériés prévus non travaillés
     if(hPrecMois>0){
       // Fin de semaine à cheval : heures de base déjà payées le mois précédent
-      // → calculer HS sur total semaine pour la majoration uniquement, sans toucher hComp
-      const hSupSem=Math.max(0,hSem-seuilSup);
+      // → calculer HS sur total semaine (+ fériés prévus) pour la majoration uniquement
+      const hSupSem=Math.max(0,hSem+hPrecMois+hFerie-seuilSup);
       const hSupDejaPayee=Math.max(0,hPrecMois-seuilSup);
       const hSupMaj=Math.max(0,hSupSem-hSupDejaPayee);
       // Maj HC déjà payée le mois précédent pour cette semaine
@@ -4840,7 +4845,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       window._hCompVersHS[semKey]=(window._hCompVersHS[semKey]||0)+hCompVersHS;
     } else {
       // Semaine normale ou début de semaine à cheval : calcul standard
-      const hSupSem=Math.max(0,hSem-seuilSup);
+      const hSupSem=Math.max(0,hSem+hFerie-seuilSup);
       hSup+=hSupSem;
       // Ne pas retirer hSup de hComp : les HS sont payées via hComp ("sur jours ouvrables")
       // hSup sert uniquement pour la majoration
