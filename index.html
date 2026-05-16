@@ -2350,7 +2350,7 @@ function ouvrirFiche(contratId,key){
         const diff=reel-prev;
         if(diff>0) hComp='+'+fmtH(diff);
         // Si diff<=0 : rien à afficher
-      } else if(j.heureDebPrev&&j.heureFinPrev){
+      } else if(j.heureDebPrev&&j.heureFinPrev&&!isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))){
         const prev=toM(j.heureFinPrev)-toM(j.heureDebPrev);
         const diff=reel-prev;
         if(diff>0) hComp='+'+fmtH(diff);
@@ -4790,9 +4790,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     }
   });
   indemKmTotal=(c.km||0)*kmTotal;
-  // Calculer les majorations uniquement sur le mois qui contient la FIN de la semaine
-  // = soit semaine complète dans le mois (dimanche dans le mois), soit fin de semaine à cheval
-  let hCompMaj=0; // heures HC dont la maj s'applique ce mois (dimanche dans ce mois)
+  // hComp = heures en plus via compJour ("sur jours ouvrables")
+  // hSup = heures pour majoration HS uniquement
+  // hCompMaj = heures HC dont la maj s'applique ce mois
+  let hCompMaj=0;
   Object.keys(hParSemaine).forEach(semKey=>{
     const hSem=hParSemaine[semKey]||0;
     const hPrevSem=hPrevuParSemaine[semKey]||0;
@@ -4801,26 +4802,30 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const hSeuilComp=Math.max(0,hPrevSem-hAbsSem);
     const seuilSup=Math.max(45,hPrevSem);
     const hPrecMois=hParSemainePrecMois[semKey]||0;
-    // Trouver si le dimanche de cette semaine est dans ce mois
-    let dimancheDansCeMois=false;
-    fiche.jours.forEach(j=>{
-      if(new Date(j.date).getDay()===0&&getSemISO(j.date)===parseInt(semKey.split('-S')[1])){
-        dimancheDansCeMois=true;
-      }
-    });
-    const estFinSemaine=dimancheDansCeMois||hPrecMois>0;
-    if(estFinSemaine){
+    if(hPrecMois>0){
+      // Fin de semaine à cheval : heures de base déjà payées le mois précédent
+      // → calculer HS sur total semaine pour la majoration uniquement, sans toucher hComp
       const hSupSem=Math.max(0,hSem-seuilSup);
+      const hSupDejaPayee=Math.max(0,hPrecMois-seuilSup);
+      const hSupMaj=Math.max(0,hSupSem-hSupDejaPayee);
+      // Maj HC déjà payée le mois précédent pour cette semaine
+      const hCompMajPrecMois=Math.max(0,Math.min(hPrecMois,seuilSup)-hSeuilComp);
+      // Si des HC du mois précédent deviennent HS ce mois, déduire leur maj HC
+      const hCompVersHS=Math.min(hCompMajPrecMois,hSupMaj);
+      hSup+=hSupMaj;
+      // Ne pas retirer de hComp : les heures en plus sont déjà dans hComp via compJour
+      // Stocker les HC versées en HS pour corriger la majoration
+      if(!window._hCompVersHS) window._hCompVersHS={};
+      window._hCompVersHS[semKey]=(window._hCompVersHS[semKey]||0)+hCompVersHS;
+    } else {
+      // Semaine normale ou début de semaine à cheval : calcul standard
+      const hSupSem=Math.max(0,hSem-seuilSup);
+      const hCompSem=Math.max(0,Math.min(hSem,seuilSup)-hSeuilComp);
       hSup+=hSupSem;
-      if(hPrecMois===0){
-        // Semaine complète : maj HC applicable ce mois
-        hComp-=hSupSem;
-        if(hComp<0) hComp=0;
-        hCompMaj+=hComp; // hComp après soustraction des HS pour cette semaine
-      }
-      // Si fin de semaine à cheval (hPrecMois>0) : pas de maj HC ce mois
+      hComp-=hSupSem;
+      if(hComp<0) hComp=0;
+      hCompMaj+=Math.max(0,hComp);
     }
-    // Si début de semaine à cheval : pas de majorations ce mois
   });
   const hMoyParJour=nbJoursMoisContrat>0?hMensu/nbJoursMoisContrat:hMensu/20;
   if(hAbs>0&&hTheoriques>0){
@@ -4864,7 +4869,12 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // ── Majorations (surplus dû aux taux) ──
   const majCompPct=majComp; // déjà en décimal
   const montantMajComp=parseFloat((hCompMaj*majCompPct*txNet).toFixed(2));
-  const montantMajSup=parseFloat((hSup*majSup*txNet).toFixed(2));
+  // Déduire la maj HC déjà payée le mois précédent pour les heures HC devenues HS
+  const hCompVersHSTotal=Object.values(window._hCompVersHS||{}).reduce((t,v)=>t+v,0);
+  window._hCompVersHS={}; // reset pour le prochain calcul
+  const montantMajSupBrut=parseFloat((hSup*majSup*txNet).toFixed(2));
+  const montantMajCompDejaPayee=parseFloat((hCompVersHSTotal*majCompPct*txNet).toFixed(2));
+  const montantMajSup=parseFloat(Math.max(0,montantMajSupBrut-montantMajCompDejaPayee).toFixed(2));
   const montantMajFerieNP=parseFloat((hMajFerie*majFeriePct*txNet).toFixed(2));
   const montantMajFeriePrevu2=parseFloat((hMajFeriePrevu*majFeriePct*txNet).toFixed(2));
   const montantMajRepos=parseFloat((hMajRepos*majReposPct*txNet).toFixed(2));
