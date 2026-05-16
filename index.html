@@ -2412,9 +2412,12 @@ const statutPrevuJ=getStatutPrevu(c,j);
         ?`<button onclick="confirmerHeuresPrevues(${contratId},'${key}',${idx})"
             style="width:20px;height:36px;background:#3a6b4a;color:#fff;border:none;border-radius:3px;font-size:12px;cursor:pointer;margin-left:3px;flex-shrink:0"
             title="Confirmer les heures pr\u00E9vues">\u2713</button>`:'';
+      const estSemaineOff=agendaMois&&agendaMois.semaines&&agendaMois.semaines[j.semKey]==='off';
+      const estCongesJour=['conges-acq','conges-anticipe','conges-non','conges-am'].includes(j.statut||statutPrevuJ);
+      const couleurPrev=(estSemaineOff||estCongesJour)?'transparent':'var(--tx)';
       prevuCell=`<td style="padding:3px 4px;font-size:12px;color:var(--tx);white-space:nowrap">
         <div style="display:flex;align-items:center">
-          <div>${j.heureDebPrev||'\u2014'}<br>${j.heureFinPrev||'\u2014'}</div>
+          <div style="color:${couleurPrev}">${j.heureDebPrev||'\u2014'}<br>${j.heureFinPrev||'\u2014'}</div>
           ${cocheVerte}
         </div>
       </td>`;
@@ -3518,6 +3521,23 @@ function majFicheRepas(contratId,key,idx,ri,checked){
 function validerFiche(contratId,key){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c||!c.fiches||!c.fiches[key])return;
+  // Vérifier que l'agenda est pointé pour les contrats qui en ont besoin (fixe 46 sem, sem)
+  if(c.tc!=='52'&&c.tc!=='occ'&&c.th!=='plan'){
+    const sourceV=getVersionActive(c,new Date(key+'-01'));
+    const agendasV=sourceV.agendas||c.agendas||[];
+    const [ky,km]=key.split('-').map(Number);
+    const debutMoisV=new Date(ky,km-1,1);
+    const finMoisV=new Date(ky,km,0);
+    const agV=agendasV.find(ag=>new Date(ag.dateDebut)<=finMoisV&&new Date(ag.dateFin)>=debutMoisV);
+    if(agV){
+      const semDuMois=new Set(c.fiches[key].jours.map(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))));
+      const aSemainePointee=[...semDuMois].some(sk=>agV.semaines&&agV.semaines[sk]);
+      if(!aSemainePointee){
+        toast('⚠ L\'agenda n\'est pas pointé pour ce mois — veuillez pointer les semaines avant de valider');
+        return;
+      }
+    }
+  }
   // Détecter si c'est la dernière feuille (rupture confirmée + mois de fin)
   let msgConfirm='Cette feuille ne pourra plus être modifiée ensuite. Confirmer la validation ?';
   if(c.rupture&&c.rupture.confirmee&&!c.archive){
@@ -4663,17 +4683,6 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const prevusHC=getHeuresPrevues(c,new Date(j.date),sourceActif);
         if(prevusHC.debut&&prevusHC.fin){
           hPrev=(toM(prevusHC.fin)-toM(prevusHC.debut))/60;
-        } else if(isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))){
-          // CORRECTION : semaine 'off' dans hPrev pour _horsContratAvenant
-          const jourIdxF=j.jourSemaine===0?6:j.jourSemaine-1;
-          if(sourceActif.th==='fixe'&&sourceActif.joursFixe&&sourceActif.joursFixe[jourIdxF]){
-            const jf=sourceActif.joursFixe[jourIdxF];
-            hPrev=jf&&jf.d&&jf.f?(toM(jf.f)-toM(jf.d))/60:0;
-          } else if(sourceActif.th==='sem'&&sourceActif.semTypes){
-            hPrev=(sourceActif.hMensu||0)*12/(sourceActif.nbSem||46)/joursMaxMoyen;
-          } else {
-            hPrev=0;
-          }
         } else {
           hPrev=0;
         }
@@ -4734,18 +4743,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           }
         }
       } else if(c.th==='fixe'||c.th==='sem'){
-        // CORRECTION : semaine 'off' pour contrats fixe/sem dans hPrev
         const semKeyHCF=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
         if(isAbsenceEmployeur(agendaMois,semKeyHCF)){
-          const jourIdxF=j.jourSemaine===0?6:j.jourSemaine-1;
-          if(sourceActif.th==='fixe'&&sourceActif.joursFixe&&sourceActif.joursFixe[jourIdxF]){
-            const jf=sourceActif.joursFixe[jourIdxF];
-            hPrev=jf&&jf.d&&jf.f?(toM(jf.f)-toM(jf.d))/60:0;
-          } else if(sourceActif.th==='sem'&&sourceActif.semTypes){
-            hPrev=(sourceActif.hMensu||0)*12/(sourceActif.nbSem||46)/joursMaxMoyen;
-          } else {
-            hPrev=0;
-          }
+          // Semaine off : toutes les heures réelles comptent en HC, pas de seuil
+          hPrev=0;
         } else {
           hPrev=hMensu/(nbJoursMoisContrat||20);
         }
