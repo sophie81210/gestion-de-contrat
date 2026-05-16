@@ -3521,20 +3521,38 @@ function majFicheRepas(contratId,key,idx,ri,checked){
 function validerFiche(contratId,key){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c||!c.fiches||!c.fiches[key])return;
-  // Vérifier que l'agenda est pointé pour les contrats qui en ont besoin (fixe 46 sem, sem)
-  if(c.tc!=='52'&&c.tc!=='occ'&&c.th!=='plan'){
-    const sourceV=getVersionActive(c,new Date(key+'-01'));
-    const agendasV=sourceV.agendas||c.agendas||[];
-    const [ky,km]=key.split('-').map(Number);
-    const debutMoisV=new Date(ky,km-1,1);
-    const finMoisV=new Date(ky,km,0);
-    const agV=agendasV.find(ag=>new Date(ag.dateDebut)<=finMoisV&&new Date(ag.dateFin)>=debutMoisV);
-    if(agV){
-      const semDuMois=new Set(c.fiches[key].jours.map(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))));
-      const aSemainePointee=[...semDuMois].some(sk=>agV.semaines&&agV.semaines[sk]);
-      if(!aSemainePointee){
-        toast('⚠ L\'agenda n\'est pas pointé pour ce mois — veuillez pointer les semaines avant de valider');
-        return;
+  // Vérifier que l'agenda est pointé pour les contrats qui en ont besoin
+  if(c.tc!=='52'||c.th==='plan'||c.th==='sem'){
+    if(c.tc==='52'&&(c.th==='fixe'||c.th==='min')) {} // 52 fixe/min : pas d'agenda
+    else {
+      const sourceV=getVersionActive(c,new Date(key+'-01'));
+      const agendasV=sourceV.agendas||c.agendas||[];
+      const [ky,km]=key.split('-').map(Number);
+      const debutMoisV=new Date(ky,km-1,1);
+      const finMoisV=new Date(ky,km,0);
+      const agV=agendasV.find(ag=>new Date(ag.dateDebut)<=finMoisV&&new Date(ag.dateFin)>=debutMoisV);
+      if(agV){
+        // Calculer les semaines violettes du mois
+        const semDuMois=[...new Set(c.fiches[key].jours.map(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))))];
+        // Semaines violettes = semaines avec beaucoup de congés/fériés
+        const semsCongesScoreV=semDuMois.map(sk=>{
+          let nb=0;
+          // Compter les jours posés/fériés dans cette semaine
+          c.fiches[key].jours.forEach(j=>{
+            if(getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))!==sk) return;
+            if(S.congesAM) Object.values(S.congesAM).forEach(cgAm=>{if(cgAm?.jours?.[j.date]==='pose') nb++;});
+            if(isFerie(j.date,c)) nb++;
+          });
+          return {sk,nb};
+        }).filter(x=>x.nb>=5);
+        semsCongesScoreV.sort((a,b)=>b.nb-a.nb);
+        const semsViolettes=new Set(semsCongesScoreV.slice(0,5).map(x=>x.sk));
+        // Vérifier que toutes les semaines non violettes sont pointées
+        const semNonPointee=semDuMois.find(sk=>!semsViolettes.has(sk)&&!agV.semaines?.[sk]);
+        if(semNonPointee){
+          toast('⚠ L\'agenda n\'est pas complet — toutes les semaines doivent être pointées avant de valider');
+          return;
+        }
       }
     }
   }
