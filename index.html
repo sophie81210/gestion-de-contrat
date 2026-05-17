@@ -4392,24 +4392,23 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const semJoursCptAv={}; // compteur séparé pour jours _horsContratAvenant
   // Pour plan min/var : précalculer les jours hors-contrat à exclure de hTheoriques
   const joursHCExclus=new Set();
-  // Compte les jours cochés au contrat sur toute la semaine ISO (7 jours)
-  function jourscochesSemaine(semNum, src, annee){
+  // Compte les jours cochés dans un volume donné sur toute la semaine ISO
+  function jourscochesDansVol(semNum, vol, annee){
     let count=0;
-    const d=getDateFromSemISO(semNum, annee);
+    const d=getDateFromSemISO(semNum,annee);
     if(!d) return 0;
     for(let i=0;i<7;i++){
       const cur=new Date(d); cur.setDate(d.getDate()+i);
       const idx=cur.getDay()===0?6:cur.getDay()-1;
-      if(src.planType==='min') { if(src.joursMin&&src.joursMin[idx]) count++; }
-      else if(src.planType==='var'&&src.planVar) { if(src.planVar.some(v=>v.jours&&v.jours[idx])) count++; }
+      if(vol&&vol.jours&&vol.jours[idx]) count++;
     }
     return count;
   }
-  // Compte les jours cochés au contrat dans la partie hors-contrat d'une semaine à cheval
-  // limiteDate = c.dateDeb (on compte avant) ou dateAvenant (on compte après), sens='avant'|'apres'
-  function joursCochesHC(semNum, limiteDate, sens, src, annee){
+  // Compte les jours cochés dans un volume dans la partie HC d'une semaine à cheval
+  // limiteDate = c.dateDeb (sens='avant') ou dateAvenant (sens='apres')
+  function joursCochesHCDansVol(semNum, limiteDate, sens, vol, annee){
     let count=0;
-    const d=getDateFromSemISO(semNum, annee);
+    const d=getDateFromSemISO(semNum,annee);
     if(!d) return 0;
     for(let i=0;i<7;i++){
       const cur=new Date(d); cur.setDate(d.getDate()+i);
@@ -4417,66 +4416,76 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const ok=sens==='avant'?curStr<limiteDate:curStr>=limiteDate;
       if(!ok) continue;
       const idx=cur.getDay()===0?6:cur.getDay()-1;
-      if(src.planType==='min') { if(src.joursMin&&src.joursMin[idx]) count++; }
-      else if(src.planType==='var'&&src.planVar) { if(src.planVar.some(v=>v.jours&&v.jours[idx])) count++; }
+      if(vol&&vol.jours&&vol.jours[idx]) count++;
     }
     return count;
+  }
+  // Détecte si une semaine ISO est à cheval sur une date limite (a des jours des deux côtés)
+  function estSemaineChevalSur(semNum, limiteDate, annee){
+    const d=getDateFromSemISO(semNum,annee);
+    if(!d) return false;
+    let avant=false, apres=false;
+    for(let i=0;i<7;i++){
+      const cur=new Date(d); cur.setDate(d.getDate()+i);
+      const curStr=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
+      if(curStr<limiteDate) avant=true; else apres=true;
+    }
+    return avant&&apres;
   }
   if(c.th==='plan'&&(c.planType==='min'||c.planType==='var')){
     const hAbsJoursCptTh={};
     fiche.jours.forEach(j=>{
-      // Inclure aussi les jours avant c.dateDeb (non marqués hors-contrat mais hors période)
       const estHorsContrat=(j.statut||'')==='hors-contrat';
       const estAvantDebut=!!(c.dateDeb&&j.date<c.dateDeb);
       if(!estHorsContrat&&!estAvantDebut) return;
-      const jourIdxTh2=j.jourSemaine===0?6:j.jourSemaine-1;
       const semNumTh=getSemISO(j.date);
+      const anneeJ=getSemAnnee(j.date);
+      const agKeyTh=getKeyAgenda(semNumTh,anneeJ);
       const srcTh=getVersionActive(c,new Date(j.date));
-      const jourPossibleTh=srcTh.planType==='var'?srcTh.planVar?.some(v=>v.jours&&v.jours[jourIdxTh2]):(srcTh.joursMin&&srcTh.joursMin[jourIdxTh2]);
-      if(!jourPossibleTh){joursHCExclus.add(j.date);return;}
-
-      // Déterminer si c'est une semaine à cheval (début contrat ou avenant)
-      const estDebutContrat=estAvantDebut||(!j._horsContratAvenant&&j.date<(c.dateDeb||''));
-      const estChevalAvenant=j._horsContratAvenant;
-      const joursDesSemTh=fiche.jours.filter(jj=>getSemISO(jj.date)===semNumTh);
-      const aDesJoursDansPeriodeTh=joursDesSemTh.some(jj=>!jj._horsContratAvenant);
-      const estFinPeriode2=periodeAv==='avant'&&j._horsContratAvenant&&aDesJoursDansPeriodeTh;
-
-      const estChevalSem=estDebutContrat||estChevalAvenant;
-
+      const jourIdxTh2=j.jourSemaine===0?6:j.jourSemaine-1;
+      // Trouver le volume pointé pour cette semaine
+      const typeSemTh=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKeyTh];
+      let volTh=null;
+      if(srcTh.planType==='var'&&srcTh.planVar) volTh=typeSemTh?srcTh.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemTh):null;
+      // Plan min : construire un objet "volume" uniforme
+      const joursMinTh=srcTh.joursMin||c.joursMin;
+      const jMaxMinTh=srcTh.jMaxMin||c.jMaxMin||1;
+      const hMinTh=srcTh.hMin||c.hMin||0;
+      if(srcTh.planType==='min') volTh={jours:joursMinTh,j:jMaxMinTh,h:hMinTh};
+      // Vérifier si ce jour est coché dans le volume
+      if(!volTh||!volTh.jours||!volTh.jours[jourIdxTh2]){joursHCExclus.add(j.date);return;}
+      // Semaine off : exclure des hTheoriques (sauf si hors-contrat ou arrêt géré ailleurs)
+      if(typeSemTh==='off'&&!estAvantDebut){joursHCExclus.add(j.date);return;}
       let deduitTh=false;
-      if(estChevalSem&&(estDebutContrat||estFinPeriode2)){
-        // Semaine à cheval : formule vol / jours_cochés_semaine × jours_hors_contrat_cochés
-        const anneeJ=getSemAnnee(j.date);
-        const totalCochesSem=jourscochesSemaine(semNumTh,srcTh,anneeJ);
-        let limiteDate, sens;
-        if(estDebutContrat){
-          limiteDate=c.dateDeb; sens='avant'; // jours avant dateDeb
-        } else {
-          // estFinPeriode2 : avenant période 'avant', hors-contrat = après dateAvenant
-          limiteDate=dateAvenantStr; sens='apres';
+      // Semaine à cheval sur dateDeb ?
+      if(c.dateDeb&&estSemaineChevalSur(semNumTh,c.dateDeb,anneeJ)&&(estAvantDebut||estHorsContrat)){
+        const cochesHC=joursCochesHCDansVol(semNumTh,c.dateDeb,'avant',volTh,anneeJ);
+        if(!hAbsJoursCptTh[semNumTh]) hAbsJoursCptTh[semNumTh]=0;
+        if(cochesHC>0&&hAbsJoursCptTh[semNumTh]<cochesHC){
+          deduitTh=true; hAbsJoursCptTh[semNumTh]++;
         }
-        const cochesHC=joursCochesHC(semNumTh,limiteDate,sens,srcTh,anneeJ);
-        // hTheoriques portion HC = vol_semaine / totalCochesSem × cochesHC
-        // On déduit ce jour si il est dans la portion HC cochée
-        // On compte jusqu'à cochesHC jours déduits pour cette semaine
-        if(totalCochesSem>0&&cochesHC>0){
+      } else if(dateAvenantStr&&j._horsContratAvenant){
+        // Semaine à cheval sur avenant
+        const joursDesSemTh=fiche.jours.filter(jj=>getSemISO(jj.date)===semNumTh);
+        const aDesJoursDansPeriodeTh=joursDesSemTh.some(jj=>!jj._horsContratAvenant);
+        const estFinPeriode2=periodeAv==='avant'&&aDesJoursDansPeriodeTh;
+        if(estFinPeriode2){
+          const cochesHC=joursCochesHCDansVol(semNumTh,dateAvenantStr,'apres',volTh,anneeJ);
           if(!hAbsJoursCptTh[semNumTh]) hAbsJoursCptTh[semNumTh]=0;
-          if(hAbsJoursCptTh[semNumTh]<cochesHC){
+          if(cochesHC>0&&hAbsJoursCptTh[semNumTh]<cochesHC){
+            deduitTh=true; hAbsJoursCptTh[semNumTh]++;
+          }
+        } else {
+          // Semaine entièrement hors-contrat avenant : jMax du volume
+          if(!hAbsJoursCptTh[semNumTh]) hAbsJoursCptTh[semNumTh]=0;
+          if(hAbsJoursCptTh[semNumTh]<(volTh.j||1)){
             deduitTh=true; hAbsJoursCptTh[semNumTh]++;
           }
         }
       } else {
-        // Semaine normale hors-contrat (semaine 'off' ou hors période complète)
-        // Logique jours max : on déduit jusqu'à jMax jours par semaine
-        let jMaxTh=srcTh.jMaxMin||1;
-        if(srcTh.planType==='var'&&srcTh.planVar){
-          const tJ=srcTh.planVar.reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
-          const tS=srcTh.planVar.reduce((t,v)=>t+(v.s||0),0);
-          jMaxTh=tS>0?tJ/tS:jMaxTh;
-        }
+        // Semaine entièrement hors-contrat : jMax du volume
         if(!hAbsJoursCptTh[semNumTh]) hAbsJoursCptTh[semNumTh]=0;
-        if(hAbsJoursCptTh[semNumTh]<Math.round(jMaxTh)){
+        if(hAbsJoursCptTh[semNumTh]<(volTh.j||1)){
           deduitTh=true; hAbsJoursCptTh[semNumTh]++;
         }
       }
@@ -4543,12 +4552,15 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       // Semaine 'off' = absence employeur, déjà déduite de la mensualisation → pas de contribution aux hTheoriques
       if(typeSemTh&&typeSemTh!=='off'){
         if(jourCoché){
-          // Semaine à cheval (début/fin contrat) : vol / total_cochés_semaine
-          const estChevalMin=j.date<(c.dateDeb||'')||(j._horsContratAvenant);
+          if(joursHCExclus.has(j.date)) return;
+          // Semaine à cheval sur les bords du mois : vol / jours_cochés_dans_vol_sur_semaine
+          const anneeJ=getSemAnnee(j.date);
+          const debutMoisStr=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0')+'-01';
+          const estChevalMin=estSemaineChevalSur(semKeyTh,debutMoisStr,anneeJ)||
+            estSemaineChevalSur(semKeyTh,new Date(fiche.annee,fiche.mois+1,1).toISOString().slice(0,10),anneeJ);
           if(estChevalMin){
-            const srcMin={planType:'min',joursMin:joursMinTh,jMaxMin:jMaxMinTh};
-            const anneeJ=getSemAnnee(j.date);
-            const totalCochesMin=jourscochesSemaine(semKeyTh,srcMin,anneeJ)||jMaxMinTh;
+            const volMin={jours:joursMinTh,j:jMaxMinTh,h:hMinTh};
+            const totalCochesMin=jourscochesDansVol(semKeyTh,volMin,anneeJ)||jMaxMinTh;
             hTheoriques+=(hMinTh/totalCochesMin)*60;
           } else {
             if(!semJoursCpt[semKeyTh]) semJoursCpt[semKeyTh]=0;
@@ -4570,12 +4582,14 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const volTh=typeSemTh?planVarTh.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemTh):null;
       const jourIdxTh=j.jourSemaine===0?6:j.jourSemaine-1;
       if(volTh&&volTh.jours&&volTh.jours[jourIdxTh]){
-        // Semaine à cheval (début/fin contrat ou avenant) : vol / total_cochés_semaine
-        const estChevalVar=j.date<(c.dateDeb||'')||(j._horsContratAvenant);
-        if(estChevalVar){
-          const srcVar={planType:'var',planVar:planVarTh};
-          const anneeJ=getSemAnnee(j.date);
-          const totalCochesVar=jourscochesSemaine(semKeyTh,srcVar,anneeJ)||(volTh.j||1);
+        // Semaine à cheval sur les bords du mois : vol / jours_cochés_dans_vol_sur_semaine
+        const debutMoisStr=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0')+'-01';
+        const finMoisStr=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0')+'-'+String(new Date(fiche.annee,fiche.mois+1,0).getDate()).padStart(2,'0');
+        const anneeJ=getSemAnnee(j.date);
+        const estChevalDebut=estSemaineChevalSur(semKeyTh,debutMoisStr,anneeJ);
+        const estChevalFin=!estChevalDebut&&estSemaineChevalSur(semKeyTh,new Date(fiche.annee,fiche.mois+1,1).toISOString().slice(0,10),anneeJ);
+        if(estChevalDebut||estChevalFin){
+          const totalCochesVar=jourscochesDansVol(semKeyTh,volTh,anneeJ)||(volTh.j||1);
           hTheoriques+=(volTh.h/totalCochesVar)*60;
         } else {
           if(!semJoursCpt[semKeyTh]) semJoursCpt[semKeyTh]=0;
@@ -4872,31 +4886,27 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         if(!volHC){
           const jourPossibleHC=planTypeActif==='var'?planVarActif.some(v=>v.jours&&v.jours[jourIdxHC]):(joursMinActif&&joursMinActif[jourIdxHC]);
           if(jourPossibleHC){
-            // Déterminer si semaine à cheval (début contrat ou avenant)
             const semNumHC=getSemISO(j.date);
+            const anneeJ=getSemAnnee(j.date);
             const estDebutContratHC=j.date<(c.dateDeb||'');
             const joursDesSemHC=fiche.jours.filter(jj=>getSemISO(jj.date)===semNumHC);
             const aDesJoursDansPeriode=joursDesSemHC.some(jj=>!jj._horsContratAvenant);
             const estFinPeriodeHC=periodeAv==='avant'&&j._horsContratAvenant&&aDesJoursDansPeriode;
-
-            if(estDebutContratHC||estFinPeriodeHC){
-              // Semaine à cheval : vol / jours_cochés_semaine × jours_hors_contrat_cochés
-              const srcHCCheval={planType:planTypeActif,planVar:planVarActif,joursMin:joursMinActif};
-              const anneeJ=getSemAnnee(j.date);
-              const totalCochesSemHC=jourscochesSemaine(semNumHC,srcHCCheval,anneeJ);
-              let limiteDateHC, sensHC;
-              if(estDebutContratHC){
-                limiteDateHC=c.dateDeb; sensHC='avant';
-              } else {
-                limiteDateHC=dateAvenantStr; sensHC='apres';
-              }
-              const cochesHCCount=joursCochesHC(semNumHC,limiteDateHC,sensHC,srcHCCheval,anneeJ);
-              if(totalCochesSemHC>0&&cochesHCCount>0){
-                if(!hAbsJoursCpt[semKeyHC]) hAbsJoursCpt[semKeyHC]=0;
-                if(hAbsJoursCpt[semKeyHC]<cochesHCCount){
-                  horsContratDeduit=true;
-                  hAbsJoursCpt[semKeyHC]++;
-                }
+            // Construire un objet volume uniforme pour plan min
+            let volHCUnif=null;
+            if(planTypeActif==='min') volHCUnif={jours:joursMinActif,j:jMaxMinActif||1,h:sourceActif.hMin||c.hMin||0};
+            const limiteCheval=estDebutContratHC?c.dateDeb:dateAvenantStr;
+            const estChevalHC=!!(limiteCheval&&estSemaineChevalSur(semNumHC,limiteCheval,anneeJ)&&(estDebutContratHC||estFinPeriodeHC));
+            if(estChevalHC){
+              // Semaine à cheval : limiter aux jours cochés HC dans ce volume
+              const sensHC=estDebutContratHC?'avant':'apres';
+              const cochesHCCount=volHCUnif
+                ?joursCochesHCDansVol(semNumHC,limiteCheval,sensHC,volHCUnif,anneeJ)
+                :joursCochesHCDansVol(semNumHC,limiteCheval,sensHC,planVarActif.find(v=>v.jours&&v.jours[jourIdxHC]),anneeJ);
+              if(!hAbsJoursCpt[semKeyHC]) hAbsJoursCpt[semKeyHC]=0;
+              if(cochesHCCount>0&&hAbsJoursCpt[semKeyHC]<cochesHCCount){
+                horsContratDeduit=true;
+                hAbsJoursCpt[semKeyHC]++;
               }
             } else {
               // Semaine normale hors-contrat : logique jours max
@@ -5126,22 +5136,12 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const jourPossible=c.joursMin&&c.joursMin[jourIdx2];
         if(jourPossible){
           const jMaxVol=sourceActif.jMaxMin||4;
-          const hMinVol=sourceActif.hMin||0;
-          // Semaine à cheval : vol / total_cochés_semaine
-          const estChevalAbsMin=j.date<(c.dateDeb||'')||(j._horsContratAvenant);
-          if(estChevalAbsMin){
-            const srcAbsMin={planType:'min',joursMin:sourceActif.joursMin||c.joursMin,jMaxMin:jMaxVol};
-            const anneeJ=getSemAnnee(j.date);
-            const totalCochesAbsMin=jourscochesSemaine(semKeyAbs,srcAbsMin,anneeJ)||jMaxVol;
-            hPrev=hMinVol/totalCochesAbsMin;
+          if(!hAbsDedJoursCpt2[semKeyAbs]) hAbsDedJoursCpt2[semKeyAbs]=0;
+          if(hAbsDedJoursCpt2[semKeyAbs]<jMaxVol){
+            hPrev=(sourceActif.hMin||0)/jMaxVol;
+            hAbsDedJoursCpt2[semKeyAbs]++;
           } else {
-            if(!hAbsDedJoursCpt2[semKeyAbs]) hAbsDedJoursCpt2[semKeyAbs]=0;
-            if(hAbsDedJoursCpt2[semKeyAbs]<jMaxVol){
-              hPrev=hMinVol/jMaxVol;
-              hAbsDedJoursCpt2[semKeyAbs]++;
-            } else {
-              hPrev=0;
-            }
+            hPrev=0;
           }
         } else {
           hPrev=0;
@@ -5166,22 +5166,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           hPrev=0;
         } else if(!jourPossible){hPrev=0;}
         else{
-          // Semaine à cheval : vol / total_cochés_semaine
-          const estChevalAbsVar=j.date<(c.dateDeb||'')||(j._horsContratAvenant);
-          if(estChevalAbsVar){
-            const srcAbsVar={planType:'var',planVar:c.planVar};
-            const anneeJ=getSemAnnee(j.date);
-            const totalCochesAbsVar=jourscochesSemaine(semKeyAbs,srcAbsVar,anneeJ)||(volSem.j||1);
-            hPrev=hVolSem>0?hVolSem/totalCochesAbsVar:0;
+          const jMaxVol=volSem.j||5;
+          if(!hAbsDedJoursCpt2[semKeyAbs]) hAbsDedJoursCpt2[semKeyAbs]=0;
+          if(hAbsDedJoursCpt2[semKeyAbs]<jMaxVol){
+            hPrev=hVolSem>0?hVolSem/jMaxVol:0;
+            hAbsDedJoursCpt2[semKeyAbs]++;
           } else {
-            const jMaxVol=volSem.j||5;
-            if(!hAbsDedJoursCpt2[semKeyAbs]) hAbsDedJoursCpt2[semKeyAbs]=0;
-            if(hAbsDedJoursCpt2[semKeyAbs]<jMaxVol){
-              hPrev=hVolSem>0?hVolSem/jMaxVol:0;
-              hAbsDedJoursCpt2[semKeyAbs]++;
-            } else {
-              hPrev=0;
-            }
+            hPrev=0;
           }
         }
       } else if(c.th==='fixe'||c.th==='sem'){
