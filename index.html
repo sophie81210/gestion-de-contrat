@@ -4287,11 +4287,30 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   function compterJoursPossibles(jours, src){
     if(!src) return 0;
     return jours.filter(j=>{
-      const jourIdx=j.jourSemaine===0?6:j.jourSemaine-1;
+      const jourIdx=(j.jourSemaine!==undefined?j.jourSemaine:new Date(j.date).getDay())===0?6:(j.jourSemaine!==undefined?j.jourSemaine:new Date(j.date).getDay())-1;
       if(src.planType==='min') return !!(src.joursMin&&src.joursMin[jourIdx]);
       if(src.planType==='var'&&src.planVar) return src.planVar.some(v=>v.jours&&v.jours[jourIdx]);
       return false;
     }).length;
+  }
+
+  // Compter les jours possibles dans une semaine ISO via le calendrier (sans fiche)
+  function joursCalendairePossibles(semNum, avantDate, src){
+    if(!src) return 0;
+    let count=0;
+    // Trouver le lundi de la semaine ISO
+    const d=getDateFromSemISO(semNum, getSemAnnee(avantDate));
+    if(!d) return 0;
+    for(let i=0;i<7;i++){
+      const cur=new Date(d);
+      cur.setDate(d.getDate()+i);
+      const curStr=cur.toISOString().slice(0,10);
+      if(curStr>=avantDate) break;
+      const jourIdx=cur.getDay()===0?6:cur.getDay()-1;
+      if(src.planType==='min'&&src.joursMin&&src.joursMin[jourIdx]) count++;
+      else if(src.planType==='var'&&src.planVar&&src.planVar.some(v=>v.jours&&v.jours[jourIdx])) count++;
+    }
+    return count;
   }
   if(fichePrec){
     const semMoisCourant=new Set(fiche.jours.map(j=>getSemISO(j.date)));
@@ -4370,9 +4389,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const estDebutMois2=j.date<(c.dateDeb||'');
       const estFinPeriode2=periodeAv==='avant'&&j._horsContratAvenant;
       let deduitTh=false;
-      if(estDebutMois2&&fichePrec&&c.dateDeb){
-        const joursPrec2=fichePrec.jours.filter(jj=>getSemISO(jj.date)===semNumTh);
-        const possPrec2=compterJoursPossibles(joursPrec2,srcTh);
+      if(estDebutMois2&&c.dateDeb){
+        const possPrec2=fichePrec
+          ?compterJoursPossibles(fichePrec.jours.filter(jj=>getSemISO(jj.date)===semNumTh),srcTh)
+          :joursCalendairePossibles(semNumTh,c.dateDeb,srcTh);
         const aDeduireTh=Math.max(0,Math.round(jMaxTh)-possPrec2);
         if(!hAbsJoursCptTh[semNumTh]) hAbsJoursCptTh[semNumTh]=0;
         if(possPrec2<Math.round(jMaxTh)&&hAbsJoursCptTh[semNumTh]<aDeduireTh){
@@ -4799,29 +4819,16 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             const estFinPeriode=periodeAv==='avant'&&j._horsContratAvenant;
 
             if(estDebutMois&&c.dateDeb){
-              // Début de contrat : vérifier si mois précédent peut compléter
-              const estPremiereSemContrat=fichePrec===undefined||fichePrec===null;
-              if(!estPremiereSemContrat&&fichePrec){
-                const joursPrec=fichePrec.jours.filter(jj=>getSemISO(jj.date)===semNumHC);
-                const joursPossiblesPrec=compterJoursPossibles(joursPrec, sourceActif);
-                if(joursPossiblesPrec>=Math.round(jMaxMoy)){
-                  // Le mois précédent peut compléter → pas de déduction
-                  // horsContratDeduit reste false
-                  if(!hAbsJoursCpt[semKeyHC]) hAbsJoursCpt[semKeyHC]=0;
-                  // Ne pas incrémenter, ne pas déduire
-                } else {
-                  // Déduire la différence seulement
-                  const aDeduire=Math.max(0,Math.round(jMaxMoy)-joursPossiblesPrec);
-                  if(!hAbsJoursCpt[semKeyHC]) hAbsJoursCpt[semKeyHC]=0;
-                  if(hAbsJoursCpt[semKeyHC]<aDeduire){
-                    horsContratDeduit=true;
-                    hAbsJoursCpt[semKeyHC]++;
-                  }
-                }
+              // Début de contrat : vérifier si mois précédent peut compléter via calendrier
+              const joursPossiblesPrec=fichePrec
+                ?compterJoursPossibles(fichePrec.jours.filter(jj=>getSemISO(jj.date)===semNumHC),sourceActif)
+                :joursCalendairePossibles(semNumHC,c.dateDeb,sourceActif);
+              if(joursPossiblesPrec>=Math.round(jMaxMoy)){
+                // Le mois précédent peut compléter → pas de déduction
               } else {
-                // Première semaine du contrat : déduction normale
+                const aDeduire=Math.max(0,Math.round(jMaxMoy)-joursPossiblesPrec);
                 if(!hAbsJoursCpt[semKeyHC]) hAbsJoursCpt[semKeyHC]=0;
-                if(hAbsJoursCpt[semKeyHC]<Math.round(jMaxMoy)){
+                if(hAbsJoursCpt[semKeyHC]<aDeduire){
                   horsContratDeduit=true;
                   hAbsJoursCpt[semKeyHC]++;
                 }
