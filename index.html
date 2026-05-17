@@ -2395,7 +2395,39 @@ function ouvrirFiche(contratId,key){
     return dateAv>debutMois&&dateAv<=finMois;
   });
 
-  const lignes=joursSemaines.map((j,idx)=>{
+  let recap, recap2, dateDebAv;
+  if(avenantDuMois){
+    dateDebAv=avenantDuMois.dateAvenant;
+    const veille=new Date(dateDebAv);
+    veille.setDate(veille.getDate()-1);
+    const veilleStr=veille.getFullYear()+'-'+String(veille.getMonth()+1).padStart(2,'0')+'-'+String(veille.getDate()).padStart(2,'0');
+    const finMoisStr=parseInt(annee)+'-'+String(mois+1).padStart(2,'0')+'-'+String(new Date(parseInt(annee),mois+1,0).getDate()).padStart(2,'0');
+    const debutMoisStr=annee+'-'+String(mois+1).padStart(2,'0')+'-01';
+   recap=calcRecapFiche(c,fiche,debutMoisStr,veilleStr,debutMoisStr,dateDebAv,'avant',fiche);
+    recap2=calcRecapFiche(c,fiche,dateDebAv,finMoisStr,dateDebAv,dateDebAv,'apres',fiche);
+  } else {
+    recap=calcRecapFiche(c,fiche);
+  }
+  // Remplir hCompSemaine pour plan min/var depuis hCompParSemaine de calcRecapFiche
+  if(isPlanVar){
+    const recapPourComp=recap2||recap;
+    if(recapPourComp&&recapPourComp.hCompParSemaine){
+      // hCompParSemaine utilise getSemISO (numéro semaine ISO)
+      // j.semKey utilise getKeyAgenda (format "2024-S11")
+      // Construire un mapping numéro → semKey via les jours de la fiche
+      const semNumToKey={};
+      fiche.jours.forEach(j=>{
+        const num=String(getSemISO(j.date));
+        if(!semNumToKey[num]) semNumToKey[num]=j.semKey||getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
+      });
+      Object.entries(recapPourComp.hCompParSemaine).forEach(([num,val])=>{
+        const sk=semNumToKey[String(num)];
+        if(sk) hCompSemaine[sk]=(hCompSemaine[sk]||0)+val;
+      });
+    }
+  }
+
+    const lignes=joursSemaines.map((j,idx)=>{
     const numJour=parseInt(j.date.split('-')[2]);
     const nomJour=JOURS_ABR[j.jourSemaine===0?6:j.jourSemaine-1];
     const statutPrevu=j.statutPrevu||getStatutPrevu(c,j);
@@ -2590,37 +2622,6 @@ const statutPrevuJ=getStatutPrevu(c,j);
   const afficherCaseAnticipe=estPremierMoisPose;
 
   // Récap
-  let recap, recap2, dateDebAv;
-  if(avenantDuMois){
-    dateDebAv=avenantDuMois.dateAvenant;
-    const veille=new Date(dateDebAv);
-    veille.setDate(veille.getDate()-1);
-    const veilleStr=veille.getFullYear()+'-'+String(veille.getMonth()+1).padStart(2,'0')+'-'+String(veille.getDate()).padStart(2,'0');
-    const finMoisStr=parseInt(annee)+'-'+String(mois+1).padStart(2,'0')+'-'+String(new Date(parseInt(annee),mois+1,0).getDate()).padStart(2,'0');
-    const debutMoisStr=annee+'-'+String(mois+1).padStart(2,'0')+'-01';
-   recap=calcRecapFiche(c,fiche,debutMoisStr,veilleStr,debutMoisStr,dateDebAv,'avant',fiche);
-    recap2=calcRecapFiche(c,fiche,dateDebAv,finMoisStr,dateDebAv,dateDebAv,'apres',fiche);
-  } else {
-    recap=calcRecapFiche(c,fiche);
-  }
-  // Remplir hCompSemaine pour plan min/var depuis hCompParSemaine de calcRecapFiche
-  if(isPlanVar){
-    const recapPourComp=recap2||recap;
-    if(recapPourComp&&recapPourComp.hCompParSemaine){
-      // hCompParSemaine utilise getSemISO (numéro semaine ISO)
-      // j.semKey utilise getKeyAgenda (format "2024-S11")
-      // Construire un mapping numéro → semKey via les jours de la fiche
-      const semNumToKey={};
-      fiche.jours.forEach(j=>{
-        const num=String(getSemISO(j.date));
-        if(!semNumToKey[num]) semNumToKey[num]=j.semKey||getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
-      });
-      Object.entries(recapPourComp.hCompParSemaine).forEach(([num,val])=>{
-        const sk=semNumToKey[String(num)];
-        if(sk) hCompSemaine[sk]=(hCompSemaine[sk]||0)+val;
-      });
-    }
-  }
   cont.innerHTML=
 
   cont.innerHTML=`
@@ -2646,6 +2647,7 @@ const statutPrevuJ=getStatutPrevu(c,j);
           <th style="padding:6px 4px;font-size:11px">Prévu</th>
           <th style="padding:6px 4px;font-size:11px">Réel</th>
           <th style="padding:6px 4px;font-size:11px">H±</th>
+          ${isPlanVar?'<th style="padding:6px 4px;font-size:11px">H± sem</th>':''}
           <th style="padding:6px 4px;font-size:11px;text-align:right">Statut</th>
         </tr></thead>
         <tbody>${lignes}</tbody>
