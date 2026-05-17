@@ -2548,16 +2548,11 @@ const statutPrevuJ=getStatutPrevu(c,j);
         </div>`
         :`<span style="font-size:11px;color:var(--tx3);font-style:italic">—</span>`}
       </td>
-      <td id="hpm-${contratId}-${key}-${idx}" style="padding:3px 4px;font-size:11px;font-weight:600">
+      ${!isPlanVar?`<td id="hpm-${contratId}-${key}-${idx}" style="padding:3px 4px;font-size:11px;font-weight:600">
         ${(()=>{
-          const estPlanVar=sourceActive.th==='plan'&&(sourceActive.planType==='var'||sourceActive.planType==='min');
           const estCongesNon46=statutActuel==='conges-non'&&c.tc!=='52';
           const estCongesNon52=statutActuel==='conges-non'&&c.tc==='52';
-          // Plan var/min : cellule individuelle toujours vide (h+- dans cellule fusionnée)
-          if(estPlanVar) return '—';
-          // Congés non acquis 46 sem : pas d'affichage en rouge
           if(estCongesNon46) return '—';
-          // Congés non acquis 52 sem : afficher 1/6 hSemMoy en rouge
           if(estCongesNon52){
             const nbSem52=parseFloat(sourceActive.nbSem||52);
             const hSemMoy52=parseFloat(sourceActive.hMensu||0)*12/nbSem52;
@@ -2566,7 +2561,6 @@ const statutPrevuJ=getStatutPrevu(c,j);
           }
           if(hComp) return '<span style="color:var(--vt)">'+hComp+'</span>';
           if(hSup) return '<span style="color:var(--vt)">'+hSup+'</span>';
-          // hDeduit : rouge si réellement déduit du salaire, noir sinon
           if(hDeduit){
             const statutsDeduits=['abs-non','abs-am','ferie-non','arret','abs-enfant','hors-contrat'];
             const estDeduit=statutsDeduits.includes(statutActuel);
@@ -2574,11 +2568,12 @@ const statutPrevuJ=getStatutPrevu(c,j);
           }
           return '—';
         })()}
-      </td>
-      ${isPlanVar&&idx===semFirst[j.semKey]?`<td rowspan="${semRowspan[j.semKey]}" style="padding:3px 4px;font-size:11px;font-weight:600;text-align:center;vertical-align:middle;border-left:1px solid var(--mb)">${(()=>{
+      </td>`:''}
+      ${idx===semFirst[j.semKey]?`<td rowspan="${semRowspan[j.semKey]}" style="padding:3px 4px;font-size:11px;font-weight:600;text-align:center;vertical-align:middle;border-left:1px solid var(--mb)">${(()=>{
+        if(!isPlanVar) return '';
         const tot=hCompSemaine[j.semKey]||0;
         return tot>0?'<span style="color:var(--vt)">+'+fmtH(Math.round(tot*60))+'</span>':'—';
-      })()}</td>`:isPlanVar?'':''}
+      })()}</td>`:''}
       <td style="padding:3px 4px;text-align:right;vertical-align:top">
         <select style="font-size:10px;padding:2px 3px;border:1px solid var(--mb);border-radius:3px;width:100%;max-width:130px;background:${bg}"
           ${fiche.valide?'disabled':`onchange="majFicheStatut(${contratId},'${key}',${idx},this.value)"`}>
@@ -2639,16 +2634,16 @@ const statutPrevuJ=getStatutPrevu(c,j);
           <col style="width:12%"><!-- Jour -->
           <col style="width:13%"><!-- Prévu -->
           <col style="width:17%"><!-- Réel -->
-          <col style="width:8%"><!-- H± individuel -->
-          ${isPlanVar?'<col style="width:8%"><!-- H± semaine -->':''}
+          ${isPlanVar?'':'<col style="width:8%"><!-- H± individuel -->'}
+          <col style="width:8%"><!-- H± semaine -->
           <col><!-- Statut : reste -->
         </colgroup>
         <thead><tr style="background:var(--mp);position:sticky;top:0">
           <th style="padding:6px 4px;text-align:left;font-size:11px">Jour</th>
           <th style="padding:6px 4px;font-size:11px">Prévu</th>
           <th style="padding:6px 4px;font-size:11px">Réel</th>
-          <th style="padding:6px 4px;font-size:11px">H±</th>
-          ${isPlanVar?'<th style="padding:6px 4px;font-size:11px">H± sem</th>':''}
+          ${isPlanVar?'':'<th style="padding:6px 4px;font-size:11px">H±</th>'}
+          <th style="padding:6px 4px;font-size:11px">H± sem</th>
           <th style="padding:6px 4px;font-size:11px;text-align:right">Statut</th>
         </tr></thead>
         <tbody>${lignes}</tbody>
@@ -4641,48 +4636,22 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const absDeduites=['abs-non','abs-am','ferie-non','abs-partielle']; // arret traité séparément
     if(statut==='hors-contrat'){
       let horsContratDeduit=false;
-      if(j._horsContratAvenant){
+      if(j._horsContratAvenant&&c.th!=='plan'){
         // Pour avenant occ→46/52 : utiliser le nouveau contrat (après avenant) pour les heures prévues
         let sourceHC=sourceActif;
         if(sourceActif.tc==='occ'&&avenantDuMois&&avenantDuMois.tc&&avenantDuMois.tc!=='occ'){
           sourceHC=avenantDuMois; // utiliser les heures du nouvel avenant
         }
-        if(c.th==='plan'&&(sourceActif.planType==='var'||sourceActif.planType==='min')){
-          // Plan min/var : même logique que hors-contrat normal mais avec sourceActif
-          const semKeyHCAv=getSemISO(j.date);
-          const agKeyHCAv=getKeyAgenda(semKeyHCAv,getSemAnnee(j.date));
-          const typeSemHCAv=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKeyHCAv];
-          const planVarAv=sourceActif.planVar||c.planVar;
-          const planTypeAv=sourceActif.planType||c.planType;
-          const joursMinAv=sourceActif.joursMin||c.joursMin;
-          const jMaxMinAv=sourceActif.jMaxMin||c.jMaxMin;
-          const jourIdxHCAv2=j.jourSemaine===0?6:j.jourSemaine-1;
-          const jourPossibleAv=planTypeAv==='var'?planVarAv?.some(v=>v.jours&&v.jours[jourIdxHCAv2]):(joursMinAv&&joursMinAv[jourIdxHCAv2]);
-          if(jourPossibleAv){
-            let jMaxAv=jMaxMinAv||1;
-            if(planTypeAv==='var'&&planVarAv){
-              const totalJ=planVarAv.reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
-              const totalS=planVarAv.reduce((t,v)=>t+(v.s||0),0);
-              jMaxAv=totalS>0?totalJ/totalS:jMaxAv;
-            }
-            if(!hAbsJoursCpt[semKeyHCAv]) hAbsJoursCpt[semKeyHCAv]=0;
-            if(hAbsJoursCpt[semKeyHCAv]<Math.round(jMaxAv)){
-              horsContratDeduit=true;
-              hAbsJoursCpt[semKeyHCAv]++;
-            }
-          }
-        } else {
-          const prevusHC=getHeuresPrevues(c,new Date(j.date),sourceHC);
-          if(prevusHC.debut&&prevusHC.fin){
-            horsContratDeduit=true;
-          } else if(isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))){
-            // CORRECTION : semaine 'off' dans _horsContratAvenant
-            const jourIdxHCAv=j.jourSemaine===0?6:j.jourSemaine-1;
-            const jourTravailleHCAv=sourceActif.th==='fixe'?
-              (sourceActif.joursFixe&&sourceActif.joursFixe[jourIdxHCAv]&&sourceActif.joursFixe[jourIdxHCAv].d):
-              true;
-            if(jourTravailleHCAv) horsContratDeduit=true;
-          }
+        const prevusHC=getHeuresPrevues(c,new Date(j.date),sourceHC);
+        if(prevusHC.debut&&prevusHC.fin){
+          horsContratDeduit=true;
+        } else if(isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))){
+          // CORRECTION : semaine 'off' dans _horsContratAvenant
+          const jourIdxHCAv=j.jourSemaine===0?6:j.jourSemaine-1;
+          const jourTravailleHCAv=sourceActif.th==='fixe'?
+            (sourceActif.joursFixe&&sourceActif.joursFixe[jourIdxHCAv]&&sourceActif.joursFixe[jourIdxHCAv].d):
+            true;
+          if(jourTravailleHCAv) horsContratDeduit=true;
         }
       } else if(j.heureDebPrev&&j.heureFinPrev){
         horsContratDeduit=true;
