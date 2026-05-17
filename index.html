@@ -4199,6 +4199,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const fichePourTheoriques=ficheComplete||fiche;
   const dateRefVersion=dateRefStr?new Date(dateRefStr):new Date(fiche.annee,fiche.mois,1);
   const sourceActif=getVersionActive(c, dateRefVersion);
+  // Calculer le vrai nombre de semaines pour plan var (somme des s de chaque volume)
+  const nbSemActif=sourceActif.planType==='var'&&sourceActif.planVar
+    ?sourceActif.planVar.reduce((t,v)=>t+(v.s||0),0)||sourceActif.nbSem||46
+    :sourceActif.nbSem||46;
   const debutMois=new Date(fiche.annee,fiche.mois,1);
   const finMois=new Date(fiche.annee,fiche.mois+1,0);
   const avenantDuMois=c.avenants&&c.avenants.find(av=>{
@@ -4465,7 +4469,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       if(!deduitTh) joursHCExclus.add(j.date);
     });
   }
-  const hSemMoyTh=(hMensu*12/(sourceActif.nbSem||52));
+  const hSemMoyTh=(hMensu*12/nbSemActif);
   const hJourCgTh=(hSemMoyTh/6)*60; // en minutes, pour hTheoriques (fallback)
   const estPSVTh=c.tc==='52'&&((sourceActif.th==='sem')||(sourceActif.th==='plan'&&sourceActif.planType==='var'));
   // Pour 52 sem plan sem / plan var : calcule les heures de la semaine du jour de congé
@@ -4506,27 +4510,25 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         } else if(!semTheoriquesVues.has(semKeyTh)){
           // Contrat sem : moyenne hebdo une seule fois par semaine
           semTheoriquesVues.add(semKeyTh);
-          hTheoriques+=(hMensu*12/(sourceActif.nbSem||46))*60;
+          hTheoriques+=(hMensu*12/nbSemActif)*60;
         }
       }
     } else if(c.th==='plan'&&c.planType==='min'){
       if(joursHCExclus.has(j.date)&&!j._horsContratAvenant) return;
       const semKeyTh=getSemISO(j.date);
       const agKeyTh=getKeyAgenda(semKeyTh,getSemAnnee(j.date));
-      // Pour les jours _horsContratAvenant avec sourceActif plan var, utiliser plan var
+      // Pour les jours _horsContratAvenant avec sourceActif plan var : moyenne comme pour les absences
       if(j._horsContratAvenant&&sourceActif.planType==='var'&&sourceActif.planVar){
         if(joursHCExclus.has(j.date)) return;
         const jourIdxThAv=j.jourSemaine===0?6:j.jourSemaine-1;
-        const agendasThAv=sourceActif.agendas||[];
-        const agendaThAv=agendasThAv.find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date));
-        const typeSemThAv=agendaThAv&&agendaThAv.semaines&&agendaThAv.semaines[agKeyTh];
-        const volThAv=typeSemThAv?sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemThAv):null;
-        if(volThAv&&volThAv.jours&&volThAv.jours[jourIdxThAv]){
-          if(!semJoursCptAv[semKeyTh]) semJoursCptAv[semKeyTh]=0;
-          if(semJoursCptAv[semKeyTh]<(volThAv.j||1)){
-            hTheoriques+=(volThAv.h/(volThAv.j||1))*60;
-            semJoursCptAv[semKeyTh]++;
-          }
+        const jourPossibleMoy=sourceActif.planVar.some(v=>v.jours&&v.jours[jourIdxThAv]);
+        if(jourPossibleMoy&&!semTheoriquesVues.has(semKeyTh)){
+          semTheoriquesVues.add(semKeyTh);
+          const totJ=sourceActif.planVar.reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
+          const totS=sourceActif.planVar.reduce((t,v)=>t+(v.s||0),0);
+          const jMoy=totS>0?totJ/totS:1;
+          const hSemMoy=hMensu*12/nbSemActif;
+          hTheoriques+=hSemMoy*60;
         }
         return;
       }
@@ -4550,7 +4552,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       } else {
         if(jourCoché&&!semTheoriquesVues.has(semKeyTh)){
           semTheoriquesVues.add(semKeyTh);
-          hTheoriques+=(hMensu*12/(sourceActif.nbSem||46))*60;
+          hTheoriques+=(hMensu*12/nbSemActif)*60;
         }
       }
     } else if(c.th==='plan'&&c.planType==='var'&&c.planVar){
@@ -4573,7 +4575,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const jourPossible=sourceActif.planVar&&sourceActif.planVar.some(v=>v.jours&&v.jours[jourIdxTh]);
         if(jourPossible&&!semTheoriquesVues.has(semKeyTh)){
           semTheoriquesVues.add(semKeyTh);
-          const hSemMoy=(hMensu*12/(sourceActif.nbSem||46))*60;
+          const hSemMoy=(hMensu*12/nbSemActif)*60;
           hTheoriques+=hSemMoy;
         }
       }
@@ -4599,7 +4601,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     });
     // Pour les semaines sans heures prévues (off, sem, etc.) utiliser hMoyHebdo
     // hMoyHebdo = hMensu*12/nbSem
-    const hMoyHebdo=(hMensu*12/(sourceActif.nbSem||52));
+    const hMoyHebdo=(hMensu*12/nbSemActif);
     const majParSemaine=Math.max(0,hMoyHebdo-45);
     // Ne compter que les semaines entières avec heures théoriques issues de la moyenne
     // (semaines off, plan var sans volume)
@@ -4632,7 +4634,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             if(jfTh&&jfTh.d&&jfTh.f) hTheoriquesMois+=(toM(jfTh.f)-toM(jfTh.d))/60;
           } else if(!semTheoriquesVuesM.has(semKeyTh)){
             semTheoriquesVuesM.add(semKeyTh);
-            hTheoriquesMois+=(hMensu*12/(sourceActif.nbSem||46));
+            hTheoriquesMois+=(hMensu*12/nbSemActif);
           }
         }
       } else if(sourceActif.th==='plan'&&sourceActif.planType==='var'&&sourceActif.planVar){
@@ -4676,7 +4678,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           const jfHP=sourceActif.joursFixe[jourIdxHP];
           if(jfHP&&jfHP.d&&jfHP.f) hAbsHorsPeriode+=(toM(jfHP.f)-toM(jfHP.d))/60;
         } else if(sourceActif.th==='sem'){
-          hAbsHorsPeriode+=(hMensu*12/(sourceActif.nbSem||46))/joursMaxMoyen;
+          hAbsHorsPeriode+=(hMensu*12/nbSemActif)/joursMaxMoyen;
         }
       }
     }
@@ -5168,7 +5170,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             const totJ=sourceActif.planVar.reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
             const totS=sourceActif.planVar.reduce((t,v)=>t+(v.s||0),0);
             const jMoyHC=totS>0?totJ/totS:5;
-            hPrev=(hMensu*12/(sourceActif.nbSem||46))/jMoyHC;
+            hPrev=(hMensu*12/nbSemActif)/jMoyHC;
           } else {
             hPrev=0;
           }
@@ -5496,7 +5498,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   let montantCongesNonAcquis=0;
   let nbCongesNonAcquis=0;
   if(c.tc==='52'){
-    const hSemMoy52=hMensu*12/(sourceActif.nbSem||52);
+    const hSemMoy52=hMensu*12/nbSemActif;
     const estPSV52=(sourceActif.th==='sem')||(sourceActif.th==='plan'&&sourceActif.planType==='var');
     // Heures de la semaine pour un jour donné (plan sem / plan var), sinon moyenne
     const getHSemPourJour=(dateStr)=>{
