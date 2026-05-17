@@ -4161,12 +4161,29 @@ function toMins(t){return toM(t);}
 function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAvenantStr,periodeAv,ficheComplete){
   // Filtrer les jours si une période est spécifiée
  if(dateDebPeriode||dateFinPeriode){
-    const joursDansPeriode=fiche.jours.filter(j=>{
+    const isPlanMinVar=c.th==='plan'&&(c.planType==='min'||c.planType==='var');
+    const joursFiltre=fiche.jours.filter(j=>{
       if(dateDebPeriode&&j.date<dateDebPeriode) return false;
       if(dateFinPeriode&&j.date>dateFinPeriode) return false;
       return true;
     });
-    const ficheFiltre={...fiche,jours:joursDansPeriode};
+    let joursHorsPeriode=[];
+    if(isPlanMinVar){
+      // Inclure les jours hors période possibles au contrat avec statut hors-contrat
+      // pour que le calcul d'absence les déduise dans la limite de joursMax
+      const sourceRef=getVersionActive(c,dateDebPeriode?new Date(dateDebPeriode):new Date(dateFinPeriode));
+      joursHorsPeriode=fiche.jours.filter(j=>{
+        const dansPeriode=(!dateDebPeriode||j.date>=dateDebPeriode)&&(!dateFinPeriode||j.date<=dateFinPeriode);
+        if(dansPeriode) return false;
+        // Vérifier si le jour est possible au contrat actif à cette date
+        const srcJ=getVersionActive(c,new Date(j.date));
+        const jourIdx=j.jourSemaine===0?6:j.jourSemaine-1;
+        if(srcJ.planType==='min') return !!(srcJ.joursMin&&srcJ.joursMin[jourIdx]);
+        if(srcJ.planType==='var'&&srcJ.planVar) return srcJ.planVar.some(v=>v.jours&&v.jours[jourIdx]);
+        return false;
+      }).map(j=>({...j,statut:'hors-contrat',_horsContratAvenant:true,heureDebReel:null,heureFinReel:null}));
+    }
+    const ficheFiltre={...fiche,jours:[...joursFiltre,...joursHorsPeriode]};
     return calcRecapFiche(c,ficheFiltre,null,null,dateRefStr||dateDebPeriode,dateAvenantStr,periodeAv,ficheComplete||fiche);
   }
   const fichePourTheoriques=ficheComplete||fiche;
