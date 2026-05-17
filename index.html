@@ -2580,7 +2580,7 @@ const statutPrevuJ=getStatutPrevu(c,j);
         return tot>0?'<span style="color:var(--vt)">+'+fmtH(Math.round(tot*60))+'</span>':'—';
       })()}</td>`:isPlanVar?'':''}
       <td style="padding:3px 4px;text-align:right;vertical-align:top">
-        <select style="font-size:10px;padding:2px 3px;border:1px solid var(--mb);border-radius:3px;max-width:110px;background:${bg}"
+        <select style="font-size:10px;padding:2px 3px;border:1px solid var(--mb);border-radius:3px;max-width:130px;background:${bg}"
           ${fiche.valide?'disabled':`onchange="majFicheStatut(${contratId},'${key}',${idx},this.value)"`}>
           ${selectedOpts}
         </select>
@@ -2639,7 +2639,8 @@ const statutPrevuJ=getStatutPrevu(c,j);
           <col style="width:12%"><!-- Jour -->
           <col style="width:13%"><!-- Prévu -->
           <col style="width:17%"><!-- Réel -->
-          <col style="width:12%"><!-- H± -->
+          <col style="width:8%"><!-- H± individuel -->
+          ${isPlanVar?'<col style="width:8%"><!-- H± semaine -->':''}
           <col><!-- Statut : reste -->
         </colgroup>
         <thead><tr style="background:var(--mp);position:sticky;top:0">
@@ -3296,7 +3297,8 @@ function buildRecapHtml(recap, solde, regul52, c){
     if(parseFloat(recap.hAbs)>0){
       const _mensuNet=parseFloat((parseFloat(recap.hMensu||0)*parseFloat(recap.txNetExact||0)).toFixed(2));
       const _infoMsg='Mensualisation '+_mensuNet.toFixed(2)+' \u20AC\u00A0/ h. th\u00E9oriques '+parseFloat(recap.hTheoriques||0).toFixed(2)+' h \u00D7 absence '+parseFloat(recap.hAbs||0).toFixed(2)+' h = '+parseFloat(recap.montantAbsences||0).toFixed(2)+' \u20AC';
-      html+=ligneG('Heures d\'absence <button onclick="event.stopPropagation();alerte(document.getElementById(\'_infoAbsMsg\').textContent)" style="background:none;border:1px solid var(--tx3);border-radius:50%;width:16px;height:16px;font-size:10px;cursor:pointer;color:var(--tx2);padding:0;line-height:1;margin-left:4px">i</button><span id=\"_infoAbsMsg\" hidden>'+_infoMsg+'</span>', '\u2212 '+recap.hAbsDeduit.toFixed(2)+' h \u2014 '+recap.montantAbsences.toFixed(2)+' \u20AC','','var(--al)');
+      const _absId='_infoAbsMsg_'+(Date.now()+Math.random()).toString(36).slice(2);
+      html+=ligneG('Heures d\'absence <button onclick="event.stopPropagation();alerte(document.getElementById(\''+_absId+'\').textContent)" style="background:none;border:1px solid var(--tx3);border-radius:50%;width:16px;height:16px;font-size:10px;cursor:pointer;color:var(--tx2);padding:0;line-height:1;margin-left:4px">i</button><span id="'+_absId+'" hidden>'+_infoMsg+'</span>', '\u2212 '+recap.hAbsDeduit.toFixed(2)+' h \u2014 '+recap.montantAbsences.toFixed(2)+' \u20AC','','var(--al)');
     }
     if(parseFloat(recap.montantCongesNonAcquis||0)>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--al)">dont congés non acquis ('+recap.nbCongesNonAcquis+' j) — '+recap.montantCongesNonAcquis.toFixed(2)+' € déduits</td></tr>';
     if(parseFloat(recap.hComp||0)>0||parseFloat(recap.hSup||0)>0) html+=ligneG('Taux horaire net', recap.txNet+' \u20AC', true);
@@ -3988,6 +3990,9 @@ function calcCongesContrat(c){
           jours.forEach(j=>{
             const statutJ=j.statut||getStatutPrevu(c,j);
             if(['prevu','travaille','abs-partielle','abs-rem'].includes(statutJ)){
+              joursNormaux++;
+            } else if(statutJ==='non-prevu'&&j.heureDebReel){
+              // Jour non prévu travaillé : compte toujours en plus
               joursNormaux++;
             } else if(['conges-acq','conges-anticipe'].includes(statutJ)){
               // Toujours 1/6, quelle que soit le jour de la semaine
@@ -6266,7 +6271,26 @@ function renderAgendas(c){
 
     // source = version active pour cet agenda (contrat ou avenant)
     const agSource=(()=>{const r=trouverAgenda(c,ag.id);return r?r.source:c;})();
-    const calHtml = renderCalAgenda(c,ag,semaines,false,c.id,agSource);
+
+    // Masquer les semaines après la date d'avenant si un avenant supplante cet agenda
+    let semainesFiltrees=semaines;
+    const avenantSupplantant=(c.avenants||[]).find(av=>{
+      if(!av.signe||!av.dateAvenant) return false;
+      if(!av.agendas||!av.agendas.length) return false;
+      return new Date(av.dateAvenant)>=new Date(ag.dateDebut)&&new Date(av.dateAvenant)<=new Date(ag.dateFin);
+    });
+    if(avenantSupplantant){
+      const dateAv=avenantSupplantant.dateAvenant;
+      // Garder uniquement les semaines dont au moins un jour est avant la date d'avenant
+      // ET dont le mois de la fiche correspondante est validé
+      semainesFiltrees=semaines.filter(s=>{
+        const lundiStr=s.lundi.toISOString().slice(0,10);
+        const dimStr=new Date(s.lundi.getTime()+6*86400000).toISOString().slice(0,10);
+        return lundiStr<dateAv; // semaines commençant avant l'avenant
+      });
+    }
+
+    const calHtml = renderCalAgenda(c,ag,semainesFiltrees,false,c.id,agSource);
 
     const btnSuppr=!estCommence
       ?`<button class="btn bd bsm" onclick="supprimerAgenda(${c.id},${ag.id})">Supprimer</button>`
@@ -6739,6 +6763,14 @@ function validerModifAgenda(cid,agid){
   } else if(autresWarnings.length>0){
     if(!confirm('⚠ Attention :\n'+autresWarnings.join('\n')+'\n\nLe minimum de semaines n\'est pas atteint. Valider quand même ?'))return;
   }
+  // Bloquer si trop de semaines off
+  const compteOff=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
+  const nbSemSrc=source.nbSem||46;
+  const maxOff=Math.max(0,47-nbSemSrc);
+  if(compteOff>maxOff){
+    alerte('Le nombre de semaines d\'absence employeur ('+compteOff+') dépasse le maximum autorisé ('+maxOff+'). Veuillez corriger avant de valider.');
+    return;
+  }
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
     window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
@@ -6749,9 +6781,9 @@ function validerModifAgenda(cid,agid){
   if(S.congesAM){
     Object.keys(S.congesAM).forEach(am=>{majFichesCgAm(parseInt(am),false);});
   }
-  fermerModifAgenda(cid,agid);
- const agWrap=document.getElementById('agenda-wrap-'+cid);
+  const agWrap=document.getElementById('agenda-wrap-'+cid);
   if(agWrap) agWrap.innerHTML=renderAgendas({...c,agendas:source.agendas||c.agendas});
+  fermerModifAgenda(cid,agid);
 }
 
 function fermerModifAgenda(cid,agid){
@@ -7740,20 +7772,19 @@ function renderRuptureCDD(c, cont){
   }
 
   // ─── Motifs selon initiative ───
+  const estTermePrecis=c.cddTerme==='precis';
   const motifEmployeur=[
-    {v:'fin-terme-precis', l:'Fin de CDD à terme précis'},
-    {v:'fin-terme-imprecis', l:'Fin de CDD à terme imprécis'},
+    ...(estTermePrecis?[{v:'fin-terme-precis', l:'Fin de CDD à terme précis'}]:[{v:'fin-terme-imprecis', l:'Fin de CDD à terme imprécis'}]),
     {v:'fin-essai', l:'Rupture de la période d\'essai'},
     {v:'faute-grave', l:'Faute grave'},
     {v:'force-majeure', l:'Cas de force majeure'},
     {v:'accord-commun', l:'Accord commun'},
-    {v:'refus-cdi-emp', l:'Refus de CDI de l\'Ass\'Mat'},
+    ...(estTermePrecis?[{v:'refus-cdi-emp', l:'Refus de CDI de l\'Ass\'Mat'}]:[]),
     {v:'autre-motif-emp', l:'Autre motif'},
   ];
   const motifAssmat=[
     {v:'fin-essai-am', l:'Rupture de la période d\'essai'},
-    {v:'embauche-cdi', l:'Proposition d\'embauche en CDI'},
-    {v:'refus-cdi', l:'Refus de passage en CDI équivalent'},
+    ...(estTermePrecis?[{v:'embauche-cdi', l:'Proposition d\'embauche en CDI'},{v:'refus-cdi', l:'Refus de passage en CDI équivalent'}]:[]),
     {v:'faute-grave-am', l:'Faute grave'},
     {v:'force-majeure-am', l:'Cas de force majeure'},
     {v:'accord-commun-am', l:'Accord commun'},
