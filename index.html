@@ -2580,7 +2580,7 @@ const statutPrevuJ=getStatutPrevu(c,j);
         return tot>0?'<span style="color:var(--vt)">+'+fmtH(Math.round(tot*60))+'</span>':'—';
       })()}</td>`:isPlanVar?'':''}
       <td style="padding:3px 4px;text-align:right;vertical-align:top">
-        <select style="font-size:10px;padding:2px 3px;border:1px solid var(--mb);border-radius:3px;max-width:130px;background:${bg}"
+        <select style="font-size:10px;padding:2px 3px;border:1px solid var(--mb);border-radius:3px;width:100%;max-width:130px;background:${bg}"
           ${fiche.valide?'disabled':`onchange="majFicheStatut(${contratId},'${key}',${idx},this.value)"`}>
           ${selectedOpts}
         </select>
@@ -6272,22 +6272,34 @@ function renderAgendas(c){
     // source = version active pour cet agenda (contrat ou avenant)
     const agSource=(()=>{const r=trouverAgenda(c,ag.id);return r?r.source:c;})();
 
-    // Masquer les semaines après la date d'avenant si un avenant supplante cet agenda
+    // Masquer les semaines après la date d'avenant ultérieur si le mois est validé
     let semainesFiltrees=semaines;
-    const avenantSupplantant=(c.avenants||[]).find(av=>{
-      if(!av.signe||!av.dateAvenant) return false;
-      if(!av.agendas||!av.agendas.length) return false;
-      return new Date(av.dateAvenant)>=new Date(ag.dateDebut)&&new Date(av.dateAvenant)<=new Date(ag.dateFin);
-    });
-    if(avenantSupplantant){
-      const dateAv=avenantSupplantant.dateAvenant;
-      // Garder uniquement les semaines dont au moins un jour est avant la date d'avenant
-      // ET dont le mois de la fiche correspondante est validé
-      semainesFiltrees=semaines.filter(s=>{
-        const lundiStr=s.lundi.toISOString().slice(0,10);
-        const dimStr=new Date(s.lundi.getTime()+6*86400000).toISOString().slice(0,10);
-        return lundiStr<dateAv; // semaines commençant avant l'avenant
-      });
+    const contratPrincipal=S.contrats.find(x=>x.id==c.id);
+    if(contratPrincipal){
+      // Trouver si un avenant ultérieur supplante cet agenda
+      const tousAvenants=[...(contratPrincipal.avenants||[])].sort((a,b)=>a.dateAvenant>b.dateAvenant?1:-1);
+      // Déterminer à qui appartient cet agenda (contrat initial ou quel avenant)
+      const proprietaire=contratPrincipal.agendas?.some(a=>a.id===ag.id)?contratPrincipal:
+        tousAvenants.find(av=>av.agendas?.some(a=>a.id===ag.id));
+      if(proprietaire){
+        // Chercher un avenant ultérieur signé dont la date tombe dans cet agenda
+        const avenantUlterieur=tousAvenants.find(av=>{
+          if(!av.signe||!av.dateAvenant) return false;
+          if(av===proprietaire) return false;
+          // L'avenant doit être postérieur au propriétaire
+          const dateProprietaire=proprietaire===contratPrincipal?contratPrincipal.dateDeb:(proprietaire.dateAvenant||'');
+          if(av.dateAvenant<=dateProprietaire) return false;
+          return av.dateAvenant>=ag.dateDebut&&av.dateAvenant<=ag.dateFin;
+        });
+        if(avenantUlterieur){
+          const dateAv=avenantUlterieur.dateAvenant;
+          const moisAv=dateAv.slice(0,7);
+          const ficheAv=contratPrincipal.fiches?.[moisAv];
+          if(ficheAv?.valide){
+            semainesFiltrees=semaines.filter(s=>s.lundi.toISOString().slice(0,10)<dateAv);
+          }
+        }
+      }
     }
 
     const calHtml = renderCalAgenda(c,ag,semainesFiltrees,false,c.id,agSource);
