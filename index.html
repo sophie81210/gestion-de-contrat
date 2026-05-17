@@ -4181,14 +4181,12 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       return true;
     });
     let joursHorsPeriode=[];
-    if(isPlanMinVar){
-      // Inclure les jours hors période possibles au contrat avec statut hors-contrat
-      // pour que le calcul d'absence les déduise dans la limite de joursMax
-      const sourceRef=getVersionActive(c,dateDebPeriode?new Date(dateDebPeriode):new Date(dateFinPeriode));
+    if(isPlanMinVar&&periodeAv==='apres'){
+      // Pour l'encart après avenant : inclure les jours avant avenant comme hors-contrat
+      // pour que le calcul d'absence les déduise
       joursHorsPeriode=fiche.jours.filter(j=>{
         const dansPeriode=(!dateDebPeriode||j.date>=dateDebPeriode)&&(!dateFinPeriode||j.date<=dateFinPeriode);
         if(dansPeriode) return false;
-        // Vérifier si le jour est possible au contrat actif à cette date
         const srcJ=getVersionActive(c,new Date(j.date));
         const jourIdx=j.jourSemaine===0?6:j.jourSemaine-1;
         if(srcJ.planType==='min') return !!(srcJ.joursMin&&srcJ.joursMin[jourIdx]);
@@ -4369,12 +4367,15 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const hMoyJourGlobal=(sourceActif.nbSem&&sourceActif.nbSem>0)?(hMensu*12/sourceActif.nbSem)/joursMaxMoyen:hMensu/20;
   const semTheoriquesVues=new Set();
   const semJoursCpt={};
-  // Précalculer les jours hors-contrat à exclure de hTheoriques (semaines partielles non déduites)
+  // Pour plan min/var : précalculer les jours hors-contrat à exclure de hTheoriques
   const joursHCExclus=new Set();
   if(c.th==='plan'&&(c.planType==='min'||c.planType==='var')){
     const hAbsJoursCptTh={};
     fiche.jours.forEach(j=>{
-      if((j.statut||'')!=='hors-contrat') return;
+      // Inclure aussi les jours avant c.dateDeb (non marqués hors-contrat mais hors période)
+      const estHorsContrat=(j.statut||'')==='hors-contrat';
+      const estAvantDebut=c.dateDeb&&j.date<c.dateDeb;
+      if(!estHorsContrat&&!estAvantDebut) return;
       const jourIdxTh2=j.jourSemaine===0?6:j.jourSemaine-1;
       const semNumTh=getSemISO(j.date);
       const srcTh=getVersionActive(c,new Date(j.date));
@@ -4390,20 +4391,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const estFinPeriode2=periodeAv==='avant'&&j._horsContratAvenant;
       let deduitTh=false;
       if(estDebutMois2&&c.dateDeb){
-        if(!fichePrec){
-          // Premier mois du contrat : déduction normale
-          if(!hAbsJoursCptTh[semNumTh]) hAbsJoursCptTh[semNumTh]=0;
-          if(hAbsJoursCptTh[semNumTh]<Math.round(jMaxTh)){
-            deduitTh=true;hAbsJoursCptTh[semNumTh]++;
-          }
-        } else {
-          const joursPrec2=fichePrec.jours.filter(jj=>getSemISO(jj.date)===semNumTh);
-          const possPrec2=compterJoursPossibles(joursPrec2,srcTh);
-          const aDeduireTh=Math.max(0,Math.round(jMaxTh)-possPrec2);
-          if(!hAbsJoursCptTh[semNumTh]) hAbsJoursCptTh[semNumTh]=0;
-          if(possPrec2<Math.round(jMaxTh)&&hAbsJoursCptTh[semNumTh]<aDeduireTh){
-            deduitTh=true;hAbsJoursCptTh[semNumTh]++;
-          }
+        const possPrec2=fichePrec
+          ?compterJoursPossibles(fichePrec.jours.filter(jj=>getSemISO(jj.date)===semNumTh),sourceActif)
+          :joursCalendairePossibles(semNumTh,c.dateDeb,sourceActif);
+        const aDeduireTh=Math.max(0,Math.round(jMaxTh)-possPrec2);
+        if(!hAbsJoursCptTh[semNumTh]) hAbsJoursCptTh[semNumTh]=0;
+        if(possPrec2<Math.round(jMaxTh)&&hAbsJoursCptTh[semNumTh]<aDeduireTh){
+          deduitTh=true;hAbsJoursCptTh[semNumTh]++;
         }
       } else if(estFinPeriode2&&ficheSuiv){
         const joursSuiv2=ficheSuiv.jours.filter(jj=>getSemISO(jj.date)===semNumTh);
@@ -4422,7 +4416,6 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         }
       }
       if(!deduitTh) joursHCExclus.add(j.date);
-      console.log('[joursHCExclus]',j.date,'deduitTh:',deduitTh,'estDebutMois2:',estDebutMois2,'estFinPeriode2:',estFinPeriode2);
     });
   }
   const hSemMoyTh=(hMensu*12/(sourceActif.nbSem||52));
@@ -4827,31 +4820,23 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             const estFinPeriode=periodeAv==='avant'&&j._horsContratAvenant;
 
             if(estDebutMois&&c.dateDeb){
-              if(!fichePrec){
-                // Premier mois du contrat : déduction normale
+              const joursPossiblesPrec=fichePrec
+                ?compterJoursPossibles(fichePrec.jours.filter(jj=>getSemISO(jj.date)===semNumHC),sourceActif)
+                :joursCalendairePossibles(semNumHC,c.dateDeb,sourceActif);
+              if(joursPossiblesPrec>=Math.round(jMaxMoy)){
+                // Le mois précédent peut compléter → pas de déduction
+              } else {
+                const aDeduire=Math.max(0,Math.round(jMaxMoy)-joursPossiblesPrec);
                 if(!hAbsJoursCpt[semKeyHC]) hAbsJoursCpt[semKeyHC]=0;
-                if(hAbsJoursCpt[semKeyHC]<Math.round(jMaxMoy)){
+                if(hAbsJoursCpt[semKeyHC]<aDeduire){
                   horsContratDeduit=true;
                   hAbsJoursCpt[semKeyHC]++;
-                }
-              } else {
-                const joursPossiblesPrec=compterJoursPossibles(fichePrec.jours.filter(jj=>getSemISO(jj.date)===semNumHC),sourceActif);
-                if(joursPossiblesPrec>=Math.round(jMaxMoy)){
-                  // Le mois précédent peut compléter → pas de déduction
-                } else {
-                  const aDeduire=Math.max(0,Math.round(jMaxMoy)-joursPossiblesPrec);
-                  if(!hAbsJoursCpt[semKeyHC]) hAbsJoursCpt[semKeyHC]=0;
-                  if(hAbsJoursCpt[semKeyHC]<aDeduire){
-                    horsContratDeduit=true;
-                    hAbsJoursCpt[semKeyHC]++;
-                  }
                 }
               }
             } else if(estFinPeriode&&ficheSuiv){
               // Fin de période (avant avenant) : vérifier si mois suivant peut compléter
               const joursSuiv=ficheSuiv.jours.filter(jj=>getSemISO(jj.date)===semNumHC);
               const joursPossiblesSuiv=compterJoursPossibles(joursSuiv, planVarActif?{planType:planTypeActif,planVar:planVarActif,joursMin:joursMinActif}:sourceActif);
-              console.log('[estFinPeriode]',j.date,'semNum:',semNumHC,'joursSuiv:',joursSuiv.length,'possiblesSuiv:',joursPossiblesSuiv,'jMaxMoy:',jMaxMoy);
               if(joursPossiblesSuiv>=Math.round(jMaxMoy)){
                 // Mois suivant peut compléter → pas de déduction
               } else {
