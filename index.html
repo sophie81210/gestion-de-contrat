@@ -4630,16 +4630,42 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         if(sourceActif.tc==='occ'&&avenantDuMois&&avenantDuMois.tc&&avenantDuMois.tc!=='occ'){
           sourceHC=avenantDuMois; // utiliser les heures du nouvel avenant
         }
-        const prevusHC=getHeuresPrevues(c,new Date(j.date),sourceHC);
-        if(prevusHC.debut&&prevusHC.fin){
-          horsContratDeduit=true;
-        } else if(isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))){
-          // CORRECTION : semaine 'off' dans _horsContratAvenant
-          const jourIdxHCAv=j.jourSemaine===0?6:j.jourSemaine-1;
-          const jourTravailleHCAv=sourceActif.th==='fixe'?
-            (sourceActif.joursFixe&&sourceActif.joursFixe[jourIdxHCAv]&&sourceActif.joursFixe[jourIdxHCAv].d):
-            true;
-          if(jourTravailleHCAv) horsContratDeduit=true;
+        if(c.th==='plan'&&(sourceActif.planType==='var'||sourceActif.planType==='min')){
+          // Plan min/var : même logique que hors-contrat normal mais avec sourceActif
+          const semKeyHCAv=getSemISO(j.date);
+          const agKeyHCAv=getKeyAgenda(semKeyHCAv,getSemAnnee(j.date));
+          const typeSemHCAv=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKeyHCAv];
+          const planVarAv=sourceActif.planVar||c.planVar;
+          const planTypeAv=sourceActif.planType||c.planType;
+          const joursMinAv=sourceActif.joursMin||c.joursMin;
+          const jMaxMinAv=sourceActif.jMaxMin||c.jMaxMin;
+          const jourIdxHCAv2=j.jourSemaine===0?6:j.jourSemaine-1;
+          const jourPossibleAv=planTypeAv==='var'?planVarAv?.some(v=>v.jours&&v.jours[jourIdxHCAv2]):(joursMinAv&&joursMinAv[jourIdxHCAv2]);
+          if(jourPossibleAv){
+            let jMaxAv=jMaxMinAv||1;
+            if(planTypeAv==='var'&&planVarAv){
+              const totalJ=planVarAv.reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
+              const totalS=planVarAv.reduce((t,v)=>t+(v.s||0),0);
+              jMaxAv=totalS>0?totalJ/totalS:jMaxAv;
+            }
+            if(!hAbsJoursCpt[semKeyHCAv]) hAbsJoursCpt[semKeyHCAv]=0;
+            if(hAbsJoursCpt[semKeyHCAv]<Math.round(jMaxAv)){
+              horsContratDeduit=true;
+              hAbsJoursCpt[semKeyHCAv]++;
+            }
+          }
+        } else {
+          const prevusHC=getHeuresPrevues(c,new Date(j.date),sourceHC);
+          if(prevusHC.debut&&prevusHC.fin){
+            horsContratDeduit=true;
+          } else if(isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))){
+            // CORRECTION : semaine 'off' dans _horsContratAvenant
+            const jourIdxHCAv=j.jourSemaine===0?6:j.jourSemaine-1;
+            const jourTravailleHCAv=sourceActif.th==='fixe'?
+              (sourceActif.joursFixe&&sourceActif.joursFixe[jourIdxHCAv]&&sourceActif.joursFixe[jourIdxHCAv].d):
+              true;
+            if(jourTravailleHCAv) horsContratDeduit=true;
+          }
         }
       } else if(j.heureDebPrev&&j.heureFinPrev){
         horsContratDeduit=true;
