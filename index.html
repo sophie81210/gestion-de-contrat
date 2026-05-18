@@ -4623,7 +4623,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     } else if(c.th==='plan'&&c.planType==='var'&&(c.planVar||sourceActif.planVar)){
       const semKeyTh=getSemISO(j.date);
       const agKeyTh=getKeyAgenda(semKeyTh,getSemAnnee(j.date));
-      const typeSemTh=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKeyTh];
+      // Chercher le type de semaine dans tous les agendas du contrat (pas seulement agendaMois)
+      const tousAgendas=[...(c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
+      const agendaPourJour=tousAgendas.find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date))||agendaMois;
+      const typeSemTh=agendaPourJour&&agendaPourJour.semaines&&agendaPourJour.semaines[agKeyTh];
       // Semaine 'off' = absence employeur, déjà déduite de la mensualisation → pas de contribution aux hTheoriques
       if(typeSemTh==='off') return;
       const planVarTh=sourceActif.planVar||c.planVar;
@@ -6638,13 +6641,18 @@ function renderAgendas(c){
 
 
 function ouvrirModifAgenda(cid,agid){
+  // Nettoyer tout overlay bloquant résiduel
+  const existingOverlay=document.getElementById('alerte-overlay');
+  if(existingOverlay)existingOverlay.remove();
   const c=S.contrats.find(x=>x.id==cid);
   if(!c)return;
   // Vérifier calendrier AM à l'ouverture
   const res0=trouverAgenda(c,agid);
   if(res0){
     const manquantesOuv=getAnneesAmManquantes(res0.ag);
-    if(manquantesOuv.length>0){alerteCalendrierAM(manquantesOuv);return;}
+    if(manquantesOuv.length>0){
+      toast('⚠ Calendrier congés AM non rempli pour '+manquantesOuv.map(a=>a+'/'+(a+1)).join(', '));
+    }
   }
   // Chercher l'agenda dans le contrat ou dans les avenants
   let ag=c.agendas.find(a=>a.id==agid);
@@ -7330,7 +7338,12 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
   joursFixe,semTypes,planVar};
  if(idCible&&S.contrats.find(x=>x.id==idCible)){
     const idx=S.contrats.findIndex(x=>x.id==idCible);
-    if(idx!==-1)S.contrats[idx]={...S.contrats[idx],...data};
+    const ancien=S.contrats[idx];
+    // Préserver les données de volumes si l'état du formulaire ne les a pas reconstruites
+    if(!data.planVar&&ancien.planVar) data.planVar=ancien.planVar;
+    if(!data.semTypes&&ancien.semTypes) data.semTypes=ancien.semTypes;
+    if(!data.joursFixe&&ancien.joursFixe) data.joursFixe=ancien.joursFixe;
+    if(idx!==-1)S.contrats[idx]={...ancien,...data};
     S.dernierContratId=idCible;S.enEd=null;toast('Contrat '+nom+' modifié !');
     localStorage.setItem('cam_c',JSON.stringify(S.contrats));
     const cModif=S.contrats.find(x=>x.id==idCible);
@@ -10467,6 +10480,7 @@ function ouvrirPastille(titre, corps){
     <div class="pastille-popup-corps">${corps}</div>
   </div>`;
   overlay.addEventListener('click',e=>{if(e.target===overlay) overlay.remove();});
+  overlay.addEventListener('touchstart',e=>{if(e.target===overlay) overlay.remove();},{passive:true});
   document.body.appendChild(overlay);
 }
 // Génère le HTML d'une pastille : type='i' ou '?', titre et corps du popup
@@ -10494,6 +10508,7 @@ function alerte(msg){
     <button class="alerte-btn" onclick="document.getElementById('alerte-overlay').remove()">OK</button>
   </div>`;
   overlay.addEventListener('click',e=>{if(e.target===overlay) overlay.remove();});
+  overlay.addEventListener('touchstart',e=>{if(e.target===overlay) overlay.remove();},{passive:true});
   document.body.appendChild(overlay);
 }
 
