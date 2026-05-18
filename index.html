@@ -9797,7 +9797,8 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
           }
           if(jourPossible) return dateStr;
         } else {
-          const prevus=getHeuresPrevues(c,d);
+          const srcPT=getVersionActive(c,d);
+          const prevus=getHeuresPrevues(srcPT,d);
           if(prevus.debut||prevus.planVar) return dateStr;
         }
       }
@@ -9819,8 +9820,15 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
       const jourSem=cur.getDay();
       const reposH=c.reposHebdo||0;
       if(jourSem!==reposH&&!isFerie(dateStr,c)){
-        const prevus=getHeuresPrevues(c,cur);
-        if(prevus.debut||prevus.planVar){reprise=dateStr;break;}
+        const srcDJD=getVersionActive(c,cur);
+        if(srcDJD.th==='sem'){
+          // Pour plan sem : reprise = premier jour prévu de la première semaine non-off
+          const prevusDJD=getHeuresPrevues(srcDJD,cur);
+          if(prevusDJD.debut){reprise=dateStr;break;}
+        } else {
+          const prevus=getHeuresPrevues(srcDJD,cur);
+          if(prevus.debut||prevus.planVar){reprise=dateStr;break;}
+        }
       }
       cur.setDate(cur.getDate()+1);
     }
@@ -9842,8 +9850,19 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
         const jourSem=tmp.getDay();
         const reposH=c.reposHebdo||0;
         if(jourSem!==reposH&&!isFerie(ds,c)){
-          const prevus=getHeuresPrevues(c,tmp);
-          if(prevus.debut||prevus.planVar){tousNonPrevus=false;break;}
+          const srcTmp=getVersionActive(c,tmp);
+          // Pour plan sem : vérifier si la semaine est travaillée (pas off) dans l'agenda
+          if(srcTmp.th==='sem'){
+            const semNumTmp=getSemISO(ds);
+            const semAnTmp=getSemAnnee(ds);
+            const semKeyTmp=semAnTmp+'-S'+String(semNumTmp).padStart(2,'0');
+            const agTmp=(srcTmp.agendas||c.agendas||[]).find(a=>tmp>=new Date(a.dateDebut)&&tmp<=new Date(a.dateFin));
+            const typeTmp=agTmp&&agTmp.semaines&&agTmp.semaines[semKeyTmp];
+            if(typeTmp&&typeTmp!=='off'){tousNonPrevus=false;break;}
+          } else {
+            const prevus=getHeuresPrevues(srcTmp,tmp);
+            if(prevus.debut||prevus.planVar){tousNonPrevus=false;break;}
+          }
         }
         tmp.setDate(tmp.getDate()+1);
       }
@@ -9886,7 +9905,8 @@ if(tousNonPrevus){
               const jourSem2=cur2.getDay();
               const reposH2=c.reposHebdo||0;
               if(jourSem2!==reposH2&&!isFerie(ds2,c)){
-                const prevus2=getHeuresPrevues(c,cur2);
+                const srcAPS=getVersionActive(c,cur2);
+                const prevus2=getHeuresPrevues(srcAPS,cur2);
                 if(prevus2.debut||prevus2.planVar){repriseApresSem=ds2;break;}
               }
               cur2.setDate(cur2.getDate()+1);
@@ -10015,13 +10035,16 @@ if(tousNonPrevus){
       let cur=new Date(dStart);
       let decompteCommence=false;
       // Chercher le dernier jour ouvrable avant le début de période
+      // en tenant compte de la version active (contrat ou avenant) à chaque date
       const dRecherche=new Date(debut);
       for(let pi=1;pi<=7;pi++){
         dRecherche.setDate(dRecherche.getDate()-1);
-        if(dRecherche.getDay()===(c.reposHebdo||0)) continue;
         const dsR=dRecherche.getFullYear()+'-'+String(dRecherche.getMonth()+1).padStart(2,'0')+'-'+String(dRecherche.getDate()).padStart(2,'0');
+        const srcR=getVersionActive(c,dRecherche);
+        const reposHR=srcR.reposHebdo??c.reposHebdo??0;
+        if(dRecherche.getDay()===reposHR) continue;
         const jR=c.fiches[dsR.slice(0,7)]?.jours.find(j=>j.date===dsR);
-        if(jR){
+        if(jR&&jR.statut!=='non-prevu'&&jR.statut!=='hors-contrat'){
           if(['conges-acq','conges-anticipe','conges-non'].includes(jR.statut)) decompteCommence=true;
           break;
         }
@@ -10055,7 +10078,6 @@ if(tousNonPrevus){
         const estDansPeriodeCochee=dateStr>=debut&&dateStr<=fin;
         const estPose=data.jours[dateStr]==='pose';
 
-        // Trouver la fiche correspondante
         const moisKey=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0');
         // Ne pas créer de fiche avant la date de début du contrat
         if(c.dateDeb&&dateStr<c.dateDeb){cur.setDate(cur.getDate()+1);continue;}
