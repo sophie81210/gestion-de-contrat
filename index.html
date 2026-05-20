@@ -2080,7 +2080,7 @@ function getStatutOptions(statutPrevu){
     'hors-contrat':['hors-contrat'],
     'conges-am':['conges-am'],
     'conges-anticipe':['conges-anticipe'],
-    'a-selectionner':['prevu','non-prevu','abs-partielle','abs-rem','abs-enfant','abs-non','arret','init'],
+    'a-selectionner':['prevu','non-prevu','hors-contrat','abs-partielle','abs-rem','abs-enfant','abs-non','arret','init'],
   };
   const labels={
     'prevu':'Prévu','abs-rem':'Absence rémunérée','abs-enfant':'Absence maladie de l&rsquo;enfant',
@@ -2098,7 +2098,7 @@ function getStatutBg(statut){
     'abs-rem':'#f2f7f4','abs-enfant':'#fdecea','abs-non':'#fdecea','abs-am':'#fdecea','ferie-non':'#fdecea',
     'arret':'#fdecea','travaille':'#e8f5ee','conges':'#f0defc',
     'conges-anticipe':'#f4e8fc','conges-am':'#f8f5fa',
-    'abs-partielle':'#fcf3f2','hors-contrat':'#fcfcfc','decompte-conges':'#ede8f5','a-selectionner':'#fff3e0',
+    'abs-partielle':'#fcf3f2','hors-contrat':'#fcfcfc','decompte-conges':'#ede8f5','a-selectionner':'#f2f7f4',
   };
   return bgs[statut]||'#fff';
 }
@@ -2603,7 +2603,10 @@ const statutPrevuJ=getStatutPrevu(c,j);
       <td style="padding:5px 4px;font-size:12px;font-weight:500;white-space:nowrap;${manquant?'color:var(--al)':''}">${nomJour} ${numJour}</td>
       ${prevuCell}
       <td style="padding:3px 4px">
-      ${['prevu','travaille','abs-partielle','a-selectionner'].includes(statutActuel)?`
+      ${(()=>{
+        const isPlanMinVar=sourceActive.th==='plan'&&(sourceActive.planType==='min'||sourceActive.planType==='var');
+        const afficherHeures=['prevu','travaille','abs-partielle','a-selectionner'].includes(statutActuel)||(['abs-rem','abs-non'].includes(statutActuel)&&isPlanMinVar);
+        return afficherHeures?`
         <div style="display:flex;align-items:center;gap:3px">
           <div>
             <input type="time" value="${j.heureDebReel||''}"
@@ -2614,7 +2617,8 @@ const statutPrevuJ=getStatutPrevu(c,j);
               ${fiche.valide?'disabled':`oninput="majFiche(${contratId},'${key}',${idx},'finReel',this.value)"`}>
           </div>   
         </div>`
-        :`<span style="font-size:11px;color:var(--tx3);font-style:italic">—</span>`}
+        :`<span style="font-size:11px;color:var(--tx3);font-style:italic">—</span>`;
+      })()}
       </td>
       ${!isPlanVar?`<td id="hpm-${contratId}-${key}-${idx}" style="padding:3px 4px;font-size:11px;font-weight:600">
         ${(()=>{
@@ -4458,7 +4462,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   fiche.jours.forEach(j=>{
     const semKey=getSemISO(j.date);
     if(!hParSemaine[semKey]) hParSemaine[semKey]=0;
-    if(j.heureDebReel&&j.heureFinReel&&(j.statut==='prevu'||j.statut==='travaille'||j.statut==='ferie'||!j.statut)){
+    if(j.heureDebReel&&j.heureFinReel&&(estStatutPrevu(j.statut)||j.statut==='travaille'||j.statut==='ferie'||!j.statut)){
       hParSemaine[semKey]+=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
     } else if(!j.heureDebReel&&j.statut==='ferie'&&j.heureDebPrev&&j.heureFinPrev){
       // Férié prévu non travaillé : heures prévues pour calcul HS uniquement
@@ -5340,10 +5344,18 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const jourIdx2=j.jourSemaine===0?6:j.jourSemaine-1;
         const jourPossible=c.joursMin&&c.joursMin[jourIdx2];
         if(jourPossible){
+          // Semaine à cheval sur dateAvenantStr : diviseur = jours possibles
+          const lundiSemMin=new Date(j.date);lundiSemMin.setDate(lundiSemMin.getDate()-(lundiSemMin.getDay()||7)+1);
+          const dimSemMin=new Date(lundiSemMin);dimSemMin.setDate(dimSemMin.getDate()+6);
+          const estChevalAvenantMin=dateAvenantStr&&lundiSemMin<=new Date(dateAvenantStr)&&dimSemMin>=new Date(dateAvenantStr);
           const jMaxVol=sourceActif.jMaxMin||4;
+          const joursMinActif=sourceActif.joursMin||c.joursMin||[];
+          const jouchesCochesMin=joursMinActif.filter(Boolean).length||jMaxVol;
+          const diviseurMin=estChevalAvenantMin?jouchesCochesMin:jMaxVol;
+          const limiteMin=estChevalAvenantMin?jouchesCochesMin:jMaxVol;
           if(!hAbsDedJoursCpt2[semKeyAbs]) hAbsDedJoursCpt2[semKeyAbs]=0;
-          if(hAbsDedJoursCpt2[semKeyAbs]<jMaxVol){
-            hPrev=(sourceActif.hMin||0)/jMaxVol;
+          if(hAbsDedJoursCpt2[semKeyAbs]<limiteMin){
+            hPrev=(sourceActif.hMin||0)/diviseurMin;
             hAbsDedJoursCpt2[semKeyAbs]++;
           } else {
             hPrev=0;
@@ -5380,10 +5392,17 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           }
         } else if(!jourPossible){hPrev=0;}
         else{
+          // Semaine à cheval sur dateAvenantStr : diviseur = jours possibles
+          const lundiSemAbs=new Date(j.date);lundiSemAbs.setDate(lundiSemAbs.getDate()-(lundiSemAbs.getDay()||7)+1);
+          const dimSemAbs=new Date(lundiSemAbs);dimSemAbs.setDate(dimSemAbs.getDate()+6);
+          const estChevalAvenantAbs=dateAvenantStr&&lundiSemAbs<=new Date(dateAvenantStr)&&dimSemAbs>=new Date(dateAvenantStr);
           const jMaxVol=volSem.j||5;
+          const jouchesCochesAbs=volSem.jours?volSem.jours.filter(Boolean).length:jMaxVol;
+          const diviseurAbs=estChevalAvenantAbs?jouchesCochesAbs:jMaxVol;
+          const limiteAbs=estChevalAvenantAbs?jouchesCochesAbs:jMaxVol;
           if(!hAbsDedJoursCpt2[semKeyAbs]) hAbsDedJoursCpt2[semKeyAbs]=0;
-          if(hAbsDedJoursCpt2[semKeyAbs]<jMaxVol){
-            hPrev=hVolSem>0?hVolSem/jMaxVol:0;
+          if(hAbsDedJoursCpt2[semKeyAbs]<limiteAbs){
+            hPrev=hVolSem>0?hVolSem/diviseurAbs:0;
             hAbsDedJoursCpt2[semKeyAbs]++;
           } else {
             hPrev=0;
