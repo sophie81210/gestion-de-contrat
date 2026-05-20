@@ -2328,8 +2328,12 @@ function ouvrirFiche(contratId,key){
     if(!j.semKey) j.semKey=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
     const d=new Date(j.date);
     const prevus=getHeuresPrevues(c,d);
-    j.heureDebPrev=prevus.debut==='prévu'?null:prevus.debut;
-    j.heureFinPrev=prevus.fin;
+    // Pour plan min/var : ne pas écraser les heures prévues saisies par l'utilisateur
+    const isPlanMinVarFiche=c.th==='plan'&&(c.planType==='min'||c.planType==='var');
+    if(!isPlanMinVarFiche){
+      j.heureDebPrev=prevus.debut==='prévu'?null:prevus.debut;
+      j.heureFinPrev=prevus.fin;
+    }
     j.planVarPrevu=!!(prevus.planVar);
   });
   // Marquer les jours après la date de fin de contrat comme hors-contrat
@@ -2537,7 +2541,7 @@ function ouvrirFiche(contratId,key){
        ${fiche.valide?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'km',this.value)"`}>
     </td>`:'';
 
-    const optsBase=['conges-acq','conges-non','conges-anticipe','conges-am','decompte-conges'].includes(statutActuel)?statutActuel:statutPrevu;
+    const optsBase=['conges-acq','conges-non','conges-anticipe','conges-am','decompte-conges','a-selectionner'].includes(statutActuel)?statutActuel:statutPrevu;
     const opts=getStatutOptions(optsBase);
     let selectedOpts=opts.replace(`value="${statutActuel}"`,`value="${statutActuel}" selected`);
     if(!selectedOpts.includes('selected')){
@@ -2659,7 +2663,7 @@ const statutPrevuJ=getStatutPrevu(c,j);
           return '—';
         })()}
       </td>`
-      :isPlanVar?`<td style="padding:3px 4px;font-size:11px;font-weight:600;text-align:center">${(()=>{
+      :isPlanVar?`<td id="hpm-${contratId}-${key}-${idx}" style="padding:3px 4px;font-size:11px;font-weight:600;text-align:center">${(()=>{
         // H± par jour pour plan min/var
         if(hComp) return '<span style="color:var(--vt)">'+hComp+'</span>';
         if(hSup) return '<span style="color:var(--vt)">'+hSup+'</span>';
@@ -3685,11 +3689,13 @@ function majFicheStatut(contratId,key,idx,val){
     }
   }
   // Si on repasse en non-prévu ou repos, effacer les heures réelles
- const statutsEffacerHeures=['non-prevu','repos','ferie','ferie-non','init','abs-enfant','abs-rem','abs-non','abs-am','arret',
+  const isPlanMinVarStatut=c.th==='plan'&&(c.planType==='min'||c.planType==='var');
+  const statutsEffacerHeures=['non-prevu','repos','ferie','ferie-non','init',
+    ...(isPlanMinVarStatut?[]:['abs-enfant','abs-rem','abs-non','abs-am','arret']),
     'conges-acq','conges-non','conges-am','conges-anticipe'];
   if(statutsEffacerHeures.includes(val)){
-    c.fiches[key].jours[idx].heureDebReel=null;
-    c.fiches[key].jours[idx].heureFinReel=null;
+    ficheSource.fiches[key].jours[idx].heureDebReel=null;
+    ficheSource.fiches[key].jours[idx].heureFinReel=null;
   }
 
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
@@ -3736,6 +3742,11 @@ function majFiche(contratId,key,idx,champ,val){
   const bandeau=document.getElementById('bandeau-non-enregistre');
   if(bandeau) bandeau.style.display='block';
   majRecapFiche(contratId,key);
+  // Pour debPrev/finPrev : recharger la fiche pour mettre à jour H±
+  if(champ==='debPrev'||champ==='finPrev'){
+    ouvrirFiche(contratId,key);
+    return;
+  }
   // Mettre à jour la cellule H± de la ligne concernée sans recharger toute la fiche
   if(champ==='debReel'||champ==='finReel'){
     const j2=c.fiches[key].jours[idx];
@@ -5304,11 +5315,19 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const hAbsS=hAbsParSemaine[semKeyJ]||0;
         const hSeuilCompJ=Math.max(0,hPrevSem-hAbsS);
         const hReelSem=hParSemaine[semKeyJ]||0;
+        // Dépassement journalier (heures prévues saisies par l'utilisateur)
+        if(debPrev!==null&&finPrev!==null){
+          if(debReel<debPrev) compJour+=debPrev-debReel;
+          if(finReel>finPrev) compJour+=finReel-finPrev;
+        }
+        // Dépassement hebdo (volume contrat)
         if(hReelSem>hSeuilCompJ){
           const hReelJour=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
           const hReelSemMois=hReelSem-(hParSemainePrecMois[semKeyJ]||0);
           const ratioJour=hReelSemMois>0?hReelJour/hReelSemMois:0;
-          compJour=Math.max(0,hReelSem-hSeuilCompJ)*ratioJour*60;
+          const compHebdo=Math.max(0,hReelSem-hSeuilCompJ)*ratioJour*60;
+          // Éviter double comptage avec dépassement journalier
+          compJour=Math.max(compJour,compHebdo);
         }
       } else if(debPrev!==null&&finPrev!==null&&!isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))){
         if(debReel<debPrev) compJour+=debPrev-debReel;
