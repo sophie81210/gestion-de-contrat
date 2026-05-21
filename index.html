@@ -2099,7 +2099,9 @@ function getStatutOptions(statutPrevu, isPlanMinVar){
     'prevu': isPlanMinVar
       ?['prevu','non-prevu','abs-partielle','abs-rem','abs-enfant','abs-non','arret','init']
       :['prevu','abs-partielle','abs-rem','abs-enfant','abs-non','arret','init'],
-    'non-prevu':['non-prevu','travaille','init'],
+    'non-prevu': isPlanMinVar
+      ?['prevu','non-prevu','travaille','init']
+      :['non-prevu','travaille','init'],
     'repos':['repos','travaille','init'],
     'ferie':['ferie','ferie-non','travaille','init'],
     'conges-acq':['conges-acq'],
@@ -3005,7 +3007,9 @@ function enregistrerFiche(contratId,key){
   if(cidx!==-1)S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
+    showLoader('Enregistrement en cours...');
     saveToFirestoreSync().then((r)=>{
+      hideLoader();
       if(r&&r.ok===false){
         toast('⚠ Erreur Firestore — données peut-être trop volumineuses');
         return;
@@ -3014,7 +3018,7 @@ function enregistrerFiche(contratId,key){
       const bandeau=document.getElementById('bandeau-non-enregistre');
       if(bandeau) bandeau.style.display='none';
       toast('Feuille enregistrée ✓');
-    }).catch(()=>toast('⚠ Erreur de sauvegarde'));
+    }).catch(()=>{hideLoader();toast('⚠ Erreur de sauvegarde')});
   } else {
     S.ficheModifiee=false;
     const bandeau=document.getElementById('bandeau-non-enregistre');
@@ -3707,6 +3711,11 @@ function majFicheStatut(contratId,key,idx,val){
   // Pour les jours possibles plan min/var : revenir à 'a-selectionner'
   const estJourPossible=ficheSource.fiches[key].jours[idx]._jourPossible;
   ficheSource.fiches[key].jours[idx].statut=(val==='init')?(estJourPossible?'a-selectionner':null):val||null;
+  // Pour plan min/var : réinitialiser aussi les heures prévues
+  if(val==='init'&&(c.th==='plan'&&(c.planType==='min'||c.planType==='var'))){
+    ficheSource.fiches[key].jours[idx].heureDebPrev=null;
+    ficheSource.fiches[key].jours[idx].heureFinPrev=null;
+  }
 
   // Basculement auto en non-prevu pour plan min/var quand quota atteint
   if(val==='prevu'&&(c.th==='plan'&&(c.planType==='min'||c.planType==='var'))){
@@ -3783,8 +3792,9 @@ function majFiche(contratId,key,idx,champ,val){
   else if(champ==='finPrev') j.heureFinPrev=val||null;
   else if(champ==='statut') j.statut=val||null;
   else if(champ==='km') j.km=parseFloat(val)||null;
-  // Blocage : heure début après heure fin
-  if((champ==='debReel'||champ==='finReel')&&j.heureDebReel&&j.heureFinReel){
+  // Blocage : heure début après heure fin (seulement si valeurs complètes)
+  const timeRegex=/^\d{2}:\d{2}$/;
+  if((champ==='debReel'||champ==='finReel')&&j.heureDebReel&&j.heureFinReel&&timeRegex.test(j.heureDebReel)&&timeRegex.test(j.heureFinReel)){
     if(toM(j.heureDebReel)>=toM(j.heureFinReel)){
       if(champ==='debReel') j.heureDebReel=null;
       else j.heureFinReel=null;
@@ -3792,7 +3802,7 @@ function majFiche(contratId,key,idx,champ,val){
       return;
     }
   }
-  if((champ==='debPrev'||champ==='finPrev')&&j.heureDebPrev&&j.heureFinPrev){
+  if((champ==='debPrev'||champ==='finPrev')&&j.heureDebPrev&&j.heureFinPrev&&timeRegex.test(j.heureDebPrev)&&timeRegex.test(j.heureFinPrev)){
     if(toM(j.heureDebPrev)>=toM(j.heureFinPrev)){
       if(champ==='debPrev') j.heureDebPrev=null;
       else j.heureFinPrev=null;
