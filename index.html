@@ -2099,7 +2099,7 @@ function getStatutOptions(statutPrevu, isPlanMinVar){
     'prevu': isPlanMinVar
       ?['prevu','non-prevu','abs-partielle','abs-rem','abs-enfant','abs-non','arret','init']
       :['prevu','abs-partielle','abs-rem','abs-enfant','abs-non','arret','init'],
-    'non-prevu':['non-prevu','prevu','travaille','init'],
+    'non-prevu':['non-prevu','prevu','travaille','abs-partielle','abs-rem','abs-non','abs-enfant','arret','init'],
     'repos':['repos','travaille','init'],
     'ferie':['ferie','ferie-non','travaille','init'],
     'conges-acq':['conges-acq'],
@@ -2668,8 +2668,10 @@ const statutPrevuJ=getStatutPrevu(c,j);
       <td style="padding:3px 4px;${isPlanVar?'border-left:2px solid '+couleurVolumeBrd+';':''}">
       ${(()=>{
         const isPlanMinVar=sourceActive.th==='plan'&&(sourceActive.planType==='min'||sourceActive.planType==='var');
-        const afficherHeures=['prevu','travaille','abs-partielle','a-selectionner'].includes(statutActuel)||(['abs-rem','abs-non'].includes(statutActuel)&&isPlanMinVar);
-        return afficherHeures?`
+        const estAbsAvecPrev=(['abs-rem','abs-non'].includes(statutActuel)&&isPlanMinVar);
+        const afficherHeures=['prevu','travaille','abs-partielle','a-selectionner'].includes(statutActuel);
+        // Pour abs-rem/abs-non plan min/var : masquer les heures réelles
+        return (afficherHeures&&!estAbsAvecPrev)?`
         <div style="display:flex;align-items:center;gap:3px">
           <div>
             <input type="time" value="${j.heureDebReel||''}"
@@ -4942,7 +4944,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       } else if(sourceActif.th==='plan'&&sourceActif.planType==='var'&&sourceActif.planVar){
         const semKeyTh=getSemISO(dateStr);
         const agKeyTh=getKeyAgenda(semKeyTh,getSemAnnee(dateStr));
-        const typeSemTh=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKeyTh];
+        // Utiliser l'agenda de sourceActif (avenant) pour tout le mois
+        const agendasSrcActif=sourceActif.agendas||c.agendas||[];
+        const agendaSrcActif=agendasSrcActif.find(ag=>new Date(ag.dateDebut)<=new Date(dateStr)&&new Date(ag.dateFin)>=new Date(dateStr))||agendaMois;
+        const typeSemTh=agendaSrcActif&&agendaSrcActif.semaines&&agendaSrcActif.semaines[agKeyTh];
         const volTh=typeSemTh?sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemTh):null;
         const jourIdxTh=d.getDay()===0?6:d.getDay()-1;
         if(volTh&&volTh.jours&&volTh.jours[jourIdxTh]){
@@ -5205,7 +5210,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             true;
           if(jourTravailleHCAv) horsContratDeduit=true;
         }
-      } else if(j.heureDebPrev&&j.heureFinPrev){
+      } else if(j.heureDebPrev&&j.heureFinPrev&&!estStatutPrevu(statut)&&statut!=='travaille'&&!(j._horsContratAvenant&&periodeAv==='apres')){
         horsContratDeduit=true;
       } else if(c.th==='plan'&&(c.planVar||c.planType==='min')){
         // Les jours hors-période sont couverts par hAbsHorsPeriode → pas de double comptage
@@ -5532,6 +5537,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         }
       } else if(j.heureDebPrev&&j.heureFinPrev){
         hPrev=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
+      } else if(c.th==='plan'&&(c.planType==='min'||c.planType==='var')){
+        // Plan min/var : sans heures prévues saisies → pas de déduction
+        hPrev=0;
       } else if(c.th==='plan'&&c.planType==='min'){
         const semKeyAbs=getSemISO(j.date);
         const jourIdx2=j.jourSemaine===0?6:j.jourSemaine-1;
