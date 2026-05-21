@@ -2115,7 +2115,9 @@ function getStatutOptions(statutPrevu, isPlanMinVar){
     'non-prevu':'Non prévu','travaille':'Travaillé','repos':'Repos',
     'ferie':'Férié','conges-acq':'Congés acquis','conges-non':'Congés non acquis',
   'init':'↺ Réinitialiser','hors-contrat':'Hors contrat','abs-partielle':'Absence partielle','decompte-conges':'Décompte congés','a-selectionner':'À sélectionner'};
-  return (opts[statutPrevu]||['prevu']).map(v=>`<option value="${v}">${labels[v]||v}</option>`).join('');
+  const labelsEffectifs={...labels};
+  if(isPlanMinVar) labelsEffectifs['travaille']='Jour complémentaire';
+  return (opts[statutPrevu]||['prevu']).map(v=>`<option value="${v}">${labelsEffectifs[v]||v}</option>`).join('');
 }
 
 function getStatutBg(statut){
@@ -5420,12 +5422,39 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           if(debReel<debPrev) depassJour+=debPrev-debReel;
           if(finReel>finPrev) depassJour+=finReel-finPrev;
         }
+        // Règle 3 : jour 'travaille' sur jour non possible → toutes les heures en HC
+        if(j.statut==='travaille'){
+          const jourIdxTrav=j.jourSemaine===0?6:j.jourSemaine-1;
+          let jourPossible=false;
+          if(sourceActif.planType==='min'){
+            jourPossible=!!(sourceActif.joursMin&&sourceActif.joursMin[jourIdxTrav]);
+          } else if(sourceActif.planType==='var'&&sourceActif.planVar){
+            const agKeyTrav=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
+            const agendasTrav=(sourceActif.agendas||c.agendas||[]);
+            const agTrav=agendasTrav.find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date));
+            const typeSemTrav=agTrav&&agTrav.semaines&&agTrav.semaines[agKeyTrav];
+            const volTrav=typeSemTrav?sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemTrav):null;
+            jourPossible=!!(volTrav&&volTrav.jours&&volTrav.jours[jourIdxTrav]);
+          }
+          if(!jourPossible){
+            compJour=(toM(j.heureFinReel)-toM(j.heureDebReel));
+            // Jour non possible → toutes les heures en HC, pas de calcul hebdo
+          } else {
         compJour=(depassHebdo>0?(()=>{
           const hReelJour=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
           const hReelSemMois=hReelSem-(hParSemainePrecMois[semKeyJ]||0);
           const ratioJour=hReelSemMois>0?hReelJour/hReelSemMois:0;
           return Math.max(0,hPrevSaisieSem-hAbsS-hVolContrat)*ratioJour*60;
         })():0)+depassJour;
+          }
+        } else {
+        compJour=(depassHebdo>0?(()=>{
+          const hReelJour=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
+          const hReelSemMois=hReelSem-(hParSemainePrecMois[semKeyJ]||0);
+          const ratioJour=hReelSemMois>0?hReelJour/hReelSemMois:0;
+          return Math.max(0,hPrevSaisieSem-hAbsS-hVolContrat)*ratioJour*60;
+        })():0)+depassJour;
+        }
       } else if(debPrev!==null&&finPrev!==null&&!isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))){
         if(debReel<debPrev) compJour+=debPrev-debReel;
         if(finReel>finPrev) compJour+=finReel-finPrev;
