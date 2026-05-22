@@ -10176,8 +10176,21 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
       const reposH=c.reposHebdo||0;
       const jourIdx=jourSem===0?6:jourSem-1;
       if(jourSem!==reposH&&!isFerie(dateStr,c)){
+        // Sauter les semaines off (absence employeur) pour contrats 46 sem
+        if(c.tc!=='52'){
+          const srcPTOff=getVersionActive(c,d);
+          const semNumPT=getSemISO(dateStr);
+          const semAnPT=getSemAnnee(dateStr);
+          const semKeyPT=semAnPT+'-S'+String(semNumPT).padStart(2,'0');
+          const agendasPT=srcPTOff.agendas||c.agendas||[];
+          const agPT=agendasPT.find(a=>d>=new Date(a.dateDebut)&&d<=new Date(a.dateFin));
+          if(agPT&&agPT.semaines&&agPT.semaines[semKeyPT]==='off'){
+            const jourSemPT=d.getDay()||7;
+            d.setDate(d.getDate()+(8-jourSemPT));
+            continue;
+          }
+        }
         if(c.th==='plan'){
-          // Sur planning : vérifier si ce jour est possiblement travaillé
           let jourPossible=false;
           if(c.planType==='var'&&c.planVar){
             jourPossible=c.planVar.some(v=>v.jours&&v.jours[jourIdx]);
@@ -10202,7 +10215,8 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
     const fin=new Date(finPeriode);
     let cur=new Date(fin);
     cur.setDate(cur.getDate()+1);
-    // Chercher le 1er jour prévu travaillé après la période
+    // Chercher le 1er jour prévu travaillé après la période, dans une semaine non-off
+    // (s'applique à tous les contrats 46 sem ou moins, pas seulement plan sem)
     let reprise=null;
     for(let i=0;i<60;i++){
       const dateStr=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
@@ -10210,14 +10224,22 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
       const reposH=c.reposHebdo||0;
       if(jourSem!==reposH&&!isFerie(dateStr,c)){
         const srcDJD=getVersionActive(c,cur);
-        if(srcDJD.th==='sem'){
-          // Pour plan sem : reprise = premier jour prévu de la première semaine non-off
-          const prevusDJD=getHeuresPrevues(srcDJD,cur);
-          if(prevusDJD.debut){reprise=dateStr;break;}
-        } else {
-          const prevus=getHeuresPrevues(srcDJD,cur);
-          if(prevus.debut||prevus.planVar){reprise=dateStr;break;}
+        // Vérifier si la semaine courante est off (absence employeur) - pour tous contrats 46 sem
+        if(c.tc!=='52'){
+          const semNumCur=getSemISO(dateStr);
+          const semAnCur=getSemAnnee(dateStr);
+          const semKeyCur=semAnCur+'-S'+String(semNumCur).padStart(2,'0');
+          const agendasCur=srcDJD.agendas||c.agendas||[];
+          const agCur=agendasCur.find(a=>cur>=new Date(a.dateDebut)&&cur<=new Date(a.dateFin));
+          if(agCur&&agCur.semaines&&agCur.semaines[semKeyCur]==='off'){
+            // Semaine off : sauter au lundi suivant
+            const jourSemCur=cur.getDay()||7;
+            cur.setDate(cur.getDate()+(8-jourSemCur));
+            continue;
+          }
         }
+        const prevusDJD=getHeuresPrevues(srcDJD,cur);
+        if(prevusDJD.debut||prevusDJD.planVar){reprise=dateStr;break;}
       }
       cur.setDate(cur.getDate()+1);
     }
@@ -10240,7 +10262,7 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
         const reposH=c.reposHebdo||0;
         if(jourSem!==reposH&&!isFerie(ds,c)){
           const srcTmp=getVersionActive(c,tmp);
-          // Pour plan sem : vérifier si la semaine est travaillée (pas off) dans l'agenda
+          // Vérifier si la semaine est travaillée (pas off) dans l'agenda (tous contrats 46 sem)
           if(srcTmp.th==='sem'){
             const semNumTmp=getSemISO(ds);
             const semAnTmp=getSemAnnee(ds);
