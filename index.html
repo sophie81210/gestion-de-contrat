@@ -6443,31 +6443,29 @@ function selTC(el,v){
     fpe.closest('.fg').style.display=v==='occ'?'none':'block';
     // Avenant occ→46/52 : activer la période d'essai avec déduction des mois déjà écoulés
     const isAvenantOccVersClassique=S.enAvenant&&(S.contrats.find(x=>x.id==S.enAvenant)||{}).tc==='occ';
-    fpe.disabled=!!(S.enAvenant&&!isAvenantOccVersClassique);
-    if(S.enAvenant&&!isAvenantOccVersClassique){
+    // Point d'essai : toujours désactivé dans un avenant
+    if(S.enAvenant){
+      fpe.disabled=true;
       fpe.title="La période d\'essai ne peut pas être modifiée dans un avenant";
-    } else if(isAvenantOccVersClassique){
-      // Calculer les mois déjà écoulés depuis le début du contrat occ
-      const cOcc=S.contrats.find(x=>x.id==S.enAvenant);
-      if(cOcc&&cOcc.dateDeb){
-        const deb=new Date(cOcc.dateDeb.split('-')[0],parseInt(cOcc.dateDeb.split('-')[1])-1,parseInt(cOcc.dateDeb.split('-')[2]));
-        const now=new Date();
-        const moisEcoules=Math.floor((now-deb)/(1000*60*60*24*30.5));
-        // Période d'essai max selon les jours/sem (déjà calculée dans calc())
-        // Calculer période d'essai max selon les jours/sem (2 mois si >=4j/sem, sinon 3)
-        let joursParSemOcc=0;
-        const joursFixeEl=document.querySelectorAll('#cond-fixe input[type="checkbox"]');
-        joursFixeEl.forEach(cb=>{if(cb.checked) joursParSemOcc++;});
-        if(joursParSemOcc===0){
-          // Essayer depuis semTypes ou planVar
-          const semTypesEls=document.querySelectorAll('.sem-type-jours input:checked');
-          joursParSemOcc=semTypesEls.length||5;
+      // Avenant occ→classique : pré-remplir avec les mois restants depuis la date d'embauche
+      if(isAvenantOccVersClassique){
+        const cOcc=S.contrats.find(x=>x.id==S.enAvenant);
+        if(cOcc&&cOcc.dateDeb){
+          const deb=new Date(cOcc.dateDeb.split('-')[0],parseInt(cOcc.dateDeb.split('-')[1])-1,parseInt(cOcc.dateDeb.split('-')[2]));
+          const now=new Date();
+          const moisEcoules=Math.floor((now-deb)/(1000*60*60*24*30.5));
+          let joursParSemOcc=0;
+          const joursFixeEl=document.querySelectorAll('#cond-fixe input[type="checkbox"]');
+          joursFixeEl.forEach(cb=>{if(cb.checked) joursParSemOcc++;});
+          if(joursParSemOcc===0){
+            const semTypesEls=document.querySelectorAll('.sem-type-jours input:checked');
+            joursParSemOcc=semTypesEls.length||5;
+          }
+          const periodeEssaiMax=joursParSemOcc>=4?2:3;
+          const essaiRestant=Math.max(0,periodeEssaiMax-moisEcoules);
+          fpe.value=essaiRestant;
+          fpe.title='Période d\'essai calculée depuis l\'embauche : '+periodeEssaiMax+' mois max − '+moisEcoules+' mois écoulés = '+essaiRestant+' mois restants (non modifiable)';
         }
-        const periodeEssaiMax=joursParSemOcc>=4?2:3;
-        const essaiRestant=Math.max(0,periodeEssaiMax-moisEcoules);
-        fpe.value=essaiRestant;
-        fpe.disabled=false;
-        fpe.title='Période d\'essai : '+periodeEssaiMax+' mois max, diminuée de '+moisEcoules+' mois écoulés = '+essaiRestant+' mois restants';
       }
     }
   }
@@ -6894,7 +6892,12 @@ function renderAgendas(c){
     const semaines=getSemsAgenda(ag,c);
     // Pour plan sem et plan var : pas de semaines congés bloquées (pointage libre)
     // Pour les autres types : calculer semsCongesSet (5 semaines les plus chargées)
-    const agSource2=(()=>{const r=trouverAgenda(c,ag.id);return r?r.source:c;})();
+    const agSource2=(()=>{
+      // Chercher la vraie source dans S.contrats pour avoir semTypes et autres propriétés
+      const cReal=S.contrats.find(x=>x.id==c.id)||c;
+      const r=trouverAgenda(cReal,ag.id);
+      return r?r.source:c;
+    })();
     const estPlanSemOuVar52=(agSource2.tc==='52')&&((agSource2.th==='plan'&&(agSource2.planType==='var'||agSource2.planType==='sem'))||(agSource2.th==='sem'));
     let semsCongesSet=null;
     if(!estPlanSemOuVar52){
@@ -7453,7 +7456,7 @@ function validerModifAgenda(cid,agid){
     Object.keys(S.congesAM).forEach(am=>{majFichesCgAm(parseInt(am),false);});
   }
   const agWrap=document.getElementById('agenda-wrap-'+cid);
-  if(agWrap) agWrap.innerHTML=renderAgendas(S.contrats.find(x=>x.id==cid)||c);
+  if(agWrap) agWrap.innerHTML=renderAgendas({...source,id:c.id});
   fermerModifAgenda(cid,agid);
 }
 
