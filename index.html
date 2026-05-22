@@ -2700,8 +2700,9 @@ const statutPrevuJ=getStatutPrevu(c,j);
           }
           if(hComp) return '<span style="color:var(--vt)">'+hComp+'</span>';
           if(hSup) return '<span style="color:var(--vt)">'+hSup+'</span>';
+          if(statutActuel==='abs-rem') return '—';
           if(hDeduit){
-            const statutsDeduits=['abs-non','abs-am','ferie-non','arret','abs-enfant','hors-contrat'];
+            const statutsDeduits=['abs-non','abs-am','ferie-non','arret','abs-enfant','abs-partielle','hors-contrat'];
             const estDeduit=statutsDeduits.includes(statutActuel);
             return estDeduit?'<span style="color:var(--al)">'+hDeduit+'</span>':'<span style="color:var(--tx)">'+hDeduit+'</span>';
           }
@@ -2712,8 +2713,9 @@ const statutPrevuJ=getStatutPrevu(c,j);
         // H± par jour pour plan min/var
         if(hComp) return '<span style="color:var(--vt)">'+hComp+'</span>';
         if(hSup) return '<span style="color:var(--vt)">'+hSup+'</span>';
+        if(statutActuel==='abs-rem') return '—';
         if(hDeduit){
-          const statutsDeduits=['abs-non','abs-am','ferie-non','arret','abs-enfant','hors-contrat'];
+          const statutsDeduits=['abs-non','abs-am','ferie-non','arret','abs-enfant','abs-partielle','hors-contrat'];
           // Pour plan min/var : n'afficher hDeduit que pour vraies absences déductibles
           if(statutsDeduits.includes(statutActuel)) return '<span style="color:var(--al)">'+hDeduit+'</span>';
         }
@@ -3857,7 +3859,7 @@ function majFiche(contratId,key,idx,champ,val){
     const cellHpm=document.getElementById('hpm-'+contratId+'-'+key+'-'+idx);
     if(cellHpm){
       const isPlanMinVar2=c.th==='plan'&&(c.planType==='min'||c.planType==='var');
-      const statutsDeduits2=['abs-non','abs-am','ferie-non','arret','abs-enfant','hors-contrat'];
+      const statutsDeduits2=['abs-non','abs-am','ferie-non','arret','abs-enfant','abs-partielle','hors-contrat'];
       const afficherDeduit2=!isPlanMinVar2||statutsDeduits2.includes(statut2);
       const hDeduitAffiche2=afficherDeduit2?hDeduit2:'';
       cellHpm.style.color=hComp2?'var(--vt)':hDeduitAffiche2?'var(--al)':'var(--tx3)';
@@ -4813,21 +4815,46 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       hTheoriques+=getHJourCgTh(j.date);
     } else if(j.heureDebPrev&&j.heureFinPrev&&!(c.th==='plan'&&(c.planType==='min'||c.planType==='var'))&&!(sourceActif.th==='plan'&&(sourceActif.planType==='min'||sourceActif.planType==='var'))){
       hTheoriques+=toM(j.heureFinPrev)-toM(j.heureDebPrev);
-    } else if(!j.heureDebPrev&&!j.heureFinPrev&&(c.th==='fixe'||c.th==='sem')){
-      // CORRECTION : Semaine 'off' sur contrat fixe/sem
+    } else if(!j.heureDebPrev&&!j.heureFinPrev){
+      // Semaine 'off' : tous types de contrats
       const semKeyTh=getSemISO(j.date);
       const agKeyTh=getKeyAgenda(semKeyTh,getSemAnnee(j.date));
       const typeSemRaw=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKeyTh];
       if(typeSemRaw==='off'){
-        // Contrat fixe : heures du jour selon joursFixe
         if(sourceActif.th==='fixe'&&sourceActif.joursFixe){
           const jourIdxTh=j.jourSemaine===0?6:j.jourSemaine-1;
           const jfTh=sourceActif.joursFixe[jourIdxTh];
           if(jfTh&&jfTh.d&&jfTh.f) hTheoriques+=toM(jfTh.f)-toM(jfTh.d);
-        } else if(!semTheoriquesVues.has(semKeyTh)){
-          // Contrat sem : moyenne hebdo une seule fois par semaine
+        } else if((sourceActif.th==='fixe'||sourceActif.th==='sem')&&!semTheoriquesVues.has(semKeyTh)){
           semTheoriquesVues.add(semKeyTh);
           hTheoriques+=(hMensu*12/nbSemActif)*60;
+        } else if(sourceActif.th==='plan'&&sourceActif.planType==='min'){
+          const jourIdxTh=j.jourSemaine===0?6:j.jourSemaine-1;
+          const joursMinTh=sourceActif.joursMin||c.joursMin;
+          const jMaxMinTh=sourceActif.jMaxMin||c.jMaxMin||4;
+          const hMinTh=sourceActif.hMin||c.hMin||0;
+          if(joursMinTh&&joursMinTh[jourIdxTh]){
+            if(!semJoursCpt[semKeyTh]) semJoursCpt[semKeyTh]=0;
+            if(semJoursCpt[semKeyTh]<jMaxMinTh){
+              hTheoriques+=hMinTh/jMaxMinTh*60;
+              semJoursCpt[semKeyTh]++;
+            }
+          }
+        } else if(sourceActif.th==='plan'&&sourceActif.planType==='var'&&sourceActif.planVar){
+          const agendasSrcOff=sourceActif.agendas||c.agendas||[];
+          const agOff=agendasSrcOff.find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date))||agendaMois;
+          const typeSemOff=agOff&&agOff.semaines&&agOff.semaines[agKeyTh];
+          const volOff=typeSemOff?sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemOff):null;
+          if(volOff&&volOff.jours){
+            const jourIdxTh=j.jourSemaine===0?6:j.jourSemaine-1;
+            if(volOff.jours[jourIdxTh]){
+              if(!semJoursCpt[semKeyTh]) semJoursCpt[semKeyTh]=0;
+              if(semJoursCpt[semKeyTh]<(volOff.j||1)){
+                hTheoriques+=(volOff.h/(volOff.j||1))*60;
+                semJoursCpt[semKeyTh]++;
+              }
+            }
+          }
         }
       }
     } else if(c.th==='plan'&&c.planType==='min'){
