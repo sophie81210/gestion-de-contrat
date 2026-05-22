@@ -5012,28 +5012,39 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           hAbsHorsPeriode+=(hMensu*12/nbSemActif)/joursMaxMoyen;
         }
       } else if(sourceActif.th==='plan'&&sourceActif.planType==='var'&&sourceActif.planVar){
-        // Toujours utiliser sourceActif (avenant) pour les calculs hors-période
-        const semKeyHP=getSemISO(dateStr);
-        const agKeyHP=getKeyAgenda(semKeyHP,getSemAnnee(dateStr));
-        // Utiliser l'agenda de sourceActif
-        const agendasSrcHP=sourceActif.agendas||c.agendas||[];
-        const agendaSrcHP=agendasSrcHP.find(ag=>new Date(ag.dateDebut)<=new Date(dateStr)&&new Date(ag.dateFin)>=new Date(dateStr))||agendaMois;
-        const typeSemHP=agendaSrcHP&&agendaSrcHP.semaines&&agendaSrcHP.semaines[agKeyHP];
-        if(typeSemHP&&typeSemHP!=='off'){
-          const volHP=sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemHP);
+        const srcHP=getVersionActive(c,new Date(d));
+        if(srcHP.planType==='var'&&srcHP.planVar){
+          const semKeyHP=getSemISO(dateStr);
+          const agKeyHP=getKeyAgenda(semKeyHP,getSemAnnee(dateStr));
+          const typeSemHP=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKeyHP];
+          if(typeSemHP&&typeSemHP!=='off'){
+            const volHP=srcHP.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemHP);
+            const jourIdxHP=d.getDay()===0?6:d.getDay()-1;
+            if(volHP&&volHP.jours&&volHP.jours[jourIdxHP]){
+              if(!semJoursCptM['hp_'+semKeyHP]) semJoursCptM['hp_'+semKeyHP]=0;
+              if(semJoursCptM['hp_'+semKeyHP]<(volHP.j||1)){
+                hAbsHorsPeriode+=volHP.h/volHP.j;
+                semJoursCptM['hp_'+semKeyHP]++;
+              }
+            }
+          }
+        } else if(srcHP.planType==='min'){
           const jourIdxHP=d.getDay()===0?6:d.getDay()-1;
-          if(volHP&&volHP.jours&&volHP.jours[jourIdxHP]){
-            if(!semJoursCptM['hp_'+semKeyHP]) semJoursCptM['hp_'+semKeyHP]=0;
-            // Semaine à cheval sur dateAvenantStr : diviseur = jours possibles
-            const lundiHP=new Date(d);lundiHP.setDate(lundiHP.getDate()-(lundiHP.getDay()||7)+1);
-            const dimHP=new Date(lundiHP);dimHP.setDate(dimHP.getDate()+6);
-            const estChevalHP=dateAvenantStr&&lundiHP<=new Date(dateAvenantStr)&&dimHP>=new Date(dateAvenantStr);
-            const jouchesCochesHP=volHP.jours.filter(Boolean).length||volHP.j||1;
-            const diviseurHP=estChevalHP?jouchesCochesHP:(volHP.j||1);
-            const limiteHP=estChevalHP?jouchesCochesHP:(volHP.j||1);
-            if(semJoursCptM['hp_'+semKeyHP]<limiteHP){
-              hAbsHorsPeriode+=volHP.h/diviseurHP;
-              semJoursCptM['hp_'+semKeyHP]++;
+          const joursMinHP=srcHP.joursMin||c.joursMin||[];
+          const jMaxMinHP=srcHP.jMaxMin||c.jMaxMin||4;
+          const hMinHP=srcHP.hMin||c.hMin||0;
+          const joursCoches=joursMinHP.filter(Boolean).length||jMaxMinHP;
+          const semKeyHPM=getSemISO(dateStr);
+          // Semaine à cheval sur dateAvenantStr : limite = joursCoches
+          const lundiHPM=new Date(d);lundiHPM.setDate(lundiHPM.getDate()-(lundiHPM.getDay()||7)+1);
+          const dimHPM=new Date(lundiHPM);dimHPM.setDate(dimHPM.getDate()+6);
+          const estChevalHPM=dateAvenantStr&&lundiHPM<=new Date(dateAvenantStr)&&dimHPM>=new Date(dateAvenantStr);
+          const limiteHPM=estChevalHPM?joursCoches:jMaxMinHP;
+          if(joursMinHP[jourIdxHP]){
+            if(!semJoursCptM['hp_'+semKeyHPM]) semJoursCptM['hp_'+semKeyHPM]=0;
+            if(semJoursCptM['hp_'+semKeyHPM]<limiteHPM){
+              hAbsHorsPeriode+=hMinHP/joursCoches;
+              semJoursCptM['hp_'+semKeyHPM]++;
             }
           }
         }
@@ -5044,9 +5055,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const hMinHP=sourceActif.hMin||c.hMin||0;
         const joursCoches=joursMinHP.filter(Boolean).length||jMaxMinHP;
         const semKeyHPM=getSemISO(dateStr);
+        const lundiHPM2=new Date(d);lundiHPM2.setDate(lundiHPM2.getDate()-(lundiHPM2.getDay()||7)+1);
+        const dimHPM2=new Date(lundiHPM2);dimHPM2.setDate(dimHPM2.getDate()+6);
+        const estChevalHPM2=dateAvenantStr&&lundiHPM2<=new Date(dateAvenantStr)&&dimHPM2>=new Date(dateAvenantStr);
+        const limiteHPM2=estChevalHPM2?joursCoches:jMaxMinHP;
         if(joursMinHP[jourIdxHP]){
           if(!semJoursCptM['hp_'+semKeyHPM]) semJoursCptM['hp_'+semKeyHPM]=0;
-          if(semJoursCptM['hp_'+semKeyHPM]<jMaxMinHP){
+          if(semJoursCptM['hp_'+semKeyHPM]<limiteHPM2){
             hAbsHorsPeriode+=hMinHP/joursCoches;
             semJoursCptM['hp_'+semKeyHPM]++;
           }
@@ -5201,10 +5216,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         }
       } else if(j.heureDebPrev&&j.heureFinPrev&&!estStatutPrevu(statut)&&statut!=='travaille'&&!(j._horsContratAvenant&&periodeAv==='apres')){
         horsContratDeduit=true;
-      } else if((sourceActif.th==='plan'||c.th==='plan')&&(sourceActif.planVar||sourceActif.planType==='min'||c.planVar||c.planType==='min')){
-        // Encart 2 : jours avant avenant déjà couverts par hAbsHorsPeriode
-        if(j._horsContratAvenant&&periodeAv==='apres') {
-          // pas de horsContratDeduit
+      } else if(c.th==='plan'&&(c.planVar||c.planType==='min')){
+        // Les jours hors-période sont couverts par hAbsHorsPeriode → pas de double comptage
+        if(j._horsContratAvenant&&dateAvenantStr){
+          // déjà compté dans hAbsHorsPeriode
         } else {
         const semKeyHC=getSemISO(j.date);
         const agKeyHC=getKeyAgenda(semKeyHC,getSemAnnee(j.date));
@@ -5311,7 +5326,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             }
           }
         }
-        } // fin else encart 2
+        }
       } else if(c.th!=='plan'){
         // CORRECTION : semaine 'off' pour contrats fixe/sem
         const semKeyHCF=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
