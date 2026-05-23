@@ -2021,7 +2021,7 @@ function creerFiche(c,annee,mois){
 
 
 // Helper : 'a-selectionner' se comporte comme 'prevu' dans tous les calculs
-function estStatutPrevu(s){ return s==='prevu'||s==='a-selectionner'; }
+function estStatutPrevu(s){ return s==='prevu'||s==='a-selectionner'||s==='reprise'; }
 
 function getTypeSem(agenda, semKey){
   const val = agenda&&agenda.semaines&&agenda.semaines[semKey];
@@ -4706,11 +4706,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const vol=typeSem?planVarRef.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
       if(vol) hPrevuParSemaine[semKey]=vol.h;
     }
-    if((sourceActif.th==='plan'||c.th==='plan')&&(sourceActif.planType==='min'||c.planType==='min')&&!hPrevuParSemaine[semKey]){
+    if(c.th==='plan'&&c.planType==='min'&&!hPrevuParSemaine[semKey]){
       hPrevuParSemaine[semKey]=sourceActif.hMin||c.hMin||0;
     }
     // Pour plan min/var : accumuler les heures prévues saisies par semaine
-    if((sourceActif.th==='plan'||c.th==='plan')&&((sourceActif.planType==='min'||sourceActif.planType==='var')||(c.planType==='min'||c.planType==='var'))){
+    if(c.th==='plan'&&(c.planType==='min'||c.planType==='var')){
       if(!hPrevSaisieParSemaine) hPrevSaisieParSemaine={};
       if(!hPrevSaisieParSemaine[semKey]) hPrevSaisieParSemaine[semKey]=0;
       const statutsComptablesPrev=['prevu','a-selectionner','abs-non','abs-rem','abs-enfant','arret','abs-partielle'];
@@ -4739,7 +4739,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const semJoursCptAv={}; // compteur séparé pour jours _horsContratAvenant
   // Pour plan min/var : précalculer les jours hors-contrat à exclure de hTheoriques
   const joursHCExclus=new Set();
-  if((sourceActif.th==='plan'||c.th==='plan')&&((sourceActif.planType==='min'||sourceActif.planType==='var')||(c.planType==='min'||c.planType==='var'))){
+  if(c.th==='plan'&&(c.planType==='min'||c.planType==='var')){
     const hAbsJoursCptTh={};
     fiche.jours.forEach(j=>{
       // Inclure aussi les jours avant c.dateDeb (non marqués hors-contrat mais hors période)
@@ -4868,21 +4868,6 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
               semJoursCpt[semKeyTh]++;
             }
           }
-        } else if(sourceActif.th==='plan'&&sourceActif.planType==='var'&&sourceActif.planVar){
-          const agendasSrcOff=sourceActif.agendas||c.agendas||[];
-          const agOff=agendasSrcOff.find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date))||agendaMois;
-          const typeSemOff=agOff&&agOff.semaines&&agOff.semaines[agKeyTh];
-          const volOff=typeSemOff?sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemOff):null;
-          if(volOff&&volOff.jours){
-            const jourIdxTh=j.jourSemaine===0?6:j.jourSemaine-1;
-            if(volOff.jours[jourIdxTh]){
-              if(!semJoursCpt[semKeyTh]) semJoursCpt[semKeyTh]=0;
-              if(semJoursCpt[semKeyTh]<(volOff.j||1)){
-                hTheoriques+=(volOff.h/(volOff.j||1))*60;
-                semJoursCpt[semKeyTh]++;
-              }
-            }
-          }
         }
       }
     } else if(c.th==='plan'&&c.planType==='min'){
@@ -4939,7 +4924,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           hTheoriques+=(hMensu*12/nbSemActif)*60;
         }
       }
-    } else if((sourceActif.th==='plan'||c.th==='plan')&&(sourceActif.planType==='var'||c.planType==='var')&&(sourceActif.planVar||c.planVar)){
+    }
+    // Plan var : traité indépendamment (avec ou sans heureDebPrev)
+    if((sourceActif.th==='plan'||c.th==='plan')&&(sourceActif.planType==='var'||c.planType==='var')&&(sourceActif.planVar||c.planVar)&&!['conges-non','conges-acq','conges-anticipe'].includes(j.statut)){
       const semKeyTh=getSemISO(j.date);
       const agKeyTh=getKeyAgenda(semKeyTh,getSemAnnee(j.date));
       // Chercher le type de semaine dans tous les agendas du contrat (pas seulement agendaMois)
@@ -5162,7 +5149,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // Pour th='sem' ou th='plan' non-var : utiliser la méthode alternative (moyenne par jour)
   // hTheoriques = totalHeuresAnnuelles / totalJoursAnnuels × nbJoursMois
   const isPlanVar=sourceActif.th==='plan'&&sourceActif.planType==='var';
-  if(!isPlanVar&&(hTheoriques<=0||sourceActif.th==='sem'||(sourceActif.th==='plan'&&sourceActif.planType!=='min'))){
+  if(!isPlanVar&&sourceActif.planType!=='min'&&c.planType!=='min'&&(hTheoriques<=0||sourceActif.th==='sem'||(sourceActif.th==='plan'&&sourceActif.planType!=='min'))){
     // Calculer le total heures et jours annuels depuis le contrat
     let totalHAnnuel=0;
     let totalJAnnuel=0;
