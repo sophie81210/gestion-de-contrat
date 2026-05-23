@@ -2107,6 +2107,7 @@ function getStatutOptions(statutPrevu, isPlanMinVar){
     'hors-contrat':['hors-contrat'],
     'conges-am':['conges-am'],
     'conges-anticipe':['conges-anticipe'],
+    'decompte-conges':['decompte-conges','travaille'],
     'a-selectionner':['prevu','non-prevu','abs-partielle','abs-rem','abs-non','abs-enfant','arret','init'],
   };
   const labels={
@@ -10340,6 +10341,20 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
     const fin=new Date(finPeriode);
     let cur=new Date(fin);
     cur.setDate(cur.getDate()+1);
+    // Vérifier si un jour travaillé/complémentaire existe dans la fiche après finPeriode
+    // → un jour travaillé stoppe le décompte (reprise effective)
+    const tousJoursFiche=Object.values(c.fiches||{}).flatMap(f=>f.jours||[]);
+    const premierTravailleApres=tousJoursFiche
+      .filter(j=>j.date>finPeriode&&['travaille','jours-complementaires'].includes(j.statut))
+      .sort((a,b)=>a.date<b.date?-1:1)[0];
+    if(premierTravailleApres){
+      // Dernier décompté = veille du premier jour travaillé
+      const vt=new Date(premierTravailleApres.date);
+      vt.setDate(vt.getDate()-1);
+      const vtStr=vt.getFullYear()+'-'+String(vt.getMonth()+1).padStart(2,'0')+'-'+String(vt.getDate()).padStart(2,'0');
+      // Mais seulement si ce jour travaillé est avant la reprise normale
+      // On continue pour trouver reprise et comparer
+    }
     // Chercher le 1er jour prévu travaillé après la période, dans une semaine non-off
     // (s'applique à tous les contrats 46 sem ou moins, pas seulement plan sem)
     let reprise=null;
@@ -10435,10 +10450,17 @@ if(tousNonPrevus){
         }
       }
     }
-    // Dernier jour décompté = veille de la reprise
+    // Dernier jour décompté = veille de la reprise (ou veille du premier jour travaillé si antérieur)
     const veille=new Date(reprise);
     veille.setDate(veille.getDate()-1);
-    return veille.getFullYear()+'-'+String(veille.getMonth()+1).padStart(2,'0')+'-'+String(veille.getDate()).padStart(2,'0');
+    const veilleStr=veille.getFullYear()+'-'+String(veille.getMonth()+1).padStart(2,'0')+'-'+String(veille.getDate()).padStart(2,'0');
+    if(premierTravailleApres&&premierTravailleApres.date<=reprise){
+      const vt=new Date(premierTravailleApres.date);
+      vt.setDate(vt.getDate()-1);
+      const vtStr=vt.getFullYear()+'-'+String(vt.getMonth()+1).padStart(2,'0')+'-'+String(vt.getDate()).padStart(2,'0');
+      return vtStr<veilleStr?vtStr:veilleStr;
+    }
+    return veilleStr;
   }
 
   S.contrats.forEach(c=>{
