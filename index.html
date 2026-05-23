@@ -2094,57 +2094,30 @@ function getHeuresPrevues(c, date, sourceForce){
 
   return {debut:null, fin:null};
 }
-function getStatutOptions(statutPrevu, isPlanMinVar, c, sourceActive){
-  const th=(sourceActive||c||{}).th||'fixe';
-  const planType=(sourceActive||c||{}).planType||'';
-  const tc=(c||{}).tc||'52';
-  const isPlanVar=isPlanMinVar&&(planType==='var'||planType==='min');
-  const isFixeSem=(th==='fixe'||th==='sem');
-
+function getStatutOptions(statutPrevu, isPlanMinVar){
   const opts={
-    // Jours prévus : changer le statut en absence
-    'prevu':['abs-partielle','abs-rem','abs-enfant','abs-non','arret','init'],
-    // Jours non prévus : actions possibles selon le type de contrat
-    'non-prevu': isPlanVar
-      ?['prevu','jours-complementaires','arret','init']
-      :['travaille','arret','init'],
-    // Statuts simples : juste réinitialiser
-    'travaille':['init'],
-    'jours-complementaires':['init'],
-    'arret':['init'],
-    'abs-partielle':['init'],
-    'abs-rem':['init'],
-    'abs-enfant':['init'],
-    'abs-non':['init'],
-    'abs-am':['init'],
-    'ferie-non':['init'],
-    // Repos et fériés : exceptions possibles
-    'repos':['travaille','init'],
-    'ferie':['ferie-non','travaille','init'],
-    // Congés : gérés par le calendrier AM
+    'prevu': isPlanMinVar
+      ?['prevu','non-prevu','abs-partielle','abs-rem','abs-enfant','abs-non','arret','init']
+      :['prevu','abs-partielle','abs-rem','abs-enfant','abs-non','arret','init'],
+    'non-prevu':['non-prevu','prevu','travaille','abs-partielle','abs-rem','abs-non','abs-enfant','arret','init'],
+    'repos':['repos','travaille','init'],
+    'ferie':['ferie','ferie-non','travaille','init'],
     'conges-acq':['conges-acq'],
     'conges-non':['conges-non'],
+    'hors-contrat':['hors-contrat'],
     'conges-am':['conges-am'],
     'conges-anticipe':['conges-anticipe'],
-    'hors-contrat':['hors-contrat'],
-    // Décompte congés ↔ reprise
-    'decompte-conges':['reprise'],
-    'reprise':['decompte-conges'],
-    // À sélectionner (plan min/var)
-    'a-selectionner': isPlanVar
-      ?['prevu','jours-complementaires','arret','init']
-      :['prevu','non-prevu','abs-partielle','abs-rem','abs-non','abs-enfant','arret','init'],
+    'a-selectionner':['prevu','non-prevu','abs-partielle','abs-rem','abs-non','abs-enfant','arret','init'],
   };
   const labels={
-    'prevu':'Prévu','abs-rem':'Absence rémunérée','abs-enfant':'Abs. maladie enfant',
-    'abs-non':'Absence non rémunérée','abs-am':'Absence AM','ferie-non':'Férié non acquis',
-    'arret':'Arrêt de travail','non-prevu':'Non prévu','travaille':'Travaillé','repos':'Repos',
+    'prevu':'Prévu','abs-rem':'Absence rémunérée','abs-enfant':'Absence maladie de l&rsquo;enfant',
+    'abs-non':'Absence non rémunérée','abs-am':'Absence AM','ferie-non':'Férié non acquis','conges':'Congés','arret':'Arrêt de travail',
+    'non-prevu':'Non prévu','travaille':'Travaillé','repos':'Repos',
     'ferie':'Férié','conges-acq':'Congés acquis','conges-non':'Congés non acquis',
-    'init':'↺ Réinitialiser','hors-contrat':'Hors contrat','abs-partielle':'Absence partielle',
-    'decompte-conges':'Décompte congés','a-selectionner':'À sélectionner',
-    'jours-complementaires':'Jour complémentaire','reprise':'Reprise'
-  };
-  return (opts[statutPrevu]||['init']).map(v=>`<option value="${v}">${labels[v]||v}</option>`).join('');
+  'init':'↺ Réinitialiser','hors-contrat':'Hors contrat','abs-partielle':'Absence partielle','decompte-conges':'Décompte congés','a-selectionner':'À sélectionner'};
+  const labelsEffectifs={...labels};
+  if(isPlanMinVar) labelsEffectifs['travaille']='Jour complémentaire';
+  return (opts[statutPrevu]||['prevu']).map(v=>`<option value="${v}">${labelsEffectifs[v]||v}</option>`).join('');
 }
 
 function getStatutBg(statut){
@@ -2154,7 +2127,7 @@ function getStatutBg(statut){
     'abs-rem':'#f2f7f4','abs-enfant':'#fdecea','abs-non':'#fdecea','abs-am':'#fdecea','ferie-non':'#fdecea',
     'arret':'#fdecea','travaille':'#e8f5ee','conges':'#f0defc',
     'conges-anticipe':'#f4e8fc','conges-am':'#f8f5fa',
-    'abs-partielle':'#fcf3f2','hors-contrat':'#fcfcfc','decompte-conges':'#ede8f5','reprise':'#e8f5ee','a-selectionner':'#f2f7f4',
+    'abs-partielle':'#fcf3f2','hors-contrat':'#fcfcfc','decompte-conges':'#ede8f5','a-selectionner':'#f2f7f4',
   };
   return bgs[statut]||'#fff';
 }
@@ -2612,7 +2585,7 @@ function ouvrirFiche(contratId,key){
     </td>`:'';
 
     const optsBase=['conges-acq','conges-non','conges-anticipe','conges-am','decompte-conges','a-selectionner','non-prevu','hors-contrat','repos','ferie','ferie-non'].includes(statutActuel)?statutActuel:statutPrevu;
-    const opts=getStatutOptions(optsBase, isPlanVar, c, sourceActive);
+    const opts=getStatutOptions(optsBase, isPlanVar);
     let selectedOpts=opts.replace(`value="${statutActuel}"`,`value="${statutActuel}" selected`);
     if(!selectedOpts.includes('selected')){
     const moisNum=parseInt(key.split('-')[1]);
@@ -4699,18 +4672,17 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       if(!hParSemaineFerie[semKey]) hParSemaineFerie[semKey]=0;
       hParSemaineFerie[semKey]+=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
     }
-    if((sourceActif.th==='plan'||c.th==='plan')&&(sourceActif.planType==='var'||c.planType==='var')&&(sourceActif.planVar||c.planVar)&&agendaMois&&!hPrevuParSemaine[semKey]){
+    if(c.th==='plan'&&c.planType==='var'&&c.planVar&&agendaMois&&!hPrevuParSemaine[semKey]){
       const agKey=getKeyAgenda(semKey,getSemAnnee(j.date));
       const typeSem=agendaMois.semaines&&agendaMois.semaines[agKey];
-      const planVarRef=sourceActif.planVar||c.planVar;
-      const vol=typeSem?planVarRef.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
+      const vol=typeSem?c.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
       if(vol) hPrevuParSemaine[semKey]=vol.h;
     }
-    if((sourceActif.th==='plan'||c.th==='plan')&&(sourceActif.planType==='min'||c.planType==='min')&&!hPrevuParSemaine[semKey]){
-      hPrevuParSemaine[semKey]=sourceActif.hMin||c.hMin||0;
+    if(c.th==='plan'&&c.planType==='min'&&!hPrevuParSemaine[semKey]){
+      hPrevuParSemaine[semKey]=sourceActif.hMin||0;
     }
     // Pour plan min/var : accumuler les heures prévues saisies par semaine
-    if((sourceActif.th==='plan'||c.th==='plan')&&((sourceActif.planType==='min'||sourceActif.planType==='var')||(c.planType==='min'||c.planType==='var'))){
+    if(c.th==='plan'&&(c.planType==='min'||c.planType==='var')){
       if(!hPrevSaisieParSemaine) hPrevSaisieParSemaine={};
       if(!hPrevSaisieParSemaine[semKey]) hPrevSaisieParSemaine[semKey]=0;
       const statutsComptablesPrev=['prevu','a-selectionner','abs-non','abs-rem','abs-enfant','arret','abs-partielle'];
@@ -4739,7 +4711,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const semJoursCptAv={}; // compteur séparé pour jours _horsContratAvenant
   // Pour plan min/var : précalculer les jours hors-contrat à exclure de hTheoriques
   const joursHCExclus=new Set();
-  if((sourceActif.th==='plan'||c.th==='plan')&&((sourceActif.planType==='min'||sourceActif.planType==='var')||(c.planType==='min'||c.planType==='var'))){
+  if(c.th==='plan'&&(c.planType==='min'||c.planType==='var')){
     const hAbsJoursCptTh={};
     fiche.jours.forEach(j=>{
       // Inclure aussi les jours avant c.dateDeb (non marqués hors-contrat mais hors période)
@@ -4939,7 +4911,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           hTheoriques+=(hMensu*12/nbSemActif)*60;
         }
       }
-    } else if((sourceActif.th==='plan'||c.th==='plan')&&(sourceActif.planType==='var'||c.planType==='var')&&(sourceActif.planVar||c.planVar)){
+    } else if(c.th==='plan'&&c.planType==='var'&&(c.planVar||sourceActif.planVar)){
       const semKeyTh=getSemISO(j.date);
       const agKeyTh=getKeyAgenda(semKeyTh,getSemAnnee(j.date));
       // Chercher le type de semaine dans tous les agendas du contrat (pas seulement agendaMois)
@@ -5227,11 +5199,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         } else if(['decompte-conges','conges-acq','conges-non','conges-anticipe'].includes(statutPS)){
           // Jours décomptés congés : hSemMoy/6
           hTheoriques+=hSemMoyPS/6;
-        } else if(!['repos','hors-contrat','non-prevu','travaille','reprise'].includes(statutPS)&&jj.jourSemaine!==(c.reposHebdo||0)){
-          // Jours prévus/absences : hMoyJour (seulement si jour possible ET heures prévues ou jour prévu)
-          const aHeuresPrev=jj.heureDebPrev&&jj.heureFinPrev;
-          const estJourPrevu=joursPossiblesSemPS[jourIdxPS];
-          if(estJourPrevu&&(aHeuresPrev||statutPS==='prevu'||statutPS==='a-selectionner')){
+        } else if(!['repos','hors-contrat','non-prevu','travaille'].includes(statutPS)&&jj.jourSemaine!==(c.reposHebdo||0)){
+          // Jours prévus/absences : hMoyJour
+          if(joursPossiblesSemPS[jourIdxPS]){
             hTheoriques+=hMoyJour;
           }
         }
@@ -5244,7 +5214,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const hAbsJoursCpt={};
   const hAbsDedJoursCpt={};
   const hAbsDedJoursCpt2={};
-  if(sourceActif.th==='plan'||c.th==='plan'){
+  if(c.th==='plan'){
     fiche.jours.forEach(j=>{
       const statut=j.statut||getStatutPrevu(c,j);
       const absDeduitesPre=['abs-non','abs-am','ferie-non','arret','abs-partielle','hors-contrat'];
@@ -5253,11 +5223,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       if(!hAbsParSemaine[semKeyPre]) hAbsParSemaine[semKeyPre]=0;
       if(j.heureDebPrev&&j.heureFinPrev){
         hAbsParSemaine[semKeyPre]+=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
-      } else if((sourceActif.planType==='var'||c.planType==='var')&&(sourceActif.planVar||c.planVar)){
-        const planVarAbs=sourceActif.planVar||c.planVar;
+      } else if(c.planType==='var'&&c.planVar){
         const agKeyPre=getKeyAgenda(semKeyPre,getSemAnnee(j.date));
         const typeSemPre=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKeyPre];
-        const volPre=typeSemPre?planVarAbs.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemPre):null;
+        const volPre=typeSemPre?c.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemPre):null;
         const jourIdxPre=j.jourSemaine===0?6:j.jourSemaine-1;
         if(volPre&&volPre.jours&&volPre.jours[jourIdxPre]){
           if(!hAbsJoursCpt[semKeyPre]) hAbsJoursCpt[semKeyPre]=0;
@@ -10292,7 +10261,6 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
         if(j.date<periodeDebut||j.date>periodeFin)return;
         const statutsConges=['conges-acq','conges-non','conges-am','conges-anticipe','decompte-conges'];
         if(statutsConges.includes(j.statut)) j.statut=null;
-        // reprise reste intact (comme travaille)
       });
     });
     });
@@ -10372,20 +10340,6 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
     const fin=new Date(finPeriode);
     let cur=new Date(fin);
     cur.setDate(cur.getDate()+1);
-    // Vérifier si un jour travaillé/complémentaire existe dans la fiche après finPeriode
-    // → un jour travaillé stoppe le décompte (reprise effective)
-    const tousJoursFiche=Object.values(c.fiches||{}).flatMap(f=>f.jours||[]);
-    const premierTravailleApres=tousJoursFiche
-      .filter(j=>j.date>finPeriode&&['travaille','jours-complementaires'].includes(j.statut))
-      .sort((a,b)=>a.date<b.date?-1:1)[0];
-    if(premierTravailleApres){
-      // Dernier décompté = veille du premier jour travaillé
-      const vt=new Date(premierTravailleApres.date);
-      vt.setDate(vt.getDate()-1);
-      const vtStr=vt.getFullYear()+'-'+String(vt.getMonth()+1).padStart(2,'0')+'-'+String(vt.getDate()).padStart(2,'0');
-      // Mais seulement si ce jour travaillé est avant la reprise normale
-      // On continue pour trouver reprise et comparer
-    }
     // Chercher le 1er jour prévu travaillé après la période, dans une semaine non-off
     // (s'applique à tous les contrats 46 sem ou moins, pas seulement plan sem)
     let reprise=null;
@@ -10481,17 +10435,10 @@ if(tousNonPrevus){
         }
       }
     }
-    // Dernier jour décompté = veille de la reprise (ou veille du premier jour travaillé si antérieur)
+    // Dernier jour décompté = veille de la reprise
     const veille=new Date(reprise);
     veille.setDate(veille.getDate()-1);
-    const veilleStr=veille.getFullYear()+'-'+String(veille.getMonth()+1).padStart(2,'0')+'-'+String(veille.getDate()).padStart(2,'0');
-    if(premierTravailleApres&&premierTravailleApres.date<=reprise){
-      const vt=new Date(premierTravailleApres.date);
-      vt.setDate(vt.getDate()-1);
-      const vtStr=vt.getFullYear()+'-'+String(vt.getMonth()+1).padStart(2,'0')+'-'+String(vt.getDate()).padStart(2,'0');
-      return vtStr<veilleStr?vtStr:veilleStr;
-    }
-    return veilleStr;
+    return veille.getFullYear()+'-'+String(veille.getMonth()+1).padStart(2,'0')+'-'+String(veille.getDate()).padStart(2,'0');
   }
 
   S.contrats.forEach(c=>{
@@ -10531,7 +10478,6 @@ if(tousNonPrevus){
         if(j.date<periodeDebut||j.date>periodeFin)return;
         const statutsConges=['conges-acq','conges-non','conges-am','conges-anticipe','decompte-conges'];
         if(statutsConges.includes(j.statut)) j.statut=null;
-        // reprise reste intact (comme travaille)
       });
     });
 
@@ -10666,7 +10612,6 @@ if(tousNonPrevus){
         const jour=fiche.jours[jourIdx];
 
       if(premierTrav&&dateStr>=premierTrav) decompteCommence=true;
-      // reprise = même effet que travaille pour les hTheoriques
         // Suspendre le décompte pendant les semaines absence employeur
         // (sauf si c'est après finPeriode = la semaine off est après la pose)
         if(dateStr>fin){
@@ -10739,9 +10684,6 @@ if(tousNonPrevus){
         // Jours entre fin de pose et premierTravReprise → décompte-conges
         // Uniquement si le décompte a effectivement commencé pendant la période cochée
         if(dateStr>fin&&premierTravReprise&&dateStr<premierTravReprise&&!estRepos&&!estFerie&&decompteCommence){
-          // Un jour reprise stoppe le décompte
-          if(jour.statut==='reprise') break;
-          if(jour.statut==='travaille') break;
           compteurTotal++;
           if(!fiche.valide){
             if(compteurTotal<=quotaAcquis){
