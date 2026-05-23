@@ -4918,11 +4918,37 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const tousAgendas=[...(c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
       const agendaPourJour=tousAgendas.find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date))||agendaMois;
       const typeSemTh=agendaPourJour&&agendaPourJour.semaines&&agendaPourJour.semaines[agKeyTh];
-      // Semaine 'off' = absence employeur, déjà déduite de la mensualisation → pas de contribution aux hTheoriques
-      if(typeSemTh==='off') return;
       const planVarTh=sourceActif.planVar||c.planVar;
+      // Calculer hSemMoy pour plan var = moyenne pondérée des volumes
+      const hSemMoyPV=planVarTh&&planVarTh.length>0
+        ?(planVarTh.reduce((t,v)=>t+(v.h||0)*(v.s||0),0)/Math.max(1,planVarTh.reduce((t,v)=>t+(v.s||0),0)))
+        :(hMensu*12/nbSemActif);
+      if(typeSemTh==='off'){
+        // Semaine off : contribue à hTheoriques via la moyenne (une fois par semaine)
+        if(!semTheoriquesVues.has(semKeyTh)){
+          semTheoriquesVues.add(semKeyTh);
+          // Jours possibles dans la semaine entière (union de tous les volumes)
+          const joursPossiblesSemPV=Array.from({length:7},(_,i)=>planVarTh.some(v=>v.jours&&v.jours[i]));
+          const nbJoursPossiblesSemPV=joursPossiblesSemPV.filter(Boolean).length||1;
+          // Jours possibles dans le mois (intersection avec les jours de la fiche)
+          const joursDesSemPV=fiche.jours.filter(jj=>getSemISO(jj.date)===semKeyTh);
+          const nbJoursPossiblesMoisPV=joursDesSemPV.filter(jj=>{
+            const idx=new Date(jj.date).getDay();
+            const idxLun=idx===0?6:idx-1;
+            return joursPossiblesSemPV[idxLun];
+          }).length;
+          hTheoriques+=hSemMoyPV*(nbJoursPossiblesMoisPV/nbJoursPossiblesSemPV)*60;
+        }
+        return;
+      }
       const volTh=typeSemTh?planVarTh.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemTh):null;
       const jourIdxTh=j.jourSemaine===0?6:j.jourSemaine-1;
+      // Jours décomptés congés (pas de volume) : hSemMoy/6
+      const statutJourTh=j.statut||getStatutPrevu(c,j);
+      if(!volTh&&(statutJourTh==='decompte-conges'||statutJourTh==='conges-acq'||statutJourTh==='conges-non'||statutJourTh==='conges-anticipe')){
+        hTheoriques+=(hSemMoyPV/6)*60;
+        return;
+      }
       if(volTh){
         if(volTh.jours&&volTh.jours[jourIdxTh]){
           if(!semJoursCpt[semKeyTh]) semJoursCpt[semKeyTh]=0;
@@ -5137,12 +5163,49 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     }
     if(totalHAnnuel>0&&totalJAnnuel>0){
       const hMoyJour=totalHAnnuel/totalJAnnuel;
-      // Compter les jours théoriques du mois (hors repos, hors hors-contrat)
-      const nbJoursTh=fiche.jours.filter(j=>{
-        const sp=j.statut||getStatutPrevu(c,j);
-        return !['repos','hors-contrat','non-prevu'].includes(sp)&&j.jourSemaine!==(c.reposHebdo||0);
-      }).length;
-      hTheoriques=hMoyJour*nbJoursTh;
+      const hSemMoyPS=totalJAnnuel>0?totalHAnnuel/nbSemActif:hMensu*12/nbSemActif;
+      // Jours possibles dans la semaine (union de tous les semTypes ou planVar)
+      const joursPossiblesSemPS=Array.from({length:7},(_,idx)=>{
+        if(sourceActif.th==='sem'&&sourceActif.semTypes){
+          return sourceActif.semTypes.some(st=>st.jours&&st.jours[idx]&&st.jours[idx].d);
+        } else if(sourceActif.th==='plan'&&sourceActif.planVar){
+          return sourceActif.planVar.some(v=>v.jours&&v.jours[idx]);
+        }
+        return false;
+      });
+      const nbJoursPossiblesSemPS=joursPossiblesSemPS.filter(Boolean).length||1;
+      // Calculer hTheoriques semaine par semaine
+      hTheoriques=0;
+      const semVuesPS=new Set();
+      fiche.jours.forEach(jj=>{
+        const semKeyPS=getSemISO(jj.date);
+        const agKeyPS=getKeyAgenda(semKeyPS,getSemAnnee(jj.date));
+        const tousAgendasPS=[...(sourceActif.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
+        const agPS=tousAgendasPS.find(ag=>new Date(ag.dateDebut)<=new Date(jj.date)&&new Date(ag.dateFin)>=new Date(jj.date))||agendaMois;
+        const typeSemPS=agPS&&agPS.semaines&&agPS.semaines[agKeyPS];
+        const jourIdxPS=jj.jourSemaine===0?6:jj.jourSemaine-1;
+        const statutPS=jj.statut||getStatutPrevu(c,jj);
+        if(typeSemPS==='off'){
+          // Semaine off : prorata hSemMoy × jours possibles dans le mois / jours possibles dans la semaine
+          if(!semVuesPS.has(semKeyPS)){
+            semVuesPS.add(semKeyPS);
+            const joursDesSemPS=fiche.jours.filter(jk=>getSemISO(jk.date)===semKeyPS);
+            const nbJoursPossiblesMoisPS=joursDesSemPS.filter(jk=>{
+              const idx=jk.jourSemaine===0?6:jk.jourSemaine-1;
+              return joursPossiblesSemPS[idx];
+            }).length;
+            hTheoriques+=hSemMoyPS*(nbJoursPossiblesMoisPS/nbJoursPossiblesSemPS);
+          }
+        } else if(['decompte-conges','conges-acq','conges-non','conges-anticipe'].includes(statutPS)){
+          // Jours décomptés congés : hSemMoy/6
+          hTheoriques+=hSemMoyPS/6;
+        } else if(!['repos','hors-contrat','non-prevu','travaille'].includes(statutPS)&&jj.jourSemaine!==(c.reposHebdo||0)){
+          // Jours prévus/absences : hMoyJour
+          if(joursPossiblesSemPS[jourIdxPS]){
+            hTheoriques+=hMoyJour;
+          }
+        }
+      });
     } else {
       hTheoriques=hMensu;
     }
