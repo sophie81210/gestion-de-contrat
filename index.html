@@ -4485,6 +4485,121 @@ function calcCongesContrat(c){
 
 function toMins(t){return toM(t);}
          
+function getHJourFerie(c, sourceActif, dateStr, agendaMois, estSemConges){
+  // Retourne la valeur en heures d'un férié dans les hTheoriques
+  // estSemConges = true si la semaine est une semaine de congés (type inconnu)
+  const tc=sourceActif.tc||c.tc||'52';
+  const th=sourceActif.th||c.th||'fixe';
+  const planType=sourceActif.planType||c.planType||'';
+
+  // Occasionnel : jamais compté
+  if(tc==='occ') return 0;
+
+  const d=new Date(dateStr);
+  const jourIdx=d.getDay()===0?6:d.getDay()-1;
+
+  // 52 sem fixe et sem : valeur du jour si prévu
+  if(tc==='52'&&(th==='fixe'||th==='sem')){
+    if(th==='fixe'&&sourceActif.joursFixe){
+      const jf=sourceActif.joursFixe[jourIdx];
+      if(jf&&jf.d&&jf.f) return (toM(jf.f)-toM(jf.d))/60;
+    } else if(th==='sem'){
+      // Valeur du jour selon le semType actif
+      const semKey=getSemISO(dateStr);
+      const agKey=getKeyAgenda(semKey,getSemAnnee(dateStr));
+      const typeSem=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKey];
+      const st=sourceActif.semTypes&&typeSem?sourceActif.semTypes.find(s=>s.nom===typeSem):null;
+      if(st&&st.jours&&st.jours[jourIdx]&&st.jours[jourIdx].d&&st.jours[jourIdx].f){
+        return (toM(st.jours[jourIdx].f)-toM(st.jours[jourIdx].d))/60;
+      }
+    }
+    return 0;
+  }
+
+  // 52 sem min et var : si jour possible valeur volume / jour max
+  if(tc==='52'&&planType==='min'){
+    if(sourceActif.joursMin&&sourceActif.joursMin[jourIdx]){
+      return (sourceActif.hMin||0)/(sourceActif.jMaxMin||1);
+    }
+    return 0;
+  }
+  if(tc==='52'&&planType==='var'){
+    const semKey=getSemISO(dateStr);
+    const agKey=getKeyAgenda(semKey,getSemAnnee(dateStr));
+    const typeSem=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKey];
+    const vol=typeSem&&sourceActif.planVar?sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
+    if(vol&&vol.jours&&vol.jours[jourIdx]){
+      return (vol.h||0)/(vol.j||1);
+    }
+    return 0;
+  }
+
+  // 46 sem fixe : valeur du jour si prévu dans la semaine habituelle
+  if(tc!=='52'&&th==='fixe'){
+    if(sourceActif.joursFixe){
+      const jf=sourceActif.joursFixe[jourIdx];
+      if(jf&&jf.d&&jf.f) return (toM(jf.f)-toM(jf.d))/60;
+    }
+    return 0;
+  }
+
+  // Calcul hMoyJour pour 46 sem
+  let totalHAnnuel=0, totalJAnnuel=0;
+  if(th==='sem'&&sourceActif.semTypes){
+    sourceActif.semTypes.forEach(st=>{
+      const hSem=(st.jours||[]).reduce((s,j)=>j&&j.d&&j.f?s+(toM(j.f)-toM(j.d))/60:s,0);
+      const jSem=(st.jours||[]).filter(j=>j&&j.d).length;
+      totalHAnnuel+=hSem*(parseFloat(st.nb)||0);
+      totalJAnnuel+=jSem*(parseFloat(st.nb)||0);
+    });
+  } else if(planType==='var'&&sourceActif.planVar){
+    sourceActif.planVar.forEach(v=>{
+      totalHAnnuel+=(v.h||0)*(v.s||0);
+      totalJAnnuel+=(v.j||0)*(v.s||0);
+    });
+  } else if(planType==='min'){
+    const nbSem=sourceActif.nbSem||c.nbSem||46;
+    totalHAnnuel=(sourceActif.hMin||0)*nbSem;
+    totalJAnnuel=(sourceActif.jMaxMin||1)*nbSem;
+  }
+  const hMoyJour=totalJAnnuel>0?totalHAnnuel/totalJAnnuel:0;
+
+  // 46 sem sem : pendant congés = hMoyJour si prévu dans au moins un semType
+  //              pendant semaine travaillée = valeur exacte du jour
+  if(th==='sem'){
+    if(estSemConges){
+      const jourPossible=sourceActif.semTypes&&sourceActif.semTypes.some(st=>st.jours&&st.jours[jourIdx]&&st.jours[jourIdx].d);
+      return jourPossible?hMoyJour:0;
+    } else {
+      const semKey=getSemISO(dateStr);
+      const agKey=getKeyAgenda(semKey,getSemAnnee(dateStr));
+      const typeSem=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKey];
+      const st=sourceActif.semTypes&&typeSem?sourceActif.semTypes.find(s=>s.nom===typeSem):null;
+      if(st&&st.jours&&st.jours[jourIdx]&&st.jours[jourIdx].d&&st.jours[jourIdx].f){
+        return (toM(st.jours[jourIdx].f)-toM(st.jours[jourIdx].d))/60;
+      }
+      return 0;
+    }
+  }
+
+  // 46 sem min : si jour possible valeur volume / jour max
+  if(planType==='min'){
+    if(sourceActif.joursMin&&sourceActif.joursMin[jourIdx]){
+      return (sourceActif.hMin||0)/(sourceActif.jMaxMin||1);
+    }
+    return 0;
+  }
+
+  // 46 sem var : si jour possible valeur volume moyen / jour max moyen
+  if(planType==='var'){
+    const jourPossibleVar=sourceActif.planVar&&sourceActif.planVar.some(v=>v.jours&&v.jours[jourIdx]);
+    if(!jourPossibleVar) return 0;
+    return hMoyJour;
+  }
+
+  return 0;
+}
+
 function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriquesVues, joursHCExclus){
   // Calcule les heures théoriques pour un contrat plan sem 46 sem
   // Logique : par semaine selon le type dans l'agenda. Semaines off = hSemMoy. Décompte = hSemMoy/6.
@@ -4555,10 +4670,15 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
       const nbJoursDecompteNoType=joursDesSem.filter(jj=>{
         if(jj.jourSemaine===reposHPS) return false; // exclure jour de repos
         const st=jj.statut||getStatutPrevu(sourceActif||c,jj);
-        // Compter si : statut congés (avec ou sans heures transparentes) OU jour sans heures prévues
         return statsCongés.includes(st)||(jj.planVarPrevu&&!jj.heureDebPrev);
       }).length;
       hTheoriques+=hSemMoyPS/6*nbJoursDecompteNoType;
+      // Fériés dans semaine de congés : valeur via getHJourFerie(estSemConges=true)
+      joursDesSem.forEach(jj=>{
+        if(jj.statut==='ferie'||(!jj.statut&&isFerie(jj.date,c))){
+          hTheoriques+=getHJourFerie(c,sourceActif,jj.date,agendaMois,true);
+        }
+      });
       return;
     }
 
@@ -4568,6 +4688,12 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
     // Heures de la semaine selon le semType
     if(!semTheoriquesVues.has(semKey)){
       semTheoriquesVues.add(semKey);
+      // Fériés dans semaine travaillée
+      joursDesSem.forEach(jj=>{
+        if(jj.statut==='ferie'||(!jj.statut&&isFerie(jj.date,c))){
+          hTheoriques+=getHJourFerie(c,sourceActif,jj.date,agendaMois,false);
+        }
+      });
       if(stTh){
         // Heures du type de semaine exact
         const hSemType=(stTh.jours||[]).reduce((s,j)=>j&&j.d&&j.f?s+(toM(j.f)-toM(j.d))/60:s,0);
@@ -4649,6 +4775,14 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
     }
 
     if(!typeSemTh) return; // pas de type → pas de contribution
+
+    // Jours fériés sur jours possibles dans cette semaine travaillée
+    joursDesSem.forEach(jj=>{
+      if((jj.statut==='ferie')||(!jj.statut&&isFerie(jj.date,c))){
+        const hF=getHJourFerie(c,sourceActif,jj.date,agendaMois,false);
+        hTheoriques+=hF;
+      }
+    });
 
     // Jours décomptés congés dans cette semaine : hSemMoy/6 par jour
     const nbJoursDecompte=joursDesSem.filter(jj=>{
@@ -4754,6 +4888,12 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
       // Congés avec volume : hSemMoy/6 aussi (on ne connaît pas les heures du jour)
       if(volTh&&['decompte-conges','conges-acq','conges-non','conges-anticipe','reprise'].includes(statutJourTh)){
         hTheoriques+=hSemMoyPV/6;
+        return;
+      }
+      // Jour férié : valeur selon getHJourFerie
+      if(statutJourTh==='ferie'){
+        const hF=getHJourFerie(c,sourceActif,jj.date,agendaMois,false);
+        hTheoriques+=hF;
         return;
       }
       // Jours travaillés/prévus/absences : heures du volume
@@ -5142,9 +5282,12 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   };
   fiche.jours.forEach(j=>{
     if(j.statut==='conges-non'||j.statut==='conges-acq'||j.statut==='conges-anticipe'){
-      // Jours de congés : heures de la semaine concernée / 6 (plan sem/var) ou moyenne/6
-      hTheoriques+=getHJourCgTh(j.date);
-    } else if(j.heureDebPrev&&j.heureFinPrev&&!(c.th==='plan'&&(c.planType==='min'||c.planType==='var'))&&!(sourceActif.th==='plan'&&(sourceActif.planType==='min'||sourceActif.planType==='var'))){
+      // Pour plan sem 46 : géré par calcHTheoriquesPlanSem, pas ici
+      const estPlanSem46=(sourceActif.th==='sem'||c.th==='sem')&&(sourceActif.tc!=='52'||c.tc!=='52');
+      if(!estPlanSem46){
+        hTheoriques+=getHJourCgTh(j.date);
+      }
+    } else if(j.heureDebPrev&&j.heureFinPrev&&!(c.th==='plan'&&(c.planType==='min'||c.planType==='var'))&&!(sourceActif.th==='plan'&&(sourceActif.planType==='min'||sourceActif.planType==='var'))&&!((sourceActif.th==='sem'||c.th==='sem')&&(sourceActif.tc!=='52'||c.tc!=='52'))){
       hTheoriques+=toM(j.heureFinPrev)-toM(j.heureDebPrev);
     } else if(!j.heureDebPrev&&!j.heureFinPrev){
       // Semaine 'off' : tous types de contrats
