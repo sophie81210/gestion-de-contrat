@@ -4561,9 +4561,33 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
     if(!semTheoriquesVues.has(semKey)){
       semTheoriquesVues.add(semKey);
       if(stTh){
-        // Heures du type de semaine exact - pas de prorata car heures connues jour par jour
+        // Heures du type de semaine exact
         const hSemType=(stTh.jours||[]).reduce((s,j)=>j&&j.d&&j.f?s+(toM(j.f)-toM(j.d))/60:s,0);
-        hTheoriques+=hSemType;
+        // Semaine à cheval : additionner uniquement les heures des jours présents dans le mois
+        const finMoisDate=new Date(fiche.annee,fiche.mois+1,0);
+        const finMoisStr=finMoisDate.getFullYear()+'-'+String(finMoisDate.getMonth()+1).padStart(2,'0')+'-'+String(finMoisDate.getDate()).padStart(2,'0');
+        const debutMoisStr=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0')+'-01';
+        const lundiSem=new Date(dateEx);
+        while(lundiSem.getDay()!==1) lundiSem.setDate(lundiSem.getDate()-1);
+        const dimSem=new Date(lundiSem);dimSem.setDate(lundiSem.getDate()+6);
+        const lundiStr=lundiSem.getFullYear()+'-'+String(lundiSem.getMonth()+1).padStart(2,'0')+'-'+String(lundiSem.getDate()).padStart(2,'0');
+        const dimStr=dimSem.getFullYear()+'-'+String(dimSem.getMonth()+1).padStart(2,'0')+'-'+String(dimSem.getDate()).padStart(2,'0');
+        const estCheval=lundiStr<debutMoisStr||dimStr>finMoisStr;
+        if(estCheval){
+          // Additionner les heures prévues des jours du semType présents dans le mois
+          let hCheval=0;
+          for(let i=0;i<7;i++){
+            const jourDate=new Date(lundiSem);jourDate.setDate(lundiSem.getDate()+i);
+            const jourStr=jourDate.getFullYear()+'-'+String(jourDate.getMonth()+1).padStart(2,'0')+'-'+String(jourDate.getDate()).padStart(2,'0');
+            if(jourStr<debutMoisStr||jourStr>finMoisStr) continue;
+            const jourIdx=jourDate.getDay()===0?6:jourDate.getDay()-1;
+            const stJour=stTh.jours&&stTh.jours[jourIdx];
+            if(stJour&&stJour.d&&stJour.f) hCheval+=(toM(stJour.f)-toM(stJour.d))/60;
+          }
+          hTheoriques+=hCheval;
+        } else {
+          hTheoriques+=hSemType;
+        }
       } else {
         // Type inconnu → hSemMoy
         hTheoriques+=hSemMoyPS;
@@ -5382,7 +5406,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // Pour th='sem' ou th='plan' non-var : utiliser la méthode alternative (moyenne par jour)
   // hTheoriques = totalHeuresAnnuelles / totalJoursAnnuels × nbJoursMois
   const isPlanVar=sourceActif.th==='plan'&&sourceActif.planType==='var';
-  if(!isPlanVar&&sourceActif.planType!=='min'&&c.planType!=='min'&&(hTheoriques<=0||sourceActif.th==='sem'||(sourceActif.th==='plan'&&sourceActif.planType!=='min'))){
+  const isPlanSem=sourceActif.th==='sem'||(c.th==='sem');
+  if(!isPlanVar&&!isPlanSem&&sourceActif.planType!=='min'&&c.planType!=='min'&&(hTheoriques<=0||sourceActif.th==='sem'||(sourceActif.th==='plan'&&sourceActif.planType!=='min'))){
     // Calculer le total heures et jours annuels depuis le contrat
     let totalHAnnuel=0;
     let totalJAnnuel=0;
