@@ -4467,6 +4467,89 @@ function calcCongesContrat(c){
 
 function toMins(t){return toM(t);}
          
+function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, semTheoriquesVues, joursHCExclus){
+  // Calcule les heures théoriques pour un contrat plan min 46 sem
+  const joursMinTh=sourceActif.joursMin||c.joursMin||[];
+  const jMaxMinTh=sourceActif.jMaxMin||c.jMaxMin||4;
+  const hMinTh=sourceActif.hMin||c.hMin||0;
+  const nbSemActif=sourceActif.nbSem||c.nbSem||46;
+  const hMensuTh=sourceActif.hMensu||c.hMensu||0;
+  const hSemMoyTh=hMensuTh*12/nbSemActif;
+
+  // Tous les agendas du contrat
+  const tousAgendas=[...(sourceActif.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
+
+  let hTheoriques=0;
+
+  // Parcourir toutes les semaines du mois
+  const semaines=new Set(fiche.jours.map(j=>getSemISO(j.date)));
+  semaines.forEach(semNum=>{
+    const joursDesSem=fiche.jours.filter(jj=>getSemISO(jj.date)===semNum);
+    if(!joursDesSem.length) return;
+    const dateEx=joursDesSem[0].date;
+    const semAn=getSemAnnee(dateEx);
+    const semKey=semAn+'-S'+String(semNum).padStart(2,'0');
+    const agKeyTh=getKeyAgenda(semNum,semAn);
+
+    // Trouver l'agenda pour cette semaine
+    const agPourSem=tousAgendas.find(ag=>new Date(ag.dateDebut)<=new Date(dateEx)&&new Date(ag.dateFin)>=new Date(dateEx))||agendaMois;
+    const typeSemTh=agPourSem&&agPourSem.semaines&&agPourSem.semaines[agKeyTh];
+
+    if(typeSemTh==='off'){
+      // Semaine off : hSemMoy × prorata jours cochés dans le mois
+      if(!semTheoriquesVues.has(semKey)){
+        semTheoriquesVues.add(semKey);
+        const joursCoches=joursMinTh.filter(Boolean).length||jMaxMinTh;
+        const nbJoursCochesMois=joursDesSem.filter(jj=>{
+          const idx=jj.jourSemaine===0?6:jj.jourSemaine-1;
+          return joursMinTh[idx];
+        }).length;
+        hTheoriques+=hSemMoyTh*(nbJoursCochesMois/joursCoches);
+      }
+      return;
+    }
+
+    if(!typeSemTh) return; // pas de type → pas de contribution
+
+    // Jours décomptés congés dans cette semaine : hSemMoy/6 par jour
+    const nbJoursDecompte=joursDesSem.filter(jj=>{
+      const st=jj.statut||getStatutPrevu(sourceActif||c,jj);
+      return ['decompte-conges','conges-acq','conges-non','conges-anticipe','reprise'].includes(st);
+    }).length;
+    hTheoriques+=hSemMoyTh/6*nbJoursDecompte;
+
+    // Heures théoriques de la semaine : hMin entier ou prorata si semaine à cheval
+    if(!semTheoriquesVues.has(semKey)){
+      semTheoriquesVues.add(semKey);
+      // Détecter semaine à cheval : début/fin de contrat, avenant, ou début/fin de mois
+      const debutMoisStr=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0')+'-01';
+      const finMoisDate=new Date(fiche.annee,fiche.mois+1,0);
+      const finMoisStr=finMoisDate.getFullYear()+'-'+String(finMoisDate.getMonth()+1).padStart(2,'0')+'-'+String(finMoisDate.getDate()).padStart(2,'0');
+      const dateDebContrat=c.dateDeb||'';
+      const dateAvenant=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant)?.dateAvenant||'';
+      // Semaine à cheval si elle déborde hors du mois OU sur le début/fin de contrat/avenant
+      const lundiSem=new Date(dateEx);
+      while(lundiSem.getDay()!==1) lundiSem.setDate(lundiSem.getDate()-1);
+      const dimSem=new Date(lundiSem);dimSem.setDate(lundiSem.getDate()+6);
+      const lundiStr=lundiSem.getFullYear()+'-'+String(lundiSem.getMonth()+1).padStart(2,'0')+'-'+String(lundiSem.getDate()).padStart(2,'0');
+      const dimStr=dimSem.getFullYear()+'-'+String(dimSem.getMonth()+1).padStart(2,'0')+'-'+String(dimSem.getDate()).padStart(2,'0');
+      const estCheval=lundiStr<debutMoisStr||dimStr>finMoisStr||(dateDebContrat&&lundiStr<dateDebContrat)||((dateAvenant)&&lundiStr<=dateAvenant&&dimStr>=dateAvenant);
+      if(estCheval){
+        const joursCoches=joursMinTh.filter(Boolean).length||jMaxMinTh;
+        const nbJoursCochesMois=joursDesSem.filter(jj=>{
+          const idx=jj.jourSemaine===0?6:jj.jourSemaine-1;
+          return joursMinTh[idx];
+        }).length;
+        hTheoriques+=hMinTh*(nbJoursCochesMois/joursCoches);
+      } else {
+        hTheoriques+=hMinTh;
+      }
+    }
+  });
+
+  return hTheoriques; // en heures
+}
+
 function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, semTheoriquesVues, joursHCExclus){
   // Calcule les heures théoriques pour un contrat plan var 46 sem
   // Logique : par semaine, selon le volume de l'agenda. Semaines off = moyenne. Décompte congés = hSemMoy/6
@@ -4978,7 +5061,6 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const jMaxMinTh=sourceActif.jMaxMin||c.jMaxMin||4;
       const hMinTh=sourceActif.hMin||c.hMin||0;
       const jourCoché=joursMinTh&&joursMinTh[jourIdxTh];
-      if(j.date==='2024-03-04') console.log('plan min', j.date, 'typeSemTh=', typeSemTh, 'jourCoché=', jourCoché, 'agendaThJour=', !!agendaThJour);
       // Semaine 'off' = absence employeur, déjà déduite de la mensualisation → pas de contribution aux hTheoriques
       if(typeSemTh&&typeSemTh!=='off'){
         if(jourCoché){
@@ -5009,9 +5091,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     }
     // Plan var : délégué à calcHTheoriquesPlanVar (appelé après le forEach)
   });
-  // Plan var : calcul séparé par semaine
+  // Plan var et plan min : calcul séparé par semaine
   if((sourceActif.th==='plan'||c.th==='plan')&&(sourceActif.planType==='var'||c.planType==='var')&&(sourceActif.planVar||c.planVar)){
     hTheoriques=calcHTheoriquesPlanVar(c,sourceActif,fiche,agendaMois,semJoursCpt,semTheoriquesVues,joursHCExclus);
+  } else if((sourceActif.th==='plan'||c.th==='plan')&&(sourceActif.planType==='min'||c.planType==='min')){
+    hTheoriques=calcHTheoriquesPlanMin(c,sourceActif,fiche,agendaMois,semJoursCpt,semTheoriquesVues,joursHCExclus);
   } else {
     hTheoriques=hTheoriques/60;
   }
