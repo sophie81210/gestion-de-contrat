@@ -706,6 +706,11 @@ S.showTodayMap = JSON.parse(localStorage.getItem("cam_showToday") || "{}");
           delete j._jourPossible;
           modifie=true;
         }
+        // Corriger les fériés sur jours possibles qui ont statut a-selectionner au lieu de ferie
+        if(j.statut==='a-selectionner'&&j.planVarPrevu&&c.th==='plan'&&(c.planType==='min'||c.planType==='var')&&isFerie(j.date,c)){
+          j.statut='ferie';
+          modifie=true;
+        }
         if(j.statut===null&&j.planVarPrevu&&j._jourPossible!==false&&!(c.dateDeb&&j.date<c.dateDeb)){
           // Vérifier si semaine off dans l'agenda
           const semNum=getSemISO(j.date);
@@ -7087,12 +7092,13 @@ function creerAgenda(cid){
   if(manquantesCreation.length>0) alerteCalendrierAM(manquantesCreation);
 }
          
-function getSemsCongesGlobal(){
-  // Calcule les 5 numéros de semaine les plus chargés en congés posés + fériés depuis le calendrier AM global
-  // Les numéros de semaine sont indépendants de l'année → mêmes semaines violettes pour tous les agendas
+function getSemsCongesGlobal(dateDebut, dateFin){
+  // Calcule les 5 numéros de semaine les plus chargés en congés posés + fériés
+  // Filtre sur la période de l'agenda (dateDebut à dateFin)
   const semScores={}; // clé = numéro de semaine (ex: 32)
   const addScore=(dateStr)=>{
-    const sk=getSemISO(dateStr); // numéro de semaine seulement, indépendant de l'année
+    if(dateDebut&&dateFin&&(dateStr<dateDebut||dateStr>dateFin)) return; // filtrer sur la période
+    const sk=getSemISO(dateStr); // numéro de semaine
     if(!semScores[sk]) semScores[sk]=0;
     semScores[sk]++;
   };
@@ -7177,7 +7183,7 @@ function renderAgendas(c){
     })();
     const estPlanSemOuVar52=(agSource2.tc==='52')&&((agSource2.th==='plan'&&(agSource2.planType==='var'||agSource2.planType==='sem'))||(agSource2.th==='sem'));
     // Semaines congés : calcul global depuis le calendrier AM (identique pour tous les agendas)
-    const semsCongesSet=estPlanSemOuVar52?null:getSemsCongesGlobal();
+    const semsCongesSet=estPlanSemOuVar52?null:getSemsCongesGlobal(ag.dateDebut,ag.dateFin);
     if(!window._semsCongesSet) window._semsCongesSet={};
     window._semsCongesSet[ag.id]=semsCongesSet;
     const warnings=getAgendaWarnings(c,ag,semaines,semsCongesSet);
@@ -7520,7 +7526,7 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
   // Pour plan sem 52 et plan var 52 : pas de semaines congés bloquées (pointage libre)
   const estPlanSemOuVar2=(source.tc==='52')&&((source.th==='plan'&&(source.planType==='var'||source.planType==='sem'))||(source.th==='sem'));
   // Semaines congés : calcul global depuis le calendrier AM
-  const semsCongesSet=estPlanSemOuVar2?null:getSemsCongesGlobal();
+  const semsCongesSet=estPlanSemOuVar2?null:getSemsCongesGlobal(ag.dateDebut,ag.dateFin);
 
   semaines.forEach((s, idx)=>{
     let mKey;
@@ -7673,7 +7679,7 @@ function validerModifAgenda(cid,agid){
   const semaines=getSemsAgenda(ag,source);
   // Semaines congés : calcul global depuis le calendrier AM
   const estPSVValid=(source.tc==='52')&&((source.th==='plan'&&(source.planType==='var'||source.planType==='sem'))||(source.th==='sem'));
-  const semsCongesSet=estPSVValid?null:getSemsCongesGlobal();
+  const semsCongesSet=estPSVValid?null:getSemsCongesGlobal(ag.dateDebut,ag.dateFin);
   const warnings=getAgendaWarnings(source,ag,semaines,semsCongesSet);
   // Vérifier s'il y a des semaines non pointées (bloquant) vs autres warnings (non bloquant)
   const nonPointeesWarning=warnings.filter(w=>w.includes('non pointée'));
