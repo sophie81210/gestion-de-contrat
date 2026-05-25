@@ -1931,7 +1931,7 @@ function renderDetTab(id,tab){
   }
   else if(tab==='conges'){
     try{
-      cont.innerHTML=`<div class="card"><div class="ctitle">Congés</div>${genCumul(c)}</div>`;
+      cont.innerHTML=genOngletCongesContrat(c);
     }catch(e){
       cont.innerHTML=`<div class="card"><div style="color:red;padding:20px">Erreur congés: ${e.message}</div></div>`;
       console.error('Tab conges err:',e);
@@ -2177,7 +2177,7 @@ function getStatutBg(statut){
     'abs-rem':'#f2f7f4','abs-enfant':'#fdecea','abs-non':'#fdecea','abs-am':'#fdecea','ferie-non':'#fdecea',
     'arret':'#fdecea','travaille':'#e8f5ee','conges':'#f0defc',
     'conges-anticipe':'#f4e8fc','conges-am':'#f8f5fa',
-    'abs-partielle':'#fcf3f2','hors-contrat':'#fcfcfc','decompte-conges':'#ede8f5','decompte-acq':'#d8eeff','decompte-anticipe':'#fce8d8','reprise':'#e8f5ee','a-selectionner':'#f2f7f4',
+    'abs-partielle':'#fcf3f2','hors-contrat':'#fcfcfc','decompte-conges':'#f2f7f4','decompte-acq':'#d8eeff','decompte-anticipe':'#fce8d8','reprise':'#e8f5ee','a-selectionner':'#f2f7f4',
   };
   return bgs[statut]||'#fff';
 }
@@ -9626,6 +9626,136 @@ function calcIndemniteConges(c, anneeRef){
   const montantJournalierNet=parseFloat((montantJournalierBrut*coefNet).toFixed(4));
   return{maintien,dixieme,meilleurBrut:meilleur,meilleurNet,nomMethode,montantJournalierBrut,montantJournalierNet,acquis:cg.acquis};
 }
+function genOngletCongesContrat(c){
+  // Calcule les années AM pertinentes pour ce contrat (mai→avril)
+  const annees=[];
+  const dateDeb=c.dateDeb?new Date(c.dateDeb):new Date();
+  const dateDebAnneeAm=dateDeb.getMonth()>=4?dateDeb.getFullYear():dateDeb.getFullYear()-1;
+  const anneeActuelle=new Date().getFullYear();
+  const moisActuel=new Date().getMonth();
+  const anneeAmActuelle=moisActuel>=4?anneeActuelle:anneeActuelle-1;
+  for(let a=dateDebAnneeAm;a<=anneeAmActuelle+1;a++) annees.push(a);
+
+  let html='<div style="padding:14px">';
+  html+='<div class="ctitle" style="margin-bottom:12px">Congés — '+c.nom+'</div>';
+
+  annees.reverse().forEach(anneeAm=>{
+    const debutAm=new Date(anneeAm,4,1); // 1er mai
+    const finAm=new Date(anneeAm+1,3,30); // 30 avril
+    const label=`Mai ${anneeAm} → Avril ${anneeAm+1}`;
+    const id='cg-contrat-'+c.id+'-'+anneeAm;
+
+    // Compter les jours décomptés dans cette période
+    let nbAcq=0, nbAnticipe=0, nbDecompte=0;
+    Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
+      (fiche.jours||[]).forEach(j=>{
+        if(!j.date||j.date<debutAm.toISOString().slice(0,10)||j.date>finAm.toISOString().slice(0,10)) return;
+        if(j.statut==='conges-acq'||j.statut==='decompte-acq') nbAcq++;
+        else if(j.statut==='conges-anticipe'||j.statut==='decompte-anticipe') nbAnticipe++;
+      });
+    });
+    const total=nbAcq+nbAnticipe;
+
+    html+=`<div style="border:1px solid var(--mb);border-radius:8px;margin-bottom:10px;overflow:hidden">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#f9f6ff;cursor:pointer" onclick="toggleCgContrat('${id}')">
+        <div>
+          <div style="font-weight:700;font-size:14px;color:var(--m)">${label}</div>
+          <div style="font-size:12px;color:var(--tx2)">${nbAcq} j acquis · ${nbAnticipe} j anticipés</div>
+        </div>
+        <span style="font-size:20px;color:var(--tx3)" id="${id}-arrow">›</span>
+      </div>
+      <div id="${id}" style="display:none;padding:12px">
+        ${buildCgContratCalendrier(c, anneeAm)}
+        ${genCumul(c)}
+      </div>
+    </div>`;
+  });
+
+  html+='</div>';
+  return html;
+}
+
+function toggleCgContrat(id){
+  const el=document.getElementById(id);
+  const arrow=document.getElementById(id+'-arrow');
+  if(!el) return;
+  const open=el.style.display==='block';
+  el.style.display=open?'none':'block';
+  if(arrow) arrow.textContent=open?'›':'⌄';
+}
+
+function buildCgContratCalendrier(c, anneeAm){
+  const statsCgAcq=['conges-acq','decompte-acq'];
+  const statsCgAnticipe=['conges-anticipe','decompte-anticipe'];
+  const statsCgNonAcq=['conges-non'];
+  const reposHebdo=c.reposHebdo||0;
+
+  // Construire un index des jours par date depuis les fiches
+  const joursParDate={};
+  Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
+    (fiche.jours||[]).forEach(j=>{
+      if(j.date) joursParDate[j.date]={statut:j.statut,valide:fiche.valide};
+    });
+  });
+
+  let html='';
+  const moisNoms=['Jan','Fév','Mar','Avr','Mai','Jui','Jul','Aoû','Sep','Oct','Nov','Déc'];
+
+  // Parcourir les 12 mois de mai à avril
+  for(let m=0;m<12;m++){
+    const moisIdx=(4+m)%12;
+    const annee=moisIdx<4?anneeAm+1:anneeAm;
+    const dernierJour=new Date(annee,moisIdx+1,0).getDate();
+    const nomMois=moisNoms[moisIdx]+' '+annee;
+
+    // Vérifier si ce mois a des jours à afficher
+    let hasDays=false;
+    for(let d=1;d<=dernierJour;d++){
+      const dateStr=annee+'-'+String(moisIdx+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+      const j=joursParDate[dateStr];
+      if(j&&(statsCgAcq.includes(j.statut)||statsCgAnticipe.includes(j.statut)||statsCgNonAcq.includes(j.statut))) {hasDays=true;break;}
+    }
+    if(!hasDays) continue;
+
+    html+=`<div style="margin-bottom:8px">
+      <div style="font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:4px">${nomMois}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:2px">`;
+
+    for(let d=1;d<=dernierJour;d++){
+      const jourDate=new Date(annee,moisIdx,d);
+      const dateStr=annee+'-'+String(moisIdx+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+      const jourSem=jourDate.getDay();
+      const isRepos=jourSem===reposHebdo;
+      const j=joursParDate[dateStr];
+
+      let bg='transparent',border='none',color='var(--tx3)';
+      let title='';
+
+      if(j){
+        if(statsCgAcq.includes(j.statut)){
+          bg=j.valide?'#d8eeff':'#eef6ff';
+          border='1px solid #93c5fd';
+          color='#1d4ed8';
+          title=j.valide?'Acquis (validé)':'Acquis (en cours)';
+        } else if(statsCgAnticipe.includes(j.statut)){
+          bg=j.valide?'#fce8d8':'#fef3eb';
+          border='1px solid #fdba74';
+          color='#c2410c';
+          title=j.valide?'Anticipé (validé)':'Anticipé (en cours)';
+        }
+      }
+
+      if(isRepos&&!j) continue; // ne pas afficher les jours de repos vides
+
+      html+=`<div style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:11px;border-radius:4px;background:${bg};border:${border};color:${color}" title="${dateStr}${title?': '+title:''}">${d}</div>`;
+    }
+
+    html+='</div></div>';
+  }
+
+  return html||'<div style="color:var(--tx2);font-size:13px;padding:8px">Aucun jour de congé dans cette période.</div>';
+}
+
 function genCumul(c){
   // Détecter l'ancien format {acquis:0,pris:0,...} vs nouveau {2024:{...},2025:{...}}
   const estNouveauFormat=c.conges&&Object.keys(c.conges).some(k=>!isNaN(Number(k))&&Number(k)>2000);
