@@ -4473,6 +4473,20 @@ function calcCongesContrat(c){
   anneesRef.forEach(ar=>{restantParAnnee[ar]=c.conges[ar].acquis||0;});
   // Réinitialiser les pris
   anneesRef.forEach(ar=>{c.conges[ar].pris=0;});
+  // Soustraire les anticipés du restant disponible pour la FIFO des acquis
+  tousJoursConges.forEach(j=>{
+    if(j.statut==='conges-anticipe'){
+      const dateJ=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
+      for(const ar of anneesRef){
+        const debutRef=new Date(ar,5,1);
+        const finRef=new Date(ar+1,4,31);
+        if(dateJ>=debutRef&&dateJ<=finRef){
+          restantParAnnee[ar]=Math.max(0,restantParAnnee[ar]-1);
+          break;
+        }
+      }
+    }
+  });
 
   // Réinitialiser prisDansAMSuivante
   anneesRef.forEach(ar=>{c.conges[ar].prisDansAMSuivante=0;});
@@ -9756,7 +9770,7 @@ function buildCgContratCalendrier(c, anneeAm){
   // Trouver tous les agendas du contrat
   const tousAgendas=[...(c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
 
-  let html='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-bottom:12px">';
+  let html='<div style="margin-bottom:12px">';
 
   for(let m=0;m<12;m++){
     const moisIdx=(4+m)%12;
@@ -9769,80 +9783,50 @@ function buildCgContratCalendrier(c, anneeAm){
     for(let d=1;d<=dernierJour;d++){
       const dateStr=annee+'-'+String(moisIdx+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
       const j=joursParDate[dateStr];
-      if(j&&(statsCgAcq.includes(j.statut)||statsCgAnticipe.includes(j.statut))) {hasDays=true;break;}
+      if(j&&(statsCgAcq.includes(j.statut)||statsCgAnticipe.includes(j.statut))){hasDays=true;break;}
     }
     if(!hasDays) continue;
 
-    // Calculer le premier jour de la semaine du mois
-    const premierJourMois=new Date(annee,moisIdx,1).getDay(); // 0=dim
-    const decalage=premierJourMois===0?6:premierJourMois-1; // lundi=0
-
-    html+=`<div style="background:#fafafa;border:1px solid var(--mb);border-radius:8px;padding:8px">
-      <div style="font-size:12px;font-weight:700;color:var(--m);margin-bottom:6px;text-align:center">${nomMois}</div>
-      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;text-align:center">`;
-
-    // En-têtes jours
-    JOURS_ABR.forEach((j,i)=>{
-      const isR=i===(reposHebdo===0?6:reposHebdo-1);
-      html+=`<div style="font-size:9px;font-weight:600;color:${isR?'#93c5fd':'var(--tx3)'};padding:1px 0">${j}</div>`;
-    });
-
-    // Cases vides avant le 1er
-    for(let i=0;i<decalage;i++) html+='<div></div>';
+    html+=`<div style="margin-bottom:8px">
+      <div style="font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:4px">${nomMois}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:2px">`;
 
     for(let d=1;d<=dernierJour;d++){
       const jourDate=new Date(annee,moisIdx,d);
       const dateStr=annee+'-'+String(moisIdx+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
       const jourSem=jourDate.getDay();
-      const jourIdx=jourSem===0?6:jourSem-1;
       const isRepos=jourSem===reposHebdo;
       const j=joursParDate[dateStr];
+      const estFerie=isFerie(dateStr,c);
 
-      // Déterminer si jour off (contrat 46)
       let isOff=false;
       if(est46&&tousAgendas.length){
         const ag=tousAgendas.find(ag=>dateStr>=ag.dateDebut&&dateStr<=ag.dateFin);
         if(ag&&ag.semaines){
-          const semNum=getSemISO(dateStr);
-          const semAn=getSemAnnee(dateStr);
-          const agKey=getKeyAgenda(semNum,semAn);
-          isOff=ag.semaines[agKey]==='off';
+          const semNum=getSemISO(dateStr);const semAn=getSemAnnee(dateStr);
+          isOff=ag.semaines[getKeyAgenda(semNum,semAn)]==='off';
         }
       }
-
-      // Déterminer si férié
-      const estFerie=isFerie(dateStr,c);
 
       let bg='transparent',color='var(--tx3)',fw='400',title='',border='none';
 
       if(isRepos){
-        bg='#e8f0fe';color='#93c5fd';
-      } else if(isOff){
-        bg='#f0f0f0';color='var(--tx3)';
-        if(j&&(statsCgAcq.includes(j.statut)||statsCgAnticipe.includes(j.statut))){
-          bg=statsCgAcq.includes(j.statut)?'#d8eeff':'#fce8d8';
-          color=statsCgAcq.includes(j.statut)?'#1d4ed8':'#c2410c';
-          fw='600';
-          title=statsCgAcq.includes(j.statut)?'Acquis (semaine off)':'Anticipé (semaine off)';
-          if(!j.valide){bg=statsCgAcq.includes(j.statut)?'#eef6ff':'#fef3eb';}
-        }
-      } else if(estFerie){
+        bg='#e8f0fe';color='#6366f1';
+      } else if(estFerie&&!j){
         bg='#fffbe6';color='#854F0B';
       } else if(j){
         if(statsCgAcq.includes(j.statut)){
-          bg=j.valide?'#d8eeff':'#eef6ff';
-          color='#1d4ed8';fw='600';
-          border='1px solid #93c5fd';
+          bg=j.valide?'#f0defc':'#f7effe';border='1px solid #c084fc';color='#7e22ce';fw='600';
           title=j.valide?'Acquis validé':'Acquis en cours';
         } else if(statsCgAnticipe.includes(j.statut)){
-          bg=j.valide?'#fce8d8':'#fef3eb';
-          color='#c2410c';fw='600';
-          border='1px solid #fdba74';
+          bg=j.valide?'#fce8d8':'#fef3eb';border='1px solid #fdba74';color='#c2410c';fw='600';
           title=j.valide?'Anticipé validé':'Anticipé en cours';
         }
+      } else if(isOff){
+        bg='#f5f5f5';color='#bbb';
       }
 
-      html+=`<div style="width:100%;aspect-ratio:1;display:flex;align-items:center;justify-content:center;font-size:10px;border-radius:3px;background:${bg};border:${border};color:${color};font-weight:${fw};cursor:default" title="${title||dateStr}">${d}</div>`;
+      html+=`<div style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:11px;border-radius:4px;background:${bg};border:${border};color:${color};font-weight:${fw}" title="${title||dateStr}">${d}</div>`;
     }
 
     html+='</div></div>';
