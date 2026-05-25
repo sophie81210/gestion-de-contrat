@@ -4935,9 +4935,9 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
         hTheoriques+=hSemMoyPV/6;
         return;
       }
-      // Congés avec volume : hSemMoy/6 aussi (on ne connaît pas les heures du jour)
+      // Congés avec volume : hVolume/6 (volume de la semaine connu)
       if(volTh&&['decompte-conges','conges-acq','conges-non','conges-anticipe','reprise'].includes(statutJourTh)){
-        hTheoriques+=hSemMoyPV/6;
+        hTheoriques+=volTh.h/6;
         return;
       }
       // Jour férié : valeur selon getHJourFerie
@@ -4954,6 +4954,28 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
         }
       }
     });
+
+    // Semaine à cheval sur début/fin de contrat ou avenant : prorata
+    if(volTh&&!semTheoriquesVues.has(semKey)){
+      const lundiSem=new Date(dateEx);
+      while(lundiSem.getDay()!==1) lundiSem.setDate(lundiSem.getDate()-1);
+      const dimSem=new Date(lundiSem);dimSem.setDate(lundiSem.getDate()+6);
+      const lundiStr=lundiSem.getFullYear()+'-'+String(lundiSem.getMonth()+1).padStart(2,'0')+'-'+String(lundiSem.getDate()).padStart(2,'0');
+      const dimStr=dimSem.getFullYear()+'-'+String(dimSem.getMonth()+1).padStart(2,'0')+'-'+String(dimSem.getDate()).padStart(2,'0');
+      const dateDebContrat=c.dateDeb||'';
+      const dateAvenant=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant)?.dateAvenant||'';
+      const estChevalContratOuAvenant=(dateDebContrat&&lundiStr<dateDebContrat)||(dateAvenant&&lundiStr<=dateAvenant&&dimStr>=dateAvenant);
+      if(estChevalContratOuAvenant){
+        semTheoriquesVues.add(semKey);
+        const nbJoursPossiblesMois=joursDesSem.filter(jj=>{
+          const idx=jj.jourSemaine===0?6:jj.jourSemaine-1;
+          return volTh.jours&&volTh.jours[idx];
+        }).length;
+        const hDejaAjoute=semJoursCpt[semKey]*(volTh.h/(volTh.j||1));
+        hTheoriques-=hDejaAjoute;
+        hTheoriques+=volTh.h*(nbJoursPossiblesMois/(volTh.j||1));
+      }
+    }
   });
 
   return hTheoriques; // en heures
