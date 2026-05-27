@@ -9651,45 +9651,49 @@ function calcIndemniteConges(c, anneeRef){
 function genOngletCongesContrat(c){
   const annees=[];
   const dateDeb=c.dateDeb?new Date(c.dateDeb):new Date();
-  const dateDebAnneeAm=dateDeb.getMonth()>=4?dateDeb.getFullYear():dateDeb.getFullYear()-1;
+  // Première année d'acquisition : juin de l'année du début de contrat
+  const anneeDebContrat=dateDeb.getMonth()>=5?dateDeb.getFullYear():dateDeb.getFullYear()-1;
   const anneeActuelle=new Date().getFullYear();
   const moisActuel=new Date().getMonth();
-  const anneeAmActuelle=moisActuel>=4?anneeActuelle:anneeActuelle-1;
-  for(let a=dateDebAnneeAm;a<=anneeAmActuelle+1;a++) annees.push(a);
+  const anneeAcqActuelle=moisActuel>=5?anneeActuelle:anneeActuelle-1;
+  for(let a=anneeDebContrat;a<=anneeAcqActuelle;a++) annees.push(a);
 
   const containerId='cg-contrat-container-'+c.id;
 
   let html='<div style="padding:14px" id="'+containerId+'">';
   html+='<div class="ctitle" style="margin-bottom:12px">Congés — '+c.nom+'</div>';
 
-  annees.reverse().forEach(anneeAm=>{
-    const debutAmStr=anneeAm+'-05-01';
-    const finAmStr=(anneeAm+1)+'-04-30';
-    const id='cg-contrat-'+c.id+'-'+anneeAm;
+  annees.reverse().forEach(anneeAcq=>{
+    // Période d'acquisition : juin N → mai N+1
+    const debutAcqStr=anneeAcq+'-06-01';
+    const finAcqStr=(anneeAcq+1)+'-05-31';
+    const id='cg-contrat-'+c.id+'-'+anneeAcq;
+    const cg=c.conges&&c.conges[anneeAcq];
 
-    // Compter les jours posés dans cette période de pose (mai→avril) - fiches validées uniquement
+    // Compter les jours posés dans cette période d'acquisition
     let nbAcq=0, nbAnticipe=0;
     Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
-      if(!fiche.valide) return;
       (fiche.jours||[]).forEach(j=>{
-        if(!j.date||j.date<debutAmStr||j.date>finAmStr) return;
+        if(!j.date||j.date<debutAcqStr||j.date>finAcqStr) return;
         if(j.statut==='conges-acq'||j.statut==='decompte-acq') nbAcq++;
         else if(j.statut==='conges-anticipe'||j.statut==='decompte-anticipe') nbAnticipe++;
       });
     });
 
-    const label=`Mai ${anneeAm} → Avril ${anneeAm+1}`;
+    const acquis=cg?.acquis||0;
+    const restants=cg?.restants||0;
+    const label=`Acquisition ${anneeAcq}/${anneeAcq+1} (juin ${anneeAcq} → mai ${anneeAcq+1})`;
     html+=`<div style="border:1px solid var(--mb);border-radius:8px;margin-bottom:10px;overflow:hidden">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#f5f0ff;cursor:pointer" onclick="toggleCgContrat('${id}','${containerId}')">
         <div>
           <div style="font-weight:700;font-size:14px;color:var(--m)">${label}</div>
-          <div style="font-size:12px;color:var(--tx2)">${nbAcq} j acquis · ${nbAnticipe > 0 ? nbAnticipe+' j anticipés · ' : ''}${nbAcq+nbAnticipe} j total</div>
+          <div style="font-size:12px;color:var(--tx2)">${acquis} j acquis · ${nbAcq} j posés acquis · ${nbAnticipe > 0 ? nbAnticipe+' j anticipés · ' : ''}${restants > 0 ? restants+' j restants' : ''}</div>
         </div>
         <span style="font-size:20px;color:var(--tx3)" id="${id}-arrow">›</span>
       </div>
       <div id="${id}" style="display:none;padding:12px">
-        ${buildCgContratCalendrier(c, anneeAm)}
-        ${buildCgAcquisEncarts(c, anneeAm)}
+        ${buildCgContratCalendrierAcq(c, anneeAcq)}
+        ${buildCgAcquisEncarts(c, anneeAcq)}
       </div>
     </div>`;
   });
@@ -9757,6 +9761,79 @@ function buildCgAcquisEncarts(c, anneeAmPose){
 
   html+='</div>';
   return html;
+}
+
+function buildCgContratCalendrierAcq(c, anneeAcq){
+  // Calendrier des jours posés pour l'année d'acquisition juin N → mai N+1
+  const debutAcqStr=anneeAcq+'-06-01';
+  const finAcqStr=(anneeAcq+1)+'-05-31';
+  const statsCgAcq=['conges-acq','decompte-acq'];
+  const statsCgAnticipe=['conges-anticipe','decompte-anticipe'];
+  const reposHebdo=c.reposHebdo||0;
+  const MOIS_NOMS=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+
+  // Index des jours par date
+  const joursParDate={};
+  Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
+    (fiche.jours||[]).forEach(j=>{
+      if(j.date&&j.date>=debutAcqStr&&j.date<=finAcqStr) joursParDate[j.date]={statut:j.statut,valide:fiche.valide};
+    });
+  });
+
+  let html='<div style="margin-bottom:12px">';
+  const isFerieC=(dateStr)=>isFerie(dateStr,c);
+
+  // Parcourir juin N → mai N+1
+  for(let m=0;m<12;m++){
+    const moisIdx=(5+m)%12;
+    const annee=moisIdx<5?anneeAcq+1:anneeAcq;
+    const dernierJour=new Date(annee,moisIdx+1,0).getDate();
+    const nomMois=MOIS_NOMS[moisIdx]+' '+annee;
+
+    let hasDays=false;
+    for(let d=1;d<=dernierJour;d++){
+      const dateStr=annee+'-'+String(moisIdx+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+      const j=joursParDate[dateStr];
+      if(j&&(statsCgAcq.includes(j.statut)||statsCgAnticipe.includes(j.statut))){hasDays=true;break;}
+    }
+    if(!hasDays) continue;
+
+    html+=`<div style="margin-bottom:8px">
+      <div style="font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:4px">${nomMois}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:2px">`;
+
+    for(let d=1;d<=dernierJour;d++){
+      const jourDate=new Date(annee,moisIdx,d);
+      const dateStr=annee+'-'+String(moisIdx+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+      const jourSem=jourDate.getDay();
+      const isRepos=jourSem===reposHebdo;
+      const j=joursParDate[dateStr];
+      const estFerie=isFerieC(dateStr);
+
+      let bg='transparent',color='var(--tx3)',fw='400',title='',border='none';
+
+      if(isRepos){
+        bg='#e8f0fe';color='#6366f1';
+      } else if(estFerie&&!j){
+        bg='#fffbe6';color='#854F0B';
+      } else if(j){
+        if(statsCgAcq.includes(j.statut)){
+          bg=j.valide?'#f0defc':'#f7effe';border='1px solid #c084fc';color='#7e22ce';fw='600';
+          title=j.valide?'Acquis validé':'Acquis en cours';
+        } else if(statsCgAnticipe.includes(j.statut)){
+          bg=j.valide?'#fce8d8':'#fef3eb';border='1px solid #fdba74';color='#c2410c';fw='600';
+          title=j.valide?'Anticipé validé':'Anticipé en cours';
+        }
+      }
+
+      html+=`<div style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:11px;border-radius:4px;background:${bg};border:${border};color:${color};font-weight:${fw}" title="${title||dateStr}">${d}</div>`;
+    }
+
+    html+='</div></div>';
+  }
+
+  html+='</div>';
+  return html||'<div style="color:var(--tx2);font-size:13px;padding:8px">Aucun jour posé dans cette période.</div>';
 }
 
 function buildCgContratCalendrier(c, anneeAm){
