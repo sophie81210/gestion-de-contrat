@@ -9669,7 +9669,7 @@ function genOngletCongesContrat(c){
     if(!cgAcq||(!cgAcq.acquis&&!cgAcq.anticipeTotal)) return;
     // Période d'acquisition : juin N → mai N+1
     const debutAcqStr=anneeAcq+'-06-01';
-    const finAcqStr=(anneeAcq+1)+'-05-31';
+    const finAcqStr=(anneeAcq+2)+'-04-30';
     const id='cg-contrat-'+c.id+'-'+anneeAcq;
     const cg=c.conges&&c.conges[anneeAcq];
 
@@ -9726,51 +9726,50 @@ function toggleCgContrat(id, containerId){
 }
 
 function buildCgAcquisEncarts(c, anneeAcq){
-  const anneeAmPose=anneeAcq;
-  // Affiche 2 encarts d'acquisition :
-  // - L'année terminée : juin (anneeAmPose-1) → mai anneeAmPose
-  // - L'année en cours : juin anneeAmPose → mai (anneeAmPose+1)
-  // Couleurs : acquis=violet, anticipé=rose clair
-  // L'année suivante : les anticipés de l'année N deviennent les acquis de N+1
+  // Affiche l'encart de l'année d'acquisition anneeAcq uniquement
   const ls='display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid rgba(0,0,0,0.07);font-size:13px';
   const vs='font-weight:600;color:var(--m)';
   let html='<div style="margin-top:12px">';
 
-  [anneeAcq-1, anneeAcq].forEach((anneeRef, idx)=>{
-    const estTerminee=idx===0;
-    // Couleurs : année terminée = acquis violet, année en cours = acquis violet clair
-    const bgAcq=estTerminee?'#f0defc':'#f4e8fc';
-    const bgAnticipe=estTerminee?'#f4e8fc':'#fce8d8';
-    const titre=estTerminee
-      ?`Acquis ${anneeRef}/${anneeRef+1} (terminée)`
-      :`En cours d'acquisition ${anneeRef}/${anneeRef+1}`;
+  const cg=c.conges&&c.conges[anneeAcq];
+  if(!cg){ html+='</div>'; return html; }
 
-    // Récupérer les données depuis c.conges si disponible
-    const cg=c.conges&&c.conges[anneeRef];
-    if(!cg) return;
+  const estTerminee=cg.estTerminee;
+  const bg=estTerminee?'#f0defc':'#f4e8fc';
+  const bgAnticipe='#fce8d8';
+  const titre=estTerminee
+    ?`Acquis ${anneeAcq}/${anneeAcq+1} (terminée)`
+    :`En cours d'acquisition ${anneeAcq}/${anneeAcq+1}`;
 
-    html+=`<div style="background:${bgAcq};border-radius:8px;padding:10px 12px;margin-bottom:8px">
-      <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:6px">${titre}</div>
-      <div style="${ls}"><span>Jours acquis</span><span style="${vs}">${cg.acquis||0} j</span></div>
-      <div style="${ls}"><span>Jours pris (acquis)</span><span style="${vs}">${cg.pris||0} j</span></div>`;
-    if(cg.anticipe>0||cg.prisAnticipe>0){
-      html+=`<div style="background:${bgAnticipe};border-radius:6px;padding:6px 8px;margin:4px 0">
-        <div style="${ls}"><span>Jours anticipés accordés</span><span style="${vs}">${cg.anticipe||0} j</span></div>
-        <div style="${ls};border-bottom:none"><span>Jours anticipés pris</span><span style="${vs}">${cg.prisAnticipe||0} j</span></div>
-      </div>`;
-    }
-    html+=`<div style="${ls};border-bottom:none"><span>Jours restants</span><span style="${vs}">${cg.restants||0} j</span></div>
+  html+=`<div style="background:${bg};border-radius:8px;padding:10px 12px;margin-bottom:8px">
+    <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:6px">${titre}</div>
+    <div style="${ls}"><span>Jours acquis</span><span style="${vs}">${cg.acquis||0} j</span></div>
+    <div style="${ls}"><span>Jours pris (acquis)</span><span style="${vs}">${cg.pris||0} j</span></div>`;
+
+  // Anticipés
+  const nbAnticipes=Object.values(c.fiches||{}).reduce((n,f)=>{
+    return n+(f.jours||[]).filter(j=>{
+      if(j.statut!=='conges-anticipe'&&j.statut!=='decompte-anticipe') return false;
+      return j.date>=anneeAcq+'-06-01'&&j.date<=(anneeAcq+1)+'-04-30';
+    }).length;
+  },0);
+
+  if(nbAnticipes>0){
+    html+=`<div style="background:${bgAnticipe};border-radius:6px;padding:6px 8px;margin:4px 0">
+      <div style="${ls};border-bottom:none"><span>Jours anticipés posés</span><span style="${vs}">${nbAnticipes} j</span></div>
     </div>`;
-  });
+  }
+  html+=`<div style="${ls};border-bottom:none"><span>Jours restants</span><span style="${vs}">${cg.restants||0} j</span></div>
+  </div>`;
 
   html+='</div>';
   return html;
 }
 
 function buildCgContratCalendrierAcq(c, anneeAcq){
-  // Calendrier des jours posés pour l'année d'acquisition juin N → mai N+1
+  // Calendrier des jours posés : acquisition (juin N → mai N+1) + pose (mai N+1 → avril N+2)
   const debutAcqStr=anneeAcq+'-06-01';
-  const finAcqStr=(anneeAcq+1)+'-05-31';
+  const finAcqStr=(anneeAcq+2)+'-04-30';
   const statsCgAcq=['conges-acq','decompte-acq'];
   const statsCgAnticipe=['conges-anticipe','decompte-anticipe'];
   const reposHebdo=c.reposHebdo||0;
@@ -9784,13 +9783,18 @@ function buildCgContratCalendrierAcq(c, anneeAcq){
     });
   });
 
+  // Agendas pour semaines off
+  const tousAgendasAcq=[...(c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
+  const est46Acq=c.tc!=='52'&&c.tc!=='occ';
+
   let html='<div style="margin-bottom:12px">';
   const isFerieC=(dateStr)=>isFerie(dateStr,c);
 
-  // Parcourir juin N → mai N+1
-  for(let m=0;m<12;m++){
-    const moisIdx=(5+m)%12;
-    const annee=moisIdx<5?anneeAcq+1:anneeAcq;
+  // Parcourir juin N → avril N+2 (22 mois)
+  for(let m=0;m<23;m++){
+    const totalMois=(5+m);
+    const moisIdx=totalMois%12;
+    const annee=anneeAcq+Math.floor(totalMois/12);
     const dernierJour=new Date(annee,moisIdx+1,0).getDate();
     const nomMois=MOIS_NOMS[moisIdx]+' '+annee;
 
@@ -9814,10 +9818,22 @@ function buildCgContratCalendrierAcq(c, anneeAcq){
       const j=joursParDate[dateStr];
       const estFerie=isFerieC(dateStr);
 
+      // Détecter semaine off
+      let isOff=false;
+      if(est46Acq&&tousAgendasAcq.length){
+        const ag=tousAgendasAcq.find(ag=>dateStr>=ag.dateDebut&&dateStr<=ag.dateFin);
+        if(ag&&ag.semaines){
+          const semNum=getSemISO(dateStr);const semAn=getSemAnnee(dateStr);
+          isOff=ag.semaines[getKeyAgenda(semNum,semAn)]==='off';
+        }
+      }
+
       let bg='transparent',color='var(--tx3)',fw='400',title='',border='none';
 
       if(isRepos){
         bg='#e8f0fe';color='#6366f1';
+      } else if(isOff&&!j){
+        bg='#f0f0f0';color='#ccc';
       } else if(estFerie&&!j){
         bg='#fffbe6';color='#854F0B';
       } else if(j){
