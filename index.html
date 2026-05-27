@@ -9741,25 +9741,25 @@ function buildCgAcquisEncarts(c, anneeAcq){
     ?`Acquis ${anneeAcq}/${anneeAcq+1} (terminée)`
     :`En cours d'acquisition ${anneeAcq}/${anneeAcq+1}`;
 
-  html+=`<div style="background:${bg};border-radius:8px;padding:10px 12px;margin-bottom:8px">
-    <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:6px">${titre}</div>
-    <div style="${ls}"><span>Jours acquis</span><span style="${vs}">${cg.acquis||0} j</span></div>
-    <div style="${ls}"><span>Jours pris (acquis)</span><span style="${vs}">${cg.pris||0} j</span></div>`;
-
-  // Anticipés
+  // Compter les anticipés posés pendant l'acquisition (fiches validées uniquement)
   const nbAnticipes=Object.values(c.fiches||{}).reduce((n,f)=>{
+    if(!f.valide) return n;
     return n+(f.jours||[]).filter(j=>{
       if(j.statut!=='conges-anticipe'&&j.statut!=='decompte-anticipe') return false;
       return j.date>=anneeAcq+'-06-01'&&j.date<=(anneeAcq+1)+'-04-30';
     }).length;
   },0);
 
+  html+=`<div style="background:${bg};border-radius:8px;padding:10px 12px;margin-bottom:8px">
+    <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:6px">${titre}</div>
+    <div style="${ls}"><span>Jours acquis</span><span style="${vs}">${cg.acquis||0} j</span></div>`;
   if(nbAnticipes>0){
     html+=`<div style="background:${bgAnticipe};border-radius:6px;padding:6px 8px;margin:4px 0">
-      <div style="${ls};border-bottom:none"><span>Jours anticipés posés</span><span style="${vs}">${nbAnticipes} j</span></div>
+      <div style="${ls};border-bottom:none"><span>Jours anticipés pris</span><span style="${vs}">${nbAnticipes} j</span></div>
     </div>`;
   }
-  html+=`<div style="${ls};border-bottom:none"><span>Jours restants</span><span style="${vs}">${cg.restants||0} j</span></div>
+  html+=`<div style="${ls}"><span>Jours acquis pris</span><span style="${vs}">${cg.pris||0} j</span></div>
+  <div style="${ls};border-bottom:none"><span>Jours restants</span><span style="${vs}">${cg.restants||0} j</span></div>
   </div>`;
 
   html+='</div>';
@@ -9775,11 +9775,25 @@ function buildCgContratCalendrierAcq(c, anneeAcq){
   const reposHebdo=c.reposHebdo||0;
   const MOIS_NOMS=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
 
-  // Index des jours par date
+  // Index des jours par date - séparer période acquisition et période pose
+  const debutPoseStr2=(anneeAcq+1)+'-05-01';
+  const finPoseStr2=(anneeAcq+2)+'-04-30';
+  const debutAntStr=anneeAcq+'-06-01';
+  const finAntStr=(anneeAcq+1)+'-04-30'; // anticipés = pendant acquisition uniquement
   const joursParDate={};
   Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
     (fiche.jours||[]).forEach(j=>{
-      if(j.date&&j.date>=debutAcqStr&&j.date<=finAcqStr) joursParDate[j.date]={statut:j.statut,valide:fiche.valide};
+      if(!j.date) return;
+      const statsCgAcqJ=['conges-acq','decompte-acq'];
+      const statsCgAntJ=['conges-anticipe','decompte-anticipe'];
+      // Acquis posés pendant la pose
+      if(statsCgAcqJ.includes(j.statut)&&j.date>=debutPoseStr2&&j.date<=finPoseStr2){
+        joursParDate[j.date]={statut:j.statut,valide:fiche.valide};
+      }
+      // Anticipés posés pendant l'acquisition (pas après)
+      if(statsCgAntJ.includes(j.statut)&&j.date>=debutAntStr&&j.date<=finAntStr){
+        joursParDate[j.date]={statut:j.statut,valide:fiche.valide};
+      }
     });
   });
 
