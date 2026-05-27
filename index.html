@@ -9664,6 +9664,9 @@ function genOngletCongesContrat(c){
   html+='<div class="ctitle" style="margin-bottom:12px">Congés — '+c.nom+'</div>';
 
   annees.reverse().forEach(anneeAcq=>{
+    // Ignorer les années sans données (avant le contrat)
+    const cgAcq=c.conges&&c.conges[anneeAcq];
+    if(!cgAcq||(!cgAcq.acquis&&!cgAcq.anticipeTotal)) return;
     // Période d'acquisition : juin N → mai N+1
     const debutAcqStr=anneeAcq+'-06-01';
     const finAcqStr=(anneeAcq+1)+'-05-31';
@@ -9687,7 +9690,7 @@ function genOngletCongesContrat(c){
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#f5f0ff;cursor:pointer" onclick="toggleCgContrat('${id}','${containerId}')">
         <div>
           <div style="font-weight:700;font-size:14px;color:var(--m)">${label}</div>
-          <div style="font-size:12px;color:var(--tx2)">${acquis} j acquis · ${nbAcq} j posés acquis · ${nbAnticipe > 0 ? nbAnticipe+' j anticipés · ' : ''}${restants > 0 ? restants+' j restants' : ''}</div>
+          <div style="font-size:12px;color:var(--tx2)">${acquis} j acquis · ${nbAcq > 0 ? nbAcq+' j posés acquis · ' : ''}${nbAnticipe > 0 ? nbAnticipe+' j anticipés · ' : ''}${restants > 0 ? restants+' j restants' : 'soldé'}</div>
         </div>
         <span style="font-size:20px;color:var(--tx3)" id="${id}-arrow">›</span>
       </div>
@@ -9732,7 +9735,7 @@ function buildCgAcquisEncarts(c, anneeAmPose){
   const vs='font-weight:600;color:var(--m)';
   let html='<div style="margin-top:12px">';
 
-  [anneeAmPose-1, anneeAmPose].forEach((anneeRef, idx)=>{
+  [anneeAcq-1, anneeAcq].forEach((anneeRef, idx)=>{
     const estTerminee=idx===0;
     // Couleurs : année terminée = acquis violet, année en cours = acquis violet clair
     const bgAcq=estTerminee?'#f0defc':'#f4e8fc';
@@ -11299,25 +11302,8 @@ if(tousNonPrevus){
     const periodeDebut=String(anneeDebut)+'-05-01';
     const periodeFin=String(anneeDebut+1)+'-04-30';
 
-    // Initialiser compteurTotal avec les pris hors AM courante
-    // = pris_total - prisDansAMSuivante (calculé par calcCongesContrat)
+    // compteurTotal sera calculé par période (voir ci-dessous)
     let compteurTotal=0;
-    if(c.conges){
-      Object.values(c.conges).forEach(cg=>{
-        if(!cg.estTerminee) return;
-        compteurTotal+=Math.max(0,(cg.pris||0)-(cg.prisDansAMSuivante||0));
-      });
-    }
-    // Pour 52 sem : ajouter les conges-acq de mai de l'AM précédente (période de pose à cheval)
-    // Ces jours sont dans l'AM anneeDebut-1 mais font partie de la pose de l'AM anneeDebut
-    // Tous contrats : ajouter les conges-acq de mai dans compteurTotal
-    const maisKey=String(anneeDebut)+'-05';
-    const ficheMai=c.fiches?.[maisKey];
-    if(ficheMai?.valide){
-      ficheMai.jours.forEach(j=>{
-        if(j.statut==='conges-acq') compteurTotal++;
-      });
-    }
     Object.values(c.fiches).forEach(fiche=>{
       if(fiche.valide) return;
       fiche.jours.forEach(j=>{
@@ -11364,9 +11350,27 @@ if(tousNonPrevus){
       const moisPrecDate=new Date(keyMoisPrec+'-01');
       let quotaAcquis=0;
       if(c.conges){
+        // Déterminer l'année d'acquisition pour cette période de pose
+        // Pose mai N+1 → avril N+2 correspond à l'acquisition juin N → mai N+1
+        // Année d'acquisition = annee où debutDate est dans la pose (mai→avril)
+        const debutDateObj=new Date(debut);
+        const moisDebut=debutDateObj.getMonth(); // 0-11
+        const anneeDebut2=debutDateObj.getFullYear();
+        // Si pose démarre entre mai et décembre → année acq = année courante - 1
+        // Si pose démarre entre janvier et avril → année acq = année courante - 2
+        const anneeAcqPose = moisDebut >= 4 ? anneeDebut2 - 1 : anneeDebut2 - 2;
+
         Object.values(c.conges).forEach(cg=>{
           if(!cg.estTerminee) return;
-          quotaAcquis+=(cg.acquis||0);
+          if(cg.anneeRef === anneeAcqPose){
+            // Année d'acquisition principale : tous les acquis
+            quotaAcquis += (cg.acquis||0);
+          } else if(cg.anneeRef === anneeAcqPose - 1){
+            // Année précédente immédiate : ajouter les restants (non perdus)
+            // Pour 52 sem : perdus au 30 avril → 0
+            // Pour 46 sem : payés ou reportés → ajouter
+            if(c.tc !== '52') quotaAcquis += (cg.restants||0);
+          }
         });
       }
       // Quota anticipé = jours en cours d'acquisition (année non terminée)
@@ -11399,6 +11403,19 @@ if(tousNonPrevus){
           }
         });
       }
+      // Calculer compteurTotal = jours posés pour cette année d'acquisition
+      // (anticipés posés pendant l'acquisition + acquis posés pendant la pose)
+      compteurTotal=0;
+      const debutAcqStr2=anneeAcqPose+'-06-01';
+      const finPoseStr2=(anneeAcqPose+2)+'-04-30'; // fin de la pose = avril N+2
+      Object.values(c.fiches||{}).forEach(fiche=>{
+        (fiche.jours||[]).forEach(j=>{
+          if(!j.date||j.date<debutAcqStr2||j.date>finPoseStr2) return;
+          if(['conges-acq','decompte-acq','conges-anticipe','decompte-anticipe'].includes(j.statut)){
+            compteurTotal++;
+          }
+        });
+      });
       const quotaDisponible=Math.max(0,quotaAcquis-compteurTotal);
       const quotaAnticipeTotal=quotaAcquis+quotaAnticipeBrut;
 
