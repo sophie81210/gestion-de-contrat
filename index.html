@@ -7478,6 +7478,16 @@ function creerAgenda(cid){
   if(manquantesCreation.length>0) alerteCalendrierAM(manquantesCreation);
 }
          
+
+function estSemViolette(semsCongesSet, semNum, lundiDate){
+  if(!semsCongesSet) return false;
+  if(semsCongesSet instanceof Set) return semsCongesSet.has(semNum);
+  // Map: année AM → Set
+  const lundi=new Date(lundiDate);
+  const anneeAM=lundi.getMonth()>=4?lundi.getFullYear():lundi.getFullYear()-1;
+  const set=semsCongesSet.get(anneeAM);
+  return set?set.has(semNum):false;
+}
 function getSemsCongesGlobal(dateDebut, dateFin){
   // Calcule les 5 numéros de semaine les plus chargés en congés posés + fériés
   // Filtre sur la période de l'agenda (dateDebut à dateFin)
@@ -7582,10 +7592,10 @@ function renderAgendas(c){
     const anneeAmFin=agFin.getMonth()>=4?agFin.getFullYear():agFin.getFullYear()-1;
     let semsCongesSet=null;
     if(!estPlanSemOuVar52){
-      semsCongesSet=new Set();
+      // Map année AM → Set de semaines violettes
+      semsCongesSet=new Map();
       for(let am=anneeAmDebut;am<=anneeAmFin;am++){
-        const s=getSemsCongesGlobal(am+'-05-01',(am+1)+'-04-30');
-        s.forEach(sk=>semsCongesSet.add(sk));
+        semsCongesSet.set(am, getSemsCongesGlobal(am+'-05-01',(am+1)+'-04-30'));
       }
     }
     if(!window._semsCongesSet) window._semsCongesSet={};
@@ -7879,7 +7889,7 @@ function getAgendaWarnings(c,ag,semaines,semsCongesSet){
     }
     // Exclure les semaines violettes pour tous sauf plan sem/var 52
     if(!estPSV52Warn){
-      if(semsCongesSet&&semsCongesSet.has(s.sem)) return false; // s.sem = numéro de semaine
+      if(estSemViolette(semsCongesSet, s.sem, s.lundi)) return false;
       if(S.congesAM){
         let nbJours=0;
         for(let d=0;d<7;d++){
@@ -7936,10 +7946,9 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
   const anneeAmFin2=agFin2.getMonth()>=4?agFin2.getFullYear():agFin2.getFullYear()-1;
   let semsCongesSet=null;
   if(!estPlanSemOuVar2){
-    semsCongesSet=new Set();
+    semsCongesSet=new Map();
     for(let am=anneeAmDebut2;am<=anneeAmFin2;am++){
-      const s=getSemsCongesGlobal(am+'-05-01',(am+1)+'-04-30');
-      s.forEach(sk=>semsCongesSet.add(sk));
+      semsCongesSet.set(am, getSemsCongesGlobal(am+'-05-01',(am+1)+'-04-30'));
     }
   }
 
@@ -8006,7 +8015,7 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
 
       // Détecter si la semaine est parmi les 5 semaines les plus chargées en congés
       // (calculé une seule fois pour toutes les semaines via semsCongesSet)
-      const estSemConges=semsCongesSet&&semsCongesSet.has(s.sem); // s.sem = numéro de semaine
+      const estSemConges=estSemViolette(semsCongesSet, s.sem, s.lundi);
 
       let bg='var(--mp)',brd='var(--mb)',txt='var(--tx3)';
       if(estSemConges){
@@ -8072,7 +8081,14 @@ function peindreAgenda(key,cid,agid){
   const estPSV=(source.th==='sem')||(source.th==='plan'&&source.planType==='var');
   if(!estPSV){
     const semsCongesCheck=window._semsCongesSet&&window._semsCongesSet[agid];
-    if(semsCongesCheck&&semsCongesCheck.has(key)){toast('Semaine de congés Ass\'Mat — non modifiable. Si les congés ne sont pas encore posés, vérifiez le calendrier Congés Ass\'Mat.');return;}
+    // key = clé agenda (ex: '2025-S32'), extraire semNum et lundi
+    const keyParts=key.split('-S');
+    const semNumCheck=keyParts[1]?parseInt(keyParts[1]):0;
+    const anneeISOCheck=parseInt(keyParts[0]);
+    // Année AM : si sem >= 18 (mai) → même année, sinon année-1
+    const anneeAMCheck=semNumCheck>=18?anneeISOCheck:anneeISOCheck-1;
+    const setCheck=semsCongesCheck instanceof Map?semsCongesCheck.get(anneeAMCheck):semsCongesCheck;
+    if(setCheck&&setCheck.has&&setCheck.has(semNumCheck)){toast('Semaine de congés Ass\'Mat — non modifiable. Si les congés ne sont pas encore posés, vérifiez le calendrier Congés Ass\'Mat.');return;}
   }
   const pinceau=S.agendaPinceaux&&S.agendaPinceaux[agid];
   if(!pinceau){toast('Sélectionnez d\'abord un pinceau');return;}
@@ -8100,10 +8116,9 @@ function validerModifAgenda(cid,agid){
   const anneeAmFin3=agFin3.getMonth()>=4?agFin3.getFullYear():agFin3.getFullYear()-1;
   let semsCongesSet=null;
   if(!estPSVValid){
-    semsCongesSet=new Set();
+    semsCongesSet=new Map();
     for(let am=anneeAmDebut3;am<=anneeAmFin3;am++){
-      const s=getSemsCongesGlobal(am+'-05-01',(am+1)+'-04-30');
-      s.forEach(sk=>semsCongesSet.add(sk));
+      semsCongesSet.set(am, getSemsCongesGlobal(am+'-05-01',(am+1)+'-04-30'));
     }
   }
   const warnings=getAgendaWarnings(source,ag,semaines,semsCongesSet);
