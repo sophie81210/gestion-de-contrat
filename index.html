@@ -11632,11 +11632,26 @@ if(tousNonPrevus){
         return null;
       }
 
+      // Compter les samedis déjà décomptés dans les fiches validées de la période de pose
+      const debutPoseSam=(anneeAcqPose+1)+'-05-01';
+      const finPoseSam=(anneeAcqPose+2)+'-04-30';
+      const statsSamedi=['conges-acq','conges-anticipe','conges-non','decompte-acq','decompte-anticipe','decompte-conges'];
+      let nbSamedisDecomptes=0;
+      Object.values(c.fiches||{}).forEach(f=>{
+        if(!f.valide) return;
+        (f.jours||[]).forEach(j=>{
+          if(!j.date||j.date<debutPoseSam||j.date>finPoseSam) return;
+          const d=new Date(j.date);
+          if(d.getDay()===6&&statsSamedi.includes(j.statut)) nbSamedisDecomptes++;
+        });
+      });
+
       while(cur<=dEnd){
         const dateStr=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
         const jourSem=cur.getDay();
         const reposH=c.reposHebdo||0;
         const estRepos=jourSem===reposH;
+        const estSamedi=jourSem===6&&reposH!==6; // samedi non repos
         const estFerie=isFerie(dateStr,c);
         const estDansPeriodeCochee=dateStr>=debut&&dateStr<=fin;
         const estPose=data.jours[dateStr]==='pose';
@@ -11712,6 +11727,13 @@ if(tousNonPrevus){
 
         if(estRepos){
           // Repos hebdo : garde son statut
+          cur.setDate(cur.getDate()+1);continue;
+        }
+
+        // Règle des 5 samedis : max 5 samedis décomptés sur la période de pose
+        if(estSamedi&&nbSamedisDecomptes>=5&&!fiche.valide){
+          // 6ème samedi ou plus → non-prevu
+          jour.statut='non-prevu';
           cur.setDate(cur.getDate()+1);continue;
         }
 
@@ -11809,6 +11831,7 @@ if(tousNonPrevus){
               } else {
                 jour.statut='conges-non';
               }
+              if(estSamedi) nbSamedisDecomptes++;
             }
           } else {
             // Jour ouvrable décompté
@@ -11845,6 +11868,7 @@ if(tousNonPrevus){
                 } else {
                   jour.statut='conges-non';
                 }
+                if(estSamedi) nbSamedisDecomptes++;
               }
             }
           }
