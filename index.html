@@ -11503,6 +11503,7 @@ if(tousNonPrevus){
       });
     });
 
+    let compteurCumulatif=0; // compteur cumulatif entre les périodes d'une même pose
     periodes.forEach(({debut,fin})=>{
       const premierTrav=premierJourTravaille(c,debut,fin);
       const finDate=new Date(fin);
@@ -11542,14 +11543,16 @@ if(tousNonPrevus){
       if(c.conges){
 
         Object.values(c.conges).forEach(cg=>{
-          if(!cg.estTerminee) return;
           if(cg.anneeRef === anneeAcqPose){
-            // Année d'acquisition principale : tous les acquis
-            quotaAcquis += (cg.acquis||0);
-          } else if(cg.anneeRef === anneeAcqPose - 1){
+            if(cg.estTerminee){
+              quotaAcquis += (cg.acquis||0);
+            } else {
+              // Acquisition non terminée mais on est en période de pose → utiliser acqBrut
+              const debutPoseAcq=new Date(cg.anneeRef+1,4,1);
+              if(debutDate>=debutPoseAcq) quotaAcquis+=Math.floor(cg.acqBrut||0);
+            }
+          } else if(cg.anneeRef === anneeAcqPose - 1 && cg.estTerminee){
             // Année précédente immédiate : ajouter les restants (non perdus)
-            // Pour 52 sem : perdus au 30 avril → 0
-            // Pour 46 sem : payés ou reportés → ajouter
             if(c.tc !== '52') quotaAcquis += (cg.restants||0);
           }
         });
@@ -11594,15 +11597,15 @@ if(tousNonPrevus){
       const finAcqCpt=(anneeAcqPose+1)+'-04-30'; // fin acquisition (avant pose)
       const debutPoseCpt=(anneeAcqPose+1)+'-05-01'; // début pose
       const finPoseCpt=(anneeAcqPose+2)+'-04-30'; // fin pose
-      compteurTotal=0;
+      // Partir du cumulatif des périodes précédentes + fiches validées
+      compteurTotal=compteurCumulatif;
       Object.values(c.fiches||{}).forEach(fiche=>{
+        if(!fiche.valide) return; // fiches validées uniquement (les non-validées sont comptées via cumulatif)
         (fiche.jours||[]).forEach(j=>{
           if(!j.date) return;
           const estAnticipe=['conges-anticipe','decompte-anticipe'].includes(j.statut);
           const estAcquis=['conges-acq','decompte-acq'].includes(j.statut);
-          // Anticipés posés pendant l'acquisition
           if(estAnticipe&&j.date>=debutAcqCpt&&j.date<=finAcqCpt) compteurTotal++;
-          // Acquis posés pendant la pose
           if(estAcquis&&j.date>=debutPoseCpt&&j.date<=finPoseCpt) compteurTotal++;
         });
       });
@@ -11890,6 +11893,18 @@ if(tousNonPrevus){
           }
         }
         cur.setDate(cur.getDate()+1);
+      }
+      // Mettre à jour le compteur cumulatif avec les jours assignés dans cette période
+      if(!fiche?.valide){
+        // compteurCumulatif += jours assignés dans cette période
+        Object.values(c.fiches||{}).forEach(f=>{
+          if(f.valide) return;
+          (f.jours||[]).forEach(j=>{
+            if(!j.date||j.date<debut||j.date>fin) return;
+            const statsC=['conges-acq','conges-anticipe','conges-non','conges-6j','decompte-acq','decompte-anticipe'];
+            if(statsC.includes(j.statut)) compteurCumulatif++;
+          });
+        });
       }
     });
            
