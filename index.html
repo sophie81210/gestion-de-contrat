@@ -3848,6 +3848,7 @@ function majFicheStatut(contratId,key,idx,val){
   // init = réinitialiser au statut prévu (null = calculé depuis le contrat)
   // Pour les jours possibles plan min/var : revenir à 'a-selectionner'
   const estJourPossible=ficheSource.fiches[key].jours[idx]._jourPossible;
+  const _statutAvantModif=ficheSource.fiches[key].jours[idx].statut; // sauvegarder avant modification
   ficheSource.fiches[key].jours[idx].statut=(val==='init')?(estJourPossible?'a-selectionner':null):val||null;
   // Pour plan min/var : réinitialiser aussi les heures prévues
   if(val==='init'&&(c.th==='plan'&&(c.planType==='min'||c.planType==='var'))){
@@ -3903,7 +3904,7 @@ function majFicheStatut(contratId,key,idx,val){
   // Si changement lié aux congés : recalculer les congés AM
   // Déclencher majFichesCgAm si le jour est en decompte-conges, reprise,
   // ou si un jour voisin est en decompte-conges (zone de décompte)
-  const statutPrecedent=ficheSource.fiches[key]?.jours[idx]?.statut;
+  const statutPrecedent=_statutAvantModif; // statut avant modification
   // Chercher un decompte-conges après le jour modifié dans la même fiche ou le mois suivant
   const jourModifie=ficheSource.fiches[key]?.jours[idx];
   const dateModif=jourModifie?.date||'';
@@ -3913,7 +3914,15 @@ function majFicheStatut(contratId,key,idx,val){
   const moisSuivKey=km===12?(ky+1)+'-01':ky+'-'+String(km+1).padStart(2,'0');
   const fichesSuiv=ficheSource.fiches[moisSuivKey]?.jours||[];
   const decompteApres=joursApres.some(j=>estDecompte(j.statut)||j.statut==='reprise')||fichesSuiv.some(j=>estDecompte(j.statut)||j.statut==='reprise');
-  const impacteDecompte=(estDecompte(statutPrecedent)||statutPrecedent==='reprise'||val==='reprise'||estDecompte(val)||(decompteApres&&['travaille','non-prevu','init'].includes(val)));
+  // Si on remet en non-prevu un jour dans la période de pose cochée AM → recalculer
+  const dateMod=jourModifie?.date||'';
+  let estDansPoseCochee=false;
+  if(val==='non-prevu'&&dateMod&&S.congesAM){
+    Object.values(S.congesAM).forEach(data=>{
+      if(data.jours&&data.jours[dateMod]==='pose') estDansPoseCochee=true;
+    });
+  }
+  const impacteDecompte=(estDecompte(statutPrecedent)||statutPrecedent==='reprise'||val==='reprise'||estDecompte(val)||(decompteApres&&['travaille','non-prevu','init'].includes(val))||estDansPoseCochee||statutPrecedent==='travaille');
   if(impacteDecompte){
     const anneeKey=parseInt(key.split('-')[0]);
     if(S.congesAM&&S.congesAM[anneeKey]) majFichesCgAm(anneeKey,false);
