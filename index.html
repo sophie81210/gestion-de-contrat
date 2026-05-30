@@ -831,8 +831,19 @@ async function saveToFirestore(){
   if(_saveTimer)clearTimeout(_saveTimer);
   _saveTimer=setTimeout(async()=>{
     try{
+      // Filtrer les fiches futures non validées pour réduire la taille des données
+      const now=new Date();
+      const moisActuel=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+      const contratsClean=S.contrats.map(c=>{
+        const fichesClean={};
+        Object.entries(c.fiches||{}).forEach(([k,f])=>{
+          // Garder les fiches passées/présentes, ou futures si validées
+          if(k<=moisActuel||f.valide) fichesClean[k]=f;
+        });
+        return {...c,fiches:fichesClean};
+      });
       const dataClean=JSON.parse(JSON.stringify({
-        contrats:S.contrats,
+        contrats:contratsClean,
         params:S.params||{},
         congesAM:S.congesAM||{}
       }));
@@ -11842,6 +11853,10 @@ if(tousNonPrevus){
               // Non entouré de congés → reste férié
               cur.setDate(cur.getDate()+1);continue;
             }
+            if(veilleConges&&!lendConges){
+              // Veille = congé mais lendemain = non congé → reste férié (pas de pont)
+              cur.setDate(cur.getDate()+1);continue;
+            }
             // Si veille acquise et lendemain pas encore traité mais dans la période → garde férié
             if(veilleAcquis&&!lendAcquis){
               const lendOuvrStr=getNextJourOuvrable(dateStr,reposH);
@@ -11876,9 +11891,7 @@ if(tousNonPrevus){
               const estEnPeriodePose=cur>=debutPoseDate;
               if(estEnPeriodePose&&compteurTotal<=quotaAcquis){
                 jour.statut='conges-acq';
-              } else if(estEnPeriodePose&&!c.conges[anneeAcqPose]?.estTerminee&&compteurTotal<=quotaAnticipeBrut){
-                // Acquis projetés (acquisition non terminée mais en période de pose)
-                jour.statut='conges-acq';
+              
               } else if(anticipeOk&&compteurTotal<=quotaAnticipeTotal){
                 jour.statut='conges-anticipe';
               } else {
@@ -11916,8 +11929,7 @@ if(tousNonPrevus){
                 const estEnPeriodePose2=cur>=debutPoseDate2;
                 if(estEnPeriodePose2&&compteurTotal<=quotaAcquis){
                   jour.statut='conges-acq';
-                } else if(estEnPeriodePose2&&!c.conges[anneeAcqPose]?.estTerminee&&compteurTotal<=quotaAnticipeBrut){
-                  jour.statut='conges-acq';
+                
                 } else if(anticipeOk&&compteurTotal<=quotaAnticipeTotal){
                   jour.statut='conges-anticipe';
                 } else {
