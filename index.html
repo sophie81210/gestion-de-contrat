@@ -811,29 +811,11 @@ async function deconn(){
   document.getElementById('pg-login').style.display='flex';
 }
          
-function getContratsCompresses(){
-  const now=new Date();
-  const moisActuel=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-  return S.contrats.map(c=>{
-    const fichesClean={};
-    Object.entries(c.fiches||{}).forEach(([k,f])=>{
-      if(k>moisActuel&&!f.valide) return;
-      const joursClean=(f.jours||[]).map(j=>{
-        const hasData=j.statut||j.heureDebReel||j.heureFinReel||j.heureDebPrev||j.heureFinPrev||j.note||j.km||(j.repas&&j.repas.some(r=>r))||j.planVarPrevu;
-        if(!hasData) return {date:j.date,jourSemaine:j.jourSemaine,semKey:j.semKey};
-        return j;
-      });
-      fichesClean[k]={...f,jours:joursClean};
-    });
-    return {...c,fiches:fichesClean};
-  });
-}
-
 async function saveToFirestoreSync(){
   if(!window.FB_USER||!window.fbSaveData) return;
   // Nettoyer les undefined (non supportés par Firestore)
   const data=JSON.parse(JSON.stringify({
-    contrats:getContratsCompresses(),
+    contrats:S.contrats,
     params:S.params||{},
     congesAM:S.congesAM||{}
   }));
@@ -844,7 +826,7 @@ let _saveTimer=null;
 async function saveToFirestore(){
   if(!window.FB_USER||!window.fbSaveData) return;
   // Sauvegarder immédiatement dans localStorage
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   // Debounce : attendre 2s d'inactivité avant d'écrire sur Firestore
   if(_saveTimer)clearTimeout(_saveTimer);
   _saveTimer=setTimeout(async()=>{
@@ -852,7 +834,20 @@ async function saveToFirestore(){
       // Filtrer les fiches futures non validées pour réduire la taille des données
       const now=new Date();
       const moisActuel=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-      const contratsClean=getContratsCompresses();
+      const contratsClean=S.contrats.map(c=>{
+        const fichesClean={};
+        Object.entries(c.fiches||{}).forEach(([k,f])=>{
+          if(k>moisActuel&&!f.valide) return; // fiches futures non validées
+          // Compresser les jours : ne garder que ceux avec des données saisies
+          const joursClean=(f.jours||[]).map(j=>{
+            const hasData=j.statut||j.heureDebReel||j.heureFinReel||j.heureDebPrev||j.heureFinPrev||j.note||j.km||(j.repas&&j.repas.some(r=>r))||j.planVarPrevu;
+            if(!hasData) return {date:j.date,jourSemaine:j.jourSemaine,semKey:j.semKey}; // minimal
+            return j;
+          });
+          fichesClean[k]={...f,jours:joursClean};
+        });
+        return {...c,fiches:fichesClean};
+      });
       const dataClean=JSON.parse(JSON.stringify({
         contrats:contratsClean,
         params:S.params||{},
