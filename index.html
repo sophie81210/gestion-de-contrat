@@ -8820,10 +8820,17 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
     const fiche=c.fiches[key];
     const [ay2,am2]=key.split('-').map(Number);
     const source=getVersionActive(c,new Date(ay2,am2-1,1));
+    // Détecter si ce mois est à cheval sur un avenant 46→52
+    const avenantMois=(c.avenants||[]).find(av=>av.signe&&av.tc==='52'&&av.dateAvenant&&av.dateAvenant.slice(0,7)===key);
+    const veilleAvenantStr=avenantMois?(()=>{
+      const [avy,avm,avd]=avenantMois.dateAvenant.split('-').map(Number);
+      const dV=new Date(avy,avm-1,avd-1);
+      return dV.getFullYear()+'-'+String(dV.getMonth()+1).padStart(2,'0')+'-'+String(dV.getDate()).padStart(2,'0');
+    })():null;
     // Heures payées = hMensu - hAbsDeduit (en heures équivalentes)
-    const recapMois=calcRecapFiche(c,fiche);
+    const recapMois=avenantMois?calcRecapFiche(c,fiche,null,veilleAvenantStr,null,avenantMois.dateAvenant,'avant'):calcRecapFiche(c,fiche);
     const hAbsDedMois=parseFloat(recapMois.hAbsDeduit||0);
-    const hMensuMois=parseFloat(source.hMensu||0);
+    const hMensuMois=parseFloat(recapMois.hMensu||source.hMensu||0);
     tranches[idx].mensu+=Math.max(0,hMensuMois-hAbsDedMois);
     tranches[idx].hAbsDed=(tranches[idx].hAbsDed||0)+hAbsDedMois;
     // Heures prévues (sans off ni congés)
@@ -9475,8 +9482,8 @@ function renderRupture(c, cont){
   if(c.tc!=='52'||avenantVers52){
     const dateFinRegul=avenantVers52?(()=>{
       const [ay,am]=avenantVers52.dateAvenant.split('-').map(Number);
-      // Dernière fiche 46 sem = mois précédant l'avenant
-      return new Date(am===1?ay-1:ay,(am===1?12:am)-1,1);
+      // Inclure le mois de l'avenant (traité en partie dans calcRegularisationDefinitive)
+      return new Date(ay,am-1,1);
     })():null;
     const reg=calcRegularisationDefinitive(c,null,dateFinRegul);
     if(reg.diff>0){
