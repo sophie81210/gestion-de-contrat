@@ -11095,80 +11095,25 @@ function buildCgAmDetail(anneeDebut,data){
 // Retourne true si le ferié doit rester jaune/non cochable
 function ferieCouvretParAcquis(dateStr, anneeDebut, dataAM) {
   const joursAM = dataAM.jours || {};
-  // Trouver le meilleur contrat (max jours acquis + anticipes si option)
-  let maxJoursAcquis = 0;
-  let meilleurContrat = null;
-  S.contrats.filter(c => c.signe && !c.cloture).forEach(c => {
-    let acquis = 0;
-    if (c.conges) {
-      // Chercher l annee de reference correspondante
-      // Choisir l'année d'acquisition selon la date du férié
-      const anneeRef = dateStr>=(anneeDebut+1)+'-05-01' ? anneeDebut : anneeDebut - 1;
-      const cgRef = c.conges[anneeRef] || {};
-      acquis = cgRef.acquis || 0;
-    }
-    if (acquis > maxJoursAcquis) {
-      maxJoursAcquis = acquis;
-      meilleurContrat = c;
-    }
-  });
+  if(!Object.keys(joursAM).some(d=>joursAM[d]==='pose')) return false;
 
-  if (!meilleurContrat || maxJoursAcquis === 0) return false; // pas de conges acquis -> ferié cochable
+  // Repos hebdo : prendre le premier contrat actif signé
+  const premierContrat = S.contrats.find(c=>c.signe&&!c.cloture);
+  const reposHebdo = premierContrat?.reposHebdo || 0;
 
-  // Trouver le repos hebdo du meilleur contrat
-  const reposHebdo = meilleurContrat.reposHebdo || 0;
+  // Chercher la veille calendaire non-repos
+  const dV=new Date(dateStr.split('-')[0],parseInt(dateStr.split('-')[1])-1,parseInt(dateStr.split('-')[2]));
+  dV.setDate(dV.getDate()-1);
+  if(dV.getDay()===reposHebdo) dV.setDate(dV.getDate()-1);
+  const veilleStr=dV.getFullYear()+'-'+String(dV.getMonth()+1).padStart(2,'0')+'-'+String(dV.getDate()).padStart(2,'0');
+  // Chercher le lendemain calendaire non-repos
+  const dL=new Date(dateStr.split('-')[0],parseInt(dateStr.split('-')[1])-1,parseInt(dateStr.split('-')[2]));
+  dL.setDate(dL.getDate()+1);
+  if(dL.getDay()===reposHebdo) dL.setDate(dL.getDate()+1);
+  const lendemainStr=dL.getFullYear()+'-'+String(dL.getMonth()+1).padStart(2,'0')+'-'+String(dL.getDate()).padStart(2,'0');
 
-  // Trier les jours caches dans le calendrier AM
-  const joursCaches = Object.keys(joursAM)
-    .filter(d => joursAM[d] === 'pose')
-    .sort();
-
-  if (!joursCaches.length) return false;
-
-  // Identifier les periodes continues de conges (séparées par des dimanches/repos)
-  // Pour chaque periode, compter les jours ouvrables selon le meilleur contrat
-  // et voir si le ferié est couvert
-  const partsD = dateStr.split('-').map(Number);
-  const dateFerie = new Date(partsD[0], partsD[1]-1, partsD[2]);
-
-  // Trouver la periode de conges qui contient la veille ou le lendemain du ferié
-  // (le ferié doit être entre 2 jours poses ou précédé d'un jour posé avant reprise)
-  const veilleStr = getPrevJourOuvrable(dateStr, reposHebdo);
-  const lendemainStr = getNextJourOuvrable(dateStr, reposHebdo);
-  const veilleCoché = joursAM[veilleStr] === 'pose';
-  const lendemainCoché = joursAM[lendemainStr] === 'pose';
-
-  // Le ferié n'est pertinent que s'il est entouré de jours poses
-  if (!veilleCoché && !lendemainCoché) return false; // ferié isolé -> pas dans une periode
-
-  // Trouver le début de la période de congés contenant ce ferié
-  const debutPeriode = trouverDebutPeriode(dateStr, joursAM, reposHebdo);
-  if (!debutPeriode) return false;
-
-  // Compter les jours ouvrables (selon meilleur contrat) depuis début période jusqu'au ferié (exclu)
-  let compteur = 0;
-  let cursor = new Date(debutPeriode.split('-')[0], parseInt(debutPeriode.split('-')[1])-1, parseInt(debutPeriode.split('-')[2]));
-  const dateF = new Date(partsD[0], partsD[1]-1, partsD[2]);
-
-  while (cursor < dateF) {
-    const jourSem = cursor.getDay();
-    if (jourSem !== 0 && jourSem !== reposHebdo) { // ni dimanche ni repos hebdo
-      const ds = cursor.getFullYear()+'-'+String(cursor.getMonth()+1).padStart(2,'0')+'-'+String(cursor.getDate()).padStart(2,'0');
-      if (!isFerie(ds, meilleurContrat)) { // les fériés déjà couverts ne comptent pas
-        compteur++;
-      }
-    }
-    cursor.setDate(cursor.getDate()+1);
-  }
-
-  // Le férié est acquis seulement si :
-  // - il est dans une période (veille ou lendemain posé) ET
-  // - le lendemain ouvrable est posé OU c'est le dernier jour avant reprise (veille posée suffit) ET
-  // - le compteur de jours avant lui est dans les acquis
-  if(compteur >= maxJoursAcquis) return false; // pas assez d'acquis pour couvrir jusqu'ici
-  // Le férié est dans une période de pose si veille OU lendemain est coché
-  if(veilleCoché || lendemainCoché) return true;
-  return false;
+  // Bloquer si veille OU lendemain est coché
+  return joursAM[veilleStr]==='pose' || joursAM[lendemainStr]==='pose';
 }
 
 function getPrevJourPrevuTravaille(c, dateStr){
@@ -11272,20 +11217,7 @@ function toggleCgAm(anneeDebut,dateStr){
     // Pas de limite au nombre de jours cochés (certains contrats peuvent avoir plus de jours restants)
     const parts=dateStr.split('-');
     const jourDate=new Date(parseInt(parts[0]),parseInt(parts[1])-1,parseInt(parts[2]));
-    if(jourDate.getDay()===6){
-      const nbSam=Object.keys(data.jours).filter(k=>{
-        if(data.jours[k]!=='pose')return false;
-        const p=k.split('-');
-        return new Date(parseInt(p[0]),parseInt(p[1])-1,parseInt(p[2])).getDay()===6;
-      }).length;
-      const samTrav=S.contrats.filter(c=>c.signe&&!c.cloture).some(c=>{
-        const src=getVersionActive(c,new Date());
-        if(src.th==='fixe'&&src.joursFixe) return src.joursFixe[5]&&(src.joursFixe[5].d||src.joursFixe[5].f);
-        if(src.th==='sem'&&src.semTypes) return src.semTypes.some(st=>st.jours&&st.jours[5]);
-        return false;
-      });
-      if(!samTrav&&nbSam>=5){toast('Maximum 5 samedis dans les congés');return;}
-    }
+    // Pas de blocage sur les samedis : conges-6j est géré par contrat dans majFichesCgAm
     data.jours[dateStr]='pose';
   }
   S.congesAM[anneeDebut]=data;
