@@ -10916,6 +10916,55 @@ function buildCgAmDetail(anneeDebut,data){
   }
   const nbSamedis=nbSamedisCoches+nbSamedisFeriesAcquis;
 
+  // Précalcul des jours restants par contrat pour la bordure pointillée
+  const anneeAcqPose=anneeDebut; // pose de anneeDebut = acquisition anneeDebut-1
+  const joursRestantsParContrat=contratsActifs.map(c=>{
+    const cgAcq=c.conges&&c.conges[anneeAcqPose-1];
+    return {c, restants:cgAcq?.restants||0};
+  });
+  // Fonction : ce jour est-il éligible à la bordure pointillée ?
+  function jourEligibleBordure(dateStr){
+    const now=new Date();
+    const today=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+    if(dateStr<=today) return false; // jours passés exclus
+    // Période nov → avril N+2
+    const debutBordure=anneeDebut+'-11-01';
+    const finBordure=(anneeDebut+2)+'-04-30';
+    if(dateStr<debutBordure||dateStr>finBordure) return false;
+    if(data.jours[dateStr]==='pose') return false; // déjà coché
+    const d=new Date(dateStr);
+    const jourSem=d.getDay(); // 0=dim
+    // Vérifier toutes les conditions pour tous les contrats
+    return joursRestantsParContrat.every(({c,restants})=>{
+      const src=getVersionActive(c,d);
+      const tc=src.tc||c.tc;
+      const th=src.th||c.th;
+      const reposH=src.reposHebdo||c.reposHebdo||0;
+      if(jourSem===reposH) return false; // jour de repos → pas éligible
+      const jourIdx=jourSem===0?6:jourSem-1;
+      // Vérifier si le jour est prévu/possible pour ce contrat
+      let estPrevu=false;
+      if(th==='fixe'&&src.joursFixe) estPrevu=!!(src.joursFixe[jourIdx]?.d);
+      else if(th==='sem'&&src.semTypes) estPrevu=src.semTypes.some(st=>st.jours&&st.jours[jourIdx]?.d);
+      else if(th==='plan'){
+        const pt=src.planType||c.planType;
+        if(pt==='min') estPrevu=!!(src.joursMin||c.joursMin||[])[jourIdx];
+        else if(pt==='var') estPrevu=(src.planVar||c.planVar||[]).some(v=>v.jours&&v.jours[jourIdx]);
+      }
+      if(tc==='52'){
+        // 52 sem avec jours restants : le jour doit être prévu/possible
+        if(restants>0) return estPrevu;
+        // 52 sem sans jours restants : le jour ne doit PAS être prévu/possible
+        return !estPrevu;
+      } else {
+        // 46 sem avec jours restants : tous les jours ouvrables OK
+        if(restants>0) return true;
+        // 46 sem sans jours restants : le jour ne doit PAS être prévu/possible
+        return !estPrevu;
+      }
+    });
+  }
+
   // Résumé des jours restants par contrat
   let resumeHtml='<div style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:8px">';
   contratsActifs.forEach(c=>{
@@ -10959,6 +11008,10 @@ function buildCgAmDetail(anneeDebut,data){
       if(isFerNonTrav&&!isPose){bg='#fff8e1';color='#854F0B';}
       if(isFerNonTrav&&isReposH){cursor='not-allowed';}
       if(isPose){bg='var(--vt)';color='#fff';border='none';}
+      // Bordure pointillée verte si jour éligible pour poser des acquis restants
+      if(!isPose&&!isReposH&&jourEligibleBordure(dateStr)){
+        border='2px dashed var(--vt)';
+      }
       // Verrouiller si fiche validée pour au moins un contrat actif
       const moisKey=dateStr.slice(0,7);
       const ficheValidee=S.contrats.some(ct=>ct.signe&&!ct.cloture&&ct.fiches?.[moisKey]?.valide);
@@ -11234,14 +11287,7 @@ function toggleCgAm(anneeDebut,dateStr){
   if(data.jours[dateStr]==='pose'){
     delete data.jours[dateStr];
   } else {
-    let joursFragMaxT=0;
-    if(data.fractionnement){
-      S.contrats.filter(c=>c.signe&&!c.cloture).forEach(c=>{
-        joursFragMaxT=Math.max(joursFragMaxT,calcJoursFractionnement(c,anneeDebut));
-      });
-    }
-    const joursMaxT=30+joursFragMaxT;
-    if(joursCoches>=joursMaxT){toast('Maximum '+joursMaxT+' jours de congés');return;}
+    // Pas de limite au nombre de jours cochés (certains contrats peuvent avoir plus de jours restants)
     const parts=dateStr.split('-');
     const jourDate=new Date(parseInt(parts[0]),parseInt(parts[1])-1,parseInt(parts[2]));
     if(jourDate.getDay()===6){
