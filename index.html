@@ -1911,22 +1911,38 @@ function renderDetTab(id,tab){
             //   + abs rémunérées (heures prévues)
             //   + fériés prévus au contrat
             const ficheMois=c.fiches?.[key];
-            // Pour occ→46 : prendre la partie après avenant ; pour 46→52 : prendre la partie avant avenant
+            // Détecter le type de passage
             const estPassageVers46Reg=avenantDuMoisReg&&avenantDuMoisReg.tc!=='52'&&avenantDuMoisReg.tc!=='occ';
-            const recapMois=ficheMois?(avenantDuMoisReg?(
-              estPassageVers46Reg
-                ?calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres')
-                :calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant')
-            ):calcRecapFiche(c,ficheMois)):null;
-            const montantAbsMois=parseFloat(recapMois?.montantAbsences||0);
-            // Pour le mois de l'avenant 46→52 : utiliser le txNet de la version 46 sem
-            const txNetMois=parseFloat(recapMois?.txNetExact||0);
-            // Pour avenant dans ce mois : hMensu × txNet - absences (sans HC/HS)
-            const montantMensu=avenantDuMoisReg?parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)-(recapMois?.montantAbsences||0)).toFixed(2)):parseFloat(Math.max(0,hMensuReg*txNetMois-montantAbsMois).toFixed(2));
-            // Calculer les heures réelles payables
-            // Pour occ→46 : partir de la date avenant ; pour 46→52 : jusqu'à la veille avenant
-            const finMoisRegul=estPassageVers46Reg?finMois:(veilleAvenantReg||finMois);
-            const debutMoisRegul=estPassageVers46Reg?(avenantDuMoisReg.dateAvenant):debutMois;
+            const estPassage46vers46Reg=estPassageVers46Reg&&(()=>{const srcAv=getVersionActive(c,new Date(debutMois));return srcAv.tc!=='occ';})();
+            // Calcul recap selon le type de passage
+            let montantMensu=0, txNetMois=0, finMoisRegul=finMois, debutMoisRegul=debutMois;
+            if(avenantDuMoisReg&&estPassage46vers46Reg){
+              // 46→46 : cumuler avant + après avenant
+              const recapAvant=ficheMois?calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant'):null;
+              const recapApres=ficheMois?calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres'):null;
+              const mensuAvant=recapAvant?parseFloat(((recapAvant.hMensu||0)*(recapAvant.txNetExact||0)-(recapAvant.montantAbsences||0)).toFixed(2)):0;
+              const mensuApres=recapApres?parseFloat(((recapApres.hMensu||0)*(recapApres.txNetExact||0)-(recapApres.montantAbsences||0)).toFixed(2)):0;
+              montantMensu=parseFloat((mensuAvant+mensuApres).toFixed(2));
+              txNetMois=parseFloat(recapApres?.txNetExact||0);
+              debutMoisRegul=debutMois; finMoisRegul=finMois;
+            } else if(avenantDuMoisReg&&estPassageVers46Reg){
+              // occ→46 : partie après avenant uniquement
+              const recapMois=ficheMois?calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres'):null;
+              txNetMois=parseFloat(recapMois?.txNetExact||0);
+              montantMensu=parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)-(recapMois?.montantAbsences||0)).toFixed(2));
+              debutMoisRegul=avenantDuMoisReg.dateAvenant; finMoisRegul=finMois;
+            } else if(avenantDuMoisReg){
+              // 46→52 : partie avant avenant uniquement
+              const recapMois=ficheMois?calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant'):null;
+              txNetMois=parseFloat(recapMois?.txNetExact||0);
+              montantMensu=parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)-(recapMois?.montantAbsences||0)).toFixed(2));
+              debutMoisRegul=debutMois; finMoisRegul=veilleAvenantReg||finMois;
+            } else {
+              // Mois normal
+              const recapMois=ficheMois?calcRecapFiche(c,ficheMois):null;
+              txNetMois=parseFloat(recapMois?.txNetExact||0);
+              montantMensu=parseFloat(Math.max(0,hMensuReg*txNetMois-(recapMois?.montantAbsences||0)).toFixed(2));
+            }
             let hReel=0;
             if(ficheMois){
               const statutsExclus=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-conges',
@@ -2509,15 +2525,28 @@ function calcRegulDiffEurosAuto(c){
       return dV.getFullYear()+'-'+String(dV.getMonth()+1).padStart(2,'0')+'-'+String(dV.getDate()).padStart(2,'0');
     })():null;
     const estPassageVers46Reg=avenantDuMoisReg&&avenantDuMoisReg.tc!=='52'&&avenantDuMoisReg.tc!=='occ';
-    const recapMois=avenantDuMoisReg?(
-      estPassageVers46Reg
-        ?calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres')
-        :calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant')
-    ):calcRecapFiche(c,ficheMois);
-    const txNetMois=parseFloat(recapMois?.txNetExact||0);
-    const montantMensu=avenantDuMoisReg?parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)-(recapMois?.montantAbsences||0)).toFixed(2)):parseFloat(Math.max(0,(recapMois?.hMensu||0)*txNetMois-(recapMois?.montantAbsences||0)).toFixed(2));
-    const finMoisRegul=estPassageVers46Reg?finMois:(veilleAvenantReg||finMois);
-    const debutMoisRegul=estPassageVers46Reg?(avenantDuMoisReg.dateAvenant):debutMois;
+    const estPassage46vers46Reg=estPassageVers46Reg&&(()=>{const srcAv=getVersionActive(c,new Date(debutMois));return srcAv.tc!=='occ';})();
+    let montantMensu=0, txNetMois=0, finMoisRegul=finMois, debutMoisRegul=debutMois;
+    if(avenantDuMoisReg&&estPassage46vers46Reg){
+      const rA=calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant');
+      const rP=calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres');
+      montantMensu=parseFloat((((rA.hMensu||0)*(rA.txNetExact||0)-(rA.montantAbsences||0))+((rP.hMensu||0)*(rP.txNetExact||0)-(rP.montantAbsences||0))).toFixed(2));
+      txNetMois=parseFloat(rP?.txNetExact||0);
+    } else if(avenantDuMoisReg&&estPassageVers46Reg){
+      const r=calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres');
+      txNetMois=parseFloat(r?.txNetExact||0);
+      montantMensu=parseFloat(((r?.hMensu||0)*(r?.txNetExact||0)-(r?.montantAbsences||0)).toFixed(2));
+      debutMoisRegul=avenantDuMoisReg.dateAvenant;
+    } else if(avenantDuMoisReg){
+      const r=calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant');
+      txNetMois=parseFloat(r?.txNetExact||0);
+      montantMensu=parseFloat(((r?.hMensu||0)*(r?.txNetExact||0)-(r?.montantAbsences||0)).toFixed(2));
+      finMoisRegul=veilleAvenantReg||finMois;
+    } else {
+      const r=calcRecapFiche(c,ficheMois);
+      txNetMois=parseFloat(r?.txNetExact||0);
+      montantMensu=parseFloat(Math.max(0,(r?.hMensu||0)*txNetMois-(r?.montantAbsences||0)).toFixed(2));
+    }
     const statutsExclus=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-conges','abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat'];
     let hReel=0;
     (ficheMois.jours||[]).forEach(j=>{
