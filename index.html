@@ -3044,7 +3044,7 @@ const statutPrevuJ=getStatutPrevu(c,j);
     <div class="card" style="margin-top:10px">
       <div class="ctitle">Cumul — ${label}</div>
       <table id="recap-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
-        ${buildRecapCumul(recap,recap2,calcSoldeToutCompte(c, key))}
+        ${buildRecapCumul(recap,recap2,calcSoldeToutCompte(c, key),c)}
       </table>
     </div>`:`
     <div class="card" style="margin-top:10px">
@@ -3680,12 +3680,12 @@ function buildRecapHtml(recap, solde, regul52, c){
     if(parseFloat(recap.montantCongesNonAcquis||0)>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--al)">dont congés non acquis ('+recap.nbCongesNonAcquis+' j) — '+recap.montantCongesNonAcquis.toFixed(2)+' € déduits</td></tr>';
     if(parseFloat(recap.hComp||0)>0||parseFloat(recap.hSup||0)>0) html+=ligneG('Taux horaire net', recap.txNet+' \u20AC', true);
     // Séparateur
-    html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
     // Partie basse : cumuls
     html+=ligneG('Jours travaillés', (recap.nbJoursTrav+_joursRegul).toFixed(1)+' j');
     if(_hasRegul&&_joursRegul>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont '+_joursRegul.toFixed(1)+' j régularisés</td></tr>';
     html+=ligneG('Heures normales à déclarer', Math.max(0,(recap.hMensu||0)-(recap.hAbsDeduit||0)+_hRegul46).toFixed(2)+' h', true);
     if(_hasRegul&&_hRegul46>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont '+_hRegul46.toFixed(2)+' h régularisées</td></tr>';
+    html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
   }
   // ── Section heures complémentaires et majorées ──
   const hasHComp=parseFloat(recap.hBaseComp||0)>0||parseFloat(recap.hMajFerie||0)>0||parseFloat(recap.hMajRepos||0)>0||parseFloat(recap.hMaj1erMai||0)>0;
@@ -3769,15 +3769,22 @@ function buildRecapHtml(recap, solde, regul52, c){
   return html;
 }
 
-function buildRecapCumul(r1,r2){
+function buildRecapCumul(r1,r2,solde,c){
   const ligneG=(label,val,gras,color)=>'<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2);'+(gras?'font-weight:700':'')+'">'+(label||'')+'</td><td style="padding:7px 4px;font-weight:'+(gras?'700':'600')+';text-align:right;'+(color?'color:'+color:'')+'">'+(val||'')+'</td></tr>';
+  // Régularisation (depuis r1 = partie avant avenant)
+  const _cumulHasRegul=r1.estPassage46vers52&&r1.periodeAv!=='apres'&&c&&c._regulDiffEuros>0;
+  const _cumulDiffEuros=_cumulHasRegul?c._regulDiffEuros:0;
+  const _cumulTxNet=_cumulHasRegul?(()=>{const [ay,am,ad]=r1.dateAvenantPassage.split('-').map(Number);const vR=new Date(ay,am-1,ad-1);return parseFloat(((getVersionActive(c,vR).txBrut||0)*getCoefNet()).toFixed(4));})():0;
+  const _cumulHRegul=(_cumulHasRegul&&_cumulTxNet>0)?parseFloat((_cumulDiffEuros/_cumulTxNet).toFixed(2)):0;
+  const _cumulHMoyJour=r1.nbJoursMoisContrat>0?(r1.hMensu||0)/r1.nbJoursMoisContrat:(r1.hMensu||0)/20;
+  const _cumulJoursRegul=(_cumulHasRegul&&_cumulHMoyJour>0)?parseFloat((_cumulHRegul/_cumulHMoyJour).toFixed(1)):0;
   // Pour le cumul : si r1 est occ utiliser nbJoursTravReels (filtré par période), sinon nbJoursTrav
   const nbJoursTrav=(r1.isOcc?parseFloat(r1.nbJoursTravReels||0):parseFloat(r1.nbJoursTrav||0))
-    +parseFloat(r2.nbJoursTrav||0);
-  const hNormales=Math.max(0,(r1.hMensu||0)-(r1.hAbsDeduit||0))+Math.max(0,(r2.hMensu||0)-(r2.hAbsDeduit||0));
+    +parseFloat(r2.nbJoursTrav||0)+_cumulJoursRegul;
+  const hNormales=Math.max(0,(r1.hMensu||0)-(r1.hAbsDeduit||0))+Math.max(0,(r2.hMensu||0)-(r2.hAbsDeduit||0))+_cumulHRegul;
   const hComp=parseFloat(r1.hComp||0)+parseFloat(r2.hComp||0);
   const hSup=parseFloat(r1.hSup||0)+parseFloat(r2.hSup||0);
-  const salaireNet=parseFloat(r1.salaireNet||0)+parseFloat(r2.salaireNet||0);
+  const salaireNet=parseFloat(r1.salaireNet||0)+parseFloat(r2.salaireNet||0)+_cumulDiffEuros;
   const indemE=parseFloat(r1.indemEntretienTotal||0)+parseFloat(r2.indemEntretienTotal||0);
   const indemR=parseFloat(r1.indemRepasTotal||0)+parseFloat(r2.indemRepasTotal||0);
   const indemK=parseFloat(r1.indemKmTotal||0)+parseFloat(r2.indemKmTotal||0);
