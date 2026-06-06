@@ -1811,13 +1811,13 @@ function renderDetTab(id,tab){
         // Fonction : calcul hMensuReg pour une période
         // Pour un mois sans avenant : hMensu fixe (mensualisation lissée)
         // Pour un mois avec avenant : prorata (salaire/hTheo * hPrevu)
-        function calcHMensuReg(dateDebStr, dateFinStr, hPrevuPartie, estPartielle){
+        function calcHMensuReg(dateDebStr, dateFinStr, hPrevuPartie, estPartielle, dateFinLimite){
           const source=getVersionActive(c,new Date(dateDebStr));
           if(!estPartielle) return source.hMensu||0;
           // Mois partiel (avenant en cours de mois) : prorata
           const [dy,dm]=dateDebStr.split('-').map(Number);
           const debutMois=dy+'-'+String(dm).padStart(2,'0')+'-01';
-          const finMois=dy+'-'+String(dm).padStart(2,'0')+'-'+String(new Date(dy,dm,0).getDate()).padStart(2,'0');
+          const finMois=dateFinLimite||(dy+'-'+String(dm).padStart(2,'0')+'-'+String(new Date(dy,dm,0).getDate()).padStart(2,'0'));
           const hTheoMois=calcHTheoReg(debutMois, finMois);
           if(!hTheoMois) return source.hMensu||0;
           return (source.hMensu||0)*(hPrevuPartie/hTheoMois);
@@ -1885,7 +1885,9 @@ function renderDetTab(id,tab){
                 }
                 const hPrevuPartie=calcHPrevuReg(debPartie, finPartie);
                 hPrevu+=hPrevuPartie;
-                hMensuReg+=calcHMensuReg(debPartie, finPartie, hPrevuPartie, true);
+                // Pour le mois de l'avenant 46→52 : limiter hTheoMois à la partie avant avenant
+                const dateFinLimitePartie=(avenantDuMoisReg&&i===0&&veilleAvenantReg)?veilleAvenantReg:null;
+                hMensuReg+=calcHMensuReg(debPartie, finPartie, hPrevuPartie, true, dateFinLimitePartie);
               }
             }
 
@@ -1905,7 +1907,10 @@ function renderDetTab(id,tab){
             })():null;
             const recapMois=ficheMois?(avenantDuMoisReg?calcRecapFiche(c,ficheMois,null,veilleAvenantReg,null,avenantDuMoisReg.dateAvenant,'avant'):calcRecapFiche(c,ficheMois)):null;
             const montantAbsMois=parseFloat(recapMois?.montantAbsences||0);
-            const txNetMois=parseFloat(recapMois?.txNetExact||0);
+            // Pour le mois de l'avenant 46→52 : utiliser le txNet de la version 46 sem
+            const srcTxNet=avenantDuMoisReg?getVersionActive(c,new Date(debutMois)):null;
+            const coefNetReg=getCoefNet();
+            const txNetMois=avenantDuMoisReg?parseFloat(((srcTxNet?.txBrut||0)*coefNetReg).toFixed(4)):parseFloat(recapMois?.txNetExact||0);
             const montantMensu=parseFloat(Math.max(0,hMensuReg*txNetMois-montantAbsMois).toFixed(2));
             // Calculer les heures réelles payables
             const finMoisRegul=veilleAvenantReg||finMois;
