@@ -1911,20 +1911,28 @@ function renderDetTab(id,tab){
             //   + abs rémunérées (heures prévues)
             //   + fériés prévus au contrat
             const ficheMois=c.fiches?.[key];
-            const recapMois=ficheMois?(avenantDuMoisReg?calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant'):calcRecapFiche(c,ficheMois)):null;
+            // Pour occ→46 : prendre la partie après avenant ; pour 46→52 : prendre la partie avant avenant
+            const estPassageVers46Reg=avenantDuMoisReg&&avenantDuMoisReg.tc!=='52'&&avenantDuMoisReg.tc!=='occ';
+            const recapMois=ficheMois?(avenantDuMoisReg?(
+              estPassageVers46Reg
+                ?calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres')
+                :calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant')
+            ):calcRecapFiche(c,ficheMois)):null;
             const montantAbsMois=parseFloat(recapMois?.montantAbsences||0);
             // Pour le mois de l'avenant 46→52 : utiliser le txNet de la version 46 sem
             const txNetMois=parseFloat(recapMois?.txNetExact||0);
-            // Pour le mois de l'avenant 46→52 : hMensu × txNet - absences (sans HC/HS)
+            // Pour avenant dans ce mois : hMensu × txNet - absences (sans HC/HS)
             const montantMensu=avenantDuMoisReg?parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)-(recapMois?.montantAbsences||0)).toFixed(2)):parseFloat(Math.max(0,hMensuReg*txNetMois-montantAbsMois).toFixed(2));
             // Calculer les heures réelles payables
-            const finMoisRegul=veilleAvenantReg||finMois;
+            // Pour occ→46 : partir de la date avenant ; pour 46→52 : jusqu'à la veille avenant
+            const finMoisRegul=estPassageVers46Reg?finMois:(veilleAvenantReg||finMois);
+            const debutMoisRegul=estPassageVers46Reg?(avenantDuMoisReg.dateAvenant):debutMois;
             let hReel=0;
             if(ficheMois){
               const statutsExclus=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-conges',
                 'abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat'];
               ficheMois.jours.forEach(j=>{
-                if(j.date<debutMois||j.date>finMoisRegul) return;
+                if(j.date<debutMoisRegul||j.date>finMoisRegul) return;
                 const statut=j.statut||getStatutPrevu(c,j);
                 if(statutsExclus.includes(statut)) return;
                 if(statut==='abs-partielle'){
