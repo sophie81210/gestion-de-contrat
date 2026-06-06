@@ -2480,9 +2480,64 @@ function ouvrirFicheAvecRestauration(contratId,key){
   });
 }
 
+function calcRegulDiffEurosAuto(c){
+  // Calcule c._regulDiffEuros sans affichage HTML
+  const avenantVers52=(c.avenants||[]).find(av=>av.signe&&av.tc==='52'&&av.dateAvenant);
+  const avenantVers46=(c.avenants||[]).find(av=>av.signe&&av.tc!=='52'&&av.tc!=='occ'&&av.dateAvenant);
+  const estContratRegul=c.tc!=='52'&&c.tc!=='occ';
+  if(!estContratRegul&&!avenantVers52&&!avenantVers46){c._regulDiffEuros=0;return;}
+  const now=new Date();
+  const moisMax=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  const moisMaxRegul=avenantVers52?avenantVers52.dateAvenant.slice(0,7):moisMax;
+  const moisMinRegul=avenantVers46&&!estContratRegul?avenantVers46.dateAvenant.slice(0,7):null;
+  const moisTries=Object.keys(c.fiches||{}).filter(k=>k<=moisMax&&k<=moisMaxRegul&&(!moisMinRegul||k>=moisMinRegul)).sort();
+  let totGenMensu=0,totGenPrevu=0;
+  moisTries.forEach(key=>{
+    const ficheMois=c.fiches?.[key];
+    if(!ficheMois) return;
+    const [ay2,am2]=key.split('-').map(Number);
+    const debutMois=ay2+'-'+String(am2).padStart(2,'0')+'-01';
+    const finMoisDate=new Date(ay2,am2,0);
+    const finMois=ay2+'-'+String(am2).padStart(2,'0')+'-'+String(finMoisDate.getDate()).padStart(2,'0');
+    const tousAvenantsSignes=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant);
+    const avenantDuMoisReg=tousAvenantsSignes.find(av=>av.dateAvenant.slice(0,7)===key)||null;
+    const veilleAvenantReg=avenantDuMoisReg?(()=>{
+      const [avy,avm,avd]=avenantDuMoisReg.dateAvenant.split('-').map(Number);
+      const dV=new Date(avy,avm-1,avd-1);
+      return dV.getFullYear()+'-'+String(dV.getMonth()+1).padStart(2,'0')+'-'+String(dV.getDate()).padStart(2,'0');
+    })():null;
+    const estPassageVers46Reg=avenantDuMoisReg&&avenantDuMoisReg.tc!=='52'&&avenantDuMoisReg.tc!=='occ';
+    const recapMois=avenantDuMoisReg?(
+      estPassageVers46Reg
+        ?calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres')
+        :calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant')
+    ):calcRecapFiche(c,ficheMois);
+    const txNetMois=parseFloat(recapMois?.txNetExact||0);
+    const montantMensu=avenantDuMoisReg?parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)-(recapMois?.montantAbsences||0)).toFixed(2)):parseFloat(Math.max(0,(recapMois?.hMensu||0)*txNetMois-(recapMois?.montantAbsences||0)).toFixed(2));
+    const finMoisRegul=estPassageVers46Reg?finMois:(veilleAvenantReg||finMois);
+    const debutMoisRegul=estPassageVers46Reg?(avenantDuMoisReg.dateAvenant):debutMois;
+    const statutsExclus=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-conges','abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat'];
+    let hReel=0;
+    (ficheMois.jours||[]).forEach(j=>{
+      if(j.date<debutMoisRegul||j.date>finMoisRegul) return;
+      const statut=j.statut||getStatutPrevu(c,j);
+      if(statutsExclus.includes(statut)) return;
+      if(statut==='abs-partielle'){if(j.heureDebReel&&j.heureFinReel)hReel+=Math.max(0,(toMins(j.heureFinReel)-toMins(j.heureDebReel))/60);}
+      else if(j.heureDebPrev&&j.heureFinPrev)hReel+=Math.max(0,(toMins(j.heureFinPrev)-toMins(j.heureDebPrev))/60);
+    });
+    const montantPrevu=parseFloat((hReel*txNetMois).toFixed(2));
+    totGenMensu+=montantMensu;totGenPrevu+=montantPrevu;
+  });
+  c._regulDiffEuros=parseFloat((totGenPrevu-totGenMensu).toFixed(2));
+}
+
 function ouvrirFiche(contratId,key){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c)return;
+  // Calculer _regulDiffEuros si nécessaire (pour affichage régularisation sur fiche)
+  if(c._regulDiffEuros===undefined&&(c.tc!=='52'||((c.avenants||[]).some(av=>av.signe&&av.tc==='52')))){
+    calcRegulDiffEurosAuto(c);
+  }
   // Créer les fiches si nécessaire
   if(!c.fiches) c.fiches={};
   if(!c.fiches[key]){
