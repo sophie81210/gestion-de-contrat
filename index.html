@@ -3675,8 +3675,17 @@ function buildRecapHtml(recap, solde, regul52, c){
     // Séparateur
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
     // Partie basse : cumuls
-    html+=ligneG('Jours travaillés', recap.nbJoursTrav+' j');
-    html+=ligneG('Heures normales à déclarer', Math.max(0,(recap.hMensu||0)-(recap.hAbsDeduit||0)).toFixed(2)+' h', true);
+    // Calcul régularisation si applicable
+    const _hasRegul=recap.estPassage46vers52&&recap.periodeAv!=='apres'&&c&&c._regulDiffEuros>0;
+    const _diffEuros=_hasRegul?c._regulDiffEuros:0;
+    const _txNetRegul46=_hasRegul?(()=>{const [ay46,am46,ad46]=recap.dateAvenantPassage.split('-').map(Number);const vR=new Date(ay46,am46-1,ad46-1);return parseFloat(((getVersionActive(c,vR).txBrut||0)*getCoefNet()).toFixed(4));})():0;
+    const _hRegul46=(_hasRegul&&_txNetRegul46>0)?parseFloat((_diffEuros/_txNetRegul46).toFixed(2)):0;
+    const _hMoyJourRegul=recap.nbJoursMoisContrat>0?(recap.hMensu||0)/recap.nbJoursMoisContrat:(recap.hMensu||0)/20;
+    const _joursRegul=(_hasRegul&&_hMoyJourRegul>0)?parseFloat((_hRegul46/_hMoyJourRegul).toFixed(1)):0;
+    html+=ligneG('Jours travaillés', (recap.nbJoursTrav+_joursRegul).toFixed(1)+' j');
+    if(_hasRegul&&_joursRegul>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont '+_joursRegul.toFixed(1)+' j régularisés</td></tr>';
+    html+=ligneG('Heures normales à déclarer', Math.max(0,(recap.hMensu||0)-(recap.hAbsDeduit||0)+_hRegul46).toFixed(2)+' h', true);
+    if(_hasRegul&&_hRegul46>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont '+_hRegul46.toFixed(2)+' h régularisées</td></tr>';
   }
   // ── Section heures complémentaires et majorées ──
   const hasHComp=parseFloat(recap.hBaseComp||0)>0||parseFloat(recap.hMajFerie||0)>0||parseFloat(recap.hMajRepos||0)>0||parseFloat(recap.hMaj1erMai||0)>0;
@@ -3702,7 +3711,8 @@ function buildRecapHtml(recap, solde, regul52, c){
 
   if(parseFloat(recap.montantExo||0)>0) html+=ligneG('Exonération de charges (11,31%)', '+'+parseFloat(recap.montantExo).toFixed(2)+' €', false);
   if(parseFloat(recap.indemCongeMois||0)>0) html+=ligneG('Indemnité congés payés ('+recap.indemCongeNbJours+' j)', recap.indemCongeMois.toFixed(2)+' €', true, 'var(--m)');
-  html+=ligneG('Salaire net à déclarer', (parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)).toFixed(2)+' €', true, 'var(--m)');
+  html+=ligneG('Salaire net à déclarer', (parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)+_diffEuros).toFixed(2)+' €', true, 'var(--m)');
+  if(_hasRegul&&_diffEuros>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont '+_diffEuros.toFixed(2)+' € de régularisation de salaire</td></tr>';
   if(parseFloat(recap.indemCgOcc||0)>0) html+=ligneG('Indemnité congés contrat occasionnel', recap.indemCgOcc.toFixed(2)+' € (10%)', true, 'var(--m)');
   if(parseFloat(recap.indemEntretienTotal)>0) html+=ligneG('Indem. entretien', recap.indemEntretienTotal+' €');
   if(parseFloat(recap.indemRepasTotal)>0) html+=ligneG('Indem. repas', recap.indemRepasTotal+' €');
@@ -3713,17 +3723,6 @@ function buildRecapHtml(recap, solde, regul52, c){
   if(regul52&&regul52.diff>0){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
     html+=ligneG('R\u00E9gularisation cong\u00E9s (10\u00E8me)',regul52.diff.toFixed(2)+' \u20AC net',true,'var(--vt)');
-  }
-  // Régularisation de salaire passage 46→52 (ou occ→46→52)
-  if(recap.estPassage46vers52&&recap.periodeAv!=='apres'&&c._regulDiffEuros>0){
-    const diffEuros=c._regulDiffEuros;
-    const [ay46,am46,ad46]=recap.dateAvenantPassage.split('-').map(Number);
-    const veilleAvenantRegul=new Date(ay46,am46-1,ad46-1);
-    const txNetRegul46=parseFloat(((getVersionActive(c,veilleAvenantRegul).txBrut||0)*getCoefNet()).toFixed(4));
-    const hRegul46=txNetRegul46>0?parseFloat((diffEuros/txNetRegul46).toFixed(2)):0;
-    html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
-    html+=ligneG('R\u00E9gularisation de salaire (passage 46\u2192 52 sem)',
-      diffEuros.toFixed(2)+' \u20AC net ('+hRegul46.toFixed(2)+'h)',true,'var(--vt)');
   }
   // Éléments du solde de tout compte (dernier mois après rupture confirmée)
   if(solde){
