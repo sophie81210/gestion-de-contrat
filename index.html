@@ -1977,6 +1977,8 @@ function renderDetTab(id,tab){
         });
 
         const diffGen=totGenPrevu-totGenMensu;
+        // Stocker le diff en euros pour buildRecapHtml
+        c._regulDiffEuros=parseFloat(diffGen.toFixed(2));
         const dcGen=diffGen>0?'var(--vt)':diffGen<0?'var(--al)':'var(--tx2)';
         cont.innerHTML=`
           <div class="card" style="background:var(--mp);margin-bottom:12px">
@@ -3712,28 +3714,16 @@ function buildRecapHtml(recap, solde, regul52, c){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
     html+=ligneG('R\u00E9gularisation cong\u00E9s (10\u00E8me)',regul52.diff.toFixed(2)+' \u20AC net',true,'var(--vt)');
   }
-  // Régularisation de salaire passage 46→52
-  if(recap.estPassage46vers52){
-    const regul46v52=(()=>{
-      // Trouver la période 46 sem : du début du contrat/avenant 46 jusqu'à la veille de l'avenant 52
-      const [ay,am,ad]=recap.dateAvenantPassage.split('-').map(Number);
-      const veilleAvenant=new Date(ay,am-1,ad-1);
-      // Chercher l'avenant 46 précédent (s'il existe)
-      const avsPrecedents=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant<recap.dateAvenantPassage&&av.tc!=='52').sort((a,b)=>b.dateAvenant.localeCompare(a.dateAvenant));
-      const debutPeriode46=avsPrecedents.length>0?new Date(avsPrecedents[0].dateAvenant):new Date(c.dateDeb);
-      const r=calcRegularisationDefinitive(c, debutPeriode46, veilleAvenant);
-      if(!r||r.diff<=0) return null;
-      return r;
-    })();
-    if(regul46v52&&regul46v52.diff>0){
-      const [ay46,am46,ad46]=recap.dateAvenantPassage.split('-').map(Number);
-      const veilleAvenantRegul=new Date(ay46,am46-1,ad46-1);
-      const txNetRegul46=parseFloat(((getVersionActive(c,veilleAvenantRegul).txBrut||0)*getCoefNet()).toFixed(4));
-      const hRegul46=txNetRegul46>0?parseFloat((regul46v52.diff/txNetRegul46).toFixed(2)):0;
-      html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
-      html+=ligneG('R\u00E9gularisation de salaire (passage 46\u2192 52 sem)',
-        regul46v52.diff.toFixed(2)+' \u20AC net ('+hRegul46.toFixed(2)+'h)',true,'var(--vt)');
-    }
+  // Régularisation de salaire passage 46→52 (ou occ→46→52)
+  if(recap.estPassage46vers52&&c._regulDiffEuros>0){
+    const diffEuros=c._regulDiffEuros;
+    const [ay46,am46,ad46]=recap.dateAvenantPassage.split('-').map(Number);
+    const veilleAvenantRegul=new Date(ay46,am46-1,ad46-1);
+    const txNetRegul46=parseFloat(((getVersionActive(c,veilleAvenantRegul).txBrut||0)*getCoefNet()).toFixed(4));
+    const hRegul46=txNetRegul46>0?parseFloat((diffEuros/txNetRegul46).toFixed(2)):0;
+    html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
+    html+=ligneG('R\u00E9gularisation de salaire (passage 46\u2192 52 sem)',
+      diffEuros.toFixed(2)+' \u20AC net ('+hRegul46.toFixed(2)+'h)',true,'var(--vt)');
   }
   // Éléments du solde de tout compte (dernier mois après rupture confirmée)
   if(solde){
