@@ -1629,20 +1629,44 @@ function renderDetTab(id,tab){
       } else {
     cont.innerHTML='<div class="card"><div style="text-align:center;padding:30px;color:var(--tx2)">⏳ Calcul en cours...</div></div>';
     setTimeout(()=>{
+    const estContratRegul=c.tc!=='52'&&c.tc!=='occ';
     const avenantVers52Reg=(c.avenants||[]).find(av=>av.signe&&av.tc==='52'&&av.dateAvenant);
     const avenantVers46Reg=(c.avenants||[]).find(av=>av.signe&&av.tc!=='52'&&av.tc!=='occ'&&av.dateAvenant);
-    const estContratRegul=c.tc!=='52'&&c.tc!=='occ';
-    if(!estContratRegul&&!avenantVers52Reg&&!avenantVers46Reg){
+    const aUnCycleRegul=estContratRegul||avenantVers52Reg||avenantVers46Reg;
+    if(!aUnCycleRegul){
       cont.innerHTML=`<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">La régularisation s'applique uniquement aux contrats de 46 semaines ou moins.</div></div>`;
     } else {
       const now=new Date();
       const moisMax=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-      const moisMaxRegul=avenantVers52Reg?avenantVers52Reg.dateAvenant.slice(0,7):moisMax;
-      const moisMinRegul=avenantVers46Reg&&!estContratRegul?avenantVers46Reg.dateAvenant.slice(0,7):null;
-      const moisTries=Object.keys(c.fiches||{}).filter(k=>k<=moisMax&&k<=moisMaxRegul&&(!moisMinRegul||k>=moisMinRegul)).sort();
-      if(!moisTries.length){
-        cont.innerHTML=`<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">Aucune feuille de présence enregistrée.</div></div>`;
-      } else {
+      // Construire la liste des cycles 46 sem (chaque cycle = {moisMin, moisMax, solde:true/false})
+      const tousAvenantsTries=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant).sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant));
+      const cycles=[];
+      let cycleDebut=null; // début du cycle actuel en 46 sem
+      // Le contrat de base
+      if(estContratRegul) cycleDebut=c.dateDeb?c.dateDeb.slice(0,7):null;
+      tousAvenantsTries.forEach(av=>{
+        if(av.tc==='52'){
+          if(cycleDebut!==null){
+            cycles.push({moisMin:cycleDebut, moisMax:av.dateAvenant.slice(0,7), solde:true});
+            cycleDebut=null;
+          }
+        } else if(av.tc!=='occ'){
+          if(cycleDebut===null) cycleDebut=av.dateAvenant.slice(0,7);
+        }
+      });
+      // Cycle en cours (pas encore passé en 52)
+      if(cycleDebut!==null) cycles.push({moisMin:cycleDebut, moisMax:moisMax, solde:false});
+      if(!cycles.length){
+        cont.innerHTML=`<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">Aucun cycle de régularisation trouvé.</div></div>`;
+        return;
+      }
+      // Tout le HTML des cycles (du plus récent au plus ancien)
+      let allCyclesHtml='';
+      let totGlobalMensu=0, totGlobalPrevu=0;
+      [...cycles].reverse().forEach((cycle,cycleIdxRev)=>{
+      cycleTotMensu=0; cycleTotPrevu=0; tableauxHtml='';
+      const moisTries=Object.keys(c.fiches||{}).filter(k=>k<=moisMax&&k>=cycle.moisMin&&k<=cycle.moisMax).sort();
+      if(!moisTries.length){ return; } else {
         const [ddy,ddm,ddd]=c.dateDeb?c.dateDeb.split('-').map(Number):[new Date().getFullYear(),new Date().getMonth()+1,new Date().getDate()];
         const dateDebContrat=new Date(ddy,ddm-1,ddd);
 
@@ -1845,8 +1869,8 @@ function renderDetTab(id,tab){
           tranches[idx].push(key);
         });
 
-        let totGenMensu=0,totGenPrevu=0;
         let tableauxHtml='';
+        let cycleTotMensu=0,cycleTotPrevu=0;
         [...tranches].filter(Boolean).reverse().forEach((moisList,tIdxRev)=>{
           const tranchesFiltrees=tranches.filter(Boolean);
           const tIdx=tranches.indexOf(tranchesFiltrees[tranchesFiltrees.length-1-tIdxRev]);
@@ -1963,7 +1987,7 @@ function renderDetTab(id,tab){
             }
             const montantPrevu=parseFloat((hReel*txNetMois).toFixed(2));
             totMensu+=montantMensu; totPrevu+=montantPrevu;
-            totGenMensu+=montantMensu; totGenPrevu+=montantPrevu;
+            cycleTotMensu+=montantMensu; cycleTotPrevu+=montantPrevu;
             const diff=montantPrevu-montantMensu;
             const dc=diff>0?'var(--vt)':diff<0?'var(--al)':'var(--tx2)';
             return `<tr style="border-bottom:1px solid var(--mb)">
@@ -1990,11 +2014,30 @@ function renderDetTab(id,tab){
               </tr></tfoot>
             </table></div>
           </div>`;
-        });
-
-        const diffGen=totGenPrevu-totGenMensu;
-        // Stocker le diff en euros pour buildRecapHtml
-        c._regulDiffEuros=parseFloat(diffGen.toFixed(2));
+        }); // fin forEach tranches
+        // Sous-total du cycle
+        const diffCycle=cycleTotPrevu-cycleTotMensu;
+        const dcCycle=diffCycle>0?'var(--vt)':diffCycle<0?'var(--al)':'var(--tx2)';
+        if(cycles.length>1){
+          tableauxHtml=`<div class="card" style="background:var(--mp);margin-bottom:8px">
+            <div style="font-weight:700;font-size:13px;margin-bottom:4px">Période ${cycles.length-cycleIdxRev} ${cycle.solde?'(soldée)':'(en cours)'}</div>
+            <div style="font-size:12px;color:var(--tx2)">${cycle.moisMin} → ${cycle.moisMax}</div>
+            <div style="color:${dcCycle};font-weight:700;margin-top:4px">${diffCycle>0?'+':''}${diffCycle.toFixed(2)} €${diffCycle>0?' à régulariser':diffCycle<0?' (trop versé)':''}</div>
+          </div>`+tableauxHtml;
+        }
+        allCyclesHtml+=tableauxHtml;
+        totGlobalMensu+=cycleTotMensu;
+        totGlobalPrevu+=cycleTotPrevu;
+      }); // fin forEach cycles
+        const diffGen=totGlobalPrevu-totGlobalMensu;
+        // Stocker le diff en euros pour buildRecapHtml (cycle le plus récent non soldé)
+        const dernierCycleEnCours=cycles.find(cy=>!cy.solde);
+        const diffDernierCycle=dernierCycleEnCours?(()=>{
+          const moisCycle=Object.keys(c.fiches||{}).filter(k=>k<=moisMax&&k>=dernierCycleEnCours.moisMin&&k<=dernierCycleEnCours.moisMax).sort();
+          // On utilise le totGlobal car c'est le seul cycle en cours
+          return diffGen;
+        })():0;
+        c._regulDiffEuros=parseFloat(diffDernierCycle.toFixed(2));
         const dcGen=diffGen>0?'var(--vt)':diffGen<0?'var(--al)':'var(--tx2)';
         cont.innerHTML=`
           <div class="card" style="background:var(--mp);margin-bottom:12px;border-bottom:none">
@@ -2002,14 +2045,14 @@ function renderDetTab(id,tab){
               <div class="ctitle" style="margin:0;border-bottom:none">Total général</div>
               <div style="font-size:13px">
                 <div style="display:flex;gap:16px;flex-wrap:wrap">
-                  <span style="white-space:nowrap">Salaire mensualisé :<br><strong>${totGenMensu.toFixed(2)} €</strong></span>
-                  <span style="white-space:nowrap">Salaire dû :<br><strong>${totGenPrevu.toFixed(2)} €</strong></span>
+                  <span style="white-space:nowrap">Salaire mensualisé :<br><strong>${totGlobalMensu.toFixed(2)} €</strong></span>
+                  <span style="white-space:nowrap">Salaire dû :<br><strong>${totGlobalPrevu.toFixed(2)} €</strong></span>
                 </div>
                 ${diffGen!==0?`<div style="text-align:center;margin-top:6px;color:${dcGen};font-weight:700">${diffGen>0?'+':''}${diffGen.toFixed(2)} €${diffGen>0?' à régulariser':' (trop versé)'}</div>`:''}
               </div>
             </div>
           </div>
-          ${tableauxHtml}`;
+          ${allCyclesHtml}`;
         c._regulHtml=cont.innerHTML;
         c._regulDirty=false;
       }
