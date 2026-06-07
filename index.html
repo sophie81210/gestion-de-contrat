@@ -2625,12 +2625,16 @@ function ouvrirFiche(contratId,key){
   const fiche=c.fiches[key];
   // Vérifier que l'agenda est complet à l'ouverture (contrats avec agenda, non validés)
   if(!fiche.valide&&(c.tc!=='52'||c.th==='plan'||c.th==='sem')&&!(c.tc==='52'&&(c.th==='fixe'||c.th==='min'))){
-    const sourceV=getVersionActive(c,new Date(key+'-01'));
-    const agendasV=sourceV.agendas||c.agendas||[];
     const [ky,km]=key.split('-').map(Number);
     const debutMoisV=new Date(ky,km-1,1);
     const finMoisV=new Date(ky,km,0);
-    const agV=agendasV.find(ag=>new Date(ag.dateDebut)<=finMoisV&&new Date(ag.dateFin)>=debutMoisV);
+    // Vérifier les agendas des deux versions si avenant dans ce mois
+    const avenantDuMoisV2=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&av.dateAvenant.slice(0,7)===key);
+    const versionsV=avenantDuMoisV2?
+      [getVersionActive(c,debutMoisV), getVersionActive(c,new Date(avenantDuMoisV2.dateAvenant))]:
+      [getVersionActive(c,debutMoisV)];
+    const tousAgendasV=[...new Set(versionsV.flatMap(sv=>(sv.agendas||c.agendas||[])))];
+    const agV=tousAgendasV.find(ag=>new Date(ag.dateDebut)<=finMoisV&&new Date(ag.dateFin)>=debutMoisV);
     if(agV){
       const semDuMois=[...new Set(fiche.jours.map(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))))];
       const semDuMoisFiltrees=semDuMois.filter(sk=>{
@@ -8281,9 +8285,39 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
       // (calculé une seule fois pour toutes les semaines via semsCongesSet)
       const estSemConges=estSemViolette(semsCongesSet, s.sem, s.lundi);
 
-      let bg='var(--mp)',brd='var(--mb)',txt='var(--tx3)';
+      // Détecter si la semaine violette est complète ou partielle (a un jour travaillé)
+      let estSemCongesPartielle=false;
       if(estSemConges){
+        // Vérifier si tous les jours possibles sont en congés/fériés dans le calendrier AM
+        const joursPossiblesIdx=Array.from({length:7},(_,i)=>i).filter(i=>{
+          if(i===(source.reposHebdo||c.reposHebdo||0)) return false;
+          if(source.th==='fixe'&&source.joursFixe) return !!(source.joursFixe[i===0?6:i-1]?.d);
+          if(source.th==='sem'&&source.semTypes) return source.semTypes.some(st=>st.jours&&st.jours[i===0?6:i-1]?.d);
+          return false;
+        });
+        // Un jour est "couvert" si c'est un férié ou coché dans le calendrier AM
+        const cgAmData=S.congesAM&&Object.values(S.congesAM).find(d=>d.jours);
+        const semLundi=new Date(s.lundi);
+        const joursCouvertsPossibles=joursPossiblesIdx.every(jourSem=>{
+          for(let d=0;d<7;d++){
+            const cur=new Date(semLundi);cur.setDate(semLundi.getDate()+d);
+            if(cur.getDay()===jourSem){
+              const ds=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
+              if(isFerie(ds,c)) return true;
+              // Vérifier dans tous les calendriers AM
+              return !!(S.congesAM&&Object.values(S.congesAM).some(d=>d.jours&&d.jours[ds]==='pose'));
+            }
+          }
+          return false;
+        });
+        estSemCongesPartielle=!joursCouvertsPossibles;
+      }
+
+      let bg='var(--mp)',brd='var(--mb)',txt='var(--tx3)';
+      if(estSemConges&&!estSemCongesPartielle){
         bg='#f0e8ff';brd='#7b5ea7';txt='#7b5ea7';
+      } else if(estSemConges&&estSemCongesPartielle){
+        bg='var(--mp)';brd='#7b5ea7';txt='var(--tx3)';
       } else if(val==='off'){
         bg='#fde8e8';brd='#c0392b';txt='#c0392b';
       } else if(source.th==='sem'&&source.semTypes){
@@ -8300,14 +8334,15 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
 
       const opacite=verrouillee?'opacity:0.4;':'';
       // Semaines congés : non cliquables (pointées automatiquement)
-      const clickable=modeModif&&!verrouillee&&!estSemConges;
+      const clickable=modeModif&&!verrouillee&&(!estSemConges||estSemCongesPartielle);
       const onclick=clickable?`onclick="peindreAgenda('${s.key}',${cid},${ag.id})"`:
-        estSemConges?`title="Semaine de cong\u00E9s (pointage automatique)"`:
+        (estSemConges&&!estSemCongesPartielle)?`title="Semaine de congés (pointage automatique)"`:
         verrouillee?`title="Semaine verrouill\u00E9e (feuille valid\u00E9e)"`:
         modeModif?`title="S\u00E9lectionnez d'abord un pinceau"`:
         '';
 
-      calHtml+=`<div style="min-width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:4px;font-size:11px;font-weight:600;cursor:${clickable?'pointer':'default'};background:${bg};color:${txt};border:1px solid ${brd};${opacite}" ${onclick}>${s.sem}</div>`;
+      const brdStyle=estSemCongesPartielle?`border:2px dashed #7b5ea7`:`border:1px solid ${brd}`;
+      calHtml+=`<div style="min-width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:4px;font-size:11px;font-weight:600;cursor:${clickable?'pointer':'default'};background:${bg};color:${txt};${brdStyle};${opacite}" ${onclick}>${s.sem}</div>`;
     });
     calHtml+=`</div></td></tr>`;
   });
