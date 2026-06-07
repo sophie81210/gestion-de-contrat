@@ -3033,7 +3033,7 @@ const statutPrevuJ=getStatutPrevu(c,j);
       })()}</td>`:''}
 
       <td style="padding:3px 4px;text-align:right;vertical-align:top">
-        <select style="font-size:10px;padding:2px 3px;border:1px solid var(--mb);border-radius:3px;width:100%;max-width:130px;background:${bg}"
+        <select title="${j.statut||statutPrevu||''}" style="font-size:10px;padding:2px 3px;border:1px solid var(--mb);border-radius:3px;width:100%;max-width:130px;background:${bg}"
           ${fiche.valide?'disabled':`onchange="majFicheStatut(${contratId},'${key}',${idx},this.value)"`}>
           ${selectedOpts}
         </select>
@@ -7842,10 +7842,21 @@ function renderAgendas(c){
     }
     if(!window._semsCongesSet) window._semsCongesSet={};
     window._semsCongesSet[ag.id]=semsCongesSet;
+    // Pré-calculer si l'agenda est gelé pour masquer bouton et avertissements
+    const _contratPpal=S.contrats.find(x=>x.id==c.id);
+    const _tousAvTmp=[...(_contratPpal?.avenants||[])].sort((a,b)=>a.dateAvenant>b.dateAvenant?1:-1);
+    const _propTmp=_contratPpal?.agendas?.some(a=>a.id===ag.id)?_contratPpal:_tousAvTmp.find(av=>av.agendas?.some(a=>a.id===ag.id));
+    const _avUltTmp=_propTmp?_tousAvTmp.find(av=>{
+      if(!av.signe||!av.dateAvenant||av===_propTmp) return false;
+      const dp=_propTmp===_contratPpal?(_contratPpal.dateDeb||''):(_propTmp.dateAvenant||'');
+      if(av.dateAvenant<=dp) return false;
+      return av.dateAvenant>=ag.dateDebut&&av.dateAvenant<=ag.dateFin;
+    }):null;
+    const _agendaGeleTmp=!!(_avUltTmp&&_contratPpal?.fiches?.[_avUltTmp.dateAvenant.slice(0,7)]?.valide);
     const warnings=getAgendaWarnings(c,ag,semaines,semsCongesSet);
     // Avertissements masqués si en mode modification (S.agendaEnModif)
     const agendaEnModif=S.agendaEnModif===ag.id;
-    const warningHtml=warnings.length&&!agendaEnModif
+    const warningHtml=warnings.length&&!agendaEnModif&&!_agendaGeleTmp
       ?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">
         ${warnings.map(w=>'⚠ '+w).join('<br>')}
       </div>`
@@ -7890,7 +7901,8 @@ function renderAgendas(c){
       ?`<button class="btn bd bsm" onclick="supprimerAgenda(${c.id},${ag.id})">Supprimer</button>`
       :'';
 
-    const btnModif=`<button class="btn bs bsm" id="btn-modif-${ag.id}" onclick="ouvrirModifAgenda(${c.id},${ag.id})">✏️ Modifier</button>`;
+    const btnModif=_agendaGeleTmp?'':
+      `<button class="btn bs bsm" id="btn-modif-${ag.id}" onclick="ouvrirModifAgenda(${c.id},${ag.id})">✏️ Modifier</button>`;
 
     const html=`<div id="agenda-${ag.id}">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:6px">
