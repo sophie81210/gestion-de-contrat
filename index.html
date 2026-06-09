@@ -5058,16 +5058,23 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
         } else {
           hTheoriques+=hSemType;
         }
-        // Ajouter hSemMoy/6 pour chaque jour de décompte dans cette semaine (sauf reprise→travaillé)
-        const statsCongésTypee=['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe'];
-        const reposHPST=sourceActif.reposHebdo||c.reposHebdo||0;
-        joursDesSem.forEach(jj=>{
-          if(jj.jourSemaine===reposHPST) return;
-          const stJJ=jj.statut||getStatutPrevu(sourceActif||c,jj);
-          if(statsCongésTypee.includes(stJJ)){
-            hTheoriques+=hSemMoyPS/6;
-          }
-        });
+        // Pour les semaines non à cheval : ajouter hSemMoy/6 pour les jours décomptés
+        // et déduire les heures du semType pour ces jours (pour éviter le doublon)
+        if(!estCheval){
+          const statsCongésTypee=['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe'];
+          const reposHPST=sourceActif.reposHebdo||c.reposHebdo||0;
+          joursDesSem.forEach(jj=>{
+            if(jj.jourSemaine===reposHPST) return;
+            const stJJ=jj.statut||getStatutPrevu(sourceActif||c,jj);
+            if(statsCongésTypee.includes(stJJ)){
+              // Déduire les heures du semType pour ce jour (déjà incluses dans hSemType)
+              const jourIdx=jj.jourSemaine===0?6:jj.jourSemaine-1;
+              const stJourSem=stTh?.jours&&stTh.jours[jourIdx];
+              const hJourType=stJourSem&&stJourSem.d&&stJourSem.f?(toM(stJourSem.f)-toM(stJourSem.d))/60:0;
+              hTheoriques+=hSemMoyPS/6-hJourType;
+            }
+          });
+        }
       } else {
         // Type inconnu → hSemMoy
         hTheoriques+=hSemMoyPS;
@@ -8252,6 +8259,7 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
     }
     legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;background:#fde8e8;border:1px solid #c0392b;border-radius:2px;display:inline-block"></span>Absence employeur</span>`;
     legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;background:#f0e8ff;border:1px solid #7b5ea7;border-radius:2px;display:inline-block"></span>Congés</span>`;
+    legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;background:var(--mp);border:4px solid #d4b8f0;border-radius:2px;display:inline-block"></span>Congés partiels</span>`;
     if(source.th==='sem'&&source.semTypes){
       source.semTypes.forEach((st,i)=>{
         const cc=PLAN_COULEURS[i%PLAN_COULEURS.length];
@@ -11291,7 +11299,7 @@ function buildCgAmDetail(anneeDebut,data){
      <button class="btn bs bsm" onclick="retourCgAmList()">← Retour</button>
       <span style="font-weight:700;font-size:15px;color:var(--m)">Pose des congés ${anneeDebut}/${anneeFin}</span>
       <button class="btn bp bsm" id="btn-save-cgam" onclick="enregistrerCgAm()">💾 Enregistrer</button>
-      <span style="font-size:13px;font-weight:600;color:${ok?'var(--vt)':'var(--tx2)'}">${nb}/30 — ${nbSamedis}/5</span>
+      <span style="font-size:13px;font-weight:600;color:${ok?'var(--vt)':'var(--tx2)'}">${nb}/30</span>
     </div>
     ${new Date().getFullYear()<=anneeDebut?`<div style="background:#f5f0ff;border:1px solid #c4b5fd;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:#5b21b6">📌 Ces congés sont à planifier pour l’année — à fixer impérativement avant le 1er mars.</div>`:""}
     <div class="card" style="margin-bottom:10px">
