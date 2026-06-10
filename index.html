@@ -1566,12 +1566,15 @@ function renderDetTab(id,tab){
       // Construire la liste des versions précédentes
       const versions=[];
       versions.push({label:'Contrat initial du '+new Date(c.dateDeb).toLocaleDateString('fr-FR'), id:null});
-      avsEffectifs.slice(0,-1).forEach(a=>{
+      avsEffectifs.forEach(a=>{
         versions.push({label:'Avenant n°'+a.num+' du '+new Date(a.dateAvenant).toLocaleDateString('fr-FR'), id:a.id});
       });
       if(!versions.length) return '';
       return `<div style="display:flex;gap:6px;flex-wrap:wrap;padding:6px 0 10px">
-        ${versions.map(v=>`<button class="btn bs bsm" onclick="${v.id?`voirAvenant(${c.id},${v.id})`:`voirContratInitial(${c.id})`}">${v.label}</button>`).join('')}
+        ${versions.map(v=>`<span style="display:inline-flex;gap:4px;align-items:center">
+          <button class="btn bs bsm" onclick="${v.id?`voirAvenant(${c.id},${v.id})`:`voirContratInitial(${c.id})`}">${v.label}</button>
+          ${v.id?`<button class="btn bd bsm" onclick="annulerAvenant(${c.id},${v.id})">Annuler</button>`:''}
+        </span>`).join('')}
       </div>`;
     })()}     
     ${(()=>{
@@ -1590,7 +1593,10 @@ function renderDetTab(id,tab){
               <div style="font-weight:600;font-size:13px;color:#5b21b6">Avenant n°${a.num} — effectif le ${new Date(a.dateAvenant).toLocaleDateString('fr-FR')}</div>
               <div style="font-size:11px;color:var(--tx2)">Signé le ${new Date(a.dateSigne).toLocaleDateString('fr-FR')}</div>
             </div>
-           <button class="btn bsm" style="background:#7c3aed;color:#fff;border:none" onclick="voirAvenant(${c.id},${a.id})">Voir</button>
+           <div style="display:flex;gap:6px">
+             <button class="btn bsm" style="background:#7c3aed;color:#fff;border:none" onclick="voirAvenant(${c.id},${a.id})">Voir</button>
+             <button class="btn bd bsm" onclick="annulerAvenant(${c.id},${a.id})">Annuler</button>
+           </div>
           </div>`).join('')}
       </div>`;
     })()}
@@ -1612,7 +1618,7 @@ function renderDetTab(id,tab){
           return avBrouillon
             ?`<button class="btn bp" style="background:#7c3aed;color:#fff" onclick="creerAvenant(${c.id})">✏️ Modifier l'avenant en cours</button>`
             :c.rupture?.confirmee
-              ?`<button class="btn bp" disabled style="opacity:0.5;cursor:not-allowed" title="Rupture confirmée — impossible de créer un avenant">+ Créer un avenant</button>`
+              ?`<button class="btn bp" disabled style="opacity:0.5;cursor:not-allowed" title="Vous devez annuler la rupture du contrat en cours pour créer un avenant">+ Créer un avenant</button>`
               :`<button class="btn bp" onclick="creerAvenant(${c.id})">+ Créer un avenant</button>`;
         })()}
         <span style="display:inline-flex;align-items:center;gap:5px;padding:8px 14px;background:#e8f5ee;color:#3a6b4a;border-radius:20px;font-size:13px;font-weight:600">✓ Signé</span>`
@@ -7300,6 +7306,16 @@ function validerEssai(){
       return;
     }
   } else {
+    // Calculer le max selon le nombre de jours prévus par semaine
+    const joursCoches=Array.from(document.querySelectorAll('[name="joursFixe"]:checked')||[]).length
+      ||(()=>{const st=document.querySelectorAll('.sem-type-jours');let mx=0;st.forEach(s=>{const n=s.querySelectorAll('input:checked').length;if(n>mx)mx=n;});return mx;})();
+    const peMax=joursCoches>=4?2:3;
+    if(val>peMax){
+      errEl.textContent='Maximum '+peMax+' mois ('+( joursCoches>=4?'4 jours ou plus par semaine':'moins de 4 jours par semaine')+')';
+      errEl.style.display='inline';
+      if(el) el.style.borderColor='var(--al)';
+      return;
+    }
     if(val>3){
       errEl.textContent='Maximum 3 mois';
       errEl.style.display='inline';
@@ -7322,7 +7338,11 @@ function selTypeDuree(v){
   if(radioCdd) radioCdd.checked=v==='cdd';
   document.getElementById('bloc-cdd').style.display=v==='cdd'?'block':'none';
   document.getElementById('bloc-essai-cdi').style.display='block'; // toujours visible
-  document.getElementById('essai-cdi-wrap').style.display=v==='cdd'?'none':'flex';
+  document.getElementById('essai-cdi-wrap').style.display=(v==='cdd'||v==='occ')?'none':'flex';
+  if(v==='occ'){
+    const fpe=document.getElementById('f-periode-essai');
+    if(fpe) fpe.value='';
+  }
   document.getElementById('essai-cdd-wrap').style.display=v==='cdd'?'flex':'none';
   // Masquer occasionnel pour CDD
   const roOcc=document.getElementById('ro-occ');
@@ -10771,11 +10791,31 @@ if(c.th==='sem'&&c.semTypes){
 }
 
 // ══ AVENANT ══
+function annulerAvenant(cid, avid){
+  const c=S.contrats.find(x=>x.id==cid);
+  if(!c) return;
+  const av=c.avenants&&c.avenants.find(a=>a.id===avid);
+  if(!av||!av.signe) return;
+  // Vérifier qu'aucune fiche le concernant n'est validée
+  const fichesValidees=Object.entries(c.fiches||{}).filter(([key,f])=>f.valide&&key>=av.dateAvenant.slice(0,7));
+  if(fichesValidees.length>0){
+    alerte('Impossible d\'annuler cet avenant : des feuilles de présence sont déjà validées pour la période concernée ('+fichesValidees[0][0]+' et suivants).');
+    return;
+  }
+  if(!confirm('Annuler l\'avenant n°'+av.num+' du '+new Date(av.dateAvenant).toLocaleDateString('fr-FR')+' ?\n\nCette action est irréversible.')) return;
+  c.avenants=c.avenants.filter(a=>a.id!==avid);
+  c._regulDirty=true;
+  _contratsModifies.add(c.id);
+  saveToFirestore();
+  sauvegarder();
+  renderDetTab(cid,'contrat');
+  toast('Avenant annulé ✓');
+}
+
 function creerAvenant(id){
   const c=S.contrats.find(x=>x.id==id);
   if(!c)return;
   if(!c.signe){toast('Le contrat doit être signé avant de créer un avenant');return;}
-
   // Vérifier si un avenant brouillon existe déjà
   const brouillon=c.avenants&&c.avenants.find(a=>!a.signe);
   if(brouillon){
