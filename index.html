@@ -3052,7 +3052,7 @@ const statutPrevuJ=getStatutPrevu(c,j);
       ${(()=>{
         const isPlanMinVar=sourceActive.th==='plan'&&(sourceActive.planType==='min'||sourceActive.planType==='var');
         const estAbsAvecPrev=(['abs-rem','abs-non'].includes(statutActuel)&&isPlanMinVar);
-        const afficherHeures=['prevu','travaille','abs-partielle','a-selectionner'].includes(statutActuel);
+        const afficherHeures=['prevu','travaille','abs-partielle','a-selectionner','jours-complementaires'].includes(statutActuel);
         // Pour abs-rem/abs-non plan min/var : masquer les heures réelles
         return (afficherHeures&&!estAbsAvecPrev)?`
         <div style="display:flex;align-items:center;gap:3px">
@@ -9414,6 +9414,7 @@ function formaterSaisieDate(input){
 function rafraichirRupture(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c) return;
+  if(c.rupture?.confirmee) return; // rupture confirmée : pas de modification
   if(!c.rupture) c.rupture={};
   // Corriger les années à 2 chiffres dans les dates
   const fixDate=(d)=>{
@@ -9495,6 +9496,22 @@ function sauvegarderRupture(cid){
 function confirmerRupture(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c||!c.rupture) return;
+  const rp=c.rupture;
+  // 1. Préavis partiel sans date de fin
+  const aPreavisR=rp.motif==='retrait-enfant'||rp.motif==='demission';
+  if(aPreavisR&&rp.statutPreavis==='partiel'&&!rp.dateFinPreavis){
+    alerte('Veuillez indiquer la date de fin du préavis effectué.');
+    return;
+  }
+  // 2. Date de rupture dans une fiche validée
+  const dateFinContratR=calcDateFinContrat(c,rp)||null;
+  if(dateFinContratR){
+    const moisFin=dateFinContratR.getFullYear()+'-'+String(dateFinContratR.getMonth()+1).padStart(2,'0');
+    if(c.fiches?.[moisFin]?.valide){
+      alerte('La feuille de présence de '+moisFin+' est déjà validée. Vous ne pouvez pas confirmer une rupture sur cette période.');
+      return;
+    }
+  }
   c.rupture.confirmee=true;
   c._regulDirty=true;
   const cidx=S.contrats.findIndex(x=>x.id==cid);
@@ -9931,7 +9948,7 @@ function renderRupture(c, cont){
           })()}
         </div>`;
       }
-      if(rp.initiativePreavis&&rp.initiativePreavis!=='accord'){
+      if(rp.initiativePreavis&&rp.initiativePreavis!=='accord'&&statutPreavis==='partiel'){
         // Vérifier que la date de fin partielle n'excède pas la date légale
         const dateFinPart=rp.dateFinPreavis?new Date(rp.dateFinPreavis):null;
         if(dateFinPart&&dateFinLegale&&dateFinPart>dateFinLegale){
