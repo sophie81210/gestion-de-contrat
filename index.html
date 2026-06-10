@@ -9415,6 +9415,10 @@ function rafraichirRupture(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c) return;
   if(c.rupture?.confirmee) return; // rupture confirmée : pas de modification
+  S.ruptureModifiee=true;
+  // Afficher avertissement enregistrement
+  const warnRup=document.getElementById('warn-rupture-'+cid);
+  if(warnRup) warnRup.style.display='block';
   if(!c.rupture) c.rupture={};
   // Corriger les années à 2 chiffres dans les dates
   const fixDate=(d)=>{
@@ -9497,18 +9501,26 @@ function confirmerRupture(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c||!c.rupture) return;
   const rp=c.rupture;
-  // 1. Préavis partiel sans date de fin
+  // 1. Préavis partiel sans date de fin / date > légale
   const aPreavisR=rp.motif==='retrait-enfant'||rp.motif==='demission';
   if(aPreavisR&&rp.statutPreavis==='partiel'&&!rp.dateFinPreavis){
     alerte('Veuillez indiquer la date de fin du préavis effectué.');
     return;
   }
-  // 2. Date de rupture dans une fiche validée
-  const dateFinContratR=getDateFinContrat(c)||null;
-  if(dateFinContratR){
-    const moisFin=dateFinContratR.getFullYear()+'-'+String(dateFinContratR.getMonth()+1).padStart(2,'0');
-    if(c.fiches?.[moisFin]?.valide){
-      alerte('La feuille de présence de '+moisFin+' est déjà validée. Vous ne pouvez pas confirmer une rupture sur cette période.');
+  if(aPreavisR&&rp.statutPreavis==='partiel'&&rp.dateFinPreavis){
+    const dateSignifR=rp.dateSignif?new Date(rp.dateSignif):null;
+    const dureeR=dateSignifR?calcDureePreavis(c,dateSignifR):null;
+    const dateFinLegaleR=dateSignifR&&dureeR?calcDateFinPreavis(dateSignifR,dureeR,rp.cumulConges||false,c):null;
+    if(dateFinLegaleR&&new Date(rp.dateFinPreavis)>dateFinLegaleR){
+      alerte('La date de fin de préavis ne peut pas dépasser la date légale ('+dateFinLegaleR.toLocaleDateString('fr-FR')+').');
+      return;
+    }
+  }
+  // 2. Date de signification dans une fiche validée
+  if(rp.dateSignif){
+    const moisSignif=rp.dateSignif.slice(0,7);
+    if(c.fiches?.[moisSignif]?.valide){
+      alerte('La feuille de présence de '+moisSignif+' est déjà validée. Vous ne pouvez pas confirmer une rupture sur cette période.');
       return;
     }
   }
@@ -9743,6 +9755,7 @@ function renderRuptureCDD(c, cont){
   cont.innerHTML=`
     <div style="font-size:12px;color:var(--tx2);margin-bottom:12px">Situation au <strong>${dateSitStr}</strong></div>
     ${confirmeeHtml}
+    ${!rp.confirmee?`<div id="warn-rupture-${cid}" style="display:none;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">⚠ Modifications non enregistrées — pensez à cliquer sur 💾 Enregistrer</div>`:''}
     ${soldeCongesHtml}
     <div class="card" style="margin-bottom:10px">
       <div class="ctitle">Rupture du CDD</div>
@@ -10110,8 +10123,9 @@ function renderRupture(c, cont){
       </div></div>`;
   }
 
-  const confirmeeHtml=rp.confirmee?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px">
-    ✓ Rupture confirmée — <button class="btn bd bsm" style="margin-left:8px" onclick="annulerRupture(${cid})">✕ Annuler la confirmation</button> <button class="btn bp bsm" style="margin-left:8px" onclick="sauvegarderRupture(${cid})">💾 Enregistrer</button>
+  const confirmeeHtml=rp.confirmee?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px;margin-bottom:10px">
+    <div style="font-size:16px;font-weight:700;color:#856404;margin-bottom:6px">✓ Rupture confirmée</div>
+    <button class="btn bd bsm" onclick="annulerRupture(${cid})">✕ Annuler la confirmation</button>
   </div>`:'';
 
   cont.innerHTML=`
@@ -10150,6 +10164,13 @@ function renderRupture(c, cont){
       ${!rp.confirmee?`<button class="btn bpurple" onclick="confirmerRupture(${cid})">✓ Confirmer la rupture</button>`:''}
     </div>`;
 }
+  // Calque par-dessus le formulaire si confirmée
+  if(rp.confirmee){
+    const overlay=document.createElement('div');
+    overlay.style.cssText='position:absolute;top:0;left:0;width:100%;height:100%;z-index:10;cursor:not-allowed;';
+    cont.style.position='relative';
+    cont.appendChild(overlay);
+  }
 
 
 function calcIndemniteConges(c, anneeRef){
