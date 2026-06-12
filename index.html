@@ -1458,7 +1458,13 @@ function buildFicheContenu(source, c){
     ['Type d\'horaires',thL],
     ['Taux horaire brut',source.txBrut?(source.txBrut.toFixed(2)+' €'):'—'],
     ['Taux horaire net',source.txBrut?((source.txBrut*getCoefNet()).toFixed(2)+' €'):'—'],
-    ['Heures mensualisées',source.hMensu?(source.hMensu.toFixed(2)+'h'):'—'],
+    ['Heures mensualisées',(()=>{
+      if(!source.hMensu) return '—';
+      const hMaj=parseFloat(source.hMensuMaj||0);
+      const hNorm=parseFloat(source.hMensuNorm||source.hMensu);
+      if(hMaj>0) return source.hMensu.toFixed(2)+'h (dont '+hNorm.toFixed(2)+'h norm. + '+hMaj.toFixed(2)+'h maj.)';
+      return source.hMensu.toFixed(2)+'h';
+    })()],
     ['Heures hebdo moyennes', (()=>{
       const nbSem=source.tc==='52'?52:parseFloat(source.nbSem||46);
       if(!source.hMensu||!nbSem) return '—';
@@ -8963,6 +8969,11 @@ function calc(){
     const sdcg=document.getElementById('section-date-cg');
     if(sdcg)sdcg.style.display=S.tc==='46'?'block':'none';
   }
+  // Mettre à jour S.enEd avec hMensuMaj/hMensuNorm pour la récap brouillon
+  if(S.enEd){
+    S.enEd.hMensuMaj=parseFloat(hMMaj.toFixed(4));
+    S.enEd.hMensuNorm=parseFloat(hMNorm.toFixed(4));
+  }
   calcSal();
 }
 function calcSal(){
@@ -8976,9 +8987,21 @@ function calcSal(){
   if(txNetOcc)txNetOcc.textContent=(tx*getCoefNet()).toFixed(2)+' €';
   const hm=parseFloat(document.getElementById('r-hm')?.textContent)||0;
   if(hm){
-    const mb=tx*hm;const mn=mb*getCoefNet();
-    st('r-mb',mb.toFixed(2)+' €');st('r-mb-f',tx.toFixed(2)+' € × '+hm.toFixed(2)+'h');
+    const hMaj=parseFloat(document.getElementById('r-hm-maj-val')?.textContent)||0;
+    const hNorm=hm-hMaj;
+    // Taux de majoration HS (25% par défaut CCN)
+    const tauxMajS=parseFloat(S.enEd?.majSup||10)/100;
+    const mbNorm=tx*hNorm;
+    const mbMaj=tx*hMaj*(1+tauxMajS);
+    const mb=parseFloat((mbNorm+mbMaj).toFixed(2));
+    const mn=parseFloat((mb*getCoefNet()).toFixed(2));
+    st('r-mb',mb.toFixed(2)+' €');
+    const detailMaj=hMaj>0?` (dont ${mbMaj.toFixed(2)} € majorés)`:'';
+    st('r-mb-f',tx.toFixed(2)+' € × '+hNorm.toFixed(2)+'h + '+tx.toFixed(2)+' € × '+hMaj.toFixed(2)+'h × '+(1+tauxMajS).toFixed(2));
+    if(!hMaj) st('r-mb-f',tx.toFixed(2)+' € × '+hm.toFixed(2)+'h');
     st('r-mn',mn.toFixed(2)+' €');
+    // Mettre à jour S.enEd avec mensBrute et mensNette
+    if(S.enEd){S.enEd.mensBrute=mb;S.enEd.mensNette=mn;}
   }
 }
 function st(id,v){const el=document.getElementById(id);if(el)el.textContent=v;}
