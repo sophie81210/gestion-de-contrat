@@ -4081,16 +4081,15 @@ function buildRecapHtml(recap, solde, regul52, c){
       const _mensuNet=parseFloat((_hNormE*_txNE+_hMajE*_txNMajE).toFixed(2));
       const _hThMajE=parseFloat(recap.hTheoriquesMaj||0);
       const _hThNormE=Math.max(0,parseFloat(recap.hTheoriques||0)-_hThMajE);
-      const _hAbsHSE=Math.min(parseFloat(recap.hAbs||0),_hThMajE);
-      const _hAbsNormE=Math.max(0,parseFloat(recap.hAbs||0)-_hAbsHSE);
+      const _hAbsHSE=parseFloat(recap.hAbsHS||0);
+      const _hAbsNormE=parseFloat(recap.hAbsNorm||0);
       let _infoMsg;
       if(_hMajE>0&&_hThMajE>0){
         const _tauxNE=_hThNormE>0?(_hNormE*_txNE/_hThNormE):0;
         const _tauxME=_hThMajE>0?(_hMajE*_txNMajE/_hThMajE):0;
-        _infoMsg='D\u00E9duction :\n'
-          +(_hAbsHSE>0?'HS : '+_hAbsHSE.toFixed(2)+'h \u00D7 '+_tauxME.toFixed(4)+' \u20AC/h = '+(_hAbsHSE*_tauxME).toFixed(2)+' \u20AC\n':'')
-          +(_hAbsNormE>0?'Norm. : '+_hAbsNormE.toFixed(2)+'h \u00D7 '+_tauxNE.toFixed(4)+' \u20AC/h = '+(_hAbsNormE*_tauxNE).toFixed(2)+' \u20AC\n':'')
-          +'Total : '+parseFloat(recap.montantAbsences||0).toFixed(2)+' \u20AC';
+        _infoMsg=(_hAbsHSE>0?'HS mensualis\u00E9es ('+_hMajE.toFixed(2)+'h) / h. th\u00E9oriques HS ('+_hThMajE.toFixed(2)+'h) \u00D7 absence HS ('+_hAbsHSE.toFixed(2)+'h) = '+(_hAbsHSE*_tauxME).toFixed(2)+' \u20AC\n':'')
+          +(_hAbsNormE>0?'H. normales ('+_hNormE.toFixed(2)+'h) / h. th\u00E9oriques norm. ('+_hThNormE.toFixed(2)+'h) \u00D7 absence norm. ('+_hAbsNormE.toFixed(2)+'h) = '+(_hAbsNormE*_tauxNE).toFixed(2)+' \u20AC\n':'')
+          +'Total d\u00E9duction : '+parseFloat(recap.montantAbsences||0).toFixed(2)+' \u20AC';
       } else {
         _infoMsg='Mensualisation '+_mensuNet.toFixed(2)+' \u20AC\u00A0/ h. th\u00E9oriques '+parseFloat(recap.hTheoriques||0).toFixed(2)+' h \u00D7 absence '+parseFloat(recap.hAbs||0).toFixed(2)+' h = '+parseFloat(recap.montantAbsences||0).toFixed(2)+' \u20AC';
       }
@@ -7006,19 +7005,61 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     return total+Math.max(0,hCompSem-hSupSem);
   },0);
   const hMoyParJour=nbJoursMoisContrat>0?hMensu/nbJoursMoisContrat:hMensu/20;
+  let hAbsHSStored=0,hAbsNormStored=0;
   if(hAbs>0&&hTheoriques>0){
     const txNetMaj=txBrut*(1+majSup52)*coefNetR;
     if(hMensuMaj>0&&hTheoriquesMaj>0){
-      // Répartir hAbs entre part HS et part normale selon la proportion théorique
-      // Les heures sup théoriques = hTheoriquesMaj, les normales = hTheoriquesNorm
-      // Déduire d'abord sur les HS (jusqu'à hTheoriquesMaj), puis sur les normales
-      const hAbsHS=Math.min(hAbs,hTheoriquesMaj); // part sur HS
-      const hAbsNorm=Math.max(0,hAbs-hTheoriquesMaj); // part sur heures normales
+      // Déterminer pour chaque semaine si elle est HS (type > 45h) via l'agenda
+      // et calculer hAbsHS et hAbsNorm en fonction de la semaine d'absence
+      const hAbsParSemaine={}; // heures d'absence par semaine ISO
+      fiche.jours.forEach(j=>{
+        const statut=j.statut||'';
+        const absDeduites2=['abs-non','abs-am','arret','abs-enfant','abs-partielle','conges-non','decompte-conges'];
+        if(!absDeduites2.includes(statut)) return;
+        // Calculer hPrevJ
+        let hPrevJ=0;
+        if(j.heureDebPrev&&j.heureFinPrev) hPrevJ=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
+        else {
+          // Plan sem / fixe : utiliser hSemType/6
+          const srcJ=getVersionActive(c,new Date(j.date));
+          const hSemMoyJ=(srcJ.hMensu||0)*12/(srcJ.nbSem||46);
+          hPrevJ=hSemMoyJ/6;
+        }
+        if(hPrevJ>0){
+          const sk=getSemISO(j.date);
+          hAbsParSemaine[sk]=(hAbsParSemaine[sk]||0)+hPrevJ;
+        }
+      });
+      // Pour chaque semaine, vérifier si type > 45h via l'agenda
+      let hAbsHS=0, hAbsNorm=0;
+      Object.entries(hAbsParSemaine).forEach(([sk,hAbsSem])=>{
+        const anneeISO=getSemAnnee(String(sk));
+        const akSem=getKeyAgenda(parseInt(sk),anneeISO);
+        const typeSemAbs=agendaMois&&agendaMois.semaines?agendaMois.semaines[akSem]:null;
+        let hTypeSem=0;
+        if(typeSemAbs&&sourceActif.th==='sem'&&sourceActif.semTypes){
+          const stAbs=sourceActif.semTypes.find(st=>st.nom===typeSemAbs);
+          if(stAbs) hTypeSem=parseFloat(stAbs.h||0);
+        } else if(typeSemAbs==='on'&&sourceActif.th==='fixe'){
+          hTypeSem=sourceActif.joursFixe?sourceActif.joursFixe.reduce((t,j2)=>t+(j2&&j2.d&&j2.f?(toM(j2.f)-toM(j2.d))/60:0),0):0;
+        }
+        // Si type > 45h → abs sur HS, sinon abs sur normales
+        const hHSSemAbs=Math.max(0,hTypeSem-45);
+        if(hHSSemAbs>0){
+          hAbsHS+=Math.min(hAbsSem,hHSSemAbs);
+          hAbsNorm+=Math.max(0,hAbsSem-hHSSemAbs);
+        } else {
+          hAbsNorm+=hAbsSem;
+        }
+      });
       const tauxNorm=hTheoriquesNorm>0?(hMensuNorm*txNet)/hTheoriquesNorm:0;
       const tauxMajA=hTheoriquesMaj>0?(hMensuMaj*txNetMaj)/hTheoriquesMaj:0;
       const montantAbsMaj=parseFloat((hAbsHS*tauxMajA).toFixed(2));
       const montantAbsNorm=parseFloat((hAbsNorm*tauxNorm).toFixed(2));
       montantAbsences=parseFloat((montantAbsNorm+montantAbsMaj).toFixed(2));
+      // Stocker pour la popup
+      hAbsHSStored=hAbsHS;
+      hAbsNormStored=hAbsNorm;
     } else {
       const tauxHAbs=(hMensu*txNet)/hTheoriques;
       montantAbsences=parseFloat((tauxHAbs*hAbs).toFixed(2));
@@ -7312,7 +7353,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     hCompMaj:hCompMaj.toFixed(2),
     montantMajComp, montantMajSup, montantMajFerieNP, montantMajFeriePrevu2, montantMajRepos, montantMaj1erMai,
     montantExo, hTotalComp:hTotalComp.toFixed(2), montantTotalComp, montantTotalSup, hBaseComp:hBaseComp.toFixed(2),
-    hAbs:hAbs.toFixed(2), hAbsDeduit, montantAbsences,
+    hAbs:hAbs.toFixed(2), hAbsDeduit, montantAbsences, hAbsHS:hAbsHSStored, hAbsNorm:hAbsNormStored,
     nbJoursTrav:Math.max(0,parseFloat(nbJoursTrav.toFixed(1))),
     th:sourceActif.th, nbJoursMoisContrat, nbJoursMoisCalc, joursEnPlus, joursEnMoins:parseFloat(joursEnMoins.toFixed(1)),
     nbAbsEnfantMois, nbAbsEnfantAnneeCont,
