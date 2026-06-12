@@ -214,6 +214,7 @@ input[type=time].fi{width:auto;min-width:92px}
 </style>
 </head>
 <body>
+<div id="mobile-statut-tip" style="display:none;position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.82);color:#fff;font-size:12px;padding:8px 14px;border-radius:8px;z-index:9999;max-width:280px;text-align:center;pointer-events:none;line-height:1.4"></div>
 
 <div class="bg"></div>
 <div class="app">
@@ -1574,10 +1575,7 @@ function renderDetTab(id,tab){
       });
       if(!versions.length) return '';
       return `<div style="display:flex;gap:6px;flex-wrap:wrap;padding:6px 0 10px">
-        ${versions.map(v=>`<span style="display:inline-flex;gap:4px;align-items:center">
-          <button class="btn bs bsm" onclick="${v.id?`voirAvenant(${c.id},${v.id})`:`voirContratInitial(${c.id})`}">${v.label}</button>
-          ${v.id?`<button class="btn bd bsm" onclick="annulerAvenant(${c.id},${v.id})">Annuler</button>`:''}
-        </span>`).join('')}
+        ${versions.map(v=>`<button class="btn bs bsm" onclick="${v.id?`voirAvenant(${c.id},${v.id})`:`voirContratInitial(${c.id})`}">${v.label}</button>`).join('')}
       </div>`;
     })()}     
     ${(()=>{
@@ -2119,10 +2117,11 @@ function voirAvenant(cid,avid){
   if(!cont)return;
 
   cont.innerHTML=`
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
       <button class="btn bs bsm" onclick="renderDetTab(${cid},'contrat')">← Retour</button>
       <span style="font-weight:700;font-size:15px;color:#7c3aed">Avenant n°${av.num}</span>
       <span style="font-size:12px;color:#7c3aed;font-weight:600">✓ Signé — effectif le ${new Date(av.dateAvenant).toLocaleDateString('fr-FR')}</span>
+      <button class="btn bd bsm" style="margin-left:auto" onclick="annulerAvenant(${cid},${avid})">Annuler cet avenant</button>
     </div>
     ${buildFicheContenu(av,c)}
     ${av.agendas&&av.agendas.length?`
@@ -2320,6 +2319,19 @@ function getStatutOptions(statutPrevu, isPlanMinVar, c, sourceActive){
     'jours-complementaires':'Jour complémentaire','reprise':'Reprise'
   };
   return (opts[statutPrevu]||['init']).map(v=>`<option value="${v}">${labels[v]||v}</option>`).join('');
+}
+
+function showMobileStatutTip(statut){
+  const tip=document.getElementById('mobile-statut-tip');
+  if(!tip) return;
+  const txt=getTooltipStatut(statut);
+  if(!txt){tip.style.display='none';return;}
+  tip.textContent=txt;
+  tip.style.display='block';
+}
+function hideMobileStatutTip(){
+  const tip=document.getElementById('mobile-statut-tip');
+  if(tip) setTimeout(()=>tip.style.display='none',300);
 }
 
 function getTooltipStatut(s){
@@ -3136,6 +3148,7 @@ const statutPrevuJ=getStatutPrevu(c,j);
 
       <td style="padding:3px 4px;text-align:right;vertical-align:top">
         <select title="${getTooltipStatut(j.statut||statutPrevu||'')||''}" style="font-size:10px;padding:2px 3px;border:1px solid var(--mb);border-radius:3px;width:100%;max-width:130px;background:${bg}"
+          onfocus="showMobileStatutTip(this.value||'${j.statut||statutPrevu||''}')" onblur="hideMobileStatutTip()"
           ${fiche.valide?'disabled':`onchange="majFicheStatut(${contratId},'${key}',${idx},this.value)"`}>
           ${selectedOpts}
         </select>
@@ -9538,9 +9551,11 @@ function rafraichirRupture(cid){
   const dateFinPreavis=dateTexteVersISO(document.getElementById('rp-fin-preavis-'+cid)?.value||'')||fixDate(c.rupture.dateFinPreavis||'');
   const dateFinContrat=fixDate(c.rupture.dateFinContrat||'');
   const cumulConges=document.getElementById('rp-cumul-conges-'+cid)?.checked??c.rupture.cumulConges??false;
-  // Bloquer date de signification antérieure au début de contrat
+  // Bloquer date de signification antérieure au début de contrat ou > 1 an dans le futur
   const dateDebContratMin=c.dateDeb||'';
-  let dateSignifFinal=dateSignif&&dateSignif>=dateDebContratMin?dateSignif:'';
+  const maxDateSignif=new Date();maxDateSignif.setFullYear(maxDateSignif.getFullYear()+1);
+  const maxDateSignifStr=maxDateSignif.getFullYear()+'-'+String(maxDateSignif.getMonth()+1).padStart(2,'0')+'-'+String(maxDateSignif.getDate()).padStart(2,'0');
+  let dateSignifFinal=dateSignif&&dateSignif>=dateDebContratMin&&dateSignif<=maxDateSignifStr?dateSignif:'';
   // Bloquer signification un dimanche
   if(dateSignifFinal){
     const dsP=dateSignifFinal.split('-').map(Number);
@@ -9565,7 +9580,26 @@ function rafraichirRupture(cid){
     }
   }
   const dateNotifFinal=dateNotif&&dateNotif>=dateDebContratMin?dateNotif:'';
-  c._ruptureTemp={motif,initiative,dateSignif:dateSignifFinal,dateNotif:dateNotifFinal,delaiPrev,statutPreavis,initiativePreavis,dateFinPreavis,dateFinContrat,cumulConges};
+  // Recalculer dateFinPreavis légale si préavis effectué
+  let dateFinPreavisFinal=dateFinPreavis;
+  if(dateSignifFinal&&statutPreavis!=='non-effectue'){
+    const dsignifObj=dateSignifFinal.split('-').map(Number);
+    const dsignifDate=new Date(dsignifObj[0],dsignifObj[1]-1,dsignifObj[2]);
+    const dureeR=calcDureePreavis(c,dsignifDate);
+    const dateFinLegR=dureeR?calcDateFinPreavis(dsignifDate,dureeR,cumulConges,c):null;
+    if(dateFinLegR){
+      const dflStr=dateFinLegR.getFullYear()+'-'+String(dateFinLegR.getMonth()+1).padStart(2,'0')+'-'+String(dateFinLegR.getDate()).padStart(2,'0');
+      // Si effectué : mettre à jour le champ avec la date légale
+      if(statutPreavis==='effectue'){
+        dateFinPreavisFinal=dflStr;
+        const inputFin=document.getElementById('rp-fin-preavis-'+cid);
+        if(inputFin) inputFin.value=dflStr;
+      } else if(statutPreavis==='partiel'&&(!dateFinPreavis||new Date(dateFinPreavis)>dateFinLegR)){
+        dateFinPreavisFinal=dflStr;
+      }
+    }
+  }
+  c._ruptureTemp={motif,initiative,dateSignif:dateSignifFinal,dateNotif:dateNotifFinal,delaiPrev,statutPreavis,initiativePreavis,dateFinPreavis:dateFinPreavisFinal,dateFinContrat,cumulConges};
   const cont=document.getElementById('det-content');
   renderRupture(c,cont);
 }
