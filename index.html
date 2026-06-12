@@ -4059,17 +4059,14 @@ function buildRecapHtml(recap, solde, regul52, c){
     const _hNorm=_hMaj>0?parseFloat(recap.hMensuNorm||recap.hMensu):recap.hMensu;
     const _majSupPct=(recap.majSup||0)/100;
     const _txN=parseFloat(recap.txNetExact||0);
-    const _salMensuTotal=_hMaj>0?parseFloat((_hNorm*_txN+_hMaj*_txN*(1+_majSupPct)).toFixed(2)):(recap.hMensu||0)*_txN;
-    html+=ligneG('Heures mensualisées', (recap.hMensu||0).toFixed(2)+' h'+(_txN&&recap.hMensu?' — '+_salMensuTotal.toFixed(2)+' € net':''), false, '', _hMaj>0);
+    const _salNorm=parseFloat((_hNorm*_txN).toFixed(2));
+    html+=ligneG('Heures normales mensualisées', (_hNorm||0).toFixed(2)+' h'+(_txN&&_hNorm?' — '+_salNorm.toFixed(2)+' € net':''));
     if(_hMaj>0){
       const coefNR=getCoefNet();
-      const txNM=(recap.txNetExact||(parseFloat(recap.txNet||0)))||0;
-      const txBrutR=txNM/coefNR;
-      const majSupR=(recap.majSup||0)/100;
-      const txNetMajR=txBrutR*(1+majSupR)*coefNR;
-      const salNorm=(recap.hMensuNorm||0)*txNM;
-      const salMaj=_hMaj*txNetMajR;
-      html+='<tr><td colspan="2" style="padding:2px 4px 6px;font-size:11px;color:var(--tx2);border-bottom:1px solid var(--mb)">dont '+_hMaj.toFixed(2)+'h maj. ('+salMaj.toFixed(2)+' €)</td></tr>';
+      const txBrutR=_txN/coefNR;
+      const txNetMajR=txBrutR*(1+_majSupPct)*coefNR;
+      const salMaj=parseFloat((_hMaj*txNetMajR).toFixed(2));
+      html+=ligneG('Heures supp. mensualisées (+'+((recap.majSup||0))+'%)', _hMaj.toFixed(2)+' h'+(_txN?' — '+salMaj.toFixed(2)+' € net':''));
     }
     if(parseFloat(recap.montantCongesPayesMois||0)>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont congés payés ('+recap.nbCongesPayesMois+' j) — '+recap.montantCongesPayesMois.toFixed(2)+' € net</td></tr>';
     if(recap.regul52Fiche) html+=ligneG('Régularisation congés '+recap.regul52Fiche.anneeRef+'/'+(recap.regul52Fiche.anneeRef+1)+' (10ème)', recap.regul52Fiche.diff.toFixed(2)+' € net', true, 'var(--m)');
@@ -6980,21 +6977,46 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   },0);
   const hMoyParJour=nbJoursMoisContrat>0?hMensu/nbJoursMoisContrat:hMensu/20;
   if(hAbs>0&&hTheoriques>0){
-    // Retenue en 2 temps : heures normales + heures majorées séparément
     const txNetMaj=txBrut*(1+majSup52)*coefNetR;
-    let tauxHAbs;
     if(hMensuMaj>0&&hTheoriquesMaj>0){
-      // Part absences sur heures normales
-      const tauxNorm=(hMensuNorm*txNet)/hTheoriquesNorm;
-      // Part absences sur heures majorées  
-      const tauxMaj=(hMensuMaj*txNetMaj)/hTheoriquesMaj;
-      // Répartir hAbs entre normales et majorées selon les heures prévues du jour
-      // On utilise un taux moyen pondéré pour simplifier
-      tauxHAbs=(hMensuNorm*txNet+hMensuMaj*txNetMaj)/hTheoriques;
+      // Déduction semaine par semaine : d'abord sur les HS, puis sur les heures normales
+      // Calculer les heures d'absence par semaine
+      const hAbsParSem={};
+      const hPrevParSem={};
+      fiche.jours.forEach(j=>{
+        const sk=getSemISO(j.date);
+        // Heures prévues de ce jour
+        let hPrevJ=0;
+        if(j.heureDebPrev&&j.heureFinPrev) hPrevJ=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
+        else if(j.hPrev) hPrevJ=j.hPrev;
+        if(hPrevJ>0) hPrevParSem[sk]=(hPrevParSem[sk]||0)+hPrevJ;
+        // Heures d'absence déduites
+        const statut=j.statut||'';
+        const absDeduites=['abs-non','abs-am','arret','abs-enfant','abs-partielle','conges-non','decompte-conges'];
+        if(absDeduites.includes(statut)&&hPrevJ>0){
+          hAbsParSem[sk]=(hAbsParSem[sk]||0)+hPrevJ;
+        }
+      });
+      // Pour chaque semaine avec absences, calculer la part HS vs normale
+      let montantAbsNorm=0, montantAbsMaj=0;
+      Object.entries(hAbsParSem).forEach(([sk,hAbsSem])=>{
+        const hPrevSem=hPrevParSem[sk]||45;
+        const hHSSem=Math.max(0,hPrevSem-45); // heures sup dans cette semaine
+        const hNormSem=Math.min(hPrevSem,45);
+        // Part d'abs sur HS (si la semaine dépasse 45h, déduire d'abord sur HS)
+        const hAbsHS=Math.min(hAbsSem,hHSSem);
+        const hAbsNorm=hAbsSem-hAbsHS;
+        // Taux de déduction
+        const tauxNormSem=hPrevSem>0?(hMensuNorm*txNet)/hTheoriquesNorm:0;
+        const tauxMajSem=hPrevSem>0?(hMensuMaj*txNetMaj)/hTheoriquesMaj:0;
+        montantAbsMaj+=hAbsHS*tauxMajSem;
+        montantAbsNorm+=hAbsNorm*tauxNormSem;
+      });
+      montantAbsences=parseFloat((montantAbsNorm+montantAbsMaj).toFixed(2));
     } else {
-      tauxHAbs=(hMensu*txNet)/hTheoriques;
+      const tauxHAbs=(hMensu*txNet)/hTheoriques;
+      montantAbsences=parseFloat((tauxHAbs*hAbs).toFixed(2));
     }
-    montantAbsences=parseFloat((tauxHAbs*hAbs).toFixed(2));
   }
   const hAbsDeduit=txNet>0?parseFloat((montantAbsences/txNet).toFixed(2)):0;
   const hAbsPartielles=fiche.jours.filter(j=>j.statut==='abs-partielle').reduce((t,j)=>{
