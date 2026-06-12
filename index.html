@@ -945,9 +945,10 @@ function showLoginTab(tab){
 
 // ══ NAVIGATION ══
 function goTo(p){
-  if(S.cgAmModifie){
+  if(S.cgAmModifie&&S._cgAmModifieDepuisOuverture){
     if(!confirm('Les congés Ass\'Mat ont des modifications non enregistrées. Continuer sans enregistrer ?')) return;
     S.cgAmModifie=false;
+    S._cgAmModifieDepuisOuverture=false;
   }
   if(S.ficheModifiee){
     if(!confirm('Des modifications non enregistrées seront perdues. Continuer ?')) return;
@@ -6700,11 +6701,26 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       let hAbsJour=0;
       let hPrev;
       if(estCongesNonDeduit){
-        // Congés non acquis sur 52 sem : hSemMoy/6 avec version du mois précédent la pose
-        const sourceConge=getVersionActive(c,new Date(j.date)); // version active au moment de la prise
+        // Congés non acquis sur 52 sem : hSemType/6 si plan sem, hSemMoy/6 sinon
+        const sourceConge=getVersionActive(c,new Date(j.date));
         const nbSemConge=sourceConge.nbSem||52;
-        const hSemMoy=(sourceConge.hMensu||0)*12/nbSemConge;
-        hPrev=parseFloat((hSemMoy/6).toFixed(4));
+        const hSemMoyConge=(sourceConge.hMensu||0)*12/nbSemConge;
+        if(sourceConge.th==='sem'&&sourceConge.semTypes){
+          // Plan sem : utiliser les heures du type de semaine pointé
+          const agKeyConge=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
+          const agendasConge=sourceConge.agendas||c.agendas||[];
+          const agConge=agendasConge.find(a=>new Date(a.dateDebut)<=new Date(j.date)&&new Date(a.dateFin)>=new Date(j.date));
+          const typeSemConge=agConge&&agConge.semaines&&agConge.semaines[agKeyConge];
+          const stConge=sourceConge.semTypes.find(st=>st.nom===typeSemConge);
+          if(stConge){
+            const hSemTypeConge=stConge.jours?stConge.jours.reduce((s,jj)=>s+(jj&&jj.d&&jj.f?(toM(jj.f)-toM(jj.d))/60:0),0):hSemMoyConge;
+            hPrev=parseFloat((hSemTypeConge/6).toFixed(4));
+          } else {
+            hPrev=parseFloat((hSemMoyConge/6).toFixed(4));
+          }
+        } else {
+          hPrev=parseFloat((hSemMoyConge/6).toFixed(4));
+        }
       } else if(j._horsContratAvenant){
         const srcJourAv=sourceActif; // toujours utiliser la version active de la période (avenant)
         if(srcJourAv.planType==='min'||srcJourAv.planType==='var'){
@@ -8618,7 +8634,7 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
         return false;
       });
       // Semaine complète : tous les jours possibles sont cochés AM ou fériés
-      const estSemCongesComplete=nbJoursCochesAM>0&&joursPossiblesIdx.every(jourSem=>{
+      const estSemCongesComplete=source.tc!=='52'&&c.tc!=='52'&&nbJoursCochesAM>0&&joursPossiblesIdx.every(jourSem=>{
         for(let d=0;d<7;d++){
           const cur=new Date(semLundi);cur.setDate(semLundi.getDate()+d);
           if(cur.getDay()===jourSem){
@@ -8631,7 +8647,7 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
       });
       // Semaine partielle : au moins 1 jour coché AM mais pas tous les jours possibles couverts
       const estSemConges=estSemCongesComplete; // rétrocompat
-      const estSemCongesPartielle=nbJoursCochesAM>0&&!estSemCongesComplete;
+      const estSemCongesPartielle=nbJoursCochesAM>0&&!estSemCongesComplete&&source.tc!=='52'&&c.tc!=='52';
 
       let bg='var(--mp)',brd='var(--mb)',txt='var(--tx3)';
       if(estSemCongesComplete){
@@ -11958,6 +11974,7 @@ function toggleCgAm(anneeDebut,dateStr){
   }
   S.congesAM[anneeDebut]=data;
   S.cgAmModifie=true;
+  S._cgAmModifieDepuisOuverture=true;
   localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM));
   majFichesCgAm(anneeDebut,false);
   // Deuxième passage pour corriger les périodes dont premierTrav était null au 1er passage
