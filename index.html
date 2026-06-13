@@ -4081,18 +4081,16 @@ function buildRecapHtml(recap, solde, regul52, c){
       const _mensuNet=parseFloat((_hNormE*_txNE+_hMajE*_txNMajE).toFixed(2));
       const _hThMajE=parseFloat(recap.hTheoriquesMaj||0);
       const _hThNormE=Math.max(0,parseFloat(recap.hTheoriques||0)-_hThMajE);
-      const _hAbsHSE=parseFloat(recap.hAbsHS||0);
-      const _hAbsNormE=parseFloat(recap.hAbsNorm||0);
+      const _hAbsHSE=Math.min(parseFloat(recap.hAbs||0),_hThMajE);
+      const _hAbsNormE=Math.max(0,parseFloat(recap.hAbs||0)-_hAbsHSE);
       let _infoMsg;
       if(_hMajE>0&&_hThMajE>0){
         const _tauxNE=_hThNormE>0?(_hNormE*_txNE/_hThNormE):0;
         const _tauxME=_hThMajE>0?(_hMajE*_txNMajE/_hThMajE):0;
-        const _salNormE=parseFloat((_hNormE*_txNE).toFixed(2));
-        const _salMajE=parseFloat((_hMajE*_txNMajE).toFixed(2));
-        _infoMsg=(_hAbsHSE>0?'HS mensualis\u00E9es ('+_salMajE.toFixed(2)+'\u20AC) / h. th\u00E9oriques HS ('+_hThMajE.toFixed(2)+'h) \u00D7 absence HS ('+_hAbsHSE.toFixed(2)+'h) = '+(_hAbsHSE*_tauxME).toFixed(2)+' \u20AC\n':'')
-          +(_hAbsHSE>0&&_hAbsNormE>0?'\n':'')
-          +(_hAbsNormE>0?'H. normales mensualis\u00E9es ('+_salNormE.toFixed(2)+'\u20AC) / h. th\u00E9oriques norm. ('+_hThNormE.toFixed(2)+'h) \u00D7 absence norm. ('+_hAbsNormE.toFixed(2)+'h) = '+(_hAbsNormE*_tauxNE).toFixed(2)+' \u20AC\n':'')
-          +'Total d\u00E9duction : '+parseFloat(recap.montantAbsences||0).toFixed(2)+' \u20AC';
+        _infoMsg='D\u00E9duction :\n'
+          +(_hAbsHSE>0?'HS : '+_hAbsHSE.toFixed(2)+'h \u00D7 '+_tauxME.toFixed(4)+' \u20AC/h = '+(_hAbsHSE*_tauxME).toFixed(2)+' \u20AC\n':'')
+          +(_hAbsNormE>0?'Norm. : '+_hAbsNormE.toFixed(2)+'h \u00D7 '+_tauxNE.toFixed(4)+' \u20AC/h = '+(_hAbsNormE*_tauxNE).toFixed(2)+' \u20AC\n':'')
+          +'Total : '+parseFloat(recap.montantAbsences||0).toFixed(2)+' \u20AC';
       } else {
         _infoMsg='Mensualisation '+_mensuNet.toFixed(2)+' \u20AC\u00A0/ h. th\u00E9oriques '+parseFloat(recap.hTheoriques||0).toFixed(2)+' h \u00D7 absence '+parseFloat(recap.hAbs||0).toFixed(2)+' h = '+parseFloat(recap.montantAbsences||0).toFixed(2)+' \u20AC';
       }
@@ -6098,8 +6096,6 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     Object.entries(hThParSem).forEach(([sk,hSem])=>{
       hTheoriquesMaj+=Math.max(0,hSem-45);
     });
-    // Stocker pour la boucle de déduction
-    window._hThParSemCurrent=hThParSem;
     // Pour les semaines sans heures prévues (off, sem, etc.) utiliser hMoyHebdo
     // hMoyHebdo = hMensu*12/nbSem
     const hMoyHebdo=(hMensu*12/nbSemActif);
@@ -7010,34 +7006,29 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     return total+Math.max(0,hCompSem-hSupSem);
   },0);
   const hMoyParJour=nbJoursMoisContrat>0?hMensu/nbJoursMoisContrat:hMensu/20;
-  let hAbsHSStored=0,hAbsNormStored=0;
   if(hAbs>0&&hTheoriques>0){
     const txNetMaj=txBrut*(1+majSup52)*coefNetR;
     if(hMensuMaj>0&&hTheoriquesMaj>0){
+      // Répartir hAbs entre part HS et part normale selon la proportion théorique
+      // Les heures sup théoriques = hTheoriquesMaj, les normales = hTheoriquesNorm
+      // Déduire d'abord sur les HS (jusqu'à hTheoriquesMaj), puis sur les normales
       // Identifier les semaines avec absences et sommer leurs HS depuis hThParSem
       const semsAvecAbs=new Set();
       fiche.jours.forEach(j=>{
-        const statut=j.statut||'';
-        const absDeduites2=['abs-non','abs-am','arret','abs-enfant','abs-partielle','conges-non','decompte-conges','hors-contrat'];
-        const statutEffectif2=statut||getStatutPrevu(c,j);
-        if(!absDeduites2.includes(statutEffectif2)) return;
-        semsAvecAbs.add(String(getSemISO(j.date)));
+        const st2=j.statut||getStatutPrevu(c,j);
+        const absDs=['abs-non','abs-am','arret','abs-enfant','abs-partielle','conges-non','decompte-conges','hors-contrat'];
+        if(absDs.includes(st2)) semsAvecAbs.add(String(getSemISO(j.date)));
       });
       const hThPS=window._hThParSemCurrent||{};
-      let hHSTotal=0;
-      semsAvecAbs.forEach(sk=>{
-        hHSTotal+=Math.max(0,(parseFloat(hThPS[sk]||0))-45);
-      });
-      let hAbsHS=parseFloat(Math.min(hHSTotal,hAbs).toFixed(4));
-      let hAbsNorm=parseFloat((hAbs-hAbsHS).toFixed(4));
+      let hHSTotalAbs=0;
+      semsAvecAbs.forEach(sk=>{ hHSTotalAbs+=Math.max(0,(parseFloat(hThPS[sk]||0))-45); });
+      const hAbsHS=parseFloat(Math.min(hHSTotalAbs,hAbs).toFixed(4));
+      const hAbsNorm=parseFloat(Math.max(0,hAbs-hAbsHS).toFixed(4));
       const tauxNorm=hTheoriquesNorm>0?(hMensuNorm*txNet)/hTheoriquesNorm:0;
       const tauxMajA=hTheoriquesMaj>0?(hMensuMaj*txNetMaj)/hTheoriquesMaj:0;
       const montantAbsMaj=parseFloat((hAbsHS*tauxMajA).toFixed(2));
       const montantAbsNorm=parseFloat((hAbsNorm*tauxNorm).toFixed(2));
       montantAbsences=parseFloat((montantAbsNorm+montantAbsMaj).toFixed(2));
-      // Stocker pour la popup
-      hAbsHSStored=hAbsHS;
-      hAbsNormStored=hAbsNorm;
     } else {
       const tauxHAbs=(hMensu*txNet)/hTheoriques;
       montantAbsences=parseFloat((tauxHAbs*hAbs).toFixed(2));
@@ -7331,7 +7322,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     hCompMaj:hCompMaj.toFixed(2),
     montantMajComp, montantMajSup, montantMajFerieNP, montantMajFeriePrevu2, montantMajRepos, montantMaj1erMai,
     montantExo, hTotalComp:hTotalComp.toFixed(2), montantTotalComp, montantTotalSup, hBaseComp:hBaseComp.toFixed(2),
-    hAbs:hAbs.toFixed(2), hAbsDeduit, montantAbsences, hAbsHS:hAbsHSStored, hAbsNorm:hAbsNormStored,
+    hAbs:hAbs.toFixed(2), hAbsDeduit, montantAbsences,
     nbJoursTrav:Math.max(0,parseFloat(nbJoursTrav.toFixed(1))),
     th:sourceActif.th, nbJoursMoisContrat, nbJoursMoisCalc, joursEnPlus, joursEnMoins:parseFloat(joursEnMoins.toFixed(1)),
     nbAbsEnfantMois, nbAbsEnfantAnneeCont,
