@@ -3147,9 +3147,19 @@ const statutPrevuJ=getStatutPrevu(c,j);
           const estCongesNon52=statutActuel==='conges-non'&&(c.tc==='52'||srcActifJ.tc==='52');
           if(estCongesNon46) return '—';
           if(estCongesNon52){
-            const nbSem52=srcActifJ.tc==='52'?52:parseFloat(srcActifJ.nbSem||sourceActive.nbSem||52);
-            const hSemMoy52=parseFloat(srcActifJ.hMensu||sourceActive.hMensu||0)*12/nbSem52;
-            const hJour52=(hSemMoy52/6).toFixed(2);
+            // Pour plan sem 52 : utiliser hSemType/6 (heures connues via agenda)
+            let hJour52;
+            if(srcActifJ.th==='sem'&&srcActifJ.semTypes){
+              const agKeyCN=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
+              const agCN=(srcActifJ.agendas||c.agendas||[]).find(a=>new Date(a.dateDebut)<=new Date(j.date)&&new Date(a.dateFin)>=new Date(j.date));
+              const typeCN=agCN?.semaines?.[agKeyCN];
+              const stCN=typeCN?srcActifJ.semTypes.find(st=>st.nom===typeCN):null;
+              const hSemTypeCN=stCN?(stCN.jours||[]).reduce((s,jj)=>jj&&jj.d&&jj.f?s+(toM(jj.f)-toM(jj.d))/60:s,0):0;
+              hJour52=hSemTypeCN>0?(hSemTypeCN/6).toFixed(2):((parseFloat(srcActifJ.hMensu||0)*12/(srcActifJ.nbSem||52))/6).toFixed(2);
+            } else {
+              const nbSem52=parseFloat(srcActifJ.nbSem||52);
+              hJour52=((parseFloat(srcActifJ.hMensu||0)*12/nbSem52)/6).toFixed(2);
+            }
             return '<span style="color:var(--al)">−'+hJour52+'h</span>';
           }
           if(hComp) return '<span style="color:var(--vt)">'+hComp+'</span>';
@@ -5370,8 +5380,8 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
             const jourFiche=joursDesSem.find(jj=>jj.date===jourStr);
             const stJour=jourFiche?.statut||getStatutPrevu(sourceActif||c,jourFiche||{date:jourStr,jourSemaine:jourDate.getDay()===0?0:jourDate.getDay()});
             if(jourFiche&&statsCongésCheval.includes(stJour)){
-              // Jour de congés : hSemType/6 pour 52 sem, hSemMoyPS/6 pour 46 sem
-              hCheval+=(c.tc==='52'||sourceActif.tc==='52')?hSemType/6:hSemMoyPS/6;
+              // Jour de congés : hSemMoy/6 (règle uniforme)
+              hCheval+=hSemMoyPS/6;
             } else {
               // Jour travaillé : heures du semType
               const jourIdx=jourDate.getDay()===0?6:jourDate.getDay()-1;
@@ -5396,10 +5406,7 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
               const jourIdx=jj.jourSemaine===0?6:jj.jourSemaine-1;
               const stJourSem=stTh?.jours&&stTh.jours[jourIdx];
               const hJourType=stJourSem&&stJourSem.d&&stJourSem.f?(toM(stJourSem.f)-toM(stJourSem.d))/60:0;
-              // Pour 52 sem plan sem : utiliser hSemType/6 (heures connues via agenda)
-              // Pour 46 sem : utiliser hSemMoyPS/6 (moyenne, heures inconnues pendant congés)
-              const hRefJour=(c.tc==='52'||sourceActif.tc==='52')?hSemType/6:hSemMoyPS/6;
-              hTheoriques+=hRefJour-hJourType;
+              hTheoriques+=hSemMoyPS/6-hJourType;
             }
           });
         }
