@@ -5398,24 +5398,46 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
           console.log('hCheval sem', semKey, '=', hCheval);
           hTheoriques+=hCheval;
         } else {
-          console.log('hSemType sem', semKey, '=', hSemType);
-          hTheoriques+=hSemType;
+          if(c.tc==='52'||sourceActif.tc==='52'){
+            // Plan sem 52 non à cheval : calcul jour par jour
+            const statsCongésPS52=['conges-acq','conges-non','conges-anticipe','decompte-acq','decompte-anticipe','decompte-conges'];
+            const reposHPS52=sourceActif.reposHebdo||c.reposHebdo||0;
+            let hSem52=0;
+            for(let i=0;i<7;i++){
+              const jourDate=new Date(lundiSem);jourDate.setDate(lundiSem.getDate()+i);
+              const jourStr=jourDate.getFullYear()+'-'+String(jourDate.getMonth()+1).padStart(2,'0')+'-'+String(jourDate.getDate()).padStart(2,'0');
+              if(jourStr<debutMoisStr||jourStr>finMoisStr) continue;
+              if(jourDate.getDay()===reposHPS52) continue;
+              const jourFiche=joursDesSem.find(jj=>jj.date===jourStr);
+              const stJour=jourFiche?.statut||getStatutPrevu(sourceActif||c,jourFiche||{date:jourStr,jourSemaine:jourDate.getDay()===0?0:jourDate.getDay()});
+              const jourIdx=jourDate.getDay()===0?6:jourDate.getDay()-1;
+              const stJourSem=stTh?.jours&&stTh.jours[jourIdx];
+              const hJourReel=stJourSem&&stJourSem.d&&stJourSem.f?(toM(stJourSem.f)-toM(stJourSem.d))/60:0;
+              if(statsCongésPS52.includes(stJour)){
+                hSem52+=hSemType/6;
+              } else if(['conges-am','conges-6j','conges-6j-fin','non-prevu'].includes(stJour)){
+                // 0h
+              } else {
+                hSem52+=hJourReel; // prevu, travaille, abs-*, arret, ferie, ferie-non
+              }
+            }
+            hTheoriques+=hSem52;
+          } else {
+            hTheoriques+=hSemType;
+          }
         }
-        // Pour les semaines non à cheval : ajouter hSemMoy/6 pour les jours décomptés
-        // et déduire les heures du semType pour ces jours (pour éviter le doublon)
-        if(!estCheval){
+        // Pour les semaines non à cheval plan-sem 46 : correction jours décomptés
+        if(!estCheval&&(c.tc!=='52'&&sourceActif.tc!=='52')){
           const statsCongésTypee=['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe'];
           const reposHPST=sourceActif.reposHebdo||c.reposHebdo||0;
           joursDesSem.forEach(jj=>{
             if(jj.jourSemaine===reposHPST) return;
             const stJJ=jj.statut||getStatutPrevu(sourceActif||c,jj);
             if(statsCongésTypee.includes(stJJ)){
-              // Déduire les heures du semType pour ce jour (déjà incluses dans hSemType)
               const jourIdx=jj.jourSemaine===0?6:jj.jourSemaine-1;
               const stJourSem=stTh?.jours&&stTh.jours[jourIdx];
               const hJourType=stJourSem&&stJourSem.d&&stJourSem.f?(toM(stJourSem.f)-toM(stJourSem.d))/60:0;
-              const hRefJour=(c.tc==='52'||sourceActif.tc==='52')?hSemType/6:hSemMoyPS/6;
-              hTheoriques+=hRefJour-hJourType;
+              hTheoriques+=hSemMoyPS/6-hJourType;
             }
           });
         }
