@@ -2979,10 +2979,14 @@ function ouvrirFiche(contratId,key){
         }
       }
     } else if(statutActuel==='decompte-conges'&&!j.heureDebPrev&&(c.tc==='52'||getVersionActive(c,new Date(j.date)).tc==='52')){
-      // Décompte congés 52 sem sans heures prévues : hSemMoy/6
+      // Décompte congés 52 sem plan sem : hSemType/6 selon la semaine pointée dans l'agenda
       const srcDC=getVersionActive(c,new Date(j.date));
-      const hSemMoyDC=(srcDC.hMensu||0)*12/(srcDC.nbSem||52);
-      const hPrevDC=hSemMoyDC/6;
+      const agKeyDC=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
+      const agDC=(srcDC.agendas||c.agendas||[]).find(a=>new Date(a.dateDebut)<=new Date(j.date)&&new Date(a.dateFin)>=new Date(j.date));
+      const typeDC=agDC?.semaines?.[agKeyDC];
+      const stDC=typeDC&&srcDC.semTypes?srcDC.semTypes.find(st=>st.nom===typeDC):null;
+      const hSemTypeDC=stDC?(stDC.jours||[]).reduce((s,jj)=>jj&&jj.d&&jj.f?s+(toM(jj.f)-toM(jj.d))/60:s,0):((srcDC.hMensu||0)*12/(srcDC.nbSem||52));
+      const hPrevDC=hSemTypeDC/6;
       if(hPrevDC>0) hDeduit='−'+fmtH(Math.round(hPrevDC*60));
     } else if(statutActuel==='conges-non'&&j.heureDebPrev&&(c.tc==='52'||getVersionActive(c,new Date(j.date)).tc==='52')){
       // 52 sem plan sem : conges-non avec heures prévues → hSemType/6
@@ -6151,6 +6155,22 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         hThParSem[sk]+=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
       }
     });
+    // Pour plan-sem 52 : compléter les semaines à cheval avec les heures totales du type
+    if(sourceActif.th==='sem'&&sourceActif.semTypes&&(c.tc==='52'||sourceActif.tc==='52')){
+      const tousAgendasCh=[...(sourceActif.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
+      Object.keys(hThParSem).forEach(sk=>{
+        const [skAn,skNum]=[parseInt(sk.slice(0,4)),parseInt(sk.split('-S')[1])];
+        const agKeyCh=getKeyAgenda(skNum,skAn);
+        const lundiCh=new Date(skAn,0,4);while(lundiCh.getDay()!==1)lundiCh.setDate(lundiCh.getDate()-1);lundiCh.setDate(lundiCh.getDate()+(skNum-1)*7);
+        const agCh=tousAgendasCh.find(ag=>new Date(ag.dateDebut)<=lundiCh&&new Date(ag.dateFin)>=lundiCh);
+        const typeCh=agCh?.semaines?.[agKeyCh];
+        const stCh=typeCh&&sourceActif.semTypes?sourceActif.semTypes.find(st=>st.nom===typeCh):null;
+        if(stCh){
+          const hSemTotaleCh=(stCh.jours||[]).reduce((s,jj)=>jj&&jj.d&&jj.f?s+(toM(jj.f)-toM(jj.d))/60:s,0);
+          if(hThParSem[sk]<hSemTotaleCh) hThParSem[sk]=hSemTotaleCh;
+        }
+      });
+    }
 
     // Ajouter les semaines off et plan
     Object.entries(hThParSem).forEach(([sk,hSem])=>{
