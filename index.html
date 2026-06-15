@@ -4120,7 +4120,8 @@ function buildRecapHtml(recap, solde, regul52, c){
         const _hThMajL=parseFloat(recap.hTheoriquesMaj||0);
         const _txBrutRL=_txN>0&&coefNR>0?_txN/coefNR:0;
         const _txNMajL=_txBrutRL*(1+_majSupPct)*coefNR;
-        const _infoMsgHS='D\u00e9duction sur heures suppl\u00e9mentaires :\n'+_hMaj.toFixed(2)+' h \u00d7 '+_txNMajL.toFixed(2)+' \u20ac / '+_hThMajL.toFixed(2)+'h th\u00e9oriques \u00d7 '+_hAbsHSMaj.toFixed(2)+'h d\'absence = '+_montantAbsMajL.toFixed(2)+' \u20ac';
+        const _salMajMensuL=parseFloat((_hMaj*_txNMajL).toFixed(2));
+        const _infoMsgHS='D\u00e9duction heures suppl\u00e9mentaires :\n'+_salMajMensuL.toFixed(2)+' \u20ac / '+_hThMajL.toFixed(2)+'h th\u00e9oriques \u00d7 '+_hAbsHSMaj.toFixed(2)+'h d\'absence = '+_montantAbsMajL.toFixed(2)+' \u20ac';
         const _absIdHS='_infoAbsMsgHS_'+(Date.now()+Math.random()).toString(36).slice(2);
         html+=ligneG('Heures supp. d\'absence <button onclick="event.stopPropagation();alerte(document.getElementById(\''+_absIdHS+'\').textContent)" style="background:none;border:1px solid var(--tx3);border-radius:50%;width:16px;height:16px;font-size:10px;cursor:pointer;color:var(--tx2);padding:0;line-height:1;margin-left:4px">i</button><span id="'+_absIdHS+'" hidden>'+_infoMsgHS+'</span>', '\u2212 '+_hAbsDedHSL.toFixed(2)+' h \u2014 '+_montantAbsMajL.toFixed(2)+' \u20ac','','var(--al)');
       }
@@ -4162,6 +4163,7 @@ function buildRecapHtml(recap, solde, regul52, c){
     html+='<tr><td colspan="2" style="padding:4px 4px 2px;font-weight:700;color:var(--m);font-size:12px">Majorations</td></tr>';
     if(parseFloat(recap.hComp||0)>0) html+=ligneG('Majoration heures complémentaires', '<span style="font-weight:400;color:var(--tx3)">('+parseFloat(recap.hCompMaj||0).toFixed(2)+' h)</span> '+(parseFloat(recap.montantMajComp||0)>0?'+'+parseFloat(recap.montantMajComp).toFixed(2)+' €':'0.00 €'));
     if(parseFloat(recap.hSup||0)>0) html+=ligneG('Majoration heures supplémentaires', '<span style="font-weight:400;color:var(--tx3)">('+parseFloat(recap.hSup).toFixed(2)+' h)</span> '+(parseFloat(recap.montantMajSup||0)>0?'+'+parseFloat(recap.montantMajSup).toFixed(2)+' €':'0.00 €'));
+    if(parseFloat(recap.montantMajSupAbsPrec||0)>0) html+=ligneG('Correction maj HS (absence mois préc.)', '− '+parseFloat(recap.hMajSupAbsPrec||0).toFixed(2)+' h — '+parseFloat(recap.montantMajSupAbsPrec||0).toFixed(2)+' €','','var(--al)');
     const totalMajFerie=(parseFloat(recap.montantMajFeriePrevu2||0)+parseFloat(recap.montantMajFerieNP||0));
     if(totalMajFerie>0) html+=ligneG('Majoration férié', '+'+totalMajFerie.toFixed(2)+' €');
     if(parseFloat(recap.montantMajRepos||0)>0) html+=ligneG('Majoration repos travaillé', '+'+parseFloat(recap.montantMajRepos).toFixed(2)+' €');
@@ -7160,6 +7162,54 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const montantMajSupBrut=parseFloat((hSup*majSup*txNet).toFixed(2));
   const montantMajCompDejaPayee=parseFloat((hCompVersHSTotal*majCompPct*txNet).toFixed(2));
   const montantMajSup=parseFloat(Math.max(0,montantMajSupBrut-montantMajCompDejaPayee).toFixed(2));
+  // Déduction maj HS pour absences sur semaine à cheval fin mois précédent
+  let montantMajSupAbsPrec=0;
+  let hMajSupAbsPrec=0;
+  if(fichePrec&&sourceActif.th==='sem'&&(c.tc==='52'||sourceActif.tc==='52')){
+    const tousAgendasPrec=[...(sourceActif.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
+    const absStatutsPrec=['abs-non','abs-am','ferie-non','arret','abs-partielle'];
+    const premierJourMois=new Date(fiche.annee,fiche.mois,1);
+    const jourSemPremier=premierJourMois.getDay()===0?7:premierJourMois.getDay();
+    if(jourSemPremier>1){
+      const lundiCheval=new Date(premierJourMois);
+      lundiCheval.setDate(premierJourMois.getDate()-(jourSemPremier-1));
+      const lundiChevalStr=lundiCheval.getFullYear()+'-'+String(lundiCheval.getMonth()+1).padStart(2,'0')+'-'+String(lundiCheval.getDate()).padStart(2,'0');
+      const semKeyCheval=getSemISO(lundiChevalStr);
+      const agKeyCheval=getKeyAgenda(parseInt(semKeyCheval.split('-S')[1]),lundiCheval.getFullYear());
+      const agCheval=tousAgendasPrec.find(ag=>new Date(ag.dateDebut)<=lundiCheval&&new Date(ag.dateFin)>=lundiCheval);
+      const typeCheval=agCheval?.semaines?.[agKeyCheval];
+      const stCheval=typeCheval?(sourceActif.semTypes||c.semTypes||[]).find(st=>st.nom===typeCheval):null;
+      if(stCheval){
+        const hSemTotaleCheval=(stCheval.jours||[]).reduce((s,jj)=>jj&&jj.d&&jj.f?s+(toM(jj.f)-toM(jj.d))/60:s,0);
+        const hHSCheval=Math.max(0,hSemTotaleCheval-45);
+        if(hHSCheval>0){
+          // Vérifier qu'au moins un jour prévu est dans le mois courant
+          const joursPrevusMoisCourant=fiche.jours.filter(j=>{
+            if(getSemISO(j.date)!==semKeyCheval) return false;
+            const jourIdx=new Date(j.date).getDay()===0?6:new Date(j.date).getDay()-1;
+            return stCheval.jours&&stCheval.jours[jourIdx]&&stCheval.jours[jourIdx].d;
+          });
+          if(joursPrevusMoisCourant.length>0){
+            // Chercher les absences dans la fiche précédente sur cette semaine
+            const joursAbsPrec=(fichePrec.jours||[]).filter(j=>{
+              if(getSemISO(j.date)!==semKeyCheval) return false;
+              const st=j.statut||getStatutPrevu(sourceActif||c,j);
+              return absStatutsPrec.includes(st);
+            });
+            if(joursAbsPrec.length>0){
+              let hAbsPrec=0;
+              joursAbsPrec.forEach(j=>{
+                if(j.heureDebPrev&&j.heureFinPrev) hAbsPrec+=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
+              });
+              hMajSupAbsPrec=Math.min(hHSCheval,hAbsPrec);
+              const tauxMajAPrec=hTheoriquesMaj>0?(hMensuMaj*txNetMaj)/hTheoriquesMaj:0;
+              montantMajSupAbsPrec=parseFloat((hMajSupAbsPrec*tauxMajAPrec).toFixed(2));
+            }
+          }
+        }
+      }
+    }
+  }
   const montantMajFerieNP=parseFloat((hMajFerie*majFeriePct*txNet).toFixed(2));
   const montantMajFeriePrevu2=parseFloat((hMajFeriePrevu*majFeriePct*txNet).toFixed(2));
   const montantMajRepos=parseFloat((hMajRepos*majReposPct*txNet).toFixed(2));
@@ -7417,7 +7467,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     hMaj1erMai:hMaj1erMai.toFixed(2), montantMaj1erMaiBrut, montantMaj1erMaiNet,
     montantBaseComp, montantBaseSup, montantBaseFerieNP, montantBaseRepos, montantBase1erMai,
     hCompMaj:hCompMaj.toFixed(2),
-    montantMajComp, montantMajSup, montantMajFerieNP, montantMajFeriePrevu2, montantMajRepos, montantMaj1erMai,
+    montantMajComp, montantMajSup, montantMajSupAbsPrec, hMajSupAbsPrec, montantMajFerieNP, montantMajFeriePrevu2, montantMajRepos, montantMaj1erMai,
     montantExo, hTotalComp:hTotalComp.toFixed(2), montantTotalComp, montantTotalSup, hBaseComp:hBaseComp.toFixed(2),
     hAbs:hAbs.toFixed(2), hAbsDeduit, hAbsDeduitHS, montantAbsences, montantAbsMaj:montantAbsMajStored, hAbsHS:typeof hAbsHS!=='undefined'?hAbsHS:0, hAbsNorm:typeof hAbsNorm!=='undefined'?hAbsNorm:0,
     nbJoursTrav:Math.max(0,parseFloat(nbJoursTrav.toFixed(1))),
