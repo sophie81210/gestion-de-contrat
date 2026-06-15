@@ -4959,7 +4959,22 @@ function calcCongesContrat(c){
           const sourceSem=getVersionActive(c,dateRepSem);
           let joursMaxSem=joursMax;
           if(sourceSem.joursFixe) joursMaxSem=sourceSem.joursFixe.filter(j=>j).length||joursMax;
-          else if(sourceSem.semTypes&&sourceSem.semTypes[0]?.jours) joursMaxSem=sourceSem.semTypes[0].jours.filter(j=>j).length||joursMax;
+          else if(sourceSem.semTypes){
+            // Pour plan-sem 52 : utiliser le type réel de la semaine dans l'agenda
+            if(c.tc==='52'||sourceSem.tc==='52'){
+              const tousAgSem=[...(sourceSem.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
+              const semNumAcq=getSemISO(jours[0].date);
+              const semAnAcq=getSemAnnee(jours[0].date);
+              const agKeySemAcq=getKeyAgenda(semNumAcq,semAnAcq);
+              const agSemAcq=tousAgSem.find(ag=>new Date(ag.dateDebut)<=dateRepSem&&new Date(ag.dateFin)>=dateRepSem);
+              const typeSemAcq=agSemAcq?.semaines?.[agKeySemAcq];
+              const stSemAcq=typeSemAcq?sourceSem.semTypes.find(st=>st.nom===typeSemAcq):null;
+              if(stSemAcq) joursMaxSem=(stSemAcq.jours||[]).filter(j=>j&&j.d).length||joursMax;
+              else joursMaxSem=sourceSem.semTypes[0].jours.filter(j=>j).length||joursMax;
+            } else {
+              joursMaxSem=sourceSem.semTypes[0].jours.filter(j=>j).length||joursMax;
+            }
+          }
 
           // Jours normaux : prevu, travaille, abs-rem, abs-partielle → comptent pour 1
           // arret → comptabilisé séparément à 0.8
@@ -4986,7 +5001,21 @@ function calcCongesContrat(c){
               const sourceJF=getVersionActive(c,new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])));
               let estTravaille=false;
               if(c.th==='fixe'&&sourceJF.joursFixe) estTravaille=!!(sourceJF.joursFixe[jourIdxISO]);
-              else if(c.th==='sem'&&sourceJF.semTypes) estTravaille=sourceJF.semTypes.some(st=>st.jours&&st.jours[jourIdxISO]);
+              else if(c.th==='sem'&&sourceJF.semTypes){
+                if(c.tc==='52'||sourceJF.tc==='52'){
+                  // Plan-sem 52 : vérifier le type réel de la semaine dans l'agenda
+                  const tousAgJF=[...(sourceJF.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
+                  const dateJF=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
+                  const semNumJF=getSemISO(j.date);const semAnJF=getSemAnnee(j.date);
+                  const agKeyJF=getKeyAgenda(semNumJF,semAnJF);
+                  const agJF=tousAgJF.find(ag=>new Date(ag.dateDebut)<=dateJF&&new Date(ag.dateFin)>=dateJF);
+                  const typeJF=agJF?.semaines?.[agKeyJF];
+                  const stJF=typeJF?sourceJF.semTypes.find(st=>st.nom===typeJF):null;
+                  estTravaille=!!(stJF&&stJF.jours&&stJF.jours[jourIdxISO]&&stJF.jours[jourIdxISO].d);
+                } else {
+                  estTravaille=sourceJF.semTypes.some(st=>st.jours&&st.jours[jourIdxISO]);
+                }
+              }
               else if(c.th==='plan'&&c.planType==='min'&&sourceJF.joursFixe) estTravaille=!!(sourceJF.joursFixe[jourIdxISO]);
               if(estTravaille) joursNormaux++;
             }
@@ -7264,7 +7293,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   } else {
     // hComp = base jours ouvrables, hSup = majoration uniquement (heures déjà payées en base)
     salaireNetBrut=hMensuNorm*txNet+hMensuMaj*txNetMajR
-      +hComp*(1+majComp)*txNet+hSup*majSup*txNet - montantAbsences
+      +hComp*(1+majComp)*txNet+hSup*majSup*txNet - montantAbsences - montantMajSupAbsPrec
       +hMajFerie*(1+majFeriePct)*txNet+hMajFeriePrevu*majFeriePct*txNet+hMajRepos*(1+majReposPct)*txNet+hMaj1erMai*(1+maj1erMaiPct)*txNet;
   }
   const salaireNet=parseFloat(Math.max(0,salaireNetBrut).toFixed(2));
