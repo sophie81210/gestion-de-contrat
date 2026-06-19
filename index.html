@@ -10814,22 +10814,26 @@ function buildCgAcquisEncarts(c, anneeAcq){
       return j.date>=anneeAcq+'-06-01'&&j.date<=(anneeAcq+1)+'-04-30';
     }).length;
   },0);
-  const nbAnticipesProg=Object.values(c.fiches||{}).reduce((n,f)=>{
+  const nbAnticipesProgBrut=Object.values(c.fiches||{}).reduce((n,f)=>{
     if(f.valide) return n;
     return n+(f.jours||[]).filter(j=>{
       if(j.statut!=='conges-anticipe'&&j.statut!=='decompte-anticipe') return false;
       return j.date>=anneeAcq+'-06-01'&&j.date<=(anneeAcq+1)+'-04-30';
     }).length;
   },0);
+  // Plafonner au quota restant après déduction des jours déjà validés (anticipés en fiches validées)
+  const nbAnticipesProg=Math.min(nbAnticipesProgBrut,Math.max(0,(cg.acqBrut!==undefined?Math.floor(cg.acqBrut):(cg.acquis||0))-nbAnticipes));
   const debutPoseAcq=(anneeAcq+1)+'-05-01';
   const finPoseAcq=(anneeAcq+2)+'-04-30';
-  const nbAcqProg=Object.values(c.fiches||{}).reduce((n,f)=>{
+  const nbAcqProgBrut=Object.values(c.fiches||{}).reduce((n,f)=>{
     if(f.valide) return n;
     return n+(f.jours||[]).filter(j=>{
       if(j.statut!=='conges-acq'&&j.statut!=='decompte-acq') return false;
       return j.date>=debutPoseAcq&&j.date<=finPoseAcq;
     }).length;
   },0);
+  // Plafonner pour ne pas dépasser le quota total moins ce qui est déjà anticipé (validé + programmé)
+  const nbAcqProg=Math.min(nbAcqProgBrut,Math.max(0,(cg.acqBrut!==undefined?Math.floor(cg.acqBrut):(cg.acquis||0))-nbAnticipes-nbAnticipesProg));
 
   const acquisPris=Math.max(0,(cg.pris||0)-nbAnticipes);
   html+=`<div style="background:${bg};border-radius:8px;padding:10px 12px;margin-bottom:8px">
@@ -12627,6 +12631,18 @@ if(tousNonPrevus){
               quotaAnticipe+=cg.acquis||0;
               // Utiliser acqBrut car compteurTotal voit les jours déjà pris dans la boucle
               quotaAnticipeBrut=cg.acqBrut!==undefined?cg.acqBrut:(cg.acquis||0);
+              // Déduire les anticipés déjà validés pour cette année d'acquisition (autre période/pose)
+              const debutAcqAntic=cg.anneeRef+'-06-01';
+              const finAcqAntic=(cg.anneeRef+1)+'-04-30';
+              let anticipesDejaValides=0;
+              Object.values(c.fiches||{}).forEach(f=>{
+                if(!f.valide) return;
+                (f.jours||[]).forEach(j=>{
+                  if(!j.date||j.date<debutAcqAntic||j.date>finAcqAntic) return;
+                  if(j.statut==='conges-anticipe'||j.statut==='decompte-anticipe') anticipesDejaValides++;
+                });
+              });
+              quotaAnticipeBrut=Math.max(0,quotaAnticipeBrut-anticipesDejaValides);
             } else if(c.tc==='52'&&(cg.anneeRef!==anneeAcqPose||dansPose)){
               // Utiliser restants pour ne pas cumuler les 2 années
               // Pour dansPose : restants tient compte des pris (fiches validées) donc pas de double comptage
