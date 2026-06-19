@@ -530,7 +530,7 @@ input[type=time].fi{width:auto;min-width:92px}
           c.avenants=c.avenants.filter(a=>a.id!=avid);
           const cidx=S.contrats.findIndex(x=>x.id==cid);
           if(cidx!==-1)S.contrats[cidx]=c;
-          localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+          localStorage.setItem('cam_c',JSON.stringify(S.contrats));
           if(window.FB_USER&&window.fbSaveData){
             window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
               .catch(e=>console.error('Save supprAvenant:',e));
@@ -732,7 +732,7 @@ S.showTodayMap = JSON.parse(localStorage.getItem("cam_showToday") || "{}");
       });
     });
   });
-  if(modifie) localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  if(modifie) localStorage.setItem('cam_c',JSON.stringify(S.contrats));
 })();
 let planVarN=0;
 
@@ -811,33 +811,11 @@ async function deconn(){
   document.getElementById('pg-login').style.display='flex';
 }
          
-function getContratsCompresses(){
-  const now=new Date();
-  const moisActuel=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-  return S.contrats.map(c=>{
-    const fichesClean={};
-    Object.entries(c.fiches||{}).forEach(([k,f])=>{
-      if(k>moisActuel&&!f.valide) return;
-      const joursClean=(f.jours||[]).map(j=>{
-        const hasData=j.statut||j.heureDebReel||j.heureFinReel||j.heureDebPrev||j.heureFinPrev||j.note||j.km||(j.repas&&j.repas.some(r=>r))||j.planVarPrevu;
-        if(!hasData) return {date:j.date,jourSemaine:j.jourSemaine,semKey:j.semKey};
-        return j;
-      });
-      fichesClean[k]={...f,jours:joursClean};
-    });
-    const {_regulHtml:_, _regulDirty:__, ...cClean}=c;
-    return {...cClean,fiches:fichesClean};
-  });
-}
-
 async function saveToFirestoreSync(){
   if(!window.FB_USER||!window.fbSaveData) return;
-  if(_contratsModifies.size===0) return {ok:true}; // rien à sauvegarder
-  const contratsCompresses=getContratsCompresses();
-  const contratsClean=contratsCompresses.filter(c=>_contratsModifies.has(c.id));
-  _contratsModifies.clear();
+  // Nettoyer les undefined (non supportés par Firestore)
   const data=JSON.parse(JSON.stringify({
-    contrats:contratsClean,
+    contrats:S.contrats,
     params:S.params||{},
     congesAM:S.congesAM||{}
   }));
@@ -845,26 +823,16 @@ async function saveToFirestoreSync(){
 }
 
 let _saveTimer=null;
-const _contratsModifies=new Set(); // IDs des contrats modifiés depuis la dernière sauvegarde
 async function saveToFirestore(){
   if(!window.FB_USER||!window.fbSaveData) return;
   // Sauvegarder immédiatement dans localStorage
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   // Debounce : attendre 2s d'inactivité avant d'écrire sur Firestore
   if(_saveTimer)clearTimeout(_saveTimer);
   _saveTimer=setTimeout(async()=>{
     try{
-      // Filtrer les fiches futures non validées pour réduire la taille des données
-      const now=new Date();
-      const moisActuel=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-      const contratsCompresses=getContratsCompresses();
-      // Ne sauvegarder que les contrats modifiés (ou tous si aucun tracké)
-      const contratsClean=_contratsModifies.size>0
-        ? contratsCompresses.filter(c=>_contratsModifies.has(c.id))
-        : contratsCompresses;
-      _contratsModifies.clear();
       const dataClean=JSON.parse(JSON.stringify({
-        contrats:contratsClean, // seulement les modifiés
+        contrats:S.contrats,
         params:S.params||{},
         congesAM:S.congesAM||{}
       }));
@@ -886,19 +854,18 @@ async function loadFromFirestore(){
              if(r.data.params) S.params=r.data.params;
 else S.params=JSON.parse(localStorage.getItem('cam_params')||'null')||JSON.parse(JSON.stringify(PARAMS_DEFAUT));
      migrerFiches();
-      localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+      localStorage.setItem('cam_c',JSON.stringify(S.contrats));
       localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM||{}));
       initToutesLesFiches();
-      renderAuj();
-      // Recalculer les statuts congés en arrière-plan après affichage
+      // Recalculer les statuts congés pour toutes les années AM
       if(S.congesAM){
-        setTimeout(()=>{
-          S.contrats.forEach(c=>calcCongesContrat(c));
-          Object.keys(S.congesAM).forEach(am=>{
-            majFichesCgAm(parseInt(am),false);
-          });
-        },200);
+        // Recalculer calcCongesContrat pour tous les contrats avant majFichesCgAm
+        S.contrats.forEach(c=>calcCongesContrat(c));
+        Object.keys(S.congesAM).forEach(am=>{
+          majFichesCgAm(parseInt(am),false);
+        });
       }
+      renderAuj();
     }
   }catch(e){console.error('Load:',e);}
 }
@@ -1096,7 +1063,7 @@ function pointer(id,type){
   // Sauvegarder
   const cidx=S.contrats.findIndex(x=>x.id==id);
   if(cidx!==-1) S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
     window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
       .catch(e=>console.error('Save pointer:',e));
@@ -1116,7 +1083,7 @@ function pointer(id,type){
     if(!S.contrats[cidx2].fiches) S.contrats[cidx2].fiches={};
     S.contrats[cidx2].fiches[key]=fiche;
   }
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
     window.fbSaveData(window.FB_USER.uid,{contrats:[S.contrats.find(x=>x.id==id)],params:{},congesAM:S.congesAM||{}})
       .catch(e=>console.error('Save pointer2:',e));
@@ -1624,49 +1591,15 @@ function renderDetTab(id,tab){
     renderPresence(c,cont);
   }
       else if(tab==='regularisation'){
-      if(c._regulHtml&&!c._regulDirty){
-        cont.innerHTML=c._regulHtml;
-      } else {
-    cont.innerHTML='<div class="card"><div style="text-align:center;padding:30px;color:var(--tx2)">⏳ Calcul en cours...</div></div>';
-    setTimeout(()=>{
-    const estContratRegul=c.tc!=='52'&&c.tc!=='occ';
-    const avenantVers52Reg=(c.avenants||[]).find(av=>av.signe&&av.tc==='52'&&av.dateAvenant);
-    const avenantVers46Reg=(c.avenants||[]).find(av=>av.signe&&av.tc!=='52'&&av.tc!=='occ'&&av.dateAvenant);
-    const aUnCycleRegul=estContratRegul||avenantVers52Reg||avenantVers46Reg;
-    if(!aUnCycleRegul){
+    if(c.tc!=='46'){
       cont.innerHTML=`<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">La régularisation s'applique uniquement aux contrats de 46 semaines ou moins.</div></div>`;
     } else {
       const now=new Date();
       const moisMax=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-      // Construire la liste des cycles 46 sem (chaque cycle = {moisMin, moisMax, solde:true/false})
-      const tousAvenantsTries=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant).sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant));
-      const cycles=[];
-      let cycleDebut=null; // début du cycle actuel en 46 sem
-      // Le contrat de base
-      if(estContratRegul) cycleDebut=c.dateDeb?c.dateDeb.slice(0,7):null;
-      tousAvenantsTries.forEach(av=>{
-        if(av.tc==='52'){
-          if(cycleDebut!==null){
-            cycles.push({moisMin:cycleDebut, moisMax:av.dateAvenant.slice(0,7), solde:true});
-            cycleDebut=null;
-          }
-        } else if(av.tc!=='occ'){
-          if(cycleDebut===null) cycleDebut=av.dateAvenant.slice(0,7);
-        }
-      });
-      // Cycle en cours (pas encore passé en 52)
-      if(cycleDebut!==null) cycles.push({moisMin:cycleDebut, moisMax:moisMax, solde:false});
-      if(!cycles.length){
-        cont.innerHTML=`<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">Aucun cycle de régularisation trouvé.</div></div>`;
-        return;
-      }
-      // Tout le HTML des cycles (du plus récent au plus ancien)
-      let allCyclesHtml='';
-      let totGlobalMensu=0, totGlobalPrevu=0;
-      [...cycles].reverse().forEach((cycle,cycleIdxRev)=>{
-      cycleTotMensu=0; cycleTotPrevu=0; tableauxHtml='';
-      const moisTries=Object.keys(c.fiches||{}).filter(k=>k<=moisMax&&k>=cycle.moisMin&&k<=cycle.moisMax).sort();
-      if(!moisTries.length){ return; } else {
+      const moisTries=Object.keys(c.fiches||{}).filter(k=>k<=moisMax).sort();
+      if(!moisTries.length){
+        cont.innerHTML=`<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">Aucune feuille de présence enregistrée.</div></div>`;
+      } else {
         const [ddy,ddm,ddd]=c.dateDeb?c.dateDeb.split('-').map(Number):[new Date().getFullYear(),new Date().getMonth()+1,new Date().getDate()];
         const dateDebContrat=new Date(ddy,ddm-1,ddd);
 
@@ -1839,13 +1772,13 @@ function renderDetTab(id,tab){
         // Fonction : calcul hMensuReg pour une période
         // Pour un mois sans avenant : hMensu fixe (mensualisation lissée)
         // Pour un mois avec avenant : prorata (salaire/hTheo * hPrevu)
-        function calcHMensuReg(dateDebStr, dateFinStr, hPrevuPartie, estPartielle, dateFinLimite){
+        function calcHMensuReg(dateDebStr, dateFinStr, hPrevuPartie, estPartielle){
           const source=getVersionActive(c,new Date(dateDebStr));
           if(!estPartielle) return source.hMensu||0;
           // Mois partiel (avenant en cours de mois) : prorata
           const [dy,dm]=dateDebStr.split('-').map(Number);
           const debutMois=dy+'-'+String(dm).padStart(2,'0')+'-01';
-          const finMois=dateFinLimite||(dy+'-'+String(dm).padStart(2,'0')+'-'+String(new Date(dy,dm,0).getDate()).padStart(2,'0'));
+          const finMois=dy+'-'+String(dm).padStart(2,'0')+'-'+String(new Date(dy,dm,0).getDate()).padStart(2,'0');
           const hTheoMois=calcHTheoReg(debutMois, finMois);
           if(!hTheoMois) return source.hMensu||0;
           return (source.hMensu||0)*(hPrevuPartie/hTheoMois);
@@ -1869,8 +1802,8 @@ function renderDetTab(id,tab){
           tranches[idx].push(key);
         });
 
+        let totGenMensu=0,totGenPrevu=0;
         let tableauxHtml='';
-        let cycleTotMensu=0,cycleTotPrevu=0;
         [...tranches].filter(Boolean).reverse().forEach((moisList,tIdxRev)=>{
           const tranchesFiltrees=tranches.filter(Boolean);
           const tIdx=tranches.indexOf(tranchesFiltrees[tranchesFiltrees.length-1-tIdxRev]);
@@ -1891,15 +1824,6 @@ function renderDetTab(id,tab){
             const avenantsduMois=datesAvenants.filter(d=>d>debutMois&&d<=finMois);
 
             let hPrevu=0, hMensuReg=0;
-
-            // Détecter tout avenant dans ce mois (46→52, occ→46, etc.)
-            const tousAvenantsSignes=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant);
-            const avenantDuMoisReg=tousAvenantsSignes.find(av=>av.dateAvenant.slice(0,7)===key)||null;
-            const veilleAvenantReg=avenantDuMoisReg?(()=>{
-              const [avy,avm,avd]=avenantDuMoisReg.dateAvenant.split('-').map(Number);
-              const dV=new Date(avy,avm-1,avd-1);
-              return dV.getFullYear()+'-'+String(dV.getMonth()+1).padStart(2,'0')+'-'+String(dV.getDate()).padStart(2,'0');
-            })():null;
 
             if(avenantsduMois.length===0){
               // Mois sans avenant : hMensu fixe (mensualisation lissée)
@@ -1922,9 +1846,7 @@ function renderDetTab(id,tab){
                 }
                 const hPrevuPartie=calcHPrevuReg(debPartie, finPartie);
                 hPrevu+=hPrevuPartie;
-                // Pour le mois de l'avenant 46→52 : limiter hTheoMois à la partie avant avenant
-                const dateFinLimitePartie=(avenantDuMoisReg&&i===0&&veilleAvenantReg)?veilleAvenantReg:null;
-                hMensuReg+=calcHMensuReg(debPartie, finPartie, hPrevuPartie, true, dateFinLimitePartie);
+                hMensuReg+=calcHMensuReg(debPartie, finPartie, hPrevuPartie, true);
               }
             }
 
@@ -1935,44 +1857,17 @@ function renderDetTab(id,tab){
             //   + abs rémunérées (heures prévues)
             //   + fériés prévus au contrat
             const ficheMois=c.fiches?.[key];
-            // Détecter le type de passage
-            const estPassageVers46Reg=avenantDuMoisReg&&avenantDuMoisReg.tc!=='52'&&avenantDuMoisReg.tc!=='occ';
-            const estPassage46vers46Reg=estPassageVers46Reg&&(()=>{const srcAv=getVersionActive(c,new Date(debutMois));return srcAv.tc!=='occ';})();
-            // Calcul recap selon le type de passage
-            let montantMensu=0, txNetMois=0, finMoisRegul=finMois, debutMoisRegul=debutMois;
-            if(avenantDuMoisReg&&estPassage46vers46Reg){
-              // 46→46 : cumuler avant + après avenant
-              const recapAvant=ficheMois?calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant'):null;
-              const recapApres=ficheMois?calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres'):null;
-              const mensuAvant=recapAvant?parseFloat(((recapAvant.hMensu||0)*(recapAvant.txNetExact||0)-(recapAvant.montantAbsences||0)).toFixed(2)):0;
-              const mensuApres=recapApres?parseFloat(((recapApres.hMensu||0)*(recapApres.txNetExact||0)-(recapApres.montantAbsences||0)).toFixed(2)):0;
-              montantMensu=parseFloat((mensuAvant+mensuApres).toFixed(2));
-              txNetMois=parseFloat(recapApres?.txNetExact||0);
-              debutMoisRegul=debutMois; finMoisRegul=finMois;
-            } else if(avenantDuMoisReg&&estPassageVers46Reg){
-              // occ→46 : partie après avenant uniquement
-              const recapMois=ficheMois?calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres'):null;
-              txNetMois=parseFloat(recapMois?.txNetExact||0);
-              montantMensu=parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)-(recapMois?.montantAbsences||0)).toFixed(2));
-              debutMoisRegul=avenantDuMoisReg.dateAvenant; finMoisRegul=finMois;
-            } else if(avenantDuMoisReg){
-              // 46→52 : partie avant avenant uniquement
-              const recapMois=ficheMois?calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant'):null;
-              txNetMois=parseFloat(recapMois?.txNetExact||0);
-              montantMensu=parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)-(recapMois?.montantAbsences||0)).toFixed(2));
-              debutMoisRegul=debutMois; finMoisRegul=veilleAvenantReg||finMois;
-            } else {
-              // Mois normal
-              const recapMois=ficheMois?calcRecapFiche(c,ficheMois):null;
-              txNetMois=parseFloat(recapMois?.txNetExact||0);
-              montantMensu=parseFloat(Math.max(0,hMensuReg*txNetMois-(recapMois?.montantAbsences||0)).toFixed(2));
-            }
+            const recapMois=ficheMois?calcRecapFiche(c,ficheMois):null;
+            const montantAbsMois=parseFloat(recapMois?.montantAbsences||0);
+            const txNetMois=parseFloat(recapMois?.txNetExact||0);
+            const montantMensu=parseFloat(Math.max(0,hMensuReg*txNetMois-montantAbsMois).toFixed(2));
+            // Calculer les heures réelles payables
             let hReel=0;
             if(ficheMois){
               const statutsExclus=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-conges',
                 'abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat'];
               ficheMois.jours.forEach(j=>{
-                if(j.date<debutMoisRegul||j.date>finMoisRegul) return;
+                if(j.date<debutMois||j.date>finMois) return;
                 const statut=j.statut||getStatutPrevu(c,j);
                 if(statutsExclus.includes(statut)) return;
                 if(statut==='abs-partielle'){
@@ -1987,7 +1882,7 @@ function renderDetTab(id,tab){
             }
             const montantPrevu=parseFloat((hReel*txNetMois).toFixed(2));
             totMensu+=montantMensu; totPrevu+=montantPrevu;
-            cycleTotMensu+=montantMensu; cycleTotPrevu+=montantPrevu;
+            totGenMensu+=montantMensu; totGenPrevu+=montantPrevu;
             const diff=montantPrevu-montantMensu;
             const dc=diff>0?'var(--vt)':diff<0?'var(--al)':'var(--tx2)';
             return `<tr style="border-bottom:1px solid var(--mb)">
@@ -2003,8 +1898,8 @@ function renderDetTab(id,tab){
             <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
               <thead><tr style="background:var(--mp)">
                 <th style="padding:7px 4px;text-align:left;font-size:12px">Mois</th>
-                <th style="padding:7px 4px;font-size:12px;text-align:center">Salaire mensualisé</th>
-                <th style="padding:7px 4px;font-size:12px;text-align:center">Salaire dû</th>
+                <th style="padding:7px 4px;font-size:12px;text-align:center">Sal. mensualisé</th>
+                <th style="padding:7px 4px;font-size:12px;text-align:center">Sal. versé</th>
               </tr></thead>
               <tbody>${lignes}</tbody>
               <tfoot><tr style="background:var(--mp);font-weight:700">
@@ -2014,52 +1909,25 @@ function renderDetTab(id,tab){
               </tr></tfoot>
             </table></div>
           </div>`;
-        }); // fin forEach tranches
-        // Sous-total du cycle
-        const diffCycle=cycleTotPrevu-cycleTotMensu;
-        const dcCycle=diffCycle>0?'var(--vt)':diffCycle<0?'var(--al)':'var(--tx2)';
-        if(cycles.length>1){
-          tableauxHtml=`<div class="card" style="background:var(--mp);margin-bottom:8px">
-            <div style="font-weight:700;font-size:13px;margin-bottom:4px">Période ${cycles.length-cycleIdxRev} ${cycle.solde?'(soldée)':'(en cours)'}</div>
-            <div style="font-size:12px;color:var(--tx2)">${cycle.moisMin} → ${cycle.moisMax}</div>
-            <div style="color:${dcCycle};font-weight:700;margin-top:4px">${diffCycle>0?'+':''}${diffCycle.toFixed(2)} €${diffCycle>0?' à régulariser':diffCycle<0?' (trop versé)':''}</div>
-          </div>`+tableauxHtml;
-        }
-        allCyclesHtml+=tableauxHtml;
-        totGlobalMensu+=cycleTotMensu;
-        totGlobalPrevu+=cycleTotPrevu;
-      } // fin else moisTries
-      }); // fin forEach cycles
-        const diffGen=totGlobalPrevu-totGlobalMensu;
-        // Stocker le diff en euros pour buildRecapHtml (cycle le plus récent non soldé)
-        const dernierCycleEnCours=cycles.find(cy=>!cy.solde);
-        const diffDernierCycle=dernierCycleEnCours?(()=>{
-          const moisCycle=Object.keys(c.fiches||{}).filter(k=>k<=moisMax&&k>=dernierCycleEnCours.moisMin&&k<=dernierCycleEnCours.moisMax).sort();
-          // On utilise le totGlobal car c'est le seul cycle en cours
-          return diffGen;
-        })():0;
-        c._regulDiffEuros=parseFloat(diffDernierCycle.toFixed(2));
+        });
+
+        const diffGen=totGenPrevu-totGenMensu;
         const dcGen=diffGen>0?'var(--vt)':diffGen<0?'var(--al)':'var(--tx2)';
         cont.innerHTML=`
-          <div class="card" style="background:var(--mp);margin-bottom:12px;border-bottom:none">
+          <div class="card" style="background:var(--mp);margin-bottom:12px">
             <div style="display:flex;justify-content:space-between;align-items:center">
-              <div class="ctitle" style="margin:0;border-bottom:none">Total général</div>
-              <div style="font-size:13px">
-                <div style="display:flex;gap:16px;flex-wrap:wrap">
-                  <span style="white-space:nowrap">Salaire mensualisé :<br><strong>${totGlobalMensu.toFixed(2)} €</strong></span>
-                  <span style="white-space:nowrap">Salaire dû :<br><strong>${totGlobalPrevu.toFixed(2)} €</strong></span>
-                </div>
-                ${diffGen!==0?('<div style="text-align:center;margin-top:6px;color:'+dcGen+';font-weight:700">'+(diffGen>0?'+':'')+diffGen.toFixed(2)+' €'+(diffGen>0?' à régulariser':' (trop versé)')+'</div>'):''}
+              <div class="ctitle" style="margin:0">Total général</div>
+              <div style="display:flex;gap:16px;font-size:13px">
+                <span>Sal. mensualisé : <strong>${totGenMensu.toFixed(2)} €</strong></span>
+                <span>Sal. versé : <strong>${totGenPrevu.toFixed(2)} €</strong></span>
+                <span style="color:${dcGen};font-weight:700">${diffGen>0?'+':''}${diffGen.toFixed(2)} €</span>
               </div>
             </div>
           </div>
-          ${allCyclesHtml}`;
-        c._regulHtml=cont.innerHTML;
-        c._regulDirty=false;
+          ${tableauxHtml}`;
+      }
     }
-    },50); // fin setTimeout regularisation
-      } // fin else cache
-  } // fin regularisation
+  }
   else if(tab==='rupture'){
     renderRupture(c, cont);
   }
@@ -2281,7 +2149,7 @@ function getStatutOptions(statutPrevu, isPlanMinVar, c, sourceActive){
     // Congés : gérés par le calendrier AM
     'conges-acq':['conges-acq'],
     'conges-non':['conges-non'],
-    'conges-am':['conges-am'],'conges-6j':['conges-6j'],
+    'conges-am':['conges-am'],
     'conges-anticipe':['conges-anticipe'],
     'hors-contrat':['hors-contrat'],
     // Décompte congés ↔ reprise
@@ -2296,7 +2164,7 @@ function getStatutOptions(statutPrevu, isPlanMinVar, c, sourceActive){
     'prevu':'Prévu','abs-rem':'Absence rémunérée','abs-enfant':'Abs. maladie enfant',
     'abs-non':'Absence non rémunérée','abs-am':'Absence AM','ferie-non':'Férié non acquis',
     'arret':'Arrêt de travail','non-prevu':'Non prévu','travaille':'Travaillé','repos':'Repos',
-    'ferie':'Férié','conges-acq':'Congés','conges-non':'Congés','conges-anticipe':'Congés','conges-am':'Congés','conges-6j':'Congés',
+    'ferie':'Férié','conges-acq':'Congés','conges-non':'Congés','conges-anticipe':'Congés','conges-am':'Congés',
     'init':'↺ Réinitialiser','hors-contrat':'Hors contrat','abs-partielle':'Absence partielle',
     'decompte-conges':'Non prévu','decompte-acq':'Non prévu','decompte-anticipe':'Non prévu','a-selectionner':'À sélectionner',
     'jours-complementaires':'Jour complémentaire','reprise':'Reprise'
@@ -2307,10 +2175,10 @@ function getStatutOptions(statutPrevu, isPlanMinVar, c, sourceActive){
 function getStatutBg(statut){
   const bgs={
     'prevu':'#eaf5ee','non-prevu':'#fcfcfc','repos':'#e4eff7',
-    'ferie':'#fffbe6','conges-acq':'#84ab84','conges-non':'#84ab84','conges-6j':'#fcfcfc',
+    'ferie':'#fffbe6','conges-acq':'#f0defc','conges-non':'#f3edf7',
     'abs-rem':'#f2f7f4','abs-enfant':'#fdecea','abs-non':'#fdecea','abs-am':'#fdecea','ferie-non':'#fdecea',
     'arret':'#fdecea','travaille':'#e8f5ee','conges':'#f0defc',
-    'conges-anticipe':'#84ab84','conges-am':'#84ab84',
+    'conges-anticipe':'#fef3eb','conges-am':'#f8f5fa',
     'abs-partielle':'#fcf3f2','hors-contrat':'#fcfcfc','decompte-conges':'#fcfcfc','decompte-acq':'#fcfcfc','decompte-anticipe':'#fcfcfc','reprise':'#e8f5ee','a-selectionner':'#f2f7f4',
   };
   return bgs[statut]||'#fff';
@@ -2335,7 +2203,7 @@ function initFichesContrat(c){
 if(modifie){
     const idx=S.contrats.findIndex(x=>x.id==c.id);
     if(idx!==-1) S.contrats[idx]=c;
-    localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+    localStorage.setItem('cam_c',JSON.stringify(S.contrats));
     // Recalculer les statuts congés pour toutes les années AM affectées
     if(S.congesAM){
       const anneesAm=new Set(moisListe.map(({annee,mois})=>getAnneeAmPourDate(annee+'-'+String(mois+1).padStart(2,'0'))));
@@ -2348,22 +2216,6 @@ function initToutesLesFiches(){
   S.contrats.forEach(c=>{if(!c.cloture) initFichesContrat(c);});
 }
 
-function creerMoisSuivant(contratId){
-  const c=S.contrats.find(x=>x.id==contratId);
-  if(!c) return;
-  const now=new Date();
-  const moisSuiv=new Date(now.getFullYear(),now.getMonth()+1,1);
-  const key=moisSuiv.getFullYear()+'-'+String(moisSuiv.getMonth()+1).padStart(2,'0');
-  if(!c.fiches) c.fiches={};
-  if(!c.fiches[key]){
-    c.fiches[key]=creerFiche(c,moisSuiv.getFullYear(),moisSuiv.getMonth());
-    sauvegarder();
-    toast('Fiche '+MOIS[moisSuiv.getMonth()]+' '+moisSuiv.getFullYear()+' créée');
-  }
-  const cont=document.getElementById('det-tab-content-'+contratId);
-  if(cont) renderPresence(c,cont);
-}
-
 function renderPresence(c,cont){
   const cFresh=S.contrats.find(x=>x.id==c.id)||c;
   if(!cFresh.dateDeb){
@@ -2373,13 +2225,8 @@ function renderPresence(c,cont){
   initFichesContrat(cFresh);
   const cUp=S.contrats.find(x=>x.id==cFresh.id)||cFresh;
  const now=new Date();
-   const moisMax=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-  const moisSuivAffiche=new Date(now.getFullYear(),now.getMonth()+1,1);
-  const moisSuivAfficheKey=moisSuivAffiche.getFullYear()+'-'+String(moisSuivAffiche.getMonth()+1).padStart(2,'0');
-  // Inclure le mois suivant s'il a été créé explicitement (a des jours pointés)
-  const ficheMoisSuiv=cUp.fiches&&cUp.fiches[moisSuivAfficheKey];
-  const moisMaxAffiche=ficheMoisSuiv&&ficheMoisSuiv.jours&&ficheMoisSuiv.jours.some(j=>j.statut&&j.statut!=='non-prevu'&&j.statut!=='a-selectionner')?moisSuivAfficheKey:moisMax;
-  const moisListe=Object.keys(cUp.fiches||{}).filter(k=>k<=moisMaxAffiche).sort().reverse();
+  const moisMax=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  const moisListe=Object.keys(cUp.fiches||{}).filter(k=>k<=moisMax).sort().reverse();
   const fichesBtns=moisListe.map(key=>{
     const fiche=cUp.fiches[key];
     const [annee,moisStr]=key.split('-');
@@ -2393,7 +2240,10 @@ function renderPresence(c,cont){
       <span style="font-size:20px;color:var(--tx3)">›</span>
     </div>`;
   }).join('');
-  const warn='';
+  const warn=`<div class="ibox" style="margin-bottom:12px">
+    <strong>⚠ Pensez à remplir vos feuilles de présence depuis le début du contrat.</strong><br>
+    Sans ces données, le calcul de vos <strong>congés</strong>, de la <strong>régularisation annuelle</strong> et des <strong>indemnités de fin de contrat</strong> ne pourra pas être effectué.
+  </div>`;
   // Bouton solde de tout compte si disponible
   let soldeBtnHtml='';
   const ficheSolde=calcFicheSolde(cUp);
@@ -2406,26 +2256,7 @@ function renderPresence(c,cont){
       <span style="font-size:20px;color:var(--m)">›</span>
     </div>`;
   }
-  // Toujours afficher un mois d'avance
-  const moisSuiv=new Date(now.getFullYear(),now.getMonth()+1,1);
-  const moisSuivKey=moisSuiv.getFullYear()+'-'+String(moisSuiv.getMonth()+1).padStart(2,'0');
-  if(!cUp.fiches[moisSuivKey]) cUp.fiches[moisSuivKey]=creerFiche(cUp,moisSuiv.getFullYear(),moisSuiv.getMonth());
-  const moisListeAvec=[moisSuivKey,...moisListe.filter(k=>k!==moisSuivKey)];
-  const fichesBtnsAvec=moisListeAvec.map(key=>{
-    const fiche=cUp.fiches[key];
-    const [annee,moisStr]=key.split('-');
-    const label=MOIS[parseInt(moisStr)-1]+' '+annee;
-    const ok=fiche&&fiche.valide;
-    const estFutur=key>moisMax;
-    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:11px 14px;background:#fff;border-radius:var(--rs);border:1px solid var(--mb);margin-bottom:8px;cursor:pointer" onclick="ouvrirFiche(${cUp.id},'${key}')">
-      <div>
-        <div style="font-weight:600;font-size:14px">${label}</div>
-        <div style="font-size:12px;color:${ok?'var(--vt)':estFutur?'var(--tx2)':'var(--al)'}">${ok?'✓ Validée':estFutur?'À venir':'⚠ À compléter'}</div>
-      </div>
-      <span style="font-size:20px;color:var(--tx3)">›</span>
-    </div>`;
-  }).join('');
-  cont.innerHTML=warn+`<div class="card"><div class="ctitle">Feuilles de présence</div>${soldeBtnHtml}${fichesBtnsAvec||'<div style="text-align:center;padding:20px;color:var(--tx2)">Aucune feuille disponible</div>'}</div>`;
+  cont.innerHTML=warn+`<div class="card"><div class="ctitle">Feuilles de présence</div>${soldeBtnHtml}${fichesBtns||'<div style="text-align:center;padding:20px;color:var(--tx2)">Aucune feuille disponible</div>'}</div>`;
 }
          
 function ouvrirFicheSolde(contratId){
@@ -2541,77 +2372,9 @@ function ouvrirFicheAvecRestauration(contratId,key){
   });
 }
 
-function calcRegulDiffEurosAuto(c){
-  // Calcule c._regulDiffEuros sans affichage HTML
-  const avenantVers52=(c.avenants||[]).find(av=>av.signe&&av.tc==='52'&&av.dateAvenant);
-  const avenantVers46=(c.avenants||[]).find(av=>av.signe&&av.tc!=='52'&&av.tc!=='occ'&&av.dateAvenant);
-  const estContratRegul=c.tc!=='52'&&c.tc!=='occ';
-  if(!estContratRegul&&!avenantVers52&&!avenantVers46){c._regulDiffEuros=0;return;}
-  const now=new Date();
-  const moisMax=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-  const moisMaxRegul=avenantVers52?avenantVers52.dateAvenant.slice(0,7):moisMax;
-  const moisMinRegul=avenantVers46&&!estContratRegul?avenantVers46.dateAvenant.slice(0,7):null;
-  const moisTries=Object.keys(c.fiches||{}).filter(k=>k<=moisMax&&k<=moisMaxRegul&&(!moisMinRegul||k>=moisMinRegul)).sort();
-  let totGenMensu=0,totGenPrevu=0;
-  moisTries.forEach(key=>{
-    const ficheMois=c.fiches?.[key];
-    if(!ficheMois) return;
-    const [ay2,am2]=key.split('-').map(Number);
-    const debutMois=ay2+'-'+String(am2).padStart(2,'0')+'-01';
-    const finMoisDate=new Date(ay2,am2,0);
-    const finMois=ay2+'-'+String(am2).padStart(2,'0')+'-'+String(finMoisDate.getDate()).padStart(2,'0');
-    const tousAvenantsSignes=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant);
-    const avenantDuMoisReg=tousAvenantsSignes.find(av=>av.dateAvenant.slice(0,7)===key)||null;
-    const veilleAvenantReg=avenantDuMoisReg?(()=>{
-      const [avy,avm,avd]=avenantDuMoisReg.dateAvenant.split('-').map(Number);
-      const dV=new Date(avy,avm-1,avd-1);
-      return dV.getFullYear()+'-'+String(dV.getMonth()+1).padStart(2,'0')+'-'+String(dV.getDate()).padStart(2,'0');
-    })():null;
-    const estPassageVers46Reg=avenantDuMoisReg&&avenantDuMoisReg.tc!=='52'&&avenantDuMoisReg.tc!=='occ';
-    const estPassage46vers46Reg=estPassageVers46Reg&&(()=>{const srcAv=getVersionActive(c,new Date(debutMois));return srcAv.tc!=='occ';})();
-    let montantMensu=0, txNetMois=0, finMoisRegul=finMois, debutMoisRegul=debutMois;
-    if(avenantDuMoisReg&&estPassage46vers46Reg){
-      const rA=calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant');
-      const rP=calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres');
-      montantMensu=parseFloat((((rA.hMensu||0)*(rA.txNetExact||0)-(rA.montantAbsences||0))+((rP.hMensu||0)*(rP.txNetExact||0)-(rP.montantAbsences||0))).toFixed(2));
-      txNetMois=parseFloat(rP?.txNetExact||0);
-    } else if(avenantDuMoisReg&&estPassageVers46Reg){
-      const r=calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres');
-      txNetMois=parseFloat(r?.txNetExact||0);
-      montantMensu=parseFloat(((r?.hMensu||0)*(r?.txNetExact||0)-(r?.montantAbsences||0)).toFixed(2));
-      debutMoisRegul=avenantDuMoisReg.dateAvenant;
-    } else if(avenantDuMoisReg){
-      const r=calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant');
-      txNetMois=parseFloat(r?.txNetExact||0);
-      montantMensu=parseFloat(((r?.hMensu||0)*(r?.txNetExact||0)-(r?.montantAbsences||0)).toFixed(2));
-      finMoisRegul=veilleAvenantReg||finMois;
-    } else {
-      const r=calcRecapFiche(c,ficheMois);
-      txNetMois=parseFloat(r?.txNetExact||0);
-      montantMensu=parseFloat(Math.max(0,(r?.hMensu||0)*txNetMois-(r?.montantAbsences||0)).toFixed(2));
-    }
-    const statutsExclus=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-conges','abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat'];
-    let hReel=0;
-    (ficheMois.jours||[]).forEach(j=>{
-      if(j.date<debutMoisRegul||j.date>finMoisRegul) return;
-      const statut=j.statut||getStatutPrevu(c,j);
-      if(statutsExclus.includes(statut)) return;
-      if(statut==='abs-partielle'){if(j.heureDebReel&&j.heureFinReel)hReel+=Math.max(0,(toMins(j.heureFinReel)-toMins(j.heureDebReel))/60);}
-      else if(j.heureDebPrev&&j.heureFinPrev)hReel+=Math.max(0,(toMins(j.heureFinPrev)-toMins(j.heureDebPrev))/60);
-    });
-    const montantPrevu=parseFloat((hReel*txNetMois).toFixed(2));
-    totGenMensu+=montantMensu;totGenPrevu+=montantPrevu;
-  });
-  c._regulDiffEuros=parseFloat((totGenPrevu-totGenMensu).toFixed(2));
-}
-
 function ouvrirFiche(contratId,key){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c)return;
-  // Calculer _regulDiffEuros si nécessaire (pour affichage régularisation sur fiche)
-  if(c._regulDiffEuros===undefined&&(c.tc!=='52'||((c.avenants||[]).some(av=>av.signe&&av.tc==='52')))){
-    calcRegulDiffEurosAuto(c);
-  }
   // Créer les fiches si nécessaire
   if(!c.fiches) c.fiches={};
   if(!c.fiches[key]){
@@ -2619,7 +2382,7 @@ function ouvrirFiche(contratId,key){
     c.fiches[key]=creerFiche(c,parseInt(annee),parseInt(moisStr)-1);
     const cidxTmp=S.contrats.findIndex(x=>x.id==contratId);
     if(cidxTmp!==-1) S.contrats[cidxTmp]=c;
-    localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+    localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   }
   if(!c.fiches[key])return;
   const fiche=c.fiches[key];
@@ -2895,7 +2658,7 @@ function ouvrirFiche(contratId,key){
     if(!selectedOpts.includes('selected')){
     const moisNum=parseInt(key.split('-')[1]);
     const labelAnticipe=moisNum===5?'Congés acquis':'Congés anticipés';
-    const lbl={'conges-acq':'Congés','conges-non':'Congés','conges-anticipe':'Congés','conges-am':'Congés','conges-6j':'Congés','decompte-acq':'Non prévu','decompte-anticipe':'Non prévu','decompte-conges':'Non prévu','travaille':'Travaillé','prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié','ferie-non':'Férié non acquis','abs-rem':'Absence rémunérée','abs-enfant':'Absence maladie de l&rsquo;enfant','abs-non':'Absence non rémunérée','abs-am':'Absence AM','arret':'Arrêt de travail','hors-contrat':'Hors contrat','abs-partielle':'Absence partielle'};
+    const lbl={'conges-acq':'Congés','conges-non':'Congés','conges-anticipe':'Congés','conges-am':'Congés','decompte-acq':'Non prévu','decompte-anticipe':'Non prévu','decompte-conges':'Non prévu','travaille':'Travaillé','prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié','ferie-non':'Férié non acquis','abs-rem':'Absence rémunérée','abs-enfant':'Absence maladie de l&rsquo;enfant','abs-non':'Absence non rémunérée','abs-am':'Absence AM','arret':'Arrêt de travail','hors-contrat':'Hors contrat','abs-partielle':'Absence partielle'};
       selectedOpts=`<option value="${statutActuel}" selected>${lbl[statutActuel]||statutActuel}</option>`+opts;
     }
 
@@ -2994,13 +2757,12 @@ const statutPrevuJ=getStatutPrevu(c,j);
       </td>
       ${!isPlanVar?`<td id="hpm-${contratId}-${key}-${idx}" style="padding:3px 4px;font-size:11px;font-weight:600">
         ${(()=>{
-          const srcActifJ=getVersionActive(c,new Date(j.date));
-          const estCongesNon46=statutActuel==='conges-non'&&c.tc!=='52'&&srcActifJ.tc!=='52';
-          const estCongesNon52=statutActuel==='conges-non'&&(c.tc==='52'||srcActifJ.tc==='52');
+          const estCongesNon46=statutActuel==='conges-non'&&c.tc!=='52';
+          const estCongesNon52=statutActuel==='conges-non'&&c.tc==='52';
           if(estCongesNon46) return '—';
           if(estCongesNon52){
-            const nbSem52=srcActifJ.tc==='52'?52:parseFloat(srcActifJ.nbSem||sourceActive.nbSem||52);
-            const hSemMoy52=parseFloat(srcActifJ.hMensu||sourceActive.hMensu||0)*12/nbSem52;
+            const nbSem52=parseFloat(sourceActive.nbSem||52);
+            const hSemMoy52=parseFloat(sourceActive.hMensu||0)*12/nbSem52;
             const hJour52=(hSemMoy52/6).toFixed(2);
             return '<span style="color:var(--al)">−'+hJour52+'h</span>';
           }
@@ -3033,7 +2795,7 @@ const statutPrevuJ=getStatutPrevu(c,j);
       })()}</td>`:''}
 
       <td style="padding:3px 4px;text-align:right;vertical-align:top">
-        <select title="${j.statut||statutPrevu||''}" style="font-size:10px;padding:2px 3px;border:1px solid var(--mb);border-radius:3px;width:100%;max-width:130px;background:${bg}"
+        <select style="font-size:10px;padding:2px 3px;border:1px solid var(--mb);border-radius:3px;width:100%;max-width:130px;background:${bg}"
           ${fiche.valide?'disabled':`onchange="majFicheStatut(${contratId},'${key}',${idx},this.value)"`}>
           ${selectedOpts}
         </select>
@@ -3174,7 +2936,7 @@ const statutPrevuJ=getStatutPrevu(c,j);
     <div class="card" style="margin-top:10px">
       <div class="ctitle">Cumul — ${label}</div>
       <table id="recap-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
-        ${buildRecapCumul(recap,recap2,calcSoldeToutCompte(c, key),c)}
+        ${buildRecapCumul(recap,recap2,calcSoldeToutCompte(c, key))}
       </table>
     </div>`:`
     <div class="card" style="margin-top:10px">
@@ -3196,14 +2958,14 @@ const statutPrevuJ=getStatutPrevu(c,j);
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c||!c.fiches||!c.fiches[key]) return;
   if(val&&c.cgAnticipe!=='oui'){
-    alerte('La prise par anticipation n\'est pas autorisée au contrat.\n\nPour autoriser cette prise, signez un avenant.');
+    toast('⚠ La prise par anticipation n\'est pas autorisée au contrat');
     ouvrirFiche(contratId,key);
     return;
   }
   c.fiches[key].anticipeActif=val;
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   S.ficheModifiee=true;
   // Recalculer les statuts congés avec le nouveau choix (double appel pour corriger premierTrav=null)
   const anneeAmKey=getAnneeAmPourDate(key);
@@ -3227,9 +2989,8 @@ function confirmerHeuresPrevues(contratId,key,idx){
   j.heureFinReel=j.heureFinPrev;
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1)S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   S.ficheModifiee=true;
-  if(c?.id) _contratsModifies.add(c.id);
   const bandeau=document.getElementById('bandeau-non-enregistre');
   if(bandeau) bandeau.style.display='block';
   ouvrirFiche(contratId,key);
@@ -3255,7 +3016,7 @@ function imprimerFiche(contratId,key){
     const statutPrevu=getStatutPrevu(c,j);
     const statutActuel=j.statut||statutPrevu;
     const statutLbl={'prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié',
-      'conges-acq':'Congés','conges-non':'Congés','conges-anticipe':'Congés','conges-am':'Congés','conges-6j':'Congés','decompte-acq':'Non prévu','decompte-anticipe':'Non prévu','decompte-conges':'Non prévu','travaille':'Travaillé',
+      'conges-acq':'Congés','conges-non':'Congés','conges-anticipe':'Congés','conges-am':'Congés','decompte-acq':'Non prévu','decompte-anticipe':'Non prévu','decompte-conges':'Non prévu','travaille':'Travaillé',
       'abs-rem':'Absence rémunérée','abs-enfant':'Absence maladie de l&rsquo;enfant','abs-non':'Absence non rémunérée','abs-am':'Absence AM','ferie-non':'Férié non acquis',
       'arret':'Arrêt de travail','abs-partielle':'Absence partielle','hors-contrat':'Hors contrat'}[statutActuel]||statutActuel;
     let hComp='',hDeduit='';
@@ -3335,8 +3096,7 @@ function enregistrerFiche(contratId,key){
   if(!c||!c.fiches||!c.fiches[key])return;
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1)S.contrats[cidx]=c;
-  _contratsModifies.add(contratId); // marquer ce contrat comme modifié
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
     showLoader('Enregistrement en cours...');
     saveToFirestoreSync().then((r)=>{
@@ -3772,15 +3532,8 @@ function calcRegul52(c, key){
 
 function buildRecapHtml(recap, solde, regul52, c){
   if(recap.donneesManquantes) return '<div style="color:var(--al);padding:10px;font-size:13px">Taux horaire ou mensualisation manquants.</div>';
-  const ligneG=(label,val,gras,color,noBorder)=>'<tr style="'+(noBorder?'':'border-bottom:1px solid var(--mb)')+'"><td style="padding:7px 4px;color:var(--tx2);'+(gras?'font-weight:700':'')+'">'+(label||'')+'</td><td style="padding:7px 4px;font-weight:'+(gras?'700':'600')+';text-align:right;'+(color?'color:'+color:'')+'">'+(val||'')+'</td></tr>';
+  const ligneG=(label,val,gras,color)=>'<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2);'+(gras?'font-weight:700':'')+'">'+(label||'')+'</td><td style="padding:7px 4px;font-weight:'+(gras?'700':'600')+';text-align:right;'+(color?'color:'+color:'')+'">'+(val||'')+'</td></tr>';
   let html='';
-  // Calcul régularisation si applicable (utilisé dans plusieurs sections)
-  const _hasRegul=recap.estPassage46vers52&&recap.periodeAv!=='apres'&&c&&c._regulDiffEuros>0;
-  const _diffEuros=_hasRegul?c._regulDiffEuros:0;
-  const _txNetRegul46=_hasRegul?(()=>{const [ay46,am46,ad46]=recap.dateAvenantPassage.split('-').map(Number);const vR=new Date(ay46,am46-1,ad46-1);return parseFloat(((getVersionActive(c,vR).txBrut||0)*getCoefNet()).toFixed(4));})():0;
-  const _hRegul46=(_hasRegul&&_txNetRegul46>0)?parseFloat((_diffEuros/_txNetRegul46).toFixed(2)):0;
-  const _hMoyJourRegul=recap.nbJoursMoisContrat>0?(recap.hMensu||0)/recap.nbJoursMoisContrat:(recap.hMensu||0)/20;
-  const _joursRegul=(_hasRegul&&_hMoyJourRegul>0)?parseFloat((_hRegul46/_hMoyJourRegul).toFixed(1)):0;
   if(recap.isOcc){
     // Occasionnel : affichage simplifié
     html+=ligneG('Taux horaire net', recap.txNet+' €', true);
@@ -3810,12 +3563,10 @@ function buildRecapHtml(recap, solde, regul52, c){
     if(parseFloat(recap.montantCongesNonAcquis||0)>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--al)">dont congés non acquis ('+recap.nbCongesNonAcquis+' j) — '+recap.montantCongesNonAcquis.toFixed(2)+' € déduits</td></tr>';
     if(parseFloat(recap.hComp||0)>0||parseFloat(recap.hSup||0)>0) html+=ligneG('Taux horaire net', recap.txNet+' \u20AC', true);
     // Séparateur
-    // Partie basse : cumuls
-    html+=ligneG('Jours travaillés', (recap.nbJoursTrav+_joursRegul).toFixed(1)+' j', false, '', _hasRegul&&_joursRegul>0);
-    if(_hasRegul&&_joursRegul>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont '+_joursRegul.toFixed(1)+' j régularisés</td></tr>';
-    html+=ligneG('Heures normales à déclarer', Math.max(0,(recap.hMensu||0)-(recap.hAbsDeduit||0)+_hRegul46).toFixed(2)+' h', true, '', _hasRegul&&_hRegul46>0);
-    if(_hasRegul&&_hRegul46>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont '+_hRegul46.toFixed(2)+' h régularisées</td></tr>';
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
+    // Partie basse : cumuls
+    html+=ligneG('Jours travaillés', recap.nbJoursTrav+' j');
+    html+=ligneG('Heures normales à déclarer', Math.max(0,(recap.hMensu||0)-(recap.hAbsDeduit||0)).toFixed(2)+' h', true);
   }
   // ── Section heures complémentaires et majorées ──
   const hasHComp=parseFloat(recap.hBaseComp||0)>0||parseFloat(recap.hMajFerie||0)>0||parseFloat(recap.hMajRepos||0)>0||parseFloat(recap.hMaj1erMai||0)>0;
@@ -3841,8 +3592,7 @@ function buildRecapHtml(recap, solde, regul52, c){
 
   if(parseFloat(recap.montantExo||0)>0) html+=ligneG('Exonération de charges (11,31%)', '+'+parseFloat(recap.montantExo).toFixed(2)+' €', false);
   if(parseFloat(recap.indemCongeMois||0)>0) html+=ligneG('Indemnité congés payés ('+recap.indemCongeNbJours+' j)', recap.indemCongeMois.toFixed(2)+' €', true, 'var(--m)');
-  html+=ligneG('Salaire net à déclarer', (parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)+_diffEuros).toFixed(2)+' €', true, 'var(--m)', _hasRegul&&_diffEuros>0);
-  if(_hasRegul&&_diffEuros>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont '+_diffEuros.toFixed(2)+' € de régularisation de salaire</td></tr>';
+  html+=ligneG('Salaire net à déclarer', (parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)).toFixed(2)+' €', true, 'var(--m)');
   if(parseFloat(recap.indemCgOcc||0)>0) html+=ligneG('Indemnité congés contrat occasionnel', recap.indemCgOcc.toFixed(2)+' € (10%)', true, 'var(--m)');
   if(parseFloat(recap.indemEntretienTotal)>0) html+=ligneG('Indem. entretien', recap.indemEntretienTotal+' €');
   if(parseFloat(recap.indemRepasTotal)>0) html+=ligneG('Indem. repas', recap.indemRepasTotal+' €');
@@ -3853,6 +3603,25 @@ function buildRecapHtml(recap, solde, regul52, c){
   if(regul52&&regul52.diff>0){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
     html+=ligneG('R\u00E9gularisation cong\u00E9s (10\u00E8me)',regul52.diff.toFixed(2)+' \u20AC net',true,'var(--vt)');
+  }
+  // Régularisation de salaire passage 46→52
+  if(recap.estPassage46vers52){
+    const regul46v52=(()=>{
+      // Trouver la période 46 sem : du début du contrat/avenant 46 jusqu'à la veille de l'avenant 52
+      const [ay,am,ad]=recap.dateAvenantPassage.split('-').map(Number);
+      const veilleAvenant=new Date(ay,am-1,ad-1);
+      // Chercher l'avenant 46 précédent (s'il existe)
+      const avsPrecedents=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant<recap.dateAvenantPassage&&av.tc!=='52').sort((a,b)=>b.dateAvenant.localeCompare(a.dateAvenant));
+      const debutPeriode46=avsPrecedents.length>0?new Date(avsPrecedents[0].dateAvenant):new Date(c.dateDeb);
+      const r=calcRegularisationDefinitive(c, debutPeriode46, veilleAvenant);
+      if(!r||r.diff<=0) return null;
+      return r;
+    })();
+    if(regul46v52&&regul46v52.diff>0){
+      html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
+      html+=ligneG('R\u00E9gularisation de salaire (passage 46\u2192 52 sem)',
+        regul46v52.diff.toFixed(2)+' \u20AC net ('+regul46v52.hRegul.toFixed(2)+'h)',true,'var(--vt)');
+    }
   }
   // Éléments du solde de tout compte (dernier mois après rupture confirmée)
   if(solde){
@@ -3899,22 +3668,15 @@ function buildRecapHtml(recap, solde, regul52, c){
   return html;
 }
 
-function buildRecapCumul(r1,r2,solde,c){
+function buildRecapCumul(r1,r2){
   const ligneG=(label,val,gras,color)=>'<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2);'+(gras?'font-weight:700':'')+'">'+(label||'')+'</td><td style="padding:7px 4px;font-weight:'+(gras?'700':'600')+';text-align:right;'+(color?'color:'+color:'')+'">'+(val||'')+'</td></tr>';
-  // Régularisation (depuis r1 = partie avant avenant)
-  const _cumulHasRegul=r1.estPassage46vers52&&r1.periodeAv!=='apres'&&c&&c._regulDiffEuros>0;
-  const _cumulDiffEuros=_cumulHasRegul?c._regulDiffEuros:0;
-  const _cumulTxNet=_cumulHasRegul?(()=>{const [ay,am,ad]=r1.dateAvenantPassage.split('-').map(Number);const vR=new Date(ay,am-1,ad-1);return parseFloat(((getVersionActive(c,vR).txBrut||0)*getCoefNet()).toFixed(4));})():0;
-  const _cumulHRegul=(_cumulHasRegul&&_cumulTxNet>0)?parseFloat((_cumulDiffEuros/_cumulTxNet).toFixed(2)):0;
-  const _cumulHMoyJour=r1.nbJoursMoisContrat>0?(r1.hMensu||0)/r1.nbJoursMoisContrat:(r1.hMensu||0)/20;
-  const _cumulJoursRegul=(_cumulHasRegul&&_cumulHMoyJour>0)?parseFloat((_cumulHRegul/_cumulHMoyJour).toFixed(1)):0;
   // Pour le cumul : si r1 est occ utiliser nbJoursTravReels (filtré par période), sinon nbJoursTrav
   const nbJoursTrav=(r1.isOcc?parseFloat(r1.nbJoursTravReels||0):parseFloat(r1.nbJoursTrav||0))
-    +parseFloat(r2.nbJoursTrav||0)+_cumulJoursRegul;
-  const hNormales=Math.max(0,(r1.hMensu||0)-(r1.hAbsDeduit||0))+Math.max(0,(r2.hMensu||0)-(r2.hAbsDeduit||0))+_cumulHRegul;
+    +parseFloat(r2.nbJoursTrav||0);
+  const hNormales=Math.max(0,(r1.hMensu||0)-(r1.hAbsDeduit||0))+Math.max(0,(r2.hMensu||0)-(r2.hAbsDeduit||0));
   const hComp=parseFloat(r1.hComp||0)+parseFloat(r2.hComp||0);
   const hSup=parseFloat(r1.hSup||0)+parseFloat(r2.hSup||0);
-  const salaireNet=parseFloat(r1.salaireNet||0)+parseFloat(r2.salaireNet||0)+_cumulDiffEuros;
+  const salaireNet=parseFloat(r1.salaireNet||0)+parseFloat(r2.salaireNet||0);
   const indemE=parseFloat(r1.indemEntretienTotal||0)+parseFloat(r2.indemEntretienTotal||0);
   const indemR=parseFloat(r1.indemRepasTotal||0)+parseFloat(r2.indemRepasTotal||0);
   const indemK=parseFloat(r1.indemKmTotal||0)+parseFloat(r2.indemKmTotal||0);
@@ -4009,13 +3771,13 @@ function majFicheStatut(contratId,key,idx,val){
     const statutActuel=ficheSource.fiches[key].jours[idx].statut;
     // Si le jour avait un statut congé avant d'être mis en arrêt, restaurer ce statut
     const statutOrigine=ficheSource.fiches[key].jours[idx]._statutAvantArret;
-    if(statutOrigine&&['conges-acq','conges-non','conges-am','conges-anticipe','conges-6j','decompte-acq','decompte-anticipe','decompte-conges'].includes(statutOrigine)){
+    if(statutOrigine&&['conges-acq','conges-non','conges-am','conges-anticipe','decompte-acq','decompte-anticipe','decompte-conges'].includes(statutOrigine)){
       ficheSource.fiches[key].jours[idx].statut=statutOrigine;
       delete ficheSource.fiches[key].jours[idx]._statutAvantArret;
       // Recalculer la fiche
       const cidxInit=S.contrats.findIndex(x=>x.id==contratId);
       if(cidxInit!==-1) S.contrats[cidxInit]=c;
-      localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+      localStorage.setItem('cam_c',JSON.stringify(S.contrats));
       S.ficheModifiee=true;
       ouvrirFiche(contratId,key);
       return;
@@ -4032,16 +3794,14 @@ function majFicheStatut(contratId,key,idx,val){
   // Sauvegarder le statut avant arrêt si on passe en arrêt depuis un congé
   if(val==='arret'){
     const statutAvant=ficheSource.fiches[key].jours[idx].statut;
-    if(['conges-acq','conges-non','conges-am','conges-anticipe','conges-6j','decompte-acq','decompte-anticipe','decompte-conges'].includes(statutAvant)){
+    if(['conges-acq','conges-non','conges-am','conges-anticipe','decompte-acq','decompte-anticipe','decompte-conges'].includes(statutAvant)){
       ficheSource.fiches[key].jours[idx]._statutAvantArret=statutAvant;
     }
   }
   // init = réinitialiser au statut prévu (null = calculé depuis le contrat)
   // Pour les jours possibles plan min/var : revenir à 'a-selectionner'
   const estJourPossible=ficheSource.fiches[key].jours[idx]._jourPossible;
-  const _statutAvantModif=ficheSource.fiches[key].jours[idx].statut; // sauvegarder avant modification
-  const estFerieNonInit=(val==='init')&&_statutAvantModif==='ferie-non'&&isFerie(ficheSource.fiches[key].jours[idx].date,c);
-  ficheSource.fiches[key].jours[idx].statut=(val==='init')?(estFerieNonInit?null:(estJourPossible?'a-selectionner':null)):val||null;
+  ficheSource.fiches[key].jours[idx].statut=(val==='init')?(estJourPossible?'a-selectionner':null):val||null;
   // Pour plan min/var : réinitialiser aussi les heures prévues
   if(val==='init'&&(c.th==='plan'&&(c.planType==='min'||c.planType==='var'))){
     ficheSource.fiches[key].jours[idx].heureDebPrev=null;
@@ -4089,15 +3849,14 @@ function majFicheStatut(contratId,key,idx,val){
 
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   S.ficheModifiee=true;
-  if(c?.id) _contratsModifies.add(c.id);
   const bandeau=document.getElementById('bandeau-non-enregistre');
   if(bandeau) bandeau.style.display='block';
   // Si changement lié aux congés : recalculer les congés AM
   // Déclencher majFichesCgAm si le jour est en decompte-conges, reprise,
   // ou si un jour voisin est en decompte-conges (zone de décompte)
-  const statutPrecedent=_statutAvantModif; // statut avant modification
+  const statutPrecedent=ficheSource.fiches[key]?.jours[idx]?.statut;
   // Chercher un decompte-conges après le jour modifié dans la même fiche ou le mois suivant
   const jourModifie=ficheSource.fiches[key]?.jours[idx];
   const dateModif=jourModifie?.date||'';
@@ -4106,16 +3865,8 @@ function majFicheStatut(contratId,key,idx,val){
   const [ky,km]=key.split('-').map(Number);
   const moisSuivKey=km===12?(ky+1)+'-01':ky+'-'+String(km+1).padStart(2,'0');
   const fichesSuiv=ficheSource.fiches[moisSuivKey]?.jours||[];
-  const decompteApres=joursApres.some(j=>estDecompte(j.statut)||j.statut==='reprise')||fichesSuiv.some(j=>estDecompte(j.statut)||j.statut==='reprise');
-  // Si on remet en non-prevu un jour dans la période de pose cochée AM → recalculer
-  const dateMod=jourModifie?.date||'';
-  let estDansPoseCochee=false;
-  if(val==='non-prevu'&&dateMod&&S.congesAM){
-    Object.values(S.congesAM).forEach(data=>{
-      if(data.jours&&data.jours[dateMod]==='pose') estDansPoseCochee=true;
-    });
-  }
-  const impacteDecompte=(estDecompte(statutPrecedent)||statutPrecedent==='reprise'||val==='reprise'||estDecompte(val)||(decompteApres&&['travaille','non-prevu','init'].includes(val))||estDansPoseCochee||statutPrecedent==='travaille');
+  const decompteApres=joursApres.some(j=>j.statut==='decompte-conges'||j.statut==='reprise')||fichesSuiv.some(j=>j.statut==='decompte-conges'||j.statut==='reprise');
+  const impacteDecompte=(estDecompte(statutPrecedent)||statutPrecedent==='reprise'||val==='reprise'||estDecompte(val)||(decompteApres&&['travaille','non-prevu','init'].includes(val)));
   if(impacteDecompte){
     const anneeKey=parseInt(key.split('-')[0]);
     if(S.congesAM&&S.congesAM[anneeKey]) majFichesCgAm(anneeKey,false);
@@ -4159,9 +3910,8 @@ function majFiche(contratId,key,idx,champ,val){
   else if(champ==='km') j.km=parseFloat(val)||null;
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   S.ficheModifiee=true;
-  if(c?.id) _contratsModifies.add(c.id);
   const bandeau=document.getElementById('bandeau-non-enregistre');
   if(bandeau) bandeau.style.display='block';
   majRecapFiche(contratId,key);
@@ -4220,9 +3970,8 @@ function majFicheRepas(contratId,key,idx,ri,checked){
   c.fiches[key].jours[idx].repas[ri]=checked;
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   S.ficheModifiee=true;
-  if(c?.id) _contratsModifies.add(c.id);
   const bandeau=document.getElementById('bandeau-non-enregistre');
   if(bandeau) bandeau.style.display='block';
   // Rafraîchir le récap de la fiche
@@ -4239,10 +3988,6 @@ function majFicheRepas(contratId,key,idx,ri,checked){
 function validerFiche(contratId,key){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c||!c.fiches||!c.fiches[key])return;
-  // Bloquer la validation d'une fiche future
-  const now3=new Date();
-  const moisActuel3=now3.getFullYear()+'-'+String(now3.getMonth()+1).padStart(2,'0');
-  if(key>moisActuel3){alerte('Cette fiche est à venir — elle ne peut pas encore être validée.');return;}
   // Vérifier cohérence heures début/fin
   const joursInvalides=c.fiches[key].jours.filter(j=>{
     if(j.heureDebReel&&j.heureFinReel&&toM(j.heureDebReel)>=toM(j.heureFinReel)) return true;
@@ -4257,16 +4002,12 @@ function validerFiche(contratId,key){
   if(c.tc!=='52'||c.th==='plan'||c.th==='sem'){
     if(c.tc==='52'&&(c.th==='fixe'||c.th==='min')) {} // 52 fixe/min : pas d'agenda
     else {
+      const sourceV=getVersionActive(c,new Date(key+'-01'));
+      const agendasV=sourceV.agendas||c.agendas||[];
       const [ky,km]=key.split('-').map(Number);
       const debutMoisV=new Date(ky,km-1,1);
       const finMoisV=new Date(ky,km,0);
-      // Vérifier les agendas des deux versions si avenant dans ce mois
-      const avenantDuMoisV=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&av.dateAvenant.slice(0,7)===key);
-      const versionsAVerifier=avenantDuMoisV?
-        [getVersionActive(c,debutMoisV), getVersionActive(c,new Date(avenantDuMoisV.dateAvenant))]:
-        [getVersionActive(c,debutMoisV)];
-      const tousAgendas=[...new Set(versionsAVerifier.flatMap(sv=>(sv.agendas||c.agendas||[])))];
-      const agV=tousAgendas.find(ag=>new Date(ag.dateDebut)<=finMoisV&&new Date(ag.dateFin)>=debutMoisV);
+      const agV=agendasV.find(ag=>new Date(ag.dateDebut)<=finMoisV&&new Date(ag.dateFin)>=debutMoisV);
       if(agV){
         // Calculer les semaines violettes du mois
         const semDuMois=[...new Set(c.fiches[key].jours.map(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))))];
@@ -4365,7 +4106,6 @@ function validerFiche(contratId,key){
   }
   // Valider la fiche
   c.fiches[key].valide=true;c.fiches[key].complete=true;
-  c._regulDirty=true; // invalider le cache régularisation
   S.ficheModifiee=false;
   // Recalculer les congés acquis APRÈS validation
   calcCongesContrat(c);
@@ -4377,7 +4117,7 @@ function validerFiche(contratId,key){
   if(S.congesAM&&S.congesAM[anneeAmSuivante]){majFichesCgAm(anneeAmSuivante,false);majFichesCgAm(anneeAmSuivante,false);}
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   saveToFirestore();
   // Déclencher archivage si rupture confirmée et fiche du mois de fin validée
   if(c.rupture&&c.rupture.confirmee){
@@ -4388,7 +4128,7 @@ function validerFiche(contratId,key){
       if(ky===fy&&km===fm&&!c.archive){
         archiverContrat(c);
         S.contrats[cidx]=c;
-        localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+        localStorage.setItem('cam_c',JSON.stringify(S.contrats));
         saveToFirestore();
         // Afficher tab archives
         const tabArch=document.getElementById('tab-archives');
@@ -4405,7 +4145,7 @@ function validerFiche(contratId,key){
     if(recap.regul52Fiche){
       const ar=recap.regul52Fiche.anneeRef;
       if(c.conges[ar]) c.conges[ar].regulVersee=true;
-      localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+      localStorage.setItem('cam_c',JSON.stringify(S.contrats));
       saveToFirestore();
     }
   }
@@ -4417,7 +4157,7 @@ function validerFiche(contratId,key){
   toast('Feuille de '+MOIS[c.fiches[key].mois]+' validée !');
   // Avertissement 30 avril à la validation de février
   const [kvy,kvm]=key.split('-').map(Number);
-  if(kvm===2){
+  if(kvm===1){
     const msgs=[];
     // Contrats 52 sem : vérifier si tous les congés acquis seront pris avant le 30 avril
     if(c.tc==='52'&&c.conges){
@@ -5054,16 +4794,6 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
         } else {
           hTheoriques+=hSemType;
         }
-        // Ajouter hSemMoy/6 pour chaque jour de décompte dans cette semaine (sauf reprise→travaillé)
-        const statsCongésTypee=['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe'];
-        const reposHPST=sourceActif.reposHebdo||c.reposHebdo||0;
-        joursDesSem.forEach(jj=>{
-          if(jj.jourSemaine===reposHPST) return;
-          const stJJ=jj.statut||getStatutPrevu(sourceActif||c,jj);
-          if(statsCongésTypee.includes(stJJ)){
-            hTheoriques+=hSemMoyPS/6;
-          }
-        });
       } else {
         // Type inconnu → hSemMoy
         hTheoriques+=hSemMoyPS;
@@ -5313,7 +5043,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // Calculer le vrai nombre de semaines pour plan var (somme des s de chaque volume)
   const nbSemActif=sourceActif.planType==='var'&&sourceActif.planVar
     ?sourceActif.planVar.reduce((t,v)=>t+(v.s||0),0)||sourceActif.nbSem||46
-    :sourceActif.nbSem||c.nbSem||(sourceActif.tc==='52'||c.tc==='52'?52:46);
+    :sourceActif.nbSem||46;
   const debutMois=new Date(fiche.annee,fiche.mois,1);
   const finMois=new Date(fiche.annee,fiche.mois+1,0);
   const avenantDuMois=c.avenants&&c.avenants.find(av=>{
@@ -6085,7 +5815,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     }
     const nbAbsEnfantCeMois=fiche.jours.slice(0,fiche.jours.indexOf(j)+1).filter(jj=>jj.statut==='abs-enfant').length;
     const absEnfantDeductible=statut==='abs-enfant'&&(nbAbsEnfantAnneeCont+nbAbsEnfantCeMois<=5);
-    const estCongesNonAcq52=(statut==='conges-non'&&(c.tc==='52'||sourceActif.tc==='52'));
+    const estCongesNonAcq52=(statut==='conges-non'&&c.tc==='52');
     const estCongesNon46Travaille=false;
     const estCongesNonDeduit=estCongesNonAcq52||estCongesNon46Travaille;
     const absDeduites=['abs-non','abs-am','ferie-non','abs-partielle']; // arret traité séparément
@@ -6415,7 +6145,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       let hPrev;
       if(estCongesNonDeduit){
         // Congés non acquis sur 52 sem : hSemMoy/6 avec version du mois précédent la pose
-        const sourceConge=getVersionActive(c,new Date(j.date)); // version active au moment de la prise
+        const [jy,jm]=j.date.split('-').map(Number);
+        const dateRefConge=new Date(jy,jm-2,1); // mois précédent
+        const sourceConge=getVersionActive(c,dateRefConge);
         const nbSemConge=sourceConge.nbSem||52;
         const hSemMoy=(sourceConge.hMensu||0)*12/nbSemConge;
         hPrev=parseFloat((hSemMoy/6).toFixed(4));
@@ -6707,16 +6439,15 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const montantMajReposNet=parseFloat((montantBaseRepos+montantMajRepos).toFixed(2));
   const montantMaj1erMaiBrut=parseFloat((hMaj1erMai*(1+maj1erMaiPct)*txBrut).toFixed(2));
   const montantMaj1erMaiNet=parseFloat((montantBase1erMai+montantMaj1erMai).toFixed(2));
-  const tcActifSalaire=sourceActif.tc||c.tc;
-  let hBase=tcActifSalaire==='occ'?0:hMensu;
-  if(tcActifSalaire==='occ'){
+  let hBase=c.tc==='occ'?0:hMensu;
+  if(c.tc==='occ'){
     const hReelTotal=Object.values(hParSemaine).reduce((t,h)=>t+h,0);
     hBase=Math.max(0,hReelTotal-parseFloat(hSup));
   }
   // Salaire = heures normales mensualisées + heures majorées mensualisées (taux différent)
   const txNetMajR=txBrut*(1+majSup52)*coefNetR;
   let salaireNetBrut;
-  if(tcActifSalaire==='occ'){
+  if(c.tc==='occ'){
     // Occasionnel : salaire sur heures réelles (hBase = hReel - hSup)
     const hBaseNormOcc=Math.min(hBase,45); // part normale ≤45h
     const hBaseMajOcc=Math.max(0,hBase-45); // part majorée >45h
@@ -6921,7 +6652,6 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     donneesManquantes, hMensu, hComp:hComp.toFixed(2), hSup:hSup.toFixed(2),
     estPassage46vers52:estPassage46vers52||false,
     dateAvenantPassage:estPassage46vers52?avenantDuMois.dateAvenant:null,
-    periodeAv:periodeAv||null,
     isOcc:sourceActif.tc==='occ',
     hBase:parseFloat(hBase.toFixed(2)),
     nbJoursTravReels:fiche.jours.filter(j=>j.heureDebReel&&j.heureFinReel).length,
@@ -6972,7 +6702,7 @@ function confSuppr(id){
 }
 function suppr(id){
   S.contrats=S.contrats.filter(x=>x.id!=id);
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   // Supprimer aussi dans Firebase
   if(window.FB_USER&&window._fbModules){
     const {doc,deleteDoc}=window._fbModules;
@@ -7717,7 +7447,7 @@ function creerAgenda(cid){
 
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM));
   if(window.FB_USER&&window.fbSaveData){
     window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
@@ -7730,16 +7460,6 @@ function creerAgenda(cid){
   if(manquantesCreation.length>0) alerteCalendrierAM(manquantesCreation);
 }
          
-
-function estSemViolette(semsCongesSet, semNum, lundiDate){
-  if(!semsCongesSet) return false;
-  if(semsCongesSet instanceof Set) return semsCongesSet.has(semNum);
-  // Map: année AM → Set
-  const lundi=new Date(lundiDate);
-  const anneeAM=lundi.getMonth()>=4?lundi.getFullYear():lundi.getFullYear()-1;
-  const set=semsCongesSet.get(anneeAM);
-  return set?set.has(semNum):false;
-}
 function getSemsCongesGlobal(dateDebut, dateFin){
   // Calcule les 5 numéros de semaine les plus chargés en congés posés + fériés
   // Filtre sur la période de l'agenda (dateDebut à dateFin)
@@ -7836,37 +7556,17 @@ function renderAgendas(c){
     const estPlanSemOuVar52=(agSource2.tc==='52')&&((agSource2.th==='plan'&&(agSource2.planType==='var'||agSource2.planType==='sem'))||(agSource2.th==='sem'));
     // Semaines congés : calcul global depuis le calendrier AM (identique pour tous les agendas)
     // Utiliser la période du calendrier AM (mai N → avril N+1) qui couvre l'agenda
-    // Utiliser la date du mois affiché (agendaMois si disponible, sinon date actuelle)
-    // Calculer le Top 5 pour chaque année AM qui intersecte l'agenda
-    const agDebut=new Date(ag.dateDebut);
-    const agFin=new Date(ag.dateFin);
-    const anneeAmDebut=agDebut.getMonth()>=4?agDebut.getFullYear():agDebut.getFullYear()-1;
-    const anneeAmFin=agFin.getMonth()>=4?agFin.getFullYear():agFin.getFullYear()-1;
-    let semsCongesSet=null;
-    if(!estPlanSemOuVar52){
-      // Map année AM → Set de semaines violettes
-      semsCongesSet=new Map();
-      for(let am=anneeAmDebut;am<=anneeAmFin;am++){
-        semsCongesSet.set(am, getSemsCongesGlobal(am+'-05-01',(am+1)+'-04-30'));
-      }
-    }
+    const agDebutDate=new Date(ag.dateDebut);
+    const anneeAmAg=agDebutDate.getMonth()>=4?agDebutDate.getFullYear():agDebutDate.getFullYear()-1;
+    const debutAmAg=anneeAmAg+'-05-01';
+    const finAmAg=(anneeAmAg+1)+'-04-30';
+    const semsCongesSet=estPlanSemOuVar52?null:getSemsCongesGlobal(debutAmAg,finAmAg);
     if(!window._semsCongesSet) window._semsCongesSet={};
     window._semsCongesSet[ag.id]=semsCongesSet;
-    // Pré-calculer si l'agenda est gelé pour masquer bouton et avertissements
-    const _contratPpal=S.contrats.find(x=>x.id==c.id);
-    const _tousAvTmp=[...(_contratPpal?.avenants||[])].sort((a,b)=>a.dateAvenant>b.dateAvenant?1:-1);
-    const _propTmp=_contratPpal?.agendas?.some(a=>a.id===ag.id)?_contratPpal:_tousAvTmp.find(av=>av.agendas?.some(a=>a.id===ag.id));
-    const _avUltTmp=_propTmp?_tousAvTmp.find(av=>{
-      if(!av.signe||!av.dateAvenant||av===_propTmp) return false;
-      const dp=_propTmp===_contratPpal?(_contratPpal.dateDeb||''):(_propTmp.dateAvenant||'');
-      if(av.dateAvenant<=dp) return false;
-      return av.dateAvenant>=ag.dateDebut&&av.dateAvenant<=ag.dateFin;
-    }):null;
-    const _agendaGeleTmp=!!(_avUltTmp&&_contratPpal?.fiches?.[_avUltTmp.dateAvenant.slice(0,7)]?.valide);
     const warnings=getAgendaWarnings(c,ag,semaines,semsCongesSet);
     // Avertissements masqués si en mode modification (S.agendaEnModif)
     const agendaEnModif=S.agendaEnModif===ag.id;
-    const warningHtml=warnings.length&&!agendaEnModif&&!_agendaGeleTmp
+    const warningHtml=warnings.length&&!agendaEnModif
       ?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">
         ${warnings.map(w=>'⚠ '+w).join('<br>')}
       </div>`
@@ -7911,8 +7611,7 @@ function renderAgendas(c){
       ?`<button class="btn bd bsm" onclick="supprimerAgenda(${c.id},${ag.id})">Supprimer</button>`
       :'';
 
-    const btnModif=_agendaGeleTmp?'':
-      `<button class="btn bs bsm" id="btn-modif-${ag.id}" onclick="ouvrirModifAgenda(${c.id},${ag.id})">✏️ Modifier</button>`;
+    const btnModif=`<button class="btn bs bsm" id="btn-modif-${ag.id}" onclick="ouvrirModifAgenda(${c.id},${ag.id})">✏️ Modifier</button>`;
 
     const html=`<div id="agenda-${ag.id}">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:6px">
@@ -8153,7 +7852,7 @@ function getAgendaWarnings(c,ag,semaines,semsCongesSet){
     }
     // Exclure les semaines violettes pour tous sauf plan sem/var 52
     if(!estPSV52Warn){
-      if(estSemViolette(semsCongesSet, s.sem, s.lundi)) return false;
+      if(semsCongesSet&&semsCongesSet.has(s.sem)) return false; // s.sem = numéro de semaine
       if(S.congesAM){
         let nbJours=0;
         for(let d=0;d<7;d++){
@@ -8204,17 +7903,11 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
   // Pour plan sem 52 et plan var 52 : pas de semaines congés bloquées (pointage libre)
   const estPlanSemOuVar2=(source.tc==='52')&&((source.th==='plan'&&(source.planType==='var'||source.planType==='sem'))||(source.th==='sem'));
   // Semaines congés : calcul global depuis le calendrier AM
-  const agDebut2=new Date(ag.dateDebut);
-  const agFin2=new Date(ag.dateFin);
-  const anneeAmDebut2=agDebut2.getMonth()>=4?agDebut2.getFullYear():agDebut2.getFullYear()-1;
-  const anneeAmFin2=agFin2.getMonth()>=4?agFin2.getFullYear():agFin2.getFullYear()-1;
-  let semsCongesSet=null;
-  if(!estPlanSemOuVar2){
-    semsCongesSet=new Map();
-    for(let am=anneeAmDebut2;am<=anneeAmFin2;am++){
-      semsCongesSet.set(am, getSemsCongesGlobal(am+'-05-01',(am+1)+'-04-30'));
-    }
-  }
+  const agDebutDate2=new Date(ag.dateDebut);
+  const anneeAmAg2=agDebutDate2.getMonth()>=4?agDebutDate2.getFullYear():agDebutDate2.getFullYear()-1;
+  const debutAmAg2=anneeAmAg2+'-05-01';
+  const finAmAg2=(anneeAmAg2+1)+'-04-30';
+  const semsCongesSet=estPlanSemOuVar2?null:getSemsCongesGlobal(debutAmAg2,finAmAg2);
 
   semaines.forEach((s, idx)=>{
     let mKey;
@@ -8279,7 +7972,7 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
 
       // Détecter si la semaine est parmi les 5 semaines les plus chargées en congés
       // (calculé une seule fois pour toutes les semaines via semsCongesSet)
-      const estSemConges=estSemViolette(semsCongesSet, s.sem, s.lundi);
+      const estSemConges=semsCongesSet&&semsCongesSet.has(s.sem); // s.sem = numéro de semaine
 
       let bg='var(--mp)',brd='var(--mb)',txt='var(--tx3)';
       if(estSemConges){
@@ -8345,14 +8038,7 @@ function peindreAgenda(key,cid,agid){
   const estPSV=(source.th==='sem')||(source.th==='plan'&&source.planType==='var');
   if(!estPSV){
     const semsCongesCheck=window._semsCongesSet&&window._semsCongesSet[agid];
-    // key = clé agenda (ex: '2025-S32'), extraire semNum et lundi
-    const keyParts=key.split('-S');
-    const semNumCheck=keyParts[1]?parseInt(keyParts[1]):0;
-    const anneeISOCheck=parseInt(keyParts[0]);
-    // Année AM : si sem >= 18 (mai) → même année, sinon année-1
-    const anneeAMCheck=semNumCheck>=18?anneeISOCheck:anneeISOCheck-1;
-    const setCheck=semsCongesCheck instanceof Map?semsCongesCheck.get(anneeAMCheck):semsCongesCheck;
-    if(setCheck&&setCheck.has&&setCheck.has(semNumCheck)){toast('Semaine de congés Ass\'Mat — non modifiable. Si les congés ne sont pas encore posés, vérifiez le calendrier Congés Ass\'Mat.');return;}
+    if(semsCongesCheck&&semsCongesCheck.has(key)){toast('Semaine de congés Ass\'Mat — non modifiable. Si les congés ne sont pas encore posés, vérifiez le calendrier Congés Ass\'Mat.');return;}
   }
   const pinceau=S.agendaPinceaux&&S.agendaPinceaux[agid];
   if(!pinceau){toast('Sélectionnez d\'abord un pinceau');return;}
@@ -8374,17 +8060,11 @@ function validerModifAgenda(cid,agid){
   const semaines=getSemsAgenda(ag,source);
   // Semaines congés : calcul global depuis le calendrier AM
   const estPSVValid=(source.tc==='52')&&((source.th==='plan'&&(source.planType==='var'||source.planType==='sem'))||(source.th==='sem'));
-  const agDebut3=new Date(ag.dateDebut);
-  const agFin3=new Date(ag.dateFin);
-  const anneeAmDebut3=agDebut3.getMonth()>=4?agDebut3.getFullYear():agDebut3.getFullYear()-1;
-  const anneeAmFin3=agFin3.getMonth()>=4?agFin3.getFullYear():agFin3.getFullYear()-1;
-  let semsCongesSet=null;
-  if(!estPSVValid){
-    semsCongesSet=new Map();
-    for(let am=anneeAmDebut3;am<=anneeAmFin3;am++){
-      semsCongesSet.set(am, getSemsCongesGlobal(am+'-05-01',(am+1)+'-04-30'));
-    }
-  }
+  const agDebutDate3=new Date(ag.dateDebut);
+  const anneeAmAg3=agDebutDate3.getMonth()>=4?agDebutDate3.getFullYear():agDebutDate3.getFullYear()-1;
+  const debutAmAg3=anneeAmAg3+'-05-01';
+  const finAmAg3=(anneeAmAg3+1)+'-04-30';
+  const semsCongesSet=estPSVValid?null:getSemsCongesGlobal(debutAmAg3,finAmAg3);
   const warnings=getAgendaWarnings(source,ag,semaines,semsCongesSet);
   // Vérifier s'il y a des semaines non pointées (bloquant) vs autres warnings (non bloquant)
   const nonPointeesWarning=warnings.filter(w=>w.includes('non pointée'));
@@ -8402,7 +8082,7 @@ function validerModifAgenda(cid,agid){
     alerte('Le nombre de semaines d\'absence employeur ('+compteOff+') dépasse le maximum autorisé ('+maxOff+'). Veuillez corriger avant de valider.');
     return;
   }
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
     window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
       .catch(e=>console.error('Save agenda:',e));
@@ -8438,7 +8118,7 @@ function supprimerAgenda(cid,agid){
   source.agendas=source.agendas.filter(a=>a.id!=agid);
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
     window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
       .catch(e=>console.error('Save supprimerAgenda:',e));
@@ -8722,7 +8402,7 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
     if(!data.joursFixe&&ancien.joursFixe) data.joursFixe=ancien.joursFixe;
     if(idx!==-1)S.contrats[idx]={...ancien,...data};
     S.dernierContratId=idCible;S.enEd=null;toast('Contrat '+nom+' modifié !');
-    localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+    localStorage.setItem('cam_c',JSON.stringify(S.contrats));
     const cModif=S.contrats.find(x=>x.id==idCible);
     if(window.FB_USER&&window.fbSaveData&&cModif){
       window.fbSaveData(window.FB_USER.uid,{contrats:[cModif],params:{},congesAM:S.congesAM||{}})
@@ -8756,7 +8436,7 @@ S.contrats.push({
 });
 S.dernierContratId=newId;
 toast('Contrat '+nom+' enregistré !');
- localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+ localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   const cNew=S.contrats.find(x=>x.id==newId);
   if(window.FB_USER&&window.fbSaveData&&cNew){
     window.fbSaveData(window.FB_USER.uid,{contrats:[cNew],params:{},congesAM:S.congesAM||{}})
@@ -8838,7 +8518,7 @@ function validerAvenant(){
 
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
     window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
       .catch(e=>console.error('Save validerAvenant:',e));
@@ -9004,17 +8684,10 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
     const fiche=c.fiches[key];
     const [ay2,am2]=key.split('-').map(Number);
     const source=getVersionActive(c,new Date(ay2,am2-1,1));
-    // Détecter si ce mois est à cheval sur un avenant 46→52
-    const avenantMois=(c.avenants||[]).find(av=>av.signe&&av.tc==='52'&&av.dateAvenant&&av.dateAvenant.slice(0,7)===key);
-    const veilleAvenantStr=avenantMois?(()=>{
-      const [avy,avm,avd]=avenantMois.dateAvenant.split('-').map(Number);
-      const dV=new Date(avy,avm-1,avd-1);
-      return dV.getFullYear()+'-'+String(dV.getMonth()+1).padStart(2,'0')+'-'+String(dV.getDate()).padStart(2,'0');
-    })():null;
     // Heures payées = hMensu - hAbsDeduit (en heures équivalentes)
-    const recapMois=avenantMois?calcRecapFiche(c,fiche,null,veilleAvenantStr,null,avenantMois.dateAvenant,'avant'):calcRecapFiche(c,fiche);
+    const recapMois=calcRecapFiche(c,fiche);
     const hAbsDedMois=parseFloat(recapMois.hAbsDeduit||0);
-    const hMensuMois=parseFloat(recapMois.hMensu||source.hMensu||0);
+    const hMensuMois=parseFloat(source.hMensu||0);
     tranches[idx].mensu+=Math.max(0,hMensuMois-hAbsDedMois);
     tranches[idx].hAbsDed=(tranches[idx].hAbsDed||0)+hAbsDedMois;
     // Heures prévues (sans off ni congés)
@@ -9289,7 +8962,7 @@ function sauvegarderRupture(cid){
   delete c._ruptureTemp;
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1) S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   fbSaveData(window.FB_USER?.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}});
   const cont=document.getElementById('det-content');
   renderRupture(c,cont);
@@ -9300,10 +8973,9 @@ function confirmerRupture(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c||!c.rupture) return;
   c.rupture.confirmee=true;
-  c._regulDirty=true;
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1) S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   fbSaveData(window.FB_USER?.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}});
   const cont=document.getElementById('det-content');
   renderRupture(c,cont);
@@ -9314,7 +8986,6 @@ function annulerRupture(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c) return;
   if(c.rupture) c.rupture.confirmee=false;
-  c._regulDirty=true;
   delete c._ruptureTemp;
   // Nettoyer les jours hors-contrat marqués par la clôture
   Object.values(c.fiches||{}).forEach(fiche=>{
@@ -9328,7 +8999,7 @@ function annulerRupture(cid){
   });
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1) S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   saveToFirestore();
   const cont=document.getElementById('det-content');
   renderRupture(c,cont);
@@ -9664,14 +9335,8 @@ function renderRupture(c, cont){
 
   // ─── Régularisation définitive (46 sem uniquement) ───
   let regHtml='';
-  const avenantVers52=(c.avenants||[]).find(av=>av.signe&&av.tc==='52'&&av.dateAvenant);
-  if(c.tc!=='52'||avenantVers52){
-    const dateFinRegul=avenantVers52?(()=>{
-      const [ay,am]=avenantVers52.dateAvenant.split('-').map(Number);
-      // Inclure le mois de l'avenant (traité en partie dans calcRegularisationDefinitive)
-      return new Date(ay,am-1,1);
-    })():null;
-    const reg=calcRegularisationDefinitive(c,null,dateFinRegul);
+  if(c.tc!=='52'){
+    const reg=calcRegularisationDefinitive(c);
     if(reg.diff>0){
       const source=getVersionActive(c,dateSit||new Date());
       const txBrut=source.txBrut||0;
@@ -10008,24 +9673,19 @@ function genOngletCongesContrat(c){
     const id='cg-contrat-'+c.id+'-'+anneeAcq;
     const cg=c.conges&&c.conges[anneeAcq];
 
-    // Compter les jours posés - fiches validées uniquement
-    const debutPoseStr=(anneeAcq+1)+'-05-01';
-    const finPoseStr=(anneeAcq+2)+'-04-30';
-    const debutAntStr2=anneeAcq+'-06-01';
-    const finAntStr2=(anneeAcq+1)+'-04-30';
+    // Compter les jours posés dans cette période d'acquisition
     let nbAcq=0, nbAnticipe=0;
     Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
-      if(!fiche.valide) return;
       (fiche.jours||[]).forEach(j=>{
-        if(!j.date) return;
-        if((j.statut==='conges-acq'||j.statut==='decompte-acq')&&j.date>=debutPoseStr&&j.date<=finPoseStr) nbAcq++;
-        else if((j.statut==='conges-anticipe'||j.statut==='decompte-anticipe')&&j.date>=debutAntStr2&&j.date<=finAntStr2) nbAnticipe++;
+        if(!j.date||j.date<debutAcqStr||j.date>finAcqStr) return;
+        if(j.statut==='conges-acq'||j.statut==='decompte-acq') nbAcq++;
+        else if(j.statut==='conges-anticipe'||j.statut==='decompte-anticipe') nbAnticipe++;
       });
     });
 
     const acquis=cg?.acquis||0;
     const restants=cg?.restants||0;
-    const label=`Acquisition juin ${anneeAcq} → mai ${anneeAcq+1}`;
+    const label=`Acquisition ${anneeAcq}/${anneeAcq+1} (juin ${anneeAcq} → mai ${anneeAcq+1})`;
     html+=`<div style="border:1px solid var(--mb);border-radius:8px;margin-bottom:10px;overflow:hidden">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#f5f0ff;cursor:pointer" onclick="toggleCgContrat('${id}','${containerId}')">
         <div>
@@ -10106,25 +9766,24 @@ function buildCgAcquisEncarts(c, anneeAcq){
     }).length;
   },0);
 
-  const acquisPris=Math.max(0,(cg.pris||0)-nbAnticipes);
   html+=`<div style="background:${bg};border-radius:8px;padding:10px 12px;margin-bottom:8px">
     <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:6px">${titre}</div>
     <div style="${ls}"><span>Jours acquis</span><span style="${vs}">${cg.acquis||0} j</span></div>`;
+  const acquisPris=Math.max(0,(cg.pris||0)-nbAnticipes);
+  html+=`<div style="background:${bgAnticipe};border-radius:6px;padding:6px 8px;margin:4px 0">`;
   if(nbAnticipes>0){
-    html+=`<div style="background:${bgAnticipe};border-radius:6px;padding:6px 8px;margin:4px 0">
-      <div style="${ls};border-bottom:none"><span>Jours anticipés pris</span><span style="${vs}">${nbAnticipes} j</span></div>
-    </div>`;
+    html+=`<div style="${ls}"><span>Jours anticipés pris</span><span style="${vs}">${nbAnticipes} j</span></div>`;
   }
-  html+=`<div style="${ls}"><span>Jours acquis pris</span><span style="${vs}">${acquisPris} j</span></div>
-  <div style="${ls};border-bottom:none"><span>Jours restants</span><span style="${vs}">${cg.restants||0} j</span></div>`;
-  if(nbAnticipesProg>0||nbAcqProg>0){
-    html+=`<div style="border-top:1px solid rgba(0,0,0,0.08);margin-top:6px;padding-top:6px">
-      <div style="font-size:11px;color:var(--tx2);font-weight:600;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px">Simulation</div>`;
-    if(nbAnticipesProg>0) html+=`<div style="${ls};color:#c2410c;opacity:0.7"><span>Pose anticipée programmée</span><span style="${vs}">${nbAnticipesProg} j</span></div>`;
-    if(nbAcqProg>0) html+=`<div style="${ls};border-bottom:none;color:#7e22ce;opacity:0.7"><span>Pose acquise programmée</span><span style="${vs}">${nbAcqProg} j</span></div>`;
-    html+=`</div>`;
+  if(nbAnticipesProg>0){
+    html+=`<div style="${ls};color:#c2410c;opacity:0.6"><span>Pose anticipée programmée</span><span style="${vs}">${nbAnticipesProg} j</span></div>`;
   }
   html+=`</div>`;
+  html+=`<div style="${ls}"><span>Jours acquis pris</span><span style="${vs}">${acquisPris} j</span></div>`;
+  if(nbAcqProg>0){
+    html+=`<div style="${ls};color:#7e22ce;opacity:0.6"><span>Pose acquise programmée</span><span style="${vs}">${nbAcqProg} j</span></div>`;
+  }
+  html+=`<div style="${ls};border-bottom:none"><span>Jours restants</span><span style="${vs}">${cg.restants||0} j</span></div>
+  </div>`;
 
   html+='</div>';
   return html;
@@ -10154,7 +9813,7 @@ function buildCgContratCalendrierAcq(c, anneeAcq){
       if(statsCgAcqJ.includes(j.statut)&&j.date>=debutPoseStr2&&j.date<=finPoseStr2){
         joursParDate[j.date]={statut:j.statut,valide:fiche.valide};
       }
-      // Anticipés posés pendant l'acquisition uniquement (mai N+1 et après = acquisition suivante)
+      // Anticipés posés pendant l'acquisition (pas après)
       if(statsCgAntJ.includes(j.statut)&&j.date>=debutAntStr&&j.date<=finAntStr){
         joursParDate[j.date]={statut:j.statut,valide:fiche.valide};
       }
@@ -10164,23 +9823,6 @@ function buildCgContratCalendrierAcq(c, anneeAcq){
   // Agendas pour semaines off
   const tousAgendasAcq=[...(c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
   const est46Acq=c.tc!=='52'&&c.tc!=='occ';
-
-  // Jours cochés dans le calendrier AM pour cette période de pose
-  const joursCochesAM=new Set();
-  const anneeAmPose=anneeAcq+1; // année AM de la pose
-  const cgAm=S.congesAM&&S.congesAM[anneeAmPose];
-  if(cgAm&&cgAm.jours){
-    Object.entries(cgAm.jours).forEach(([dateStr,val])=>{
-      if(val==='pose'&&dateStr>=debutPoseStr2&&dateStr<=finPoseStr2) joursCochesAM.add(dateStr);
-    });
-  }
-  // Aussi l'année précédente pour les anticipés (acquisition)
-  const cgAmAcq=S.congesAM&&S.congesAM[anneeAcq];
-  if(cgAmAcq&&cgAmAcq.jours){
-    Object.entries(cgAmAcq.jours).forEach(([dateStr,val])=>{
-      if(val==='pose'&&dateStr>=debutAntStr&&dateStr<=finAntStr) joursCochesAM.add(dateStr);
-    });
-  }
 
   let html='<div style="margin-bottom:12px">';
   const isFerieC=(dateStr)=>isFerie(dateStr,c);
@@ -10198,7 +9840,6 @@ function buildCgContratCalendrierAcq(c, anneeAcq){
       const dateStr=annee+'-'+String(moisIdx+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
       const j=joursParDate[dateStr];
       if(j&&(statsCgAcq.includes(j.statut)||statsCgAnticipe.includes(j.statut))){hasDays=true;break;}
-
     }
     if(!hasDays) continue;
 
@@ -10285,7 +9926,6 @@ function buildCgContratCalendrier(c, anneeAm){
       const dateStr=annee+'-'+String(moisIdx+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
       const j=joursParDate[dateStr];
       if(j&&(statsCgAcq.includes(j.statut)||statsCgAnticipe.includes(j.statut))){hasDays=true;break;}
-
     }
     if(!hasDays) continue;
 
@@ -10346,7 +9986,7 @@ function genCumul(c){
     if(c.fiches&&Object.values(c.fiches).some(f=>f.valide)){
       calcCongesContrat(c);
       const cidx=S.contrats.findIndex(x=>x.id==c.id);
-      if(cidx!==-1){S.contrats[cidx]=c;localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));}
+      if(cidx!==-1){S.contrats[cidx]=c;localStorage.setItem('cam_c',JSON.stringify(S.contrats));}
     } else {
       return '<div style="text-align:center;padding:20px;color:var(--tx2)">Validez des feuilles de présence pour calculer les congés acquis.</div>';
     }
@@ -10571,7 +10211,7 @@ if(c.th==='sem'&&c.semTypes){
   const idx=S.contrats.findIndex(x=>x.id==id);
   if(idx===-1)return;
   S.contrats[idx].signe=true;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   document.getElementById('btn-signe').style.display='none';
   toast("⏳ Signature en cours...");
   // Attendre Firebase avant de naviguer
@@ -10634,7 +10274,7 @@ function creerAvenant(id){
   c.avenants.push(newAv);
   const cidx=S.contrats.findIndex(x=>x.id==id);
   if(cidx!==-1)S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
     window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
       .catch(e=>console.error('Save creerAvenant:',e));
@@ -10683,7 +10323,7 @@ function ouvrirProlongationCDD(cid){
   c.avenants.push(av);
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1) S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   ouvrirFormulaireAvenant(cid,avid);
   // Après ouverture du formulaire, ajouter champs CDD spécifiques
   setTimeout(()=>{
@@ -10727,7 +10367,7 @@ function ouvrirPassageCDI(cid){
   c.avenants.push(av);
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1) S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   ouvrirFormulaireAvenant(cid,avid);
   setTimeout(()=>{
     const blocCDI=document.getElementById('ro-cdi');
@@ -10924,9 +10564,6 @@ function signerAvenant(){
   // Signer
   av.signe=true;
   av.dateSigne=new Date().toISOString().slice(0,10);
-  c._regulDirty=true;
-  // Forcer nbSem=52 si passage vers contrat 52 sem
-  if(av.tc==='52') av.nbSem=52;
 
   // Supprimer agendas obsolètes : ceux qui débutent strictement après le mois de l'avenant
   const debutMoisAvent=av.dateAvenant.slice(0,7)+'-01';
@@ -10977,10 +10614,9 @@ function signerAvenant(){
 
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
   if(window.FB_USER&&window.fbSaveData){
-    const cClean=JSON.parse(JSON.stringify(c));
-    window.fbSaveData(window.FB_USER.uid,{contrats:[cClean],params:{},congesAM:S.congesAM||{}})
+    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
       .catch(e=>console.error('Save avenant:',e));
   }
   toast('⏳ Signature en cours...');
@@ -11119,71 +10755,6 @@ function buildCgAmDetail(anneeDebut,data){
   }
   const nbSamedis=nbSamedisCoches+nbSamedisFeriesAcquis;
 
-  // Précalcul des jours restants par contrat pour la bordure pointillée
-  const anneeAcqPose=anneeDebut; // pose de anneeDebut = acquisition anneeDebut-1
-  const joursRestantsParContrat=contratsActifs.map(c=>{
-    const cgAcq=c.conges&&c.conges[anneeAcqPose-1];
-    return {c, restants:cgAcq?.restants||0};
-  });
-  // Fonction : ce jour est-il éligible à la bordure pointillée ?
-  function jourEligibleBordure(dateStr){
-    const now=new Date();
-    const today=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
-    if(dateStr<=today) return false; // jours passés exclus
-    // Période nov → avril N+2
-    const debutBordure=anneeDebut+'-11-01';
-    const finBordure=(anneeDebut+2)+'-04-30';
-    if(dateStr<debutBordure||dateStr>finBordure) return false;
-    if(data.jours[dateStr]==='pose') return false; // déjà coché
-    const d=new Date(dateStr);
-    const jourSem=d.getDay(); // 0=dim
-    // Vérifier toutes les conditions pour tous les contrats
-    return joursRestantsParContrat.every(({c,restants})=>{
-      const src=getVersionActive(c,d);
-      const tc=src.tc||c.tc;
-      const th=src.th||c.th;
-      const reposH=src.reposHebdo||c.reposHebdo||0;
-      if(jourSem===reposH) return false; // jour de repos → pas éligible
-      const jourIdx=jourSem===0?6:jourSem-1;
-      // Vérifier si le jour est prévu/possible pour ce contrat
-      let estPrevu=false;
-      if(th==='fixe'&&src.joursFixe) estPrevu=!!(src.joursFixe[jourIdx]?.d);
-      else if(th==='sem'&&src.semTypes) estPrevu=src.semTypes.some(st=>st.jours&&st.jours[jourIdx]?.d);
-      else if(th==='plan'){
-        const pt=src.planType||c.planType;
-        if(pt==='min') estPrevu=!!(src.joursMin||c.joursMin||[])[jourIdx];
-        else if(pt==='var') estPrevu=(src.planVar||c.planVar||[]).some(v=>v.jours&&v.jours[jourIdx]);
-      }
-      if(tc==='52'){
-        // 52 sem avec jours restants : le jour doit être prévu/possible
-        if(restants>0) return estPrevu;
-        // 52 sem sans jours restants : le jour ne doit PAS être prévu/possible
-        return !estPrevu;
-      } else {
-        // 46 sem avec jours restants : tous les jours ouvrables OK
-        if(restants>0) return true;
-        // 46 sem sans jours restants : le jour ne doit PAS être prévu/possible
-        return !estPrevu;
-      }
-    });
-  }
-
-  // Résumé des jours restants par contrat
-  let resumeHtml='<div style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:8px">';
-  contratsActifs.forEach(c=>{
-    // Utiliser les données déjà calculées dans c.conges (pas de recalcul)
-    // Trouver l'année d'acquisition correspondant à cette période AM
-    const anneeAcq=anneeDebut; // la pose de anneeDebut correspond à l'acquisition anneeDebut-1
-    const cgAcq=c.conges&&c.conges[anneeAcq-1];
-    const restants=cgAcq?.restants||0;
-    if(restants>0){
-      resumeHtml+=`<div style="background:#f0defc;border-radius:8px;padding:6px 12px;font-size:12px">
-        <span style="font-weight:600">${c.nom}</span> — <span style="color:#7e22ce;font-weight:700">${restants} j restants</span>
-      </div>`;
-    }
-  });
-  resumeHtml+='</div>';
-
   // Calendrier du 1er mai au 30 avril
   let calHtml='';
   let moisCur=new Date(anneeDebut,4,1);
@@ -11211,10 +10782,6 @@ function buildCgAmDetail(anneeDebut,data){
       if(isFerNonTrav&&!isPose){bg='#fff8e1';color='#854F0B';}
       if(isFerNonTrav&&isReposH){cursor='not-allowed';}
       if(isPose){bg='var(--vt)';color='#fff';border='none';}
-      // Bordure pointillée verte si jour éligible pour poser des acquis restants
-      if(!isPose&&!isReposH&&jourEligibleBordure(dateStr)){
-        border='2px dashed var(--vt)';
-      }
       // Verrouiller si fiche validée pour au moins un contrat actif
       const moisKey=dateStr.slice(0,7);
       const ficheValidee=S.contrats.some(ct=>ct.signe&&!ct.cloture&&ct.fiches?.[moisKey]?.valide);
@@ -11253,7 +10820,9 @@ function buildCgAmDetail(anneeDebut,data){
   const ok=nb===joursMax&&(samediTravaille||nbSamedis===5);
   const feriesDecochesMsg=S._cgAmFeriesDecoches>0?`<div style="background:#fff3cd;color:#856404;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:8px">⚠ ${S._cgAmFeriesDecoches} jour(s) férié(s) ont été décochés automatiquement car ils sont désormais acquis. Veuillez cocher des jours supplémentaires.</div>`:'';
   S._cgAmFeriesDecoches=0;
-  const alertHtml=ok?`<div style="background:var(--vtc);color:var(--vt);padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">✓ ${joursMax} jours posés dont 5 samedis — calendrier validé !</div>`:
+  const alertHtml=nb>joursMax?`<div style="background:#fdecea;color:var(--al);padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">⚠ ${nb} jours cochés — maximum ${joursMax}</div>`:
+    nb===joursMax&&!samediTravaille&&nbSamedis!==5?`<div style="background:#fff8e1;color:#854F0B;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">⚠ ${nbSamedis} samedi(s) — il en faut exactement 5</div>`:
+    ok?`<div style="background:var(--vtc);color:var(--vt);padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">✓ ${joursMax} jours posés dont 5 samedis — calendrier validé !</div>`:
     `<div style="font-size:12px;color:var(--tx3);margin-bottom:10px">${nb}/${joursMax} jours cochés</div>`;
 
   return `<div style="padding:14px">
@@ -11283,10 +10852,10 @@ function buildCgAmDetail(anneeDebut,data){
       ${feriesDecochesMsg}${alertHtml}
       <div style="font-size:11px;color:var(--tx3);margin-bottom:10px">
         Cliquez sur les jours pour les cocher (vert).<br>
+        30 jours${samediTravaille?'':' dont <strong>exactement 5 samedis</strong>'}.<br>
         <span style="background:#f0f0f0;padding:1px 4px;border-radius:3px">Gris</span> = jour de repos —
-        <span style="background:#fff8e1;padding:1px 4px;border-radius:3px;color:#854F0B">Jaune</span> = férié
+        <span style="background:#fff8e1;padding:1px 4px;border-radius:3px;color:#854F0B">Jaune</span> = férié non travaillé
       </div>
-      ${resumeHtml}
       <div style="overflow-x:auto">${calHtml}</div>
     </div>
   </div>`;
@@ -11298,25 +10867,91 @@ function buildCgAmDetail(anneeDebut,data){
 // Retourne true si le ferié doit rester jaune/non cochable
 function ferieCouvretParAcquis(dateStr, anneeDebut, dataAM) {
   const joursAM = dataAM.jours || {};
-  if(!Object.keys(joursAM).some(d=>joursAM[d]==='pose')) return false;
+  // Trouver le meilleur contrat (max jours acquis + anticipes si option)
+  let maxJoursAcquis = 0;
+  let meilleurContrat = null;
+  S.contrats.filter(c => c.signe && !c.cloture).forEach(c => {
+    let acquis = 0;
+    if (c.conges) {
+      // Chercher l annee de reference correspondante
+      const anneeRef = anneeDebut - 1; // Les conges de 2025/2026 sont acquis sur ref 2024/2025
+      const cgRef = c.conges[anneeRef] || c.conges[anneeDebut] || {};
+      acquis = cgRef.acquis || 0;
+      // Ajouter anticipes si option cochee
+      if (c.cgAnticipe === 'oui' && c.conges[anneeDebut]) {
+        acquis += (c.conges[anneeDebut].acquis || 0);
+      }
+    }
+    if (acquis > maxJoursAcquis) {
+      maxJoursAcquis = acquis;
+      meilleurContrat = c;
+    }
+  });
 
-  // Repos hebdo : prendre le premier contrat actif signé
-  const premierContrat = S.contrats.find(c=>c.signe&&!c.cloture);
-  const reposHebdo = premierContrat?.reposHebdo || 0;
+  if (!meilleurContrat || maxJoursAcquis === 0) return false; // pas de conges acquis -> ferié cochable
 
-  // Chercher la veille calendaire non-repos
-  const dV=new Date(dateStr.split('-')[0],parseInt(dateStr.split('-')[1])-1,parseInt(dateStr.split('-')[2]));
-  dV.setDate(dV.getDate()-1);
-  if(dV.getDay()===reposHebdo) dV.setDate(dV.getDate()-1);
-  const veilleStr=dV.getFullYear()+'-'+String(dV.getMonth()+1).padStart(2,'0')+'-'+String(dV.getDate()).padStart(2,'0');
-  // Chercher le lendemain calendaire non-repos
-  const dL=new Date(dateStr.split('-')[0],parseInt(dateStr.split('-')[1])-1,parseInt(dateStr.split('-')[2]));
-  dL.setDate(dL.getDate()+1);
-  if(dL.getDay()===reposHebdo) dL.setDate(dL.getDate()+1);
-  const lendemainStr=dL.getFullYear()+'-'+String(dL.getMonth()+1).padStart(2,'0')+'-'+String(dL.getDate()).padStart(2,'0');
+  // Trouver le repos hebdo du meilleur contrat
+  const reposHebdo = meilleurContrat.reposHebdo || 0;
 
-  // Bloquer si veille OU lendemain est coché
-  return joursAM[veilleStr]==='pose' || joursAM[lendemainStr]==='pose';
+  // Trier les jours caches dans le calendrier AM
+  const joursCaches = Object.keys(joursAM)
+    .filter(d => joursAM[d] === 'pose')
+    .sort();
+
+  if (!joursCaches.length) return false;
+
+  // Identifier les periodes continues de conges (séparées par des dimanches/repos)
+  // Pour chaque periode, compter les jours ouvrables selon le meilleur contrat
+  // et voir si le ferié est couvert
+  const partsD = dateStr.split('-').map(Number);
+  const dateFerie = new Date(partsD[0], partsD[1]-1, partsD[2]);
+
+  // Trouver la periode de conges qui contient la veille ou le lendemain du ferié
+  // (le ferié doit être entre 2 jours poses ou précédé d'un jour posé avant reprise)
+  const veilleStr = getPrevJourOuvrable(dateStr, reposHebdo);
+  const lendemainStr = getNextJourOuvrable(dateStr, reposHebdo);
+  const veilleCoché = joursAM[veilleStr] === 'pose';
+  const lendemainCoché = joursAM[lendemainStr] === 'pose';
+
+  // Le ferié n'est pertinent que s'il est entouré de jours poses
+  if (!veilleCoché && !lendemainCoché) return false; // ferié isolé -> pas dans une periode
+
+  // Trouver le début de la période de congés contenant ce ferié
+  const debutPeriode = trouverDebutPeriode(dateStr, joursAM, reposHebdo);
+  if (!debutPeriode) return false;
+
+  // Compter les jours ouvrables (selon meilleur contrat) depuis début période jusqu'au ferié (exclu)
+  let compteur = 0;
+  let cursor = new Date(debutPeriode.split('-')[0], parseInt(debutPeriode.split('-')[1])-1, parseInt(debutPeriode.split('-')[2]));
+  const dateF = new Date(partsD[0], partsD[1]-1, partsD[2]);
+
+  while (cursor < dateF) {
+    const jourSem = cursor.getDay();
+    if (jourSem !== 0 && jourSem !== reposHebdo) { // ni dimanche ni repos hebdo
+      const ds = cursor.getFullYear()+'-'+String(cursor.getMonth()+1).padStart(2,'0')+'-'+String(cursor.getDate()).padStart(2,'0');
+      if (!isFerie(ds, meilleurContrat)) { // les fériés déjà couverts ne comptent pas
+        compteur++;
+      }
+    }
+    cursor.setDate(cursor.getDate()+1);
+  }
+
+  // Le férié est acquis seulement si :
+  // - il est dans une période (veille ou lendemain posé) ET
+  // - le lendemain ouvrable est posé OU c'est le dernier jour avant reprise (veille posée suffit) ET
+  // - le compteur de jours avant lui est dans les acquis
+  if(compteur >= maxJoursAcquis) return false; // pas assez d'acquis pour couvrir jusqu'ici
+  // Le férié est acquis seulement si entouré : veille ET lendemain tous les deux posés
+  if(veilleCoché && lendemainCoché) return true;
+  // Exception : dernier jour de la période (veille posée, lendemain non posé)
+  // mais seulement si le lendemain ouvrable est un jour prévu au contrat
+  if(veilleCoché && !lendemainCoché){
+    const lendParts=lendemainStr.split('-').map(Number);
+    const lendDate=new Date(lendParts[0],lendParts[1]-1,lendParts[2]);
+    const prevus=getHeuresPrevues(meilleurContrat,lendDate);
+    if(prevus && (prevus.debut || prevus.planVar)) return true;
+  }
+  return false;
 }
 
 function getPrevJourPrevuTravaille(c, dateStr){
@@ -11408,7 +11043,11 @@ function toggleCgAm(anneeDebut,dateStr){
   const data=S.congesAM[anneeDebut];
   // Bloquer si férié acquis (couvert par au moins un contrat)
   const contratsActifsT=S.contrats.filter(c=>c.signe&&!c.cloture);
-  const isFerNonTravT=contratsActifsT.length>0&&contratsActifsT.every(c=>isFerie(dateStr,c));
+  const isFerNonTravT=contratsActifsT.length>0&&contratsActifsT.every(c=>{
+    if(!isFerie(dateStr,c)) return false;
+    const p=dateStr.split('-');const mmdd=p[1]+'-'+p[2];
+    return !(c.feriesTravailles||[]).includes(mmdd);
+  });
   if(isFerNonTravT&&ferieCouvretParAcquis(dateStr,anneeDebut,data)){
     toast('⚠ Ce jour férié est acquis — il ne peut pas être coché comme jour de congé');
     return;
@@ -11417,10 +11056,30 @@ function toggleCgAm(anneeDebut,dateStr){
   if(data.jours[dateStr]==='pose'){
     delete data.jours[dateStr];
   } else {
-    // Pas de limite au nombre de jours cochés (certains contrats peuvent avoir plus de jours restants)
+    let joursFragMaxT=0;
+    if(data.fractionnement){
+      S.contrats.filter(c=>c.signe&&!c.cloture).forEach(c=>{
+        joursFragMaxT=Math.max(joursFragMaxT,calcJoursFractionnement(c,anneeDebut));
+      });
+    }
+    const joursMaxT=30+joursFragMaxT;
+    if(joursCoches>=joursMaxT){toast('Maximum '+joursMaxT+' jours de congés');return;}
     const parts=dateStr.split('-');
     const jourDate=new Date(parseInt(parts[0]),parseInt(parts[1])-1,parseInt(parts[2]));
-    // Pas de blocage sur les samedis : conges-6j est géré par contrat dans majFichesCgAm
+    if(jourDate.getDay()===6){
+      const nbSam=Object.keys(data.jours).filter(k=>{
+        if(data.jours[k]!=='pose')return false;
+        const p=k.split('-');
+        return new Date(parseInt(p[0]),parseInt(p[1])-1,parseInt(p[2])).getDay()===6;
+      }).length;
+      const samTrav=S.contrats.filter(c=>c.signe&&!c.cloture).some(c=>{
+        const src=getVersionActive(c,new Date());
+        if(src.th==='fixe'&&src.joursFixe) return src.joursFixe[5]&&(src.joursFixe[5].d||src.joursFixe[5].f);
+        if(src.th==='sem'&&src.semTypes) return src.semTypes.some(st=>st.jours&&st.jours[5]);
+        return false;
+      });
+      if(!samTrav&&nbSam>=5){toast('Maximum 5 samedis dans les congés');return;}
+    }
     data.jours[dateStr]='pose';
   }
   S.congesAM[anneeDebut]=data;
@@ -11472,23 +11131,18 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
       if(fiche.valide) return;
       fiche.jours.forEach(j=>{
         if(j.date<periodeDebut||j.date>periodeFin)return;
-        const statutsConges=['conges-acq','conges-non','conges-am','conges-anticipe','conges-6j','decompte-acq','decompte-anticipe','decompte-conges'];
+        const statutsConges=['conges-acq','conges-non','conges-am','conges-anticipe','decompte-acq','decompte-anticipe','decompte-conges'];
         if(statutsConges.includes(j.statut)) j.statut=null;
         // reprise reste intact (comme travaille)
         // Pour plan min/var : remettre ferie sur les jours fériés possibles
         if(!j.statut&&j.planVarPrevu&&c.th==='plan'&&(c.planType==='min'||c.planType==='var')&&isFerie(j.date,c)){
-          // Ne pas remettre ferie si le jour est encadré par des jours cochés (dans une pose)
-          const posesReset=Object.keys(data?.jours||{}).filter(d=>data.jours[d]==='pose').sort();
-          const avantReset=posesReset.filter(d=>d<j.date).pop();
-          const apresReset=posesReset.filter(d=>d>j.date).shift();
-          const dansPoseReset=avantReset&&apresReset&&(new Date(apresReset)-new Date(j.date))/(86400000)<=7&&(new Date(j.date)-new Date(avantReset))/(86400000)<=7;
-          if(!dansPoseReset) j.statut='ferie';
+          j.statut='ferie';
         }
       });
     });
     });
     S.contrats.forEach((c,i)=>{if(c.fiches)S.contrats[i]=c;});
-    localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+    localStorage.setItem('cam_c',JSON.stringify(S.contrats));
     if(sauvegarder&&window.FB_USER&&window.fbSaveData){
       S.contrats.filter(c=>c.fiches&&c.signe&&!c.cloture).forEach(c=>{
         window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
@@ -11523,22 +11177,7 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
       const jourSem=d.getDay();
       const reposH=c.reposHebdo||0;
       const jourIdx=jourSem===0?6:jourSem-1;
-      const estFeriePTJ=isFerie(dateStr,c);
-      // Un férié sur un jour prévu stoppe le décompte (compte comme reprise)
-      if(jourSem!==reposH&&estFeriePTJ){
-        const srcFerJ=getVersionActive(c,d);
-        const jourIdxFerJ=jourSem===0?6:jourSem-1;
-        let estPrevuFerJ=false;
-        if(srcFerJ.th==='fixe'&&srcFerJ.joursFixe) estPrevuFerJ=!!(srcFerJ.joursFixe[jourIdxFerJ]?.d);
-        else if(srcFerJ.th==='sem'&&srcFerJ.semTypes) estPrevuFerJ=srcFerJ.semTypes.some(st=>st.jours&&st.jours[jourIdxFerJ]?.d);
-        else if(srcFerJ.th==='plan'){
-          const ptJ=srcFerJ.planType||c.planType;
-          if(ptJ==='var') estPrevuFerJ=(srcFerJ.planVar||c.planVar||[]).some(v=>v.jours&&v.jours[jourIdxFerJ]);
-          else if(ptJ==='min') estPrevuFerJ=!!(srcFerJ.joursMin||c.joursMin||[])[jourIdxFerJ];
-        }
-        if(estPrevuFerJ) return dateStr; // férié sur jour prévu = reprise
-      }
-      if(jourSem!==reposH&&!estFeriePTJ){
+      if(jourSem!==reposH&&!isFerie(dateStr,c)){
         // Sauter les semaines off (absence employeur) pour contrats 46 sem
         if(c.tc!=='52'){
           const srcPTOff=getVersionActive(c,d);
@@ -11723,30 +11362,16 @@ if(tousNonPrevus){
       if(fiche.valide) return;
       fiche.jours.forEach(j=>{
         if(j.date<periodeDebut||j.date>periodeFin)return;
-        const statutsConges=['conges-acq','conges-non','conges-am','conges-anticipe','conges-6j','decompte-acq','decompte-anticipe','decompte-conges'];
+        const statutsConges=['conges-acq','conges-non','conges-am','conges-anticipe','decompte-acq','decompte-anticipe','decompte-conges'];
         if(statutsConges.includes(j.statut)) j.statut=null;
-        // Pour plan min/var : remettre à null les fériés dans une période de pose (seront recalculés)
-        if(j.statut==='ferie'&&j.planVarPrevu&&c.th==='plan'&&(c.planType==='min'||c.planType==='var')&&isFerie(j.date,c)){
-          const posesReset=Object.keys(data?.jours||{}).filter(d=>data.jours[d]==='pose').sort();
-          const avantReset=posesReset.filter(d=>d<j.date).pop();
-          const apresReset=posesReset.filter(d=>d>j.date).shift();
-          const dansPoseReset=avantReset&&apresReset&&(new Date(apresReset)-new Date(j.date))/(86400000)<=7&&(new Date(j.date)-new Date(avantReset))/(86400000)<=7;
-          if(dansPoseReset) j.statut=null;
-        }
         // reprise reste intact (comme travaille)
-        // Pour plan min/var : remettre ferie sur les jours fériés possibles hors pose
+        // Pour plan min/var : remettre ferie sur les jours fériés possibles
         if(!j.statut&&j.planVarPrevu&&c.th==='plan'&&(c.planType==='min'||c.planType==='var')&&isFerie(j.date,c)){
-          // Ne pas remettre ferie si le jour est encadré par des jours cochés (dans une pose)
-          const posesReset2=Object.keys(data?.jours||{}).filter(d=>data.jours[d]==='pose').sort();
-          const avantReset2=posesReset2.filter(d=>d<j.date).pop();
-          const apresReset2=posesReset2.filter(d=>d>j.date).shift();
-          const dansPoseReset2=avantReset2&&apresReset2&&(new Date(apresReset2)-new Date(j.date))/(86400000)<=7&&(new Date(j.date)-new Date(avantReset2))/(86400000)<=7;
-          if(!dansPoseReset2) j.statut='ferie';
+          j.statut='ferie';
         }
       });
     });
 
-    let compteurCumulatif=0; // compteur cumulatif entre les périodes d'une même pose
     periodes.forEach(({debut,fin})=>{
       const premierTrav=premierJourTravaille(c,debut,fin);
       const finDate=new Date(fin);
@@ -11786,16 +11411,14 @@ if(tousNonPrevus){
       if(c.conges){
 
         Object.values(c.conges).forEach(cg=>{
+          if(!cg.estTerminee) return;
           if(cg.anneeRef === anneeAcqPose){
-            if(cg.estTerminee){
-              quotaAcquis += (cg.acquis||0);
-            } else {
-              // Acquisition non terminée mais on est en période de pose → utiliser acqBrut
-              const debutPoseAcq=new Date(cg.anneeRef+1,4,1);
-              if(debutDate>=debutPoseAcq) quotaAcquis+=Math.floor(cg.acqBrut||0);
-            }
-          } else if(cg.anneeRef === anneeAcqPose - 1 && cg.estTerminee){
+            // Année d'acquisition principale : tous les acquis
+            quotaAcquis += (cg.acquis||0);
+          } else if(cg.anneeRef === anneeAcqPose - 1){
             // Année précédente immédiate : ajouter les restants (non perdus)
+            // Pour 52 sem : perdus au 30 avril → 0
+            // Pour 46 sem : payés ou reportés → ajouter
             if(c.tc !== '52') quotaAcquis += (cg.restants||0);
           }
         });
@@ -11840,15 +11463,15 @@ if(tousNonPrevus){
       const finAcqCpt=(anneeAcqPose+1)+'-04-30'; // fin acquisition (avant pose)
       const debutPoseCpt=(anneeAcqPose+1)+'-05-01'; // début pose
       const finPoseCpt=(anneeAcqPose+2)+'-04-30'; // fin pose
-      // Partir du cumulatif des périodes précédentes + fiches validées
-      compteurTotal=compteurCumulatif;
+      compteurTotal=0;
       Object.values(c.fiches||{}).forEach(fiche=>{
-        if(!fiche.valide) return; // fiches validées uniquement (les non-validées sont comptées via cumulatif)
         (fiche.jours||[]).forEach(j=>{
           if(!j.date) return;
           const estAnticipe=['conges-anticipe','decompte-anticipe'].includes(j.statut);
           const estAcquis=['conges-acq','decompte-acq'].includes(j.statut);
+          // Anticipés posés pendant l'acquisition
           if(estAnticipe&&j.date>=debutAcqCpt&&j.date<=finAcqCpt) compteurTotal++;
+          // Acquis posés pendant la pose
           if(estAcquis&&j.date>=debutPoseCpt&&j.date<=finPoseCpt) compteurTotal++;
         });
       });
@@ -11860,14 +11483,6 @@ if(tousNonPrevus){
       const dEnd=new Date(dernierDecompte);
       let cur=new Date(dStart);
       let decompteCommence=false;
-      // Si premierTrav=null mais veille du debut déjà en congés → continuer le décompte
-      if(!premierTrav){
-        const veilleDebutD=new Date(debut);veilleDebutD.setDate(veilleDebutD.getDate()-1);
-        const veilleDebutStr=veilleDebutD.getFullYear()+'-'+String(veilleDebutD.getMonth()+1).padStart(2,'0')+'-'+String(veilleDebutD.getDate()).padStart(2,'0');
-        const veilleDebutKey=veilleDebutStr.slice(0,7);
-        const veilleDebutJour=c.fiches[veilleDebutKey]?.jours.find(j=>j.date===veilleDebutStr);
-        if(['conges-acq','conges-anticipe','conges-non'].includes(veilleDebutJour?.statut)) decompteCommence=true;
-      }
       // Chercher le dernier jour ouvrable avant le début de période
       // en tenant compte de la version active (contrat ou avenant) à chaque date
       const dRecherche=new Date(debut);
@@ -11878,7 +11493,6 @@ if(tousNonPrevus){
         const reposHR=srcR.reposHebdo??c.reposHebdo??0;
         if(dRecherche.getDay()===reposHR) continue;
         const jR=c.fiches[dsR.slice(0,7)]?.jours.find(j=>j.date===dsR);
-        if(jR&&jR.statut==='ferie'&&jR.planVarPrevu) continue; // férié plan min/var : continuer à remonter
         if(jR&&jR.statut!=='non-prevu'&&jR.statut!=='hors-contrat'){
           if(['conges-acq','conges-anticipe','conges-non'].includes(jR.statut)) decompteCommence=true;
           break;
@@ -11904,26 +11518,11 @@ if(tousNonPrevus){
         return null;
       }
 
-      // Compter les samedis déjà décomptés dans les fiches validées de la période de pose
-      const debutPoseSam=(anneeAcqPose+1)+'-05-01';
-      const finPoseSam=(anneeAcqPose+2)+'-04-30';
-      const statsSamedi=['conges-acq','conges-anticipe','conges-non','decompte-acq','decompte-anticipe','decompte-conges'];
-      let nbSamedisDecomptes=0;
-      Object.values(c.fiches||{}).forEach(f=>{
-        if(!f.valide) return;
-        (f.jours||[]).forEach(j=>{
-          if(!j.date||j.date<debutPoseSam||j.date>finPoseSam) return;
-          const d=new Date(j.date);
-          if(d.getDay()===6&&statsSamedi.includes(j.statut)) nbSamedisDecomptes++;
-        });
-      });
-
       while(cur<=dEnd){
         const dateStr=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
         const jourSem=cur.getDay();
         const reposH=c.reposHebdo||0;
         const estRepos=jourSem===reposH;
-        const estSamedi=jourSem===6&&reposH!==6; // samedi non repos
         const estFerie=isFerie(dateStr,c);
         const estDansPeriodeCochee=dateStr>=debut&&dateStr<=fin;
         const estPose=data.jours[dateStr]==='pose';
@@ -12002,12 +11601,6 @@ if(tousNonPrevus){
           cur.setDate(cur.getDate()+1);continue;
         }
 
-        // Règle des 5 samedis : max 5 samedis décomptés sur la période de pose
-        if(estSamedi&&nbSamedisDecomptes>=5&&!fiche.valide){
-          jour.statut='conges-6j';
-          cur.setDate(cur.getDate()+1);continue;
-        }
-
         if(!decompteCommence&&estDansPeriodeCochee){
           // Avant le 1er jour prévu travaillé → conges-am
           jour.statut='conges-am';
@@ -12020,7 +11613,6 @@ if(tousNonPrevus){
           // Un jour reprise stoppe le décompte
           if(jour.statut==='reprise') break;
           if(jour.statut==='travaille') break;
-
           compteurTotal++;
           if(!fiche.valide){
             if(compteurTotal<=quotaAcquis){
@@ -12064,14 +11656,6 @@ if(tousNonPrevus){
               // Non entouré de congés → reste férié
               cur.setDate(cur.getDate()+1);continue;
             }
-            if(veilleAcquis&&!lendConges){
-              // Veille = congé acquis mais lendemain = non congé → reste férié (pas de pont)
-              // Sauf si le lendemain est encore dans la période de décompte (pose continue)
-              const lendOuvrStr2=getNextJourOuvrable(dateStr,reposH);
-              if(lendOuvrStr2>dernierDecompte&&data.jours[lendOuvrStr2]!=='pose'){
-                cur.setDate(cur.getDate()+1);continue;
-              }
-            }
             // Si veille acquise et lendemain pas encore traité mais dans la période → garde férié
             if(veilleAcquis&&!lendAcquis){
               const lendOuvrStr=getNextJourOuvrable(dateStr,reposH);
@@ -12106,13 +11690,11 @@ if(tousNonPrevus){
               const estEnPeriodePose=cur>=debutPoseDate;
               if(estEnPeriodePose&&compteurTotal<=quotaAcquis){
                 jour.statut='conges-acq';
-              
               } else if(anticipeOk&&compteurTotal<=quotaAnticipeTotal){
                 jour.statut='conges-anticipe';
               } else {
                 jour.statut='conges-non';
               }
-              if(estSamedi) nbSamedisDecomptes++;
             }
           } else {
             // Jour ouvrable décompté
@@ -12144,28 +11726,17 @@ if(tousNonPrevus){
                 const estEnPeriodePose2=cur>=debutPoseDate2;
                 if(estEnPeriodePose2&&compteurTotal<=quotaAcquis){
                   jour.statut='conges-acq';
-                
                 } else if(anticipeOk&&compteurTotal<=quotaAnticipeTotal){
                   jour.statut='conges-anticipe';
                 } else {
                   jour.statut='conges-non';
                 }
-                if(estSamedi) nbSamedisDecomptes++;
               }
             }
           }
         }
         cur.setDate(cur.getDate()+1);
       }
-      // Mettre à jour le compteur cumulatif avec les jours assignés dans cette période
-      Object.values(c.fiches||{}).forEach(f=>{
-        if(f.valide) return;
-        (f.jours||[]).forEach(j=>{
-          if(!j.date||j.date<debut||j.date>fin) return;
-          const statsC=['conges-acq','conges-anticipe','conges-non','conges-6j','decompte-acq','decompte-anticipe'];
-          if(statsC.includes(j.statut)) compteurCumulatif++;
-        });
-      });
     });
            
 // Traiter les fériés non cochés dans les congés AM
@@ -12217,7 +11788,7 @@ if(tousNonPrevus){
       if(fiche.valide) return;
       fiche.jours.forEach(jour=>{
         if(jour.date<periodeDebut||jour.date>periodeFin) return;
-        if(jour.statut&&!['conges-acq','conges-anticipe','conges-non','decompte-conges'].includes(jour.statut)&&!(jour.statut==='ferie'&&jour.planVarPrevu)) return;
+        if(jour.statut&&!['conges-acq','conges-anticipe','conges-non','decompte-conges'].includes(jour.statut)) return;
         if(!isFerie(jour.date,c)) return;
         const parts=jour.date.split('-').map(Number);
         const d=new Date(parts[0],parts[1]-1,parts[2]);
@@ -12248,8 +11819,7 @@ if(tousNonPrevus){
           const lendAcq=['conges-acq','conges-anticipe'].includes(lendJour?.statut);
           if(veilleAcq&&lendAcq){
             // Férié entouré de jours acquis → reste ferie
-            if(jour.planVarPrevu) jour.statut='ferie';
-            else jour.statut=null;
+            jour.statut=null;
           } else {
             jour.statut='conges-non';
           }
@@ -12260,7 +11830,7 @@ if(tousNonPrevus){
     if(cidx!==-1)S.contrats[cidx]=c;
   });
   S.contrats.forEach((c,i)=>{if(c.fiches)S.contrats[i]=c;});
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  localStorage.setItem('cam_c',JSON.stringify(S.contrats));
 
   // Décocher les fériés cochés qui sont devenus acquis (non cochables)
   const dataAM=S.congesAM[anneeDebut];
@@ -12385,8 +11955,6 @@ function enregistrerCgAm(){
 function saveCongesAM(){
   // Ne pas sauvegarder si congesAM est vide (évite d'écraser les données)
   if(!S.congesAM||!Object.keys(S.congesAM).length) return;
-  // Marquer tous les contrats comme modifiés car majFichesCgAm les a tous mis à jour
-  S.contrats.forEach(c=>_contratsModifies.add(c.id));
   localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM));
   if(window.FB_USER&&window._fbModules){
     const {doc,setDoc}=window._fbModules;
