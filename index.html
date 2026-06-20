@@ -7117,12 +7117,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const hSeuilComp=Math.max(0,hPrevSem-hAbsSem);
     const seuilSup=Math.max(45,hPrevSem);
     const hPrecMois=hParSemainePrecMois[semKey]||0;
-    const hFerie=hParSemaineFerie[semKey]||0; // heures fériés prévus non travaillés
     if(hPrecMois>0){
       // Fin de semaine à cheval : hSem inclut les heures du mois précédent via fichePrec
       // → utiliser uniquement les heures de ce mois = hSem - hPrecMois
       const hSemCeMois=Math.max(0,hSem-hPrecMois);
-      const hSupSem=Math.max(0,hSemCeMois+hPrecMois+hFerie-seuilSup);
+      const hSupSem=Math.max(0,hSemCeMois+hPrecMois-seuilSup);
       const hSupDejaPayee=Math.max(0,hPrecMois-seuilSup);
       const hSupMaj=Math.max(0,hSupSem-hSupDejaPayee);
       // Maj HC déjà payée le mois précédent pour cette semaine
@@ -7137,7 +7136,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       window._hCompVersHS[semKey]=(window._hCompVersHS[semKey]||0)+hCompVersHS;
     } else {
       // Semaine normale ou début de semaine à cheval : calcul standard
-      const hSupSem=Math.max(0,hSem+hFerie-seuilSup);
+      const hSupSem=Math.max(0,hSem-seuilSup);
       hSup+=hSupSem;
       hSupNormal+=hSupSem;
       hSupParSemaine[semKey]=(hSupParSemaine[semKey]||0)+hSupSem;
@@ -7152,30 +7151,25 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const hMoyParJour=nbJoursMoisContrat>0?hMensu/nbJoursMoisContrat:hMensu/20;
   let hAbsHS=0,hAbsNorm=0,hAbsDeduitHS=0,montantAbsMajStored=0;
   if(hAbs>0&&hTheoriques>0){
-    const txNetMaj=txBrut*(1+majSup52)*coefNetR;
     if(hMensuMaj>0){
-      // Répartir hAbs entre part HS et part normale selon la proportion théorique
-      // Les heures sup théoriques = hTheoriquesMaj, les normales = hTheoriquesNorm
-      // Déduire d'abord sur les HS (jusqu'à hTheoriquesMaj), puis sur les normales
-      // Identifier les semaines avec absences et sommer leurs HS depuis hThParSem
-      const semsAvecAbs=new Set();
-      fiche.jours.forEach(j=>{
-        const st2=j.statut||getStatutPrevu(c,j);
-        const absDs=['abs-non','abs-am','arret','abs-enfant','abs-partielle','conges-non','decompte-conges','hors-contrat'];
-        if(absDs.includes(st2)) semsAvecAbs.add(String(getSemISO(j.date)));
-      });
-      const hThPS=hThParSemLocal||{};
-      let hHSTotalAbs=0;
-      semsAvecAbs.forEach(sk=>{ hHSTotalAbs+=Math.max(0,(parseFloat(hThPS[sk]||hThPS[parseInt(sk)]||0))-45); });
-      hAbsHS=parseFloat(Math.min(hHSTotalAbs,hAbs).toFixed(4));
-      hAbsNorm=parseFloat(Math.max(0,hAbs-hAbsHS).toFixed(4));
-      const tauxNorm=hTheoriquesNorm>0?(hMensuNorm*txNet)/hTheoriquesNorm:0;
-      const tauxMajA=hTheoriquesMaj>0?(hMensuMaj*txNetMaj)/hTheoriquesMaj:0;
-      const montantAbsMaj=parseFloat((hAbsHS*tauxMajA).toFixed(2));
-      const montantAbsNorm=parseFloat((hAbsNorm*tauxNorm).toFixed(2));
+      // Méthode officielle (instruction interministérielle DSS/5B/2019/71, via EBP) :
+      // 1. Calculer la retenue totale sur la mensu globale (HN+HS), sans séparation
+      const mensuTotaleBrute=hMensuNorm*txNet+hMensuMaj*(txBrut*(1+majSup52)*coefNetR);
+      const retenueTotale=mensuTotaleBrute*hAbs/hTheoriques;
+      // 2. Ratio de maintien = part de rémunération conservée ce mois
+      const ratioMaintien=mensuTotaleBrute>0?(mensuTotaleBrute-retenueTotale)/mensuTotaleBrute:1;
+      // 3. Appliquer ce ratio à la mensu HS seule
+      const txNetMaj=txBrut*(1+majSup52)*coefNetR;
+      const mensuMajBrute=hMensuMaj*txNetMaj;
+      const mensuMajDue=mensuMajBrute*ratioMaintien;
+      const montantAbsMaj=parseFloat((mensuMajBrute-mensuMajDue).toFixed(2));
+      // 4. Déduction HN par différence
+      const montantAbsNorm=parseFloat((retenueTotale-montantAbsMaj).toFixed(2));
       montantAbsences=parseFloat((montantAbsNorm+montantAbsMaj).toFixed(2));
       montantAbsMajStored=montantAbsMaj;
       hAbsDeduitHS=txNetMaj>0?parseFloat((montantAbsMaj/txNetMaj).toFixed(2)):0;
+      hAbsHS=hAbsDeduitHS;
+      hAbsNorm=parseFloat(Math.max(0,hAbs-hAbsHS).toFixed(4));
     } else {
       const tauxHAbs=(hMensu*txNet)/hTheoriques;
       montantAbsences=parseFloat((tauxHAbs*hAbs).toFixed(2));
