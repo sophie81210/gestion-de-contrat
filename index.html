@@ -6218,15 +6218,31 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // On utilise les heures théoriques par semaine calculées ci-dessus
   let hTheoriquesMaj=0;
   let hThParSemLocal={};
+  let hSeuilParSemLocal={};
   if(hMensuMaj>0){
     // Reconstruire les heures théoriques par semaine
     const hThParSem={};
+    const hSeuilParSem={};
     fiche.jours.forEach(j=>{
       const sk=getSemISO(j.date);
       if(!hThParSem[sk]) hThParSem[sk]=0;
       if(j.heureDebPrev&&j.heureFinPrev){
         hThParSem[sk]+=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
       }
+    });
+    // Construction du seuil hebdo pour le décompte des HS ponctuelles :
+    // comptent (au réel si dispo, sinon prévu) : travaillé, abs-partielle, prévu, conges-acq, conges-anticipe
+    // ne comptent pas : férié chômé, absences non rémunérées, tous les decompte-* (jours non prévus)
+    const statsSeuilCompte=['travaille','abs-partielle','prevu','conges-acq','conges-anticipe'];
+    fiche.jours.forEach(j=>{
+      const sk=getSemISO(j.date);
+      if(!hSeuilParSem[sk]) hSeuilParSem[sk]=0;
+      const stJ=j.statut||getStatutPrevu(c,j);
+      if(!statsSeuilCompte.includes(stJ)) return;
+      let hJourSeuil=0;
+      if(j.heureDebReel&&j.heureFinReel) hJourSeuil=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
+      else if(j.heureDebPrev&&j.heureFinPrev) hJourSeuil=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
+      hSeuilParSem[sk]+=hJourSeuil;
     });
     // Pour plan-sem 52 : compléter les semaines à cheval avec les heures totales du type
     if(sourceActif.th==='sem'&&sourceActif.semTypes&&(c.tc==='52'||sourceActif.tc==='52')){
@@ -6253,6 +6269,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       hTheoriquesMaj+=Math.max(0,hSem-45);
     });
     hThParSemLocal=hThParSem;
+    hSeuilParSemLocal=hSeuilParSem;
 
     // Pour les semaines sans heures prévues (off, sem, etc.) utiliser hMoyHebdo
     // hMoyHebdo = hMensu*12/nbSem
@@ -7166,16 +7183,28 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   let hAbsHS=0,hAbsNorm=0,hAbsDeduitHS=0,montantAbsMajStored=0;
   if(hAbs>0&&hTheoriques>0){
     if(hMensuMaj>0){
+      // Vérifier si l'absence touche au moins une semaine atteignant le seuil de 45h
+      // (sinon pas de déduction sur la mensu HS, toute la retenue va en HN)
+      const absDsSeuil=['abs-non','abs-am','arret','abs-enfant','abs-partielle','conges-non','decompte-conges','hors-contrat'];
+      const semsAvecAbsSeuil=new Set();
+      fiche.jours.forEach(j=>{
+        const stSeuilJ=j.statut||getStatutPrevu(c,j);
+        if(absDsSeuil.includes(stSeuilJ)) semsAvecAbsSeuil.add(getSemISO(j.date));
+      });
+      let seuilAtteint=false;
+      semsAvecAbsSeuil.forEach(sk=>{
+        if((hSeuilParSemLocal[sk]||0)>45) seuilAtteint=true;
+      });
       // Méthode officielle (instruction interministérielle DSS/5B/2019/71, via EBP) :
       // 1. Calculer la retenue totale sur la mensu globale (HN+HS), sans séparation
       const mensuTotaleBrute=hMensuNorm*txNetPrecis+hMensuMaj*(txBrut*(1+majSup52)*coefNetR);
       const retenueTotale=mensuTotaleBrute*hAbs/hTheoriques;
       // 2. Ratio de maintien = part de rémunération conservée ce mois
       const ratioMaintien=mensuTotaleBrute>0?(mensuTotaleBrute-retenueTotale)/mensuTotaleBrute:1;
-      // 3. Appliquer ce ratio à la mensu HS seule
+      // 3. Appliquer ce ratio à la mensu HS seule, UNIQUEMENT si le seuil est atteint sur une semaine concernée
       const txNetMaj=txBrut*(1+majSup52)*coefNetR;
       const mensuMajBrute=hMensuMaj*txNetMaj;
-      const mensuMajDue=mensuMajBrute*ratioMaintien;
+      const mensuMajDue=seuilAtteint?mensuMajBrute*ratioMaintien:mensuMajBrute;
       const montantAbsMaj=parseFloat((mensuMajBrute-mensuMajDue).toFixed(2));
       // 4. Déduction HN par différence
       const montantAbsNorm=parseFloat((retenueTotale-montantAbsMaj).toFixed(2));
