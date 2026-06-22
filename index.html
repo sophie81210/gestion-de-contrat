@@ -5465,7 +5465,9 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
             if(stJour==='conges-am'){
               // 0h quel que soit le contrat
             } else if(statsCongésCheval.includes(stJour)){
-              hCheval+=est52Ch?hSemType/6:hSemMoyPS/6;
+              // 52 sem : heures réelles du jour selon le type de semaine réel (agenda)
+              // 46 sem : aucune donnée de planning sur ces semaines de congés, hSemMoyPS/6 reste nécessaire
+              hCheval+=est52Ch?hJourReelCh:hSemMoyPS/6;
             } else if(est52Ch&&['conges-6j','conges-6j-fin','non-prevu'].includes(stJour)){
               // 0h plan-sem 52
             } else {
@@ -5475,7 +5477,7 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
           hTheoriques+=hCheval;
         } else {
           if(c.tc==='52'||sourceActif.tc==='52'){
-            // Plan sem 52 non à cheval : calcul jour par jour
+            // Plan sem 52 non à cheval : calcul jour par jour, heures réelles selon le type de semaine
             const statsCongésPS52=['conges-acq','conges-non','conges-anticipe','decompte-acq','decompte-anticipe','decompte-conges'];
             const reposHPS52=sourceActif.reposHebdo||c.reposHebdo||0;
             let hSem52=0;
@@ -5490,7 +5492,8 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
               const stJourSem=stTh?.jours&&stTh.jours[jourIdx];
               const hJourReel=stJourSem&&stJourSem.d&&stJourSem.f?(toM(stJourSem.f)-toM(stJourSem.d))/60:0;
               if(statsCongésPS52.includes(stJour)){
-                hSem52+=hSemType/6;
+                // Congé/decompte : heures réelles que ce jour aurait eu selon le type de semaine réel (agenda)
+                hSem52+=hJourReel;
               } else if(['conges-am','conges-6j','conges-6j-fin','non-prevu'].includes(stJour)){
                 // 0h
               } else {
@@ -6093,22 +6096,43 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     });
   }
   const hSemMoyTh=(hMensu*12/nbSemActif);
-  const hJourCgTh=(hSemMoyTh/6)*60; // en minutes, pour hTheoriques (fallback)
+  const hJourCgTh=(hSemMoyTh/6)*60; // en minutes, pour hTheoriques (fallback, 46 sem uniquement)
   const estPSVTh=c.tc==='52'&&((sourceActif.th==='sem')||(sourceActif.th==='plan'&&sourceActif.planType==='var'));
-  // Pour 52 sem plan sem / plan var : calcule les heures de la semaine du jour de congé
+  const estFixe52Th=c.tc==='52'&&sourceActif.th==='fixe'&&sourceActif.joursFixe;
+  // Pour 52 sem (plan sem / plan var / plan fixe) : heures réelles du jour précis selon le planning/type de semaine réel
+  // (pas de moyenne /6, sauf 46 sem où aucune donnée de planning n'existe sur ces semaines)
   const getHJourCgTh=(dateStr)=>{
+    if(estFixe52Th){
+      const dJ=new Date(dateStr);
+      const jourIdxF=dJ.getDay()===0?6:dJ.getDay()-1;
+      const jf=sourceActif.joursFixe[jourIdxF];
+      if(jf&&jf.d&&jf.f) return toM(jf.f)-toM(jf.d);
+      return 0;
+    }
     if(!estPSVTh) return hJourCgTh;
     if(!agendaMois||!agendaMois.semaines) return hJourCgTh;
     const sk=getSemISO(dateStr);
     const ak=getKeyAgenda(sk,getSemAnnee(dateStr));
     const typeSem=agendaMois.semaines[ak];
     if(!typeSem) return hJourCgTh;
+    const dJ2=new Date(dateStr);
+    const jourIdxPS=dJ2.getDay()===0?6:dJ2.getDay()-1;
     if(sourceActif.th==='sem'&&sourceActif.semTypes){
       const st=sourceActif.semTypes.find(t=>t.nom===typeSem);
+      if(st&&st.jours&&st.jours[jourIdxPS]){
+        const jjSt=st.jours[jourIdxPS];
+        if(jjSt&&jjSt.d&&jjSt.f) return toM(jjSt.f)-toM(jjSt.d);
+        return 0;
+      }
       if(st&&st.h) return (parseFloat(st.h)/6)*60;
     }
     if(sourceActif.planType==='var'&&sourceActif.planVar){
       const vol=sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);
+      if(vol&&vol.jours&&vol.jours[jourIdxPS]){
+        const jjV=vol.jours[jourIdxPS];
+        if(jjV&&jjV.d&&jjV.f) return toM(jjV.f)-toM(jjV.d);
+        return 0;
+      }
       if(vol&&vol.h) return (parseFloat(vol.h)/6)*60;
     }
     return hJourCgTh;
