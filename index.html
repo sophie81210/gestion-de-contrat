@@ -4967,7 +4967,7 @@ function calcCongesContrat(c){
               // abs-non, abs-am, ferie-non, conges-am → ignorés
             });
             const contribNormPV=Math.min(joursNormauxPV,jMaxSem)/jMaxSem;
-            const contribCgPV=joursConges16PV*(1/6); // 1/6 de semaine fixe
+            const contribCgPV=joursConges16PV*(1/jMaxSem); // 1/jours réels du volume actif
             const contribArretPV=absArret*(0.8)/jMaxSem;
             const prorata=Math.max(0,contribNormPV+contribCgPV);
             totalSemaines+=prorata;
@@ -5045,7 +5045,7 @@ function calcCongesContrat(c){
 
           // Contribution en fraction de semaine (plafonnée à 1 semaine max)
           const contributionNormale=Math.min(1,joursNormaux/joursMaxSem);
-          const contributionConges=joursConges16*(1/6); // 1/6 de semaine fixe, indépendant du nb de jours/sem
+          const contributionConges=joursConges16*(1/joursMaxSem); // 1/jours réels de la semaine type
           const contributionArret=absArret*(0.8)/joursMaxSem;
           const prorata=Math.min(1,Math.max(0,contributionNormale+contributionConges));
           if(prorata>0||contributionArret>0){
@@ -5403,7 +5403,7 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
         const st=jj.statut||getStatutPrevu(sourceActif||c,jj);
         return statsCongés.includes(st)||(jj.planVarPrevu&&!jj.heureDebPrev);
       }).length;
-      hTheoriques+=hSemMoyPS/6*nbJoursDecompteNoType;
+      hTheoriques+=hSemMoyPS/nbJoursPossiblesSem*nbJoursDecompteNoType;
       // Fériés dans semaine de congés : hSemMoy/nbJoursPossiblesSem si jour possible
       joursDesSem.forEach(jj=>{
         if(jj.jourSemaine===reposHPS) return;
@@ -5467,7 +5467,7 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
             } else if(statsCongésCheval.includes(stJour)){
               // 52 sem : heures réelles du jour selon le type de semaine réel (agenda)
               // 46 sem : aucune donnée de planning sur ces semaines de congés, hSemMoyPS/6 reste nécessaire
-              hCheval+=est52Ch?hJourReelCh:hSemMoyPS/6;
+              hCheval+=est52Ch?hJourReelCh:hSemMoyPS/nbJoursPossiblesSem;
             } else if(est52Ch&&['conges-6j','conges-6j-fin','non-prevu'].includes(stJour)){
               // 0h plan-sem 52
             } else {
@@ -5516,7 +5516,7 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
               const jourIdx=jj.jourSemaine===0?6:jj.jourSemaine-1;
               const stJourSem=stTh?.jours&&stTh.jours[jourIdx];
               const hJourType=stJourSem&&stJourSem.d&&stJourSem.f?(toM(stJourSem.f)-toM(stJourSem.d))/60:0;
-              hTheoriques+=hSemMoyPS/6-hJourType;
+              hTheoriques+=hSemMoyPS/nbJoursPossiblesSem-hJourType;
             }
           });
         }
@@ -5680,12 +5680,12 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
 
       // Jours décomptés congés sans volume : hSemMoy/6
       if(!volTh&&['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe','reprise'].includes(statutJourTh)){
-        hTheoriques+=hSemMoyPV/6;
+        hTheoriques+=hSemMoyPV/nbJoursPossiblesSem;
         return;
       }
       // Congés avec volume : hSemMoy/6 (même règle que sans volume)
       if(volTh&&['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe','reprise'].includes(statutJourTh)){
-        hTheoriques+=hSemMoyPV/6;
+        hTheoriques+=hSemMoyPV/nbJoursPossiblesSem;
         return;
       }
       // Jour férié : valeur selon getHJourFerie
@@ -6096,9 +6096,30 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     });
   }
   const hSemMoyTh=(hMensu*12/nbSemActif);
-  const hJourCgTh=(hSemMoyTh/6)*60; // en minutes, pour hTheoriques (fallback, 46 sem uniquement)
+  // Nombre de jours cochés, toutes semaines types confondues (union), pour le 46 sem (sem/var)
+  // où aucune donnée de planning n'existe sur les semaines de congés
+  const getJoursCochesUnion46=()=>{
+    if((sourceActif.th==='sem')&&sourceActif.semTypes){
+      const joursUnion=[false,false,false,false,false,false,false];
+      sourceActif.semTypes.forEach(st=>{
+        (st.jours||[]).forEach((jj,idx)=>{ if(jj&&jj.d) joursUnion[idx]=true; });
+      });
+      return joursUnion.filter(Boolean).length||6;
+    }
+    if(sourceActif.th==='plan'&&sourceActif.planType==='var'&&sourceActif.planVar){
+      const joursUnion=[false,false,false,false,false,false,false];
+      sourceActif.planVar.forEach(v=>{
+        (v.jours||[]).forEach((jj,idx)=>{ if(jj&&jj.d) joursUnion[idx]=true; });
+      });
+      return joursUnion.filter(Boolean).length||6;
+    }
+    return 6;
+  };
+  const joursCochesUnion46Th=getJoursCochesUnion46();
+  const hJourCgTh=(hSemMoyTh/joursCochesUnion46Th)*60; // en minutes, pour hTheoriques (fallback, 46 sem uniquement)
   const estPSVTh=c.tc==='52'&&((sourceActif.th==='sem')||(sourceActif.th==='plan'&&sourceActif.planType==='var'));
   const estFixe52Th=c.tc==='52'&&sourceActif.th==='fixe'&&sourceActif.joursFixe;
+  const estMinTh=sourceActif.th==='plan'&&sourceActif.planType==='min';
   // Pour 52 sem (plan sem / plan var / plan fixe) : heures réelles du jour précis selon le planning/type de semaine réel
   // (pas de moyenne /6, sauf 46 sem où aucune donnée de planning n'existe sur ces semaines)
   const getHJourCgTh=(dateStr)=>{
@@ -6107,6 +6128,16 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const jourIdxF=dJ.getDay()===0?6:dJ.getDay()-1;
       const jf=sourceActif.joursFixe[jourIdxF];
       if(jf&&jf.d&&jf.f) return toM(jf.f)-toM(jf.d);
+      return 0;
+    }
+    if(estMinTh){
+      // Plan min : volume hebdo / jours possibles prévus au contrat, uniquement si le jour est cochable
+      const dJM=new Date(dateStr);
+      const jourIdxM=dJM.getDay()===0?6:dJM.getDay()-1;
+      const joursMinThCg=sourceActif.joursMin||c.joursMin;
+      const jMaxMinThCg=sourceActif.jMaxMin||c.jMaxMin||4;
+      const hMinThCg=sourceActif.hMin||c.hMin||0;
+      if(joursMinThCg&&joursMinThCg[jourIdxM]&&jMaxMinThCg>0) return (hMinThCg/jMaxMinThCg)*60;
       return 0;
     }
     if(!estPSVTh) return hJourCgTh;
@@ -6516,8 +6547,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             hTheoriques+=hSemMoyPS*(nbJoursPossiblesMoisPS/nbJoursPossiblesSemPS);
           }
         } else if(['decompte-conges','conges-acq','conges-non','conges-anticipe'].includes(statutPS)){
-          // Jours décomptés congés : hSemMoy/6
-          hTheoriques+=hSemMoyPS/6;
+          // Jours décomptés congés : hSemMoy/jours possibles toutes semaines confondues
+          hTheoriques+=hSemMoyPS/nbJoursPossiblesSemPS;
         } else if(!['repos','hors-contrat','non-prevu','travaille','reprise'].includes(statutPS)&&jj.jourSemaine!==(c.reposHebdo||0)){
           // Jours prévus/absences : hMoyJour (seulement si jour possible ET heures prévues ou jour prévu)
           const aHeuresPrev=jj.heureDebPrev&&jj.heureFinPrev;
@@ -6957,23 +6988,47 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       let hAbsJour=0;
       let hPrev;
       if(estCongesNonDeduit){
-        // Congés non acquis sur 52 sem : hSemType/6 si plan sem, hSemMoy/6 sinon
+        // Congés non acquis sur 52 sem : heures réelles du jour précis selon le planning réel
         const sourceConge=getVersionActive(c,new Date(j.date));
         const nbSemConge=sourceConge.nbSem||52;
         const hSemMoyConge=(sourceConge.hMensu||0)*12/nbSemConge;
-        if(sourceConge.th==='sem'&&sourceConge.semTypes){
-          // Plan sem : utiliser les heures du type de semaine pointé
+        const jourIdxConge=j.jourSemaine===0?6:j.jourSemaine-1;
+        if(sourceConge.th==='fixe'&&sourceConge.joursFixe){
+          // Plan fixe : heures du jour précis dans le planning fixe
+          const jfConge=sourceConge.joursFixe[jourIdxConge];
+          hPrev=jfConge&&jfConge.d&&jfConge.f?parseFloat(((toM(jfConge.f)-toM(jfConge.d))/60).toFixed(4)):0;
+        } else if(sourceConge.th==='sem'&&sourceConge.semTypes){
+          // Plan sem : utiliser les heures du jour précis dans le type de semaine pointé
           const agKeyConge=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
           const agendasConge=sourceConge.agendas||c.agendas||[];
           const agConge=agendasConge.find(a=>new Date(a.dateDebut)<=new Date(j.date)&&new Date(a.dateFin)>=new Date(j.date));
           const typeSemConge=agConge&&agConge.semaines&&agConge.semaines[agKeyConge];
           const stConge=sourceConge.semTypes.find(st=>st.nom===typeSemConge);
-          if(stConge){
-            const hSemTypeConge=stConge.jours?stConge.jours.reduce((s,jj)=>s+(jj&&jj.d&&jj.f?(toM(jj.f)-toM(jj.d))/60:0),0):hSemMoyConge;
-            hPrev=parseFloat((hSemTypeConge/6).toFixed(4));
+          if(stConge&&stConge.jours&&stConge.jours[jourIdxConge]){
+            const jjConge=stConge.jours[jourIdxConge];
+            hPrev=jjConge&&jjConge.d&&jjConge.f?parseFloat(((toM(jjConge.f)-toM(jjConge.d))/60).toFixed(4)):0;
+          } else {
+            hPrev=parseFloat((hSemMoyConge/6).toFixed(4)); // fallback si type de semaine inconnu
+          }
+        } else if(sourceConge.th==='plan'&&sourceConge.planType==='var'&&sourceConge.planVar){
+          // Plan var : heures du jour précis dans le volume pointé
+          const agKeyCongeV=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
+          const agendasCongeV=sourceConge.agendas||c.agendas||[];
+          const agCongeV=agendasCongeV.find(a=>new Date(a.dateDebut)<=new Date(j.date)&&new Date(a.dateFin)>=new Date(j.date));
+          const typeSemCongeV=agCongeV&&agCongeV.semaines&&agCongeV.semaines[agKeyCongeV];
+          const volConge=sourceConge.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemCongeV);
+          if(volConge&&volConge.jours&&volConge.jours[jourIdxConge]){
+            const jjV=volConge.jours[jourIdxConge];
+            hPrev=jjV&&jjV.d&&jjV.f?parseFloat(((toM(jjV.f)-toM(jjV.d))/60).toFixed(4)):0;
           } else {
             hPrev=parseFloat((hSemMoyConge/6).toFixed(4));
           }
+        } else if(sourceConge.th==='plan'&&sourceConge.planType==='min'){
+          // Plan min : volume hebdo / jours possibles, si jour cochable
+          const joursMinConge=sourceConge.joursMin||c.joursMin;
+          const jMaxMinConge=sourceConge.jMaxMin||c.jMaxMin||4;
+          const hMinConge=sourceConge.hMin||c.hMin||0;
+          hPrev=(joursMinConge&&joursMinConge[jourIdxConge]&&jMaxMinConge>0)?parseFloat((hMinConge/jMaxMinConge).toFixed(4)):0;
         } else {
           hPrev=parseFloat((hSemMoyConge/6).toFixed(4));
         }
