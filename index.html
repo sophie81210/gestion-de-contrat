@@ -3353,7 +3353,8 @@ const statutPrevuJ=getStatutPrevu(c,j);
     <div style="text-align:center;padding:14px 0">
       ${fiche.valide
         ?`<span style="color:var(--vt);font-size:13px;font-weight:600">✓ Feuille validée — lecture seule</span>
-          <button class="btn bs bsm" onclick="imprimerFiche(${contratId},'${key}')">📄 Télécharger PDF</button>`
+          <button class="btn bs bsm" onclick="imprimerFiche(${contratId},'${key}')">📄 Télécharger PDF</button>
+          ${peutDeverrouillerFiche(c,key)?`<button class="btn bs bsm" onclick="deverrouillerFiche(${contratId},'${key}')">🔓 Déverrouiller</button>`:''}`
         :`<button class="btn bs" onclick="enregistrerFiche(${contratId},'${key}')">💾 Enregistrer</button>
           <button class="btn bp" onclick="validerFiche(${contratId},'${key}')">✓ Valider la feuille du mois</button>`}
     </div>`;
@@ -4699,7 +4700,7 @@ function validerFiche(contratId,key){
     }
   }
   // Détecter si c'est la dernière feuille (rupture confirmée + mois de fin)
-  let msgConfirm='Cette feuille ne pourra plus être modifiée ensuite. Confirmer la validation ?';
+  let msgConfirm='Avez-vous enregistré les dernières modifications ? Confirmer la validation ?';
   if(c.rupture&&c.rupture.confirmee&&!c.archive){
     const dateFinContrat=getDateFinContrat(c);
     if(dateFinContrat){
@@ -4819,6 +4820,42 @@ function validerFiche(contratId,key){
       setTimeout(()=>alert('Rappel congés :\n\n'+msgs.join('\n')),300);
     }
   }
+  renderDetTab(contratId,'presence');
+}
+
+function moisSuivantKey(key){
+  const [ky,km]=key.split('-').map(Number);
+  return km<12?ky+'-'+String(km+1).padStart(2,'0'):(ky+1)+'-01';
+}
+
+function peutDeverrouillerFiche(c,key){
+  if(!c||!c.fiches||!c.fiches[key]||!c.fiches[key].valide) return false;
+  const keySuivant=moisSuivantKey(key);
+  if(c.fiches[keySuivant]&&c.fiches[keySuivant].valide) return false;
+  return true;
+}
+
+function deverrouillerFiche(contratId,key){
+  const c=S.contrats.find(x=>x.id==contratId);
+  if(!c||!c.fiches||!c.fiches[key])return;
+  if(!peutDeverrouillerFiche(c,key)){
+    alerte('Cette feuille ne peut plus être déverrouillée car la feuille du mois suivant a déjà été validée.');
+    return;
+  }
+  if(!confirm('Déverrouiller cette feuille pour la modifier ? Pensez à la revalider ensuite.')) return;
+  c.fiches[key].valide=false;
+  c._regulDirty=true;
+  S.ficheModifiee=false;
+  calcCongesContrat(c);
+  const anneeAmDev=getAnneeAmPourDate(key);
+  if(S.congesAM&&S.congesAM[anneeAmDev]){majFichesCgAm(anneeAmDev,false);majFichesCgAm(anneeAmDev,false);}
+  const anneeAmDevSuivante=anneeAmDev+1;
+  if(S.congesAM&&S.congesAM[anneeAmDevSuivante]){majFichesCgAm(anneeAmDevSuivante,false);majFichesCgAm(anneeAmDevSuivante,false);}
+  const cidx=S.contrats.findIndex(x=>x.id==contratId);
+  if(cidx!==-1) S.contrats[cidx]=c;
+  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  saveToFirestore();
+  toast('Feuille de '+MOIS[c.fiches[key].mois]+' déverrouillée.');
   renderDetTab(contratId,'presence');
 }
 
@@ -4964,7 +5001,7 @@ function calcCongesContrat(c){
             let joursConges16PV=0;
             joursActifs.forEach(j=>{
               const sj=j.statut||getStatutPrevu(c,j);
-              if(['prevu','travaille','abs-partielle','abs-rem'].includes(sj)){
+              if(['prevu','travaille','abs-partielle','abs-rem','jours-complementaires'].includes(sj)){
                 joursNormauxPV++;
               } else if(['conges-acq','conges-anticipe'].includes(sj)){
                 joursConges16PV++;
@@ -4977,7 +5014,7 @@ function calcCongesContrat(c){
               }
               // abs-non, abs-am, ferie-non, conges-am → ignorés
             });
-            const contribNormPV=Math.min(joursNormauxPV,jMaxSem)/jMaxSem;
+            const contribNormPV=joursNormauxPV/jMaxSem;
             const contribCgPV=joursConges16PV*(1/jMaxSem); // 1/jours réels du volume actif
             const contribArretPV=absArret*(0.8)/jMaxSem;
             const prorata=Math.max(0,contribNormPV+contribCgPV);
@@ -5018,7 +5055,7 @@ function calcCongesContrat(c){
 
           jours.forEach(j=>{
             const statutJ=j.statut||getStatutPrevu(c,j);
-            if(['prevu','travaille','abs-partielle','abs-rem'].includes(statutJ)){
+            if(['prevu','travaille','abs-partielle','abs-rem','jours-complementaires'].includes(statutJ)){
               joursNormaux++;
             } else if(statutJ==='non-prevu'&&j.heureDebReel){
               // Jour non prévu travaillé : compte toujours en plus
@@ -5055,7 +5092,7 @@ function calcCongesContrat(c){
           });
 
           // Contribution en fraction de semaine (plafonnée à 1 semaine max)
-          const contributionNormale=Math.min(1,joursNormaux/joursMaxSem);
+          const contributionNormale=joursNormaux/joursMaxSem;
           const contributionConges=joursConges16*(1/joursMaxSem); // 1/jours réels de la semaine type
           const contributionArret=absArret*(0.8)/joursMaxSem;
           const prorata=Math.min(1,Math.max(0,contributionNormale+contributionConges));
