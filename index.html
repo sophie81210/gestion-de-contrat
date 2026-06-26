@@ -2176,12 +2176,15 @@ function voirAvenant(cid,avid){
   const cont=document.getElementById('det-content');
   if(!cont)return;
 
+  // L'avenant ne peut être annulé que si aucune fiche à partir de son mois de prise d'effet n'est validée
+  const aDejaServi=Object.entries(c.fiches||{}).some(([key,f])=>f.valide&&key>=av.dateAvenant.slice(0,7));
+
   cont.innerHTML=`
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
       <button class="btn bs bsm" onclick="renderDetTab(${cid},'contrat')">← Retour</button>
       <span style="font-weight:700;font-size:15px;color:#7c3aed">Avenant n°${av.num}</span>
       <span style="font-size:12px;color:#7c3aed;font-weight:600">✓ Signé — effectif le ${new Date(av.dateAvenant).toLocaleDateString('fr-FR')}</span>
-      <button class="btn bd bsm" style="margin-left:auto" onclick="annulerAvenant(${cid},${avid})">Annuler cet avenant</button>
+      ${aDejaServi?'':`<button class="btn bd bsm" style="margin-left:auto" onclick="annulerAvenant(${cid},${avid})">Annuler cet avenant</button>`}
     </div>
     ${buildFicheContenu(av,c)}
     ${av.agendas&&av.agendas.length?`
@@ -7737,17 +7740,37 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     hMensuMaj, hMensuNorm, hTheoriquesMaj, hTheoriquesNorm, hTheoriques, hCompParSemaine,
     majSup: majSup52*100,
     indemCgOcc: (()=>{
-      // Chercher si un avenant signé ce mois a une indemCgOcc
+      // Indemnité congés payés (10%) sur la partie occasionnelle, versée le mois du 1er avenant qui sort le contrat du régime occasionnel
+      if(c.tc!=='occ'||window._calcIndemCgOccEnCours) return 0;
+      const premierAvSortieOcc=(c.avenants||[]).filter(a=>a.signe&&a.dateAvenant).sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant))[0];
+      if(!premierAvSortieOcc) return 0;
+      const dateAv=premierAvSortieOcc.dateAvenant;
+      const moisAv=dateAv.slice(0,7);
       const ficheKey=fiche.annee&&fiche.mois!==undefined
         ?(fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0'))
         :Object.keys(c.fiches||{}).find(k=>c.fiches[k]===fiche);
-      if(!ficheKey) return 0;
-      let montant=0;
-      (c.avenants||[]).forEach(av=>{
-        if(!av.signe||!av.indemCgOcc) return;
-        if(av.dateAvenant&&av.dateAvenant.slice(0,7)===ficheKey) montant+=av.indemCgOcc;
-      });
-      return montant;
+      if(!ficheKey||ficheKey!==moisAv) return 0;
+      if(periodeAv==='apres') return 0;
+      window._calcIndemCgOccEnCours=true;
+      let totalNet=0;
+      try{
+        Object.entries(c.fiches||{}).forEach(([k,f])=>{
+          if(k>=moisAv) return;
+          const r=calcRecapFiche(c,f);
+          totalNet+=parseFloat(r.salaireNet||0)+parseFloat(r.indemCongeMois||0);
+        });
+        const veilleAv=new Date(dateAv);
+        veilleAv.setDate(veilleAv.getDate()-1);
+        const veilleAvStr=veilleAv.getFullYear()+'-'+String(veilleAv.getMonth()+1).padStart(2,'0')+'-'+String(veilleAv.getDate()).padStart(2,'0');
+        const debutMoisAv=moisAv+'-01';
+        if(veilleAvStr>=debutMoisAv&&c.fiches&&c.fiches[moisAv]){
+          const rPartiel=calcRecapFiche(c,c.fiches[moisAv],debutMoisAv,veilleAvStr,debutMoisAv,dateAv,'avant');
+          totalNet+=parseFloat(rPartiel.salaireNet||0)+parseFloat(rPartiel.indemCongeMois||0);
+        }
+      } finally {
+        window._calcIndemCgOccEnCours=false;
+      }
+      return parseFloat((totalNet*0.1).toFixed(2));
     })()
   };
 }
@@ -11985,24 +12008,6 @@ function signerAvenant(){
          
   // Confirmer
   if(!confirm('L\'avenant n°'+av.num+' sera verrouillé après signature et ne pourra plus être modifié. Confirmer ?')) return;
-
-  // Indemnité congés occasionnels si contrat initial était occ
-  if(c.tc==='occ'){
-    const dateAv=new Date(av.dateAvenant.split('-')[0],parseInt(av.dateAvenant.split('-')[1])-1,parseInt(av.dateAvenant.split('-')[2]));
-    let brutOcc=0;
-    Object.entries(c.fiches||{}).forEach(([k,fiche])=>{
-      if(!fiche.valide) return;
-      const [ky,km]=k.split('-').map(Number);
-      const dateF=new Date(ky,km-1,1);
-      if(dateF>=dateAv) return;
-      const r=calcRecapFiche(c,fiche);
-      brutOcc+=parseFloat(r.hBase||0)*parseFloat(c.txBrut||0);
-    });
-    const indemCgOcc=parseFloat((brutOcc*0.1).toFixed(2));
-    if(indemCgOcc>0){
-      av.indemCgOcc=indemCgOcc;
-    }
-  }
 
   // Signer
   av.signe=true;
