@@ -313,7 +313,7 @@ input[type=time].fi{width:auto;min-width:92px}
         <div class="rg">
           <div class="ro" id="ro-52" onclick="selTC(this,'52')"><input type="radio" name="tc"><label>Accueil de 52 semaines par p&eacute;riode de 12 mois</label></div>
           <div class="ro" id="ro-46" onclick="selTC(this,'46')"><input type="radio" name="tc"><label>Accueil de 46 semaines ou moins par p&eacute;riode de 12 mois</label></div>
-          <div class="ro" id="ro-occ" onclick="selTC(this,'occ')"><input type="radio" name="tc"><label>Accueil occasionnel</label></div>
+          <div class="ro" id="ro-occ" onclick="selTC(this,'occ')" id="ro-occ-wrap"><input type="radio" name="tc"><label>Accueil occasionnel</label></div>
         </div>
         <div class="cond" id="cond-nbsem">
           <div class="fg" style="margin-top:10px;margin-bottom:0"><label class="fl">Nombre de semaines travaill&eacute;es</label><input class="fi fi-sm" type="number" id="f-nbsem" min="1" max="46" oninput="if(parseInt(this.value)>46)this.value=46;calc()"></div>
@@ -3755,7 +3755,7 @@ function getDateFinContrat(c){
   if((rp.statutPreavis==='partiel'||rp.statutPreavis==='non-effectue')&&rp.dateFinPreavis){
     return new Date(rp.dateFinPreavis);
   }
-  if((motif==='fin-essai'||motif==='fin-essai-am')&&rp.dateNotif&&rp.delaiPrev){
+  if(motif==='fin-essai'&&rp.dateNotif&&rp.delaiPrev){
     return new Date(new Date(rp.dateNotif).getTime()+parseInt(rp.delaiPrev)*24*60*60*1000);
   }
   if(motif==='retrait-force'&&rp.dateSignif){
@@ -10343,8 +10343,7 @@ function annulerRupture(cid){
   c._regulDirty=true;
   delete c._ruptureTemp;
   // Nettoyer les jours hors-contrat marqués par la clôture
-  const anneesAmAAnnuler=new Set();
-  Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
+  Object.values(c.fiches||{}).forEach(fiche=>{
     if(fiche.valide) return; // ne pas modifier les fiches validées
     (fiche.jours||[]).forEach(j=>{
       if(j._horsContratCloture||j.statut==='hors-contrat'){
@@ -10352,12 +10351,9 @@ function annulerRupture(cid){
         delete j.statut;
       }
     });
-    anneesAmAAnnuler.add(getAnneeAmPourDate(key));
   });
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1) S.contrats[cidx]=c;
-  // Réappliquer les poses de congés AM désormais valables sur ce contrat redevenu actif
-  anneesAmAAnnuler.forEach(am=>{if(S.congesAM&&S.congesAM[am]) majFichesCgAm(am,false);});
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
   saveToFirestore();
   const cont=document.getElementById('det-content');
@@ -10831,7 +10827,7 @@ function renderRupture(c, cont){
 
   // Fin de période d'essai
   let essaiHtml='';
-  if(motif==='fin-essai'||motif==='fin-essai-am'){
+  if(motif==='fin-essai'){
     const dateNotif=rp.dateNotif?new Date(rp.dateNotif):null;
     const delai=parseInt(rp.delaiPrev)||0;
     const dateFinEssai=dateNotif?new Date(dateNotif.getTime()+delai*24*60*60*1000):null;
@@ -10869,7 +10865,7 @@ function renderRupture(c, cont){
   let dateFinContrat=null;
   if(rp.statutPreavis==='effectue'&&dateFinLegale) dateFinContrat=dateFinLegale;
   else if((rp.statutPreavis==='partiel'||rp.statutPreavis==='non-effectue')&&rp.dateFinPreavis) dateFinContrat=new Date(rp.dateFinPreavis);
-  else if((motif==='fin-essai'||motif==='fin-essai-am')&&rp.dateNotif&&rp.delaiPrev) dateFinContrat=new Date(new Date(rp.dateNotif).getTime()+parseInt(rp.delaiPrev)*24*60*60*1000);
+  else if(motif==='fin-essai'&&rp.dateNotif&&rp.delaiPrev) dateFinContrat=new Date(new Date(rp.dateNotif).getTime()+parseInt(rp.delaiPrev)*24*60*60*1000);
   else if(motif==='retrait-force'&&rp.dateSignif) dateFinContrat=new Date(rp.dateSignif);
 
   if(dateSit&&motif){
@@ -11896,9 +11892,6 @@ function ouvrirPassageCDI(cid){
 
   setTimeout(()=>{
     resetForm();
-    // L'accueil occasionnel ne peut exister qu'en tout début de contrat, jamais via un avenant
-    const roOcc=document.getElementById('ro-occ');
-    if(roOcc) roOcc.style.display='none';
     // Afficher date d'embauche en lecture seule et champ date d'effet
     const labelDatedeb=document.querySelector('label[for="f-datedeb"]');
     const inputDatedeb=document.getElementById('f-datedeb');
@@ -12849,16 +12842,7 @@ if(tousNonPrevus){
 
   S.contrats.forEach(c=>{
     if(!c.signe||!c.fiches||estContratCloture(c))return;
-    // Si rupture confirmée, ignorer toute pose de congés AM postérieure à la date de fin du contrat
-    let joursPosesC=joursPoses;
-    if(c.rupture&&c.rupture.confirmee){
-      const dateFinRuptureC=getDateFinContrat(c);
-      if(dateFinRuptureC){
-        const dateFinRuptureCStr=dateFinRuptureC.getFullYear()+'-'+String(dateFinRuptureC.getMonth()+1).padStart(2,'0')+'-'+String(dateFinRuptureC.getDate()).padStart(2,'0');
-        joursPosesC=joursPoses.filter(d=>d<=dateFinRuptureCStr);
-      }
-    }
-    const periodes=getPeriodes(joursPosesC);
+    const periodes=getPeriodes(joursPoses);
 
     // Calculer le quota acquis jusqu'à fin du mois précédant chaque pose
     // (basé sur calcCongesContrat)
