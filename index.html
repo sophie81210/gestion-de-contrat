@@ -2836,7 +2836,7 @@ function ouvrirFiche(contratId,key){
         if(dateFinCloture.getFullYear()===fky&&dateFinCloture.getMonth()+1===fkm){
           fiche.jours.forEach(j=>{
             if(j.date>dateFinStr){
-              if(!j.statut||j.statut==='prevu'||j.statut==='a-selectionner'||j.statut==='non-prevu'||j.statut==='repos'){
+              if(j.statut!=='hors-contrat'){
                 j._horsContratCloture=true;
                 j.statut='hors-contrat';
               }
@@ -3752,7 +3752,10 @@ function getDateFinContrat(c){
     const duree=calcDureePreavis(c,dateSignif);
     return calcDateFinPreavis(dateSignif,duree,rp.cumulConges||false,c);
   }
-  if((rp.statutPreavis==='partiel'||rp.statutPreavis==='non-effectue')&&rp.dateFinPreavis){
+  if(rp.statutPreavis==='non-effectue'&&rp.dateSignif){
+    return new Date(rp.dateSignif);
+  }
+  if(rp.statutPreavis==='partiel'&&rp.dateFinPreavis){
     return new Date(rp.dateFinPreavis);
   }
   if(motif==='fin-essai'&&rp.dateNotif&&rp.delaiPrev){
@@ -10299,8 +10302,13 @@ function confirmerRupture(cid){
       return;
     }
   }
-  // 1. Préavis partiel sans date de fin / date > légale
+  // 1. Statut du préavis obligatoire pour les motifs concernés
   const aPreavisR=rp.motif==='retrait-enfant'||rp.motif==='demission';
+  if(aPreavisR&&!rp.statutPreavis){
+    alerte('Veuillez indiquer si le préavis a été effectué, partiellement effectué ou non effectué.');
+    return;
+  }
+  // 2. Préavis partiel sans date de fin / date > légale
   if(aPreavisR&&rp.statutPreavis==='partiel'&&!rp.dateFinPreavis){
     alerte('Veuillez indiquer la date de fin du préavis effectué.');
     return;
@@ -10314,7 +10322,7 @@ function confirmerRupture(cid){
       rp.dateFinPreavis=dateFinLegaleR.getFullYear()+'-'+String(dateFinLegaleR.getMonth()+1).padStart(2,'0')+'-'+String(dateFinLegaleR.getDate()).padStart(2,'0');
     }
   }
-  // 2. Date de fin de contrat dans une fiche validée
+  // 3. Date de fin de contrat dans une fiche validée
   const dateFinR=getDateFinContrat(c);
   if(dateFinR){
     const moisFinR=dateFinR.getFullYear()+'-'+String(dateFinR.getMonth()+1).padStart(2,'0');
@@ -10789,6 +10797,12 @@ function renderRupture(c, cont){
           ${erreurDateHtml}
         </div>`;
       }
+      if(rp.initiativePreavis&&statutPreavis==='non-effectue'){
+        // Préavis non effectué : pas de saisie, la date de fin = date de signification (jour de signification déjà hors-contrat)
+        dateFinHtml=`<div style="margin-top:8px;background:var(--mp);border-radius:6px;padding:8px;font-size:13px">
+          ${rp.dateSignif?'Fin de contrat : <strong>'+new Date(rp.dateSignif).toLocaleDateString('fr-FR')+'</strong> (jour de la signification, déjà hors-contrat)':'—'}
+        </div>`;
+      }
     }
 
     if(statutPreavis==='effectue'){
@@ -10864,7 +10878,8 @@ function renderRupture(c, cont){
   // Déterminer la date de fin de contrat
   let dateFinContrat=null;
   if(rp.statutPreavis==='effectue'&&dateFinLegale) dateFinContrat=dateFinLegale;
-  else if((rp.statutPreavis==='partiel'||rp.statutPreavis==='non-effectue')&&rp.dateFinPreavis) dateFinContrat=new Date(rp.dateFinPreavis);
+  else if(rp.statutPreavis==='non-effectue'&&rp.dateSignif) dateFinContrat=new Date(rp.dateSignif);
+  else if(rp.statutPreavis==='partiel'&&rp.dateFinPreavis) dateFinContrat=new Date(rp.dateFinPreavis);
   else if(motif==='fin-essai'&&rp.dateNotif&&rp.delaiPrev) dateFinContrat=new Date(new Date(rp.dateNotif).getTime()+parseInt(rp.delaiPrev)*24*60*60*1000);
   else if(motif==='retrait-force'&&rp.dateSignif) dateFinContrat=new Date(rp.dateSignif);
 
