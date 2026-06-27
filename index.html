@@ -3778,6 +3778,9 @@ function getDateFinContrat(c){
   if(motif==='retrait-force'&&rp.dateSignif){
     return new Date(rp.dateSignif);
   }
+  if(motif==='fin-occasionnel'&&rp.dateSignif){
+    return new Date(rp.dateSignif);
+  }
   return null;
 }
 
@@ -10301,6 +10304,27 @@ function sauvegarderRupture(cid){
   toast('Rupture enregistrée');
 }
 
+function confirmerRuptureOcc(cid){
+  const c=S.contrats.find(x=>x.id==cid);
+  if(!c) return;
+  const input=document.getElementById('rp-occ-fin-'+cid);
+  const dateISO=dateTexteVersISO(input?.value||'');
+  if(!dateISO){
+    alerte('Veuillez indiquer une date valide pour le dernier jour d\'accueil.');
+    return;
+  }
+  if(!confirm('Confirmer la fin de l\'accueil au '+dateISOversTexte(dateISO)+' ?\n\nLes jours suivants seront marqués hors-contrat. Cette action est réversible (bouton « Annuler la confirmation »).')) return;
+  c.rupture={motif:'fin-occasionnel',dateSignif:dateISO,confirmee:true};
+  delete c._ruptureTemp;
+  const cidx=S.contrats.findIndex(x=>x.id==cid);
+  if(cidx!==-1) S.contrats[cidx]=c;
+  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  saveToFirestore();
+  const cont=document.getElementById('det-content');
+  renderRupture(c,cont);
+  toast('Fin de l\'accueil confirmée');
+}
+
 function confirmerRupture(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c||!c.rupture) return;
@@ -10667,7 +10691,23 @@ function renderRupture(c, cont){
     const paramsOcc=S.params||{};
     const coefNetOcc=paramsOcc.coefNet||0.7811975;
     const indemCp=parseFloat((totalBrut*0.1).toFixed(2));
-    cont.innerHTML=`<div class="card">
+    const dateSitOcc=getDateSituationAu(c);
+    const dateSitOccStr=dateSitOcc?dateSitOcc.toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'}):'—';
+    const rpOcc=c._ruptureTemp||c.rupture||{};
+    const finOccHtml=c.rupture?.confirmee
+      ?`<div class="card" style="margin-bottom:10px;background:#fff8e1;border-color:#f0c674">
+          <div style="font-weight:600;color:#8a6500">✓ Fin de l'accueil confirmée le ${new Date(c.rupture.dateSignif).toLocaleDateString('fr-FR')}</div>
+          <button class="btn bs bsm" style="margin-top:8px" onclick="annulerRupture(${c.id})">✕ Annuler la confirmation</button>
+        </div>`
+      :`<div class="card" style="margin-bottom:10px">
+          <div class="ctitle">Fin de l'accueil</div>
+          <label style="font-size:12px;color:var(--tx2)">Dernier jour d'accueil</label>
+          <input type="text" id="rp-occ-fin-${c.id}" value="${dateISOversTexte(rpOcc.dateSignif||'')}" placeholder="JJ/MM/AAAA" oninput="formaterSaisieDate(this)" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+          <button class="btn bp" style="margin-top:10px" onclick="confirmerRuptureOcc(${c.id})">Confirmer la fin de l'accueil</button>
+        </div>`;
+    cont.innerHTML=`<div style="font-size:12px;color:var(--tx2);margin-bottom:12px">Situation au <strong>${dateSitOccStr}</strong></div>
+    ${finOccHtml}
+    <div class="card">
       <div class="ctitle">Rupture — Contrat occasionnel</div>
       <div style="background:var(--mp);border-radius:8px;padding:12px">
         <div style="font-size:13px;color:var(--tx2)">Indemnité de congés payés (10% des salaires versés)</div>
@@ -10864,6 +10904,14 @@ function renderRupture(c, cont){
         ${initiativeHtml}
         ${dateFinHtml}
       </div>`;
+  } else if(motif==='retrait-force'){
+    preavisHtml=`
+      <div style="margin-top:10px">
+        <label style="font-size:12px;color:var(--tx2)">Date de signification</label>
+        <input type="text" id="rp-date-signif-${cid}" value="${dateISOversTexte(rp.dateSignif||'')}" placeholder="JJ/MM/AAAA" oninput="formaterSaisieDate(this)" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+        <div style="font-size:12px;color:var(--tx2);margin-top:4px">Aucun préavis. Le contrat s'arrête le jour même : ce jour est déjà hors-contrat.</div>
+      </div>
+      <div style="margin-top:8px;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px;font-size:13px">⚠ Aucune indemnité de rupture n'est due, quelle que soit l'ancienneté. Les congés payés et les régularisations de salaire restent dus.</div>`;
   }
 
   // Fin de période d'essai
@@ -11083,6 +11131,22 @@ function genOngletCongesContrat(c){
 
   let html='<div style="padding:14px" id="'+containerId+'">';
   html+='<div class="ctitle" style="margin-bottom:12px">Congés — '+c.nom+'</div>';
+
+  // Contrat resté occasionnel : pas d'acquisition de jours, indemnité compensatrice de congés payés (10%) à la place
+  const srcActifCgOnglet=getVersionActive(c,new Date());
+  if(c.tc==='occ'&&srcActifCgOnglet.tc==='occ'){
+    const totalBrutCgOnglet=calcBrutTotal(c,null,null);
+    const paramsCgOnglet=S.params||{};
+    const coefNetCgOnglet=paramsCgOnglet.coefNet||0.7811975;
+    const indemCpCgOnglet=parseFloat((totalBrutCgOnglet*0.1).toFixed(2));
+    html+=`<div class="card" style="margin-bottom:10px">
+      <div style="background:var(--mp);border-radius:8px;padding:12px">
+        <div style="font-size:13px;color:var(--tx2)">Indemnité de congés payés (10% des salaires versés)</div>
+        <div style="font-size:16px;font-weight:700;margin-top:4px">${indemCpCgOnglet.toFixed(2)} € brut — ${parseFloat((indemCpCgOnglet*coefNetCgOnglet).toFixed(2))} € net</div>
+      </div></div>`;
+    html+='</div>';
+    return html;
+  }
 
   annees.reverse().forEach(anneeAcq=>{
     // Ignorer les années sans données (avant le contrat)
