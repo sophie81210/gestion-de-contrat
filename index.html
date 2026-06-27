@@ -4297,7 +4297,7 @@ function buildRecapHtml(recap, solde, regul52, c){
   }
   // Ligne total payé (toujours en bas de tout, sauf dans les encarts avant/après avenant où le total se fait au niveau du Cumul)
   if(!recap.periodeAv){
-    const sNet=parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)+(recap.regul52Fiche?recap.regul52Fiche.diff:0);
+    const sNet=parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)+(recap.regul52Fiche?recap.regul52Fiche.diff:0)+(_hasRegul?_diffEuros:0);
     const indemE=parseFloat(recap.indemEntretienTotal||0);
     const indemR=parseFloat(recap.indemRepasTotal||0);
     const indemK=parseFloat(recap.indemKmTotal||0);
@@ -9839,6 +9839,12 @@ function getDateSituationAu(c){
 function calcBrutTotal(c, dateDebut, dateFin){
   let total=0;
   const coefNetBT=getCoefNet();
+  const aRecB=(r)=>{
+    // Tout ce qui a été payé en brut sur le mois (ou la sous-période), hors frais (entretien/repas/km) et hors exonération de charges
+    const regulPassage52=(r.estPassage46vers52&&r.periodeAv!=='apres'&&c._regulDiffEuros>0)?parseFloat(c._regulDiffEuros||0):0;
+    const netMois=parseFloat(r.salaireNet||0)+parseFloat(r.indemCongeMois||0)+(r.regul52Fiche?parseFloat(r.regul52Fiche.diff||0):0)+parseFloat(r.indemCgOcc||0)+regulPassage52;
+    return parseFloat((netMois/coefNetBT).toFixed(2));
+  };
   Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
     if(!fiche.valide) return;
     const [y,m]=key.split('-').map(Number);
@@ -9846,20 +9852,23 @@ function calcBrutTotal(c, dateDebut, dateFin){
     const finMois=new Date(y,m,0);
     if(dateDebut&&finMois<dateDebut) return;
     if(dateFin&&debutMois>dateFin) return;
-    const source=getVersionActive(c,debutMois);
-    const txBrut=source.txBrut||0;
-    const r=calcRecapFiche(c,fiche);
-    // Brut réel = (hMensuNorm - hAbsDeduitNorm) * txBrut + (hMensuMaj - hAbsDeduitMaj) * txBrutMaj + comp + sup
-    const hMensuMajR=parseFloat(r.hMensuMaj||0);
-    const hMensuNormR=parseFloat(r.hMensuNorm||r.hMensu||0);
-    const hAbsDedHSR=parseFloat(r.hAbsDeduitHS||0);
-    const hBaseReelNorm=Math.max(0,hMensuNormR-(parseFloat(r.hAbsDeduit||0)-hAbsDedHSR));
-    const hBaseReelMaj=Math.max(0,hMensuMajR-hAbsDedHSR);
-    const brutMois=parseFloat((hBaseReelNorm*txBrut+hBaseReelMaj*txBrut*(1+(r.majSup||0)/100)+(r.montantCompBrut||0)+(r.montantSupBrut||0)+(r.montantMajFerieBrut||0)+(r.montantMajFeriePrevuBrut||0)+(r.montantMajReposBrut||0)+(r.montantMaj1erMaiBrut||0)).toFixed(2));
-    total+=brutMois;
-    // Ajouter la régularisation 52 sem versée (convertie en brut)
-    if(r.regul52Fiche&&r.regul52Fiche.diff>0){
-      total+=parseFloat((r.regul52Fiche.diff/coefNetBT).toFixed(2));
+    // Détecter un avenant qui démarre strictement dans ce mois (split avant/après nécessaire)
+    const avenantDuMoisBT=(c.avenants||[]).find(a=>{
+      if(!a.signe||!a.dateAvenant) return false;
+      return a.dateAvenant>key+'-01'&&a.dateAvenant<=key+'-31';
+    });
+    if(avenantDuMoisBT){
+      const moisAvB=avenantDuMoisBT.dateAvenant;
+      const veilleB=new Date(moisAvB);
+      veilleB.setDate(veilleB.getDate()-1);
+      const veilleBStr=veilleB.getFullYear()+'-'+String(veilleB.getMonth()+1).padStart(2,'0')+'-'+String(veilleB.getDate()).padStart(2,'0');
+      const debutMoisStr=key+'-01';
+      const rAvant=calcRecapFiche(c,fiche,debutMoisStr,veilleBStr,debutMoisStr,moisAvB,'avant');
+      const rApres=calcRecapFiche(c,fiche,moisAvB,finMois.getFullYear()+'-'+String(finMois.getMonth()+1).padStart(2,'0')+'-'+String(finMois.getDate()).padStart(2,'0'),debutMoisStr,moisAvB,'apres');
+      total+=aRecB(rAvant)+aRecB(rApres);
+    } else {
+      const r=calcRecapFiche(c,fiche);
+      total+=aRecB(r);
     }
   });
   return parseFloat(total.toFixed(2));
