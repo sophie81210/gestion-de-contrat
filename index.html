@@ -3391,11 +3391,6 @@ const statutPrevuJ=getStatutPrevu(c,j);
         ${buildRecapHtml(recap, calcSoldeToutCompte(c, key), calcRegul52(c, key), c)}
       </table>
     </div>`}
-    ${(()=>{
-      const soldeAffich=calcSoldeToutCompte(c, key);
-      if(!soldeAffich) return '';
-      return buildSoldeToutCompteHtml(c, avenantDuMois?recap2:recap, soldeAffich);
-    })()}
     <div style="text-align:center;padding:14px 0">
       ${fiche.valide
         ?`<span style="color:var(--vt);font-size:13px;font-weight:600">✓ Feuille validée — lecture seule</span>
@@ -3403,7 +3398,12 @@ const statutPrevuJ=getStatutPrevu(c,j);
           ${peutDeverrouillerFiche(c,key)?`<button class="btn bs bsm" onclick="deverrouillerFiche(${contratId},'${key}')">🔓 Déverrouiller</button>`:''}`
         :`<button class="btn bs" onclick="enregistrerFiche(${contratId},'${key}')">💾 Enregistrer</button>
           <button class="btn bp" onclick="validerFiche(${contratId},'${key}')">✓ Valider la feuille du mois</button>`}
-    </div>`;
+    </div>
+    ${(()=>{
+      const soldeAffich=calcSoldeToutCompte(c, key);
+      if(!soldeAffich) return '';
+      return buildSoldeToutCompteHtml(c, avenantDuMois?recap2:recap, soldeAffich, fiche.valide);
+    })()}`;
 }
 
          function toggleAnticipe(contratId,key,val){
@@ -3867,12 +3867,13 @@ function calcSoldeToutCompte(c, key){
 }
 
 // ─── ENCART SOLDE DE TOUT COMPTE (affiché en bas de la fiche du mois de clôture) ───────────
-function buildSoldeToutCompteHtml(c, recap, solde){
+function buildSoldeToutCompteHtml(c, recap, solde, ficheValide){
   if(!solde) return '';
   const ls='display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--mb);font-size:13px';
   const vs='font-weight:600';
   let html='<div class="card" style="margin-top:10px;background:var(--mp);border:2px solid var(--m)">';
   html+='<div class="ctitle" style="color:var(--m)">Solde de tout compte</div>';
+  html+='<div style="font-size:12px;color:var(--tx2);font-style:italic;margin-bottom:8px">Les montants seront mis à jour après validation de la feuille de présence.</div>';
   let totalSoldeNet=0, totalSoldeBrut=0;
   if(solde.regul){
     html+=`<div style="${ls}"><span>Régularisation (${solde.regul.hRegul.toFixed(2)}h — ${solde.regul.joursRegul} j)</span><span style="${vs};color:var(--vt)">${solde.regul.montantNet.toFixed(2)} € net</span></div>`;
@@ -3880,14 +3881,14 @@ function buildSoldeToutCompteHtml(c, recap, solde){
     totalSoldeBrut+=parseFloat(solde.regul.montantBrut||0);
   }
   if(solde.indemConges){
-    html+=`<div style="${ls}"><span>${solde.indemConges.label}</span><span style="${vs}">${solde.indemConges.montantNet.toFixed(2)} € net (${solde.indemConges.montantBrut.toFixed(2)} € brut)</span></div>`;
+    html+=`<div style="${ls}"><span>${solde.indemConges.label}</span><span style="${vs}">${solde.indemConges.montantNet.toFixed(2)} € net</span></div>`;
     totalSoldeNet+=parseFloat(solde.indemConges.montantNet||0);
     totalSoldeBrut+=parseFloat(solde.indemConges.montantBrut||0);
   }
   if(solde.indemPreavis){
     const sensLabel=solde.indemPreavis.sens==='remboursement'?' (à rembourser)':'';
     const signe=solde.indemPreavis.sens==='remboursement'?-1:1;
-    html+=`<div style="${ls}"><span>Indemnité de préavis (${solde.indemPreavis.joursRestants} j)${sensLabel}</span><span style="${vs};color:${solde.indemPreavis.sens==='remboursement'?'var(--al)':'var(--m)'}">${signe<0?'− ':''}${solde.indemPreavis.montantNet.toFixed(2)} €</span></div>`;
+    html+=`<div style="${ls}"><span>Indemnité de préavis (${solde.indemPreavis.joursRestants} j)${sensLabel}</span><span style="${vs};color:${solde.indemPreavis.sens==='remboursement'?'var(--al)':'var(--m)'}">${signe<0?'− ':''}${solde.indemPreavis.montantNet.toFixed(2)} € net</span></div>`;
     totalSoldeNet+=signe*parseFloat(solde.indemPreavis.montantNet||0);
   }
   if(solde.indemRupture){
@@ -10100,8 +10101,8 @@ function calcIndemnitePreavis(c, dateSignif, dateFinEffective, dureePreavis, cum
   const dateFinLegale=calcDateFinPreavis(dateSignif,dureePreavis,true,c);
   if(dateFinEffective>=dateFinLegale) return {montantBrut:0,montantNet:0,joursRestants:0};
   const joursTotal=dureePreavis.unite==='jours'?dureePreavis.duree:Math.round((dateFinLegale-dateSignif)/(1000*60*60*24)+1);
-  // +1 pour inclure le jour de fin effectif (ex: du 10 au 15 = 6 jours effectués)
-  const joursEffectues=Math.max(0,Math.round((dateFinEffective-dateSignif)/(1000*60*60*24))+1);
+  // joursEffectues=0 si rien n'a été travaillé (dateFinEffective===dateSignif), sinon +1 pour inclure le jour de fin effectif
+  const joursEffectues=dateFinEffective>dateSignif?Math.max(0,Math.round((dateFinEffective-dateSignif)/(1000*60*60*24))+1):0;
   const joursRestants=Math.max(0,joursTotal-joursEffectues);
   if(joursRestants===0) return {montantBrut:0,montantNet:0,joursRestants:0};
   const source=getVersionActive(c,dateSignif);
@@ -10110,12 +10111,23 @@ function calcIndemnitePreavis(c, dateSignif, dateFinEffective, dureePreavis, cum
   const hMensuNormP=hMensuMajP>0?parseFloat(source.hMensuNorm||hMensu-hMensuMajP):hMensu;
   const txBrut=source.txBrut||0;
   const majSupP=(source.majSup||0)/100;
-  // Formule : (hMensu × txBrut / nbJoursCalendairesMois) × joursRestants (heures normales + majorées)
-  const nbJoursMois=new Date(dateSignif.getFullYear(),dateSignif.getMonth()+1,0).getDate();
-  const montantBrutNorm=parseFloat(((hMensuNormP*txBrut/nbJoursMois)*joursRestants).toFixed(2));
-  const montantBrutMaj=parseFloat(((hMensuMajP*txBrut*(1+majSupP)/nbJoursMois)*joursRestants).toFixed(2));
+  // Formule basée sur les heures théoriques (même logique que les absences), pas les jours calendaires
+  let nbJoursMoisContratP=0;
+  if(source.th==='fixe'&&source.joursFixe){
+    const nbSemEffP=source.nbSem||(c.tc==='52'?52:46);
+    nbJoursMoisContratP=parseFloat(((source.joursFixe.filter(j=>j).length*nbSemEffP)/12).toFixed(1));
+  } else {
+    const nbSemEffP=source.nbSem||(c.tc==='52'?52:46);
+    const totalJP=(source.hMin||5)*nbSemEffP;
+    nbJoursMoisContratP=parseFloat((totalJP/12).toFixed(1));
+  }
+  const montantBrutNorm=parseFloat(((hMensuNormP*txBrut/(nbJoursMoisContratP||20))*joursRestants).toFixed(2));
+  const montantBrutMaj=parseFloat(((hMensuMajP*txBrut*(1+majSupP)/(nbJoursMoisContratP||20))*joursRestants).toFixed(2));
   const montantBrut=parseFloat((montantBrutNorm+montantBrutMaj).toFixed(2));
-  return {montantBrut, montantNet:montantBrut, joursRestants};
+  const paramsP=S.params||{};
+  const coefNetP=paramsP.coefNet||0.7811975;
+  const montantNet=parseFloat((montantBrut*coefNetP).toFixed(2));
+  return {montantBrut, montantNet, joursRestants};
 }
 
 function calcIndemniteRupture(c, dateFin){
