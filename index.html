@@ -188,8 +188,8 @@ input[type=time].fi{width:auto;min-width:92px}
 .pinceau-btn{display:flex;align-items:center;gap:6px;padding:7px 13px;border-radius:20px;cursor:pointer;font-size:13px;font-weight:600;border:2px solid transparent;transition:all .15s;user-select:none}
 .pinceau-btn.actif{border-color:var(--brd,#888) !important}
 .pinceau-dot{width:11px;height:11px;border-radius:50%;flex-shrink:0}
-.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--m);color:#fff;padding:11px 22px;border-radius:22px;font-size:14px;font-weight:500;z-index:9999;transition:transform .3s;box-shadow:0 4px 18px rgba(0,0,0,.25);white-space:nowrap;max-width:90vw;text-align:center}
-.toast.on{transform:translateX(-50%) translateY(0)}
+.toast{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(0.9);background:#fff;color:var(--tx);padding:14px 24px;border-radius:12px;font-size:14px;font-weight:500;z-index:9999;transition:transform .3s,opacity .3s;box-shadow:0 6px 24px rgba(0,0,0,.25);border:2px solid var(--m);white-space:normal;max-width:85vw;text-align:center;opacity:0;pointer-events:none}
+.toast.on{transform:translate(-50%,-50%) scale(1);opacity:1}
 .alerte-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:10000;display:flex;align-items:center;justify-content:center}
 .alerte-box{background:#fff;border-radius:14px;padding:28px 32px;max-width:420px;width:90vw;box-shadow:0 8px 32px rgba(0,0,0,.25);text-align:center;font-size:15px;line-height:1.5;color:var(--tx)}
 .alerte-box .alerte-btn{margin-top:18px;padding:10px 28px;background:var(--m);color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer}
@@ -1632,10 +1632,12 @@ function renderDetTab(id,tab){
       const avsEffectifs=c.avenants.filter(a=>a.signe&&a.dateAvenant<=aujourd)
         .sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant));
       if(!avsEffectifs.length) return '';
+      // Exclure le dernier avenant effectif : c'est déjà celui affiché par défaut ci-dessus
+      const avsEffectifsAnterieurs=avsEffectifs.slice(0,-1);
       // Construire la liste des versions précédentes
       const versions=[];
       versions.push({label:'Contrat initial du '+new Date(c.dateDeb).toLocaleDateString('fr-FR'), id:null});
-      avsEffectifs.forEach(a=>{
+      avsEffectifsAnterieurs.forEach(a=>{
         versions.push({label:'Avenant n°'+a.num+' du '+new Date(a.dateAvenant).toLocaleDateString('fr-FR'), id:a.id});
       });
       if(!versions.length) return '';
@@ -2759,6 +2761,11 @@ function ouvrirFiche(contratId,key){
     const cidxTmp=S.contrats.findIndex(x=>x.id==contratId);
     if(cidxTmp!==-1) S.contrats[cidxTmp]=c;
     localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+    // Recalculer les statuts congés pour réappliquer la pose du calendrier AM sur cette fiche nouvellement créée
+    if(S.congesAM){
+      const anneeAmOf=getAnneeAmPourDate(key);
+      if(S.congesAM[anneeAmOf]) majFichesCgAm(anneeAmOf,false);
+    }
   }
   if(!c.fiches[key])return;
   const fiche=c.fiches[key];
@@ -4792,6 +4799,18 @@ function validerFiche(contratId,key){
     }
   }
   if(!confirm(msgConfirm)) return;
+  const estDerniereFicheRupture=msgConfirm.includes('Dernière feuille');
+  afficherChargement(estDerniereFicheRupture?'Calcul du solde de tout compte en cours…':'Validation en cours…');
+  setTimeout(()=>{
+    try{
+      _validerFicheSuite(contratId,key,c);
+    } finally {
+      masquerChargement();
+    }
+  },10);
+}
+
+function _validerFicheSuite(contratId,key,c){
   let manquant=false;
   let manquantJours=[];
   c.fiches[key].jours.forEach(j=>{
@@ -12353,7 +12372,7 @@ function ouvrirCgAm(anneeDebut){
 function buildCgAmDetail(anneeDebut,data){
   const anneeFin=anneeDebut+1;
   // Récupérer le repos hebdo depuis les contrats signés actifs
-  const contratsActifs=S.contrats.filter(c=>c.signe&&!c.cloture);
+  const contratsActifs=S.contrats.filter(c=>c.signe&&!estContratCloture(c));
   const reposHebdo=contratsActifs[0]?.reposHebdo||0;
   // Compter les jours cochés
   const joursCoches=Object.keys(data.jours||{}).filter(k=>data.jours[k]==='pose');
@@ -12363,7 +12382,7 @@ function buildCgAmDetail(anneeDebut,data){
     return new Date(parseInt(p[0]),parseInt(p[1])-1,parseInt(p[2])).getDay()===6;
   }).length;
   // Compter aussi les samedis fériés acquis (non cochables car couverts par les congés)
-  const contratsActifsAm=S.contrats.filter(c=>c.signe&&!c.cloture);
+  const contratsActifsAm=S.contrats.filter(c=>c.signe&&!estContratCloture(c));
   let nbSamedisFeriesAcquis=0;
   // Parcourir tous les samedis de l'année AM (1er mai → 30 avril)
   const dDebAm=new Date(anneeDebut,4,1);
@@ -12464,15 +12483,13 @@ function buildCgAmDetail(anneeDebut,data){
       const jourSem=jourDate.getDay(); // 0=dim
       const jourIdx=jourSem===0?6:jourSem-1;
       const isReposH=jourSem===reposHebdo;
-      // Vérifier si c'est un férié (toujours jaune dans le calendrier AM, indépendamment du contrat)
-      const isFerNonTrav=contratsActifs.length>0?isFerie(dateStr,contratsActifs[0]||{}):isFerie(dateStr,{});
-      // Ferié cochable si non couvert par les acquis du meilleur contrat
+      // Tous les fériés sont non cochables comme jour de congé dans le calendrier AM
+      const isFerNonTrav=isFerie(dateStr,{});
       const isPose=(data.jours[dateStr]==='pose');
       // Couleur de fond — tous les fériés non travaillés sont jaunes
       let bg='#fff',color='var(--tx)',cursor='pointer',border='1px solid #e0d8d0';
       if(isReposH){bg='#f0f0f0';color='var(--tx3)';cursor='not-allowed';}
-      if(isFerNonTrav&&!isPose){bg='#fff8e1';color='#854F0B';}
-      if(isFerNonTrav&&isReposH){cursor='not-allowed';}
+      if(isFerNonTrav&&!isPose){bg='#fff8e1';color='#854F0B';cursor='not-allowed';}
       if(isPose){bg='var(--vt)';color='#fff';border='none';}
       // Bordure pointillée verte si jour éligible pour poser des acquis restants
       if(!isPose&&!isReposH&&jourEligibleBordure(dateStr)){
@@ -12481,7 +12498,7 @@ function buildCgAmDetail(anneeDebut,data){
       // Verrouiller si fiche validée pour au moins un contrat actif
       const moisKey=dateStr.slice(0,7);
       const ficheValidee=S.contrats.some(ct=>ct.signe&&!ct.cloture&&ct.fiches?.[moisKey]?.valide);
-      const clickable=!isReposH&&!(isFerNonTrav&&isReposH)&&!ficheValidee;
+      const clickable=!isReposH&&!isFerNonTrav&&!ficheValidee;
       if(ficheValidee&&!isReposH){cursor='not-allowed';}
       joursHtml+=`<div onclick="${clickable?`toggleCgAm(${anneeDebut},'${dateStr}')`:''}"
         title="${ficheValidee?'Feuille de présence validée — modification impossible':''}"
@@ -12501,13 +12518,13 @@ function buildCgAmDetail(anneeDebut,data){
   // Calculer les jours de fractionnement (max sur tous les contrats)
   let joursFragMax=0;
   if(data.fractionnement){
-    S.contrats.filter(c=>c.signe&&!c.cloture).forEach(c=>{
+    S.contrats.filter(c=>c.signe&&!estContratCloture(c)).forEach(c=>{
       joursFragMax=Math.max(joursFragMax,calcJoursFractionnement(c,anneeDebut));
     });
   }
   const joursMax=30+joursFragMax;
   // Règle des 5 samedis : uniquement si aucun contrat ne prévoit le samedi comme travaillé
-  const samediTravaille=S.contrats.filter(c=>c.signe&&!c.cloture).some(c=>{
+  const samediTravaille=S.contrats.filter(c=>c.signe&&!estContratCloture(c)).some(c=>{
     const src=getVersionActive(c,new Date());
     if(src.th==='fixe'&&src.joursFixe) return src.joursFixe[5]&&(src.joursFixe[5].d||src.joursFixe[5].f);
     if(src.th==='sem'&&src.semTypes) return src.semTypes.some(st=>st.jours&&st.jours[5]);
@@ -12559,7 +12576,7 @@ function ferieCouvretParAcquis(dateStr, anneeDebut, dataAM) {
   if(!Object.keys(joursAM).some(d=>joursAM[d]==='pose')) return false;
 
   // Repos hebdo : prendre le premier contrat actif signé
-  const premierContrat = S.contrats.find(c=>c.signe&&!c.cloture);
+  const premierContrat = S.contrats.find(c=>c.signe&&!estContratCloture(c));
   const reposHebdo = premierContrat?.reposHebdo || 0;
 
   // Chercher la veille calendaire non-repos
@@ -12664,11 +12681,11 @@ function toggleCgAm(anneeDebut,dateStr){
   if(!S.congesAM) S.congesAM={};
   if(!S.congesAM[anneeDebut]) S.congesAM[anneeDebut]={enfants:0,jours:{}};
   const data=S.congesAM[anneeDebut];
-  // Bloquer si férié acquis (couvert par au moins un contrat)
-  const contratsActifsT=S.contrats.filter(c=>c.signe&&!c.cloture);
+  // Tous les fériés sont non cochables comme jour de congé dans le calendrier AM
+  const contratsActifsT=S.contrats.filter(c=>c.signe&&!estContratCloture(c));
   const isFerNonTravT=contratsActifsT.length>0&&contratsActifsT.every(c=>isFerie(dateStr,c));
-  if(isFerNonTravT&&ferieCouvretParAcquis(dateStr,anneeDebut,data)){
-    toast('⚠ Ce jour férié est acquis — il ne peut pas être coché comme jour de congé');
+  if(isFerNonTravT){
+    toast('⚠ Ce jour férié ne peut pas être coché comme jour de congé');
     return;
   }
   const joursCoches=Object.keys(data.jours).filter(k=>data.jours[k]==='pose').length;
@@ -13601,7 +13618,7 @@ if(tousNonPrevus){
   // Décocher les fériés cochés qui sont devenus acquis (non cochables)
   const dataAM=S.congesAM[anneeDebut];
   if(dataAM&&dataAM.jours){
-    const contratsActifsD=S.contrats.filter(c=>c.signe&&!c.cloture);
+    const contratsActifsD=S.contrats.filter(c=>c.signe&&!estContratCloture(c));
     let feriesDecoches=0;
     Object.keys(dataAM.jours).forEach(dateStr=>{
       if(dataAM.jours[dateStr]!=='pose') return;
@@ -13624,7 +13641,7 @@ if(tousNonPrevus){
 
   // Sauvegarder chaque contrat modifié individuellement
  if(sauvegarder&&window.FB_USER&&window.fbSaveData){
-    S.contrats.filter(c=>c.fiches&&c.signe&&!c.cloture).forEach(c=>{
+    S.contrats.filter(c=>c.fiches&&c.signe&&!estContratCloture(c)).forEach(c=>{
       window.fbSaveData(window.FB_USER.uid,{
         contrats:[c],params:{},congesAM:S.congesAM||{}
       }).catch(e=>console.error('Save contrat:',e));
@@ -13698,7 +13715,7 @@ function enregistrerCgAm(){
   invaliderSemsCongesGlobal();
   saveCongesAM();
   if(window.FB_USER&&window.fbSaveData){
-    S.contrats.filter(c=>c.fiches&&c.signe&&!c.cloture).forEach(c=>{
+    S.contrats.filter(c=>c.fiches&&c.signe&&!estContratCloture(c)).forEach(c=>{
       window.fbSaveData(window.FB_USER.uid,{
         contrats:[c],params:{},congesAM:S.congesAM||{}
       }).catch(e=>console.error('Save enregistrerCgAm:',e));
@@ -13766,6 +13783,23 @@ function ouvrirPastille(titre, corps){
 function pastille(type,titre,corps){
   const label=type==='i'?'i':'?';
   return `<span class="pastille" onclick="ouvrirPastille('${titre.replace(/'/g,"&#39;")}','${corps.replace(/'/g,"&#39;")}')" title="${titre}">${label}</span>`;
+}
+
+function afficherChargement(msg){
+  const existing=document.getElementById('chargement-overlay');
+  if(existing) existing.remove();
+  const overlay=document.createElement('div');
+  overlay.id='chargement-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:9999;display:flex;align-items:center;justify-content:center';
+  overlay.innerHTML=`<div style="background:var(--bg);border-radius:12px;padding:24px 32px;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,0.2)">
+    <div style="font-size:24px;margin-bottom:10px">⏳</div>
+    <div style="font-size:14px;color:var(--tx2)">${msg}</div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+function masquerChargement(){
+  const overlay=document.getElementById('chargement-overlay');
+  if(overlay) overlay.remove();
 }
 
 function toast(msg){
