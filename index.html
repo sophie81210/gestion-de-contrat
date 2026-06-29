@@ -4816,18 +4816,18 @@ function validerFiche(contratId,key){
       return;
     }
   }
+  // Recalculer les statuts congés AVANT validation (sinon, si c'est la dernière fiche d'un contrat avec rupture confirmée, le contrat serait déjà "clôturé" et exclu du recalcul)
+  const anneeAm=getAnneeAmPourDate(key);
+  if(S.congesAM&&S.congesAM[anneeAm]){majFichesCgAm(anneeAm,false);majFichesCgAm(anneeAm,false);}
+  // Recalculer aussi l'année AM suivante si le mois validé peut affecter des fiches suivantes
+  const anneeAmSuivante=anneeAm+1;
+  if(S.congesAM&&S.congesAM[anneeAmSuivante]){majFichesCgAm(anneeAmSuivante,false);majFichesCgAm(anneeAmSuivante,false);}
   // Valider la fiche
   c.fiches[key].valide=true;c.fiches[key].complete=true;
   c._regulDirty=true; // invalider le cache régularisation
   S.ficheModifiee=false;
   // Recalculer les congés acquis APRÈS validation
   calcCongesContrat(c);
-  // Recalculer les statuts congés APRÈS validation (la fiche est maintenant verrouillée)
-  const anneeAm=getAnneeAmPourDate(key);
-  if(S.congesAM&&S.congesAM[anneeAm]){majFichesCgAm(anneeAm,false);majFichesCgAm(anneeAm,false);}
-  // Recalculer aussi l'année AM suivante si le mois validé peut affecter des fiches suivantes
-  const anneeAmSuivante=anneeAm+1;
-  if(S.congesAM&&S.congesAM[anneeAmSuivante]){majFichesCgAm(anneeAmSuivante,false);majFichesCgAm(anneeAmSuivante,false);}
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
@@ -10356,13 +10356,18 @@ function confirmerRupture(cid){
       return;
     }
   }
-  // 1. Statut du préavis obligatoire pour les motifs concernés
+  // 1. Motif obligatoire
+  if(!rp.motif){
+    alerte('Veuillez sélectionner un motif de rupture avant de confirmer.');
+    return;
+  }
+  // 2. Statut du préavis obligatoire pour les motifs concernés
   const aPreavisR=rp.motif==='retrait-enfant'||rp.motif==='demission';
   if(aPreavisR&&!rp.statutPreavis){
     alerte('Veuillez indiquer si le préavis a été effectué, partiellement effectué ou non effectué.');
     return;
   }
-  // 2. Préavis partiel sans date de fin / date > légale
+  // 3. Préavis partiel sans date de fin / date > légale
   if(aPreavisR&&rp.statutPreavis==='partiel'&&!rp.dateFinPreavis){
     alerte('Veuillez indiquer la date de fin du préavis effectué.');
     return;
@@ -10376,7 +10381,7 @@ function confirmerRupture(cid){
       rp.dateFinPreavis=dateFinLegaleR.getFullYear()+'-'+String(dateFinLegaleR.getMonth()+1).padStart(2,'0')+'-'+String(dateFinLegaleR.getDate()).padStart(2,'0');
     }
   }
-  // 3. Date de fin de contrat dans une fiche validée
+  // 4. Date de fin de contrat dans une fiche validée
   const motifsAvecDateFin=['retrait-enfant','demission','retrait-force','fin-essai','fin-essai-am'];
   const dateFinR=getDateFinContrat(c);
   if(motifsAvecDateFin.includes(rp.motif)&&!dateFinR){
