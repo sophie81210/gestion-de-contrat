@@ -11290,8 +11290,9 @@ function buildCgAcquisEncarts(c, anneeAcq){
       return j.date>=anneeAcq+'-06-01'&&j.date<=(anneeAcq+1)+'-04-30';
     }).length;
   },0);
+  const quotaTotalAnneeCg=cg.estTerminee?(cg.acquis||0):(cg.acqBrut!==undefined?Math.floor(cg.acqBrut):(cg.acquis||0));
   // Plafonner au quota restant après déduction des jours déjà validés (anticipés en fiches validées)
-  const nbAnticipesProg=Math.min(nbAnticipesProgBrut,Math.max(0,(cg.acqBrut!==undefined?Math.floor(cg.acqBrut):(cg.acquis||0))-nbAnticipes));
+  const nbAnticipesProg=Math.min(nbAnticipesProgBrut,Math.max(0,quotaTotalAnneeCg-nbAnticipes));
   const debutPoseAcq=(anneeAcq+1)+'-05-01';
   const finPoseAcq=(anneeAcq+2)+'-04-30';
   const nbAcqProgBrut=Object.values(c.fiches||{}).reduce((n,f)=>{
@@ -11302,7 +11303,7 @@ function buildCgAcquisEncarts(c, anneeAcq){
     }).length;
   },0);
   // Plafonner pour ne pas dépasser le quota total moins ce qui est déjà anticipé (validé + programmé)
-  const nbAcqProg=Math.min(nbAcqProgBrut,Math.max(0,(cg.acqBrut!==undefined?Math.floor(cg.acqBrut):(cg.acquis||0))-nbAnticipes-nbAnticipesProg));
+  const nbAcqProg=Math.min(nbAcqProgBrut,Math.max(0,quotaTotalAnneeCg-nbAnticipes-nbAnticipesProg));
 
   const acquisPris=Math.max(0,(cg.pris||0)-nbAnticipes);
   html+=`<div style="background:${bg};border-radius:8px;padding:10px 12px;margin-bottom:8px">
@@ -13292,6 +13293,7 @@ if(tousNonPrevus){
           const estDansPeriodeAnneeAcq=dateStr>=debutAcqCpt&&dateStr<=finPoseCpt;
           const estCongesPose=['conges-acq','conges-anticipe','decompte-acq','decompte-anticipe','decompte-conges'].includes(jour.statut);
           if(decompteCommence&&estCongesPose&&!estMaiFiche&&estDansPeriodeAnneeAcq){
+            console.log('DEBUG[A]',c.nom,dateStr,'compteurTotal avant:',compteurTotal);
             compteurTotal++;
           }
           if(decompteCommence&&estFerie&&jour.statut==='ferie'){
@@ -13307,7 +13309,10 @@ if(tousNonPrevus){
             const lendCongesV=['conges-acq','conges-anticipe','conges-non'].includes(lendJourV?.statut);
             if(!veilleAcquisV||!lendAcquisV){
               // Ne compter que si encadré par des congés acquis/anticipés, pas conges-non
-              if(veilleAcquisV||lendAcquisV) compteurTotal++;
+              if(veilleAcquisV||lendAcquisV){
+                console.log('DEBUG[B-ferie]',c.nom,dateStr,'compteurTotal avant:',compteurTotal);
+                compteurTotal++;
+              }
             }
           }
           cur.setDate(cur.getDate()+1);continue;
@@ -13351,6 +13356,7 @@ if(tousNonPrevus){
           if(jour.statut==='travaille') break;
 
           compteurTotal++;
+          console.log('DEBUG[C-postpose]',c.nom,dateStr,'compteurTotal après:',compteurTotal);
           if(!fiche.valide){
             if(compteurTotal<=quotaAcquis){
               jour.statut='decompte-acq';
@@ -13402,19 +13408,8 @@ if(tousNonPrevus){
               cur.setDate(cur.getDate()+1);continue;
             }
             if(veilleAcquis&&!lendConges){
-              // Veille = congé acquis mais lendemain = non congé → reste férié (pas de pont)
-              // Sauf si le lendemain est encore dans la période de décompte (pose continue)
-              const lendOuvrStr2=getNextJourOuvrable(dateStr,reposH);
-              if(lendOuvrStr2>dernierDecompte&&data.jours[lendOuvrStr2]!=='pose'){
-                cur.setDate(cur.getDate()+1);continue;
-              }
-            }
-            // Si veille acquise et lendemain pas encore traité mais dans la période → garde férié
-            if(veilleAcquis&&!lendAcquis){
-              const lendOuvrStr=getNextJourOuvrable(dateStr,reposH);
-              if(lendOuvrStr<=dernierDecompte||data.jours[lendOuvrStr]==='pose'){
-                cur.setDate(cur.getDate()+1);continue;
-              }
+              // Veille = congé acquis (pas conges-non) mais lendemain = non congé → reste férié (pas de pont)
+              cur.setDate(cur.getDate()+1);continue;
             }
             // Sinon décompté comme congé (acquis ou non)
             // Sauf si semaine off : ne pas décompter
@@ -13426,6 +13421,7 @@ if(tousNonPrevus){
               cur.setDate(cur.getDate()+1);continue;
             }
             compteurTotal++;
+            console.log('DEBUG[D-pose]',c.nom,dateStr,'compteurTotal après:',compteurTotal);
             if(!fiche.valide){
               // Pour les mois à cheval : vérifier anticipeActif du mois précédent ou courant
               // On remonte jusqu'au premier mois de la période qui a un anticipeActif explicite
@@ -13472,10 +13468,12 @@ if(tousNonPrevus){
               if(premierTravReprise&&dateStr>=premierTravReprise){ cur.setDate(cur.getDate()+1);continue; }
               // Jour non prévu hors période : décompte automatique
               compteurTotal++;
+              console.log('DEBUG[E-horspose]',c.nom,dateStr,'compteurTotal après:',compteurTotal);
               if(!fiche.valide) jour.statut='decompte-conges';
             } else {
               // Jour prévu ou dans la période : pose normale
               compteurTotal++;
+              console.log('DEBUG[F-dansposeOuPrevu]',c.nom,dateStr,'compteurTotal après:',compteurTotal);
               if(!fiche.valide){
                 const debutMoisKey2=new Date(debut).getFullYear()+'-'+String(new Date(debut).getMonth()+1).padStart(2,'0');
                 const ficheDebut2=c.fiches?.[debutMoisKey2];
