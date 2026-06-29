@@ -1262,7 +1262,7 @@ function estContratCloture(c){
   return !!(c.fiches&&c.fiches[key]&&c.fiches[key].valide);
 }
 
-function archiverContrat(c){
+function nettoyerFichesPostCloture(c){
   // Supprimer fiches futures à la date de fin
   const dateFinContrat=getDateFinContrat(c);
   if(dateFinContrat&&c.fiches){
@@ -1280,6 +1280,11 @@ function archiverContrat(c){
     const dateFinStr=dateFinContrat.getFullYear()+'-'+String(dateFinContrat.getMonth()+1).padStart(2,'0')+'-'+String(dateFinContrat.getDate()).padStart(2,'0');
     c.agendas=c.agendas.filter(ag=>!ag.dateDeb||ag.dateDeb<=dateFinStr);
   }
+}
+
+function archiverContrat(c){
+  // Le nettoyage des fiches/agendas a déjà eu lieu dès la clôture (validation de la dernière fiche)
+  nettoyerFichesPostCloture(c);
   // Marquer archivé
   c.archive=true;
   // Retirer de la pointeuse
@@ -1292,7 +1297,7 @@ function archiverContrat(c){
 function archiverContratManuel(id){
   const c=S.contrats.find(x=>x.id==id);
   if(!c) return;
-  if(!confirm('Archiver ce contrat clôturé ?\n\nLes fiches et agendas futurs seront supprimés.')) return;
+  if(!confirm('Archiver ce contrat clôturé ?\n\nIl sera déplacé dans l\'onglet Archives.')) return;
   archiverContrat(c);
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
   saveToFirestore();
@@ -3037,15 +3042,9 @@ function ouvrirFiche(contratId,key){
       const hPrevDC=hSemTypeDC/6;
       if(hPrevDC>0) hDeduit='−'+fmtH(Math.round(hPrevDC*60));
     } else if(statutActuel==='conges-non'&&j.heureDebPrev&&(c.tc==='52'||getVersionActive(c,new Date(j.date)).tc==='52')){
-      // 52 sem plan sem : conges-non avec heures prévues → hSemType/6
-      const srcCN52=getVersionActive(c,new Date(j.date));
-      const agKeyCN52=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
-      const agCN52=(srcCN52.agendas||c.agendas||[]).find(a=>new Date(a.dateDebut)<=new Date(j.date)&&new Date(a.dateFin)>=new Date(j.date));
-      const typeCN52=agCN52?.semaines?.[agKeyCN52];
-      const stCN52=typeCN52&&srcCN52.semTypes?srcCN52.semTypes.find(st=>st.nom===typeCN52):null;
-      const hSemTypeCN52=stCN52?(stCN52.jours||[]).reduce((s,jj)=>jj&&jj.d&&jj.f?s+(toM(jj.f)-toM(jj.d))/60:s,0):((srcCN52.hMensu||0)*12/(srcCN52.nbSem||52));
-      const hPrevCN52=hSemTypeCN52/6;
-      if(hPrevCN52>0) hDeduit='−'+fmtH(Math.round(hPrevCN52*60));
+      // 52 sem : conges-non avec heures prévues déjà connues → les utiliser directement
+      const hPrevCN52=toM(j.heureFinPrev)-toM(j.heureDebPrev);
+      if(hPrevCN52>0) hDeduit='−'+fmtH(hPrevCN52);
     } else if(['abs-non','abs-am','arret','conges-non','abs-enfant'].includes(statutActuel)&&j.heureDebPrev&&j.heureFinPrev){
       // En semaine off : utiliser hSemMoy/nbJoursPossibles au lieu des heures prévues
       const agKeyAff=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
@@ -3196,24 +3195,7 @@ const statutPrevuJ=getStatutPrevu(c,j);
         ${(()=>{
           const srcActifJ=getVersionActive(c,new Date(j.date));
           const estCongesNon46=statutActuel==='conges-non'&&c.tc!=='52'&&srcActifJ.tc!=='52';
-          const estCongesNon52=statutActuel==='conges-non'&&(c.tc==='52'||srcActifJ.tc==='52');
           if(estCongesNon46) return '—';
-          if(estCongesNon52){
-            // Pour plan sem 52 : utiliser hSemType/6 (heures connues via agenda)
-            let hJour52;
-            if(srcActifJ.th==='sem'&&srcActifJ.semTypes){
-              const agKeyCN=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
-              const agCN=(srcActifJ.agendas||c.agendas||[]).find(a=>new Date(a.dateDebut)<=new Date(j.date)&&new Date(a.dateFin)>=new Date(j.date));
-              const typeCN=agCN?.semaines?.[agKeyCN];
-              const stCN=typeCN?srcActifJ.semTypes.find(st=>st.nom===typeCN):null;
-              const hSemTypeCN=stCN?(stCN.jours||[]).reduce((s,jj)=>jj&&jj.d&&jj.f?s+(toM(jj.f)-toM(jj.d))/60:s,0):0;
-              hJour52=hSemTypeCN>0?(hSemTypeCN/6).toFixed(2):((parseFloat(srcActifJ.hMensu||0)*12/(srcActifJ.nbSem||52))/6).toFixed(2);
-            } else {
-              const nbSem52=parseFloat(srcActifJ.nbSem||52);
-              hJour52=((parseFloat(srcActifJ.hMensu||0)*12/nbSem52)/6).toFixed(2);
-            }
-            return '<span style="color:var(--al)">−'+hJour52+'h</span>';
-          }
           if(hComp) return '<span style="color:var(--vt)">'+hComp+'</span>';
           if(hSup) return '<span style="color:var(--vt)">'+hSup+'</span>';
           if(statutActuel==='abs-rem') return '—';
@@ -3681,6 +3663,26 @@ function imprimerFiche(contratId,key){
     ${parseFloat(recap.indemRepasTotal)>0?'<tr><td>Indem. repas</td><td>'+recap.indemRepasTotal+' \u20AC</td></tr>':''}
     ${parseFloat(recap.indemKmTotal||0)>0?'<tr><td>Indem. km</td><td>'+recap.indemKmTotal+' \u20AC</td></tr>':''}
   </table>
+  ${(()=>{
+    const soldePdf=calcSoldeToutCompte(c, key);
+    if(!soldePdf) return '';
+    let soldeRows='';
+    if(soldePdf.regul){
+      soldeRows+='<tr><td>Régularisation ('+soldePdf.regul.hRegul.toFixed(2)+'h \u2014 '+soldePdf.regul.joursRegul+' j)</td><td>'+soldePdf.regul.montantNet.toFixed(2)+' \u20AC net</td></tr>';
+    }
+    if(soldePdf.indemConges){
+      soldeRows+='<tr><td>'+soldePdf.indemConges.label+'</td><td>'+soldePdf.indemConges.montantNet.toFixed(2)+' \u20AC net</td></tr>';
+    }
+    if(soldePdf.indemPreavis){
+      const sensLbl=soldePdf.indemPreavis.sens==='remboursement'?' (\u00E0 rembourser)':'';
+      const sg=soldePdf.indemPreavis.sens==='remboursement'?'\u2212 ':'';
+      soldeRows+='<tr><td>Indemnité de préavis ('+soldePdf.indemPreavis.joursRestants+' j)'+sensLbl+'</td><td>'+sg+soldePdf.indemPreavis.montantNet.toFixed(2)+' \u20AC net</td></tr>';
+    }
+    if(soldePdf.indemRupture){
+      soldeRows+='<tr><td>Indemnité de rupture (1/80\u00E8me)</td><td>'+soldePdf.indemRupture.montantBrut.toFixed(2)+' \u20AC brut</td></tr>';
+    }
+    return '<h3 style="margin-top:20px">Solde de tout compte</h3><table>'+soldeRows+'</table>';
+  })()}
   <script>window.onload=function(){window.print();}<\/script>
   </body></html>`);
   win.document.close();
@@ -4641,11 +4643,13 @@ function majFiche(contratId,key,idx,champ,val){
     const cellHpm=document.getElementById('hpm-'+contratId+'-'+key+'-'+idx);
     if(cellHpm){
       const isPlanMinVar2=c.th==='plan'&&(c.planType==='min'||c.planType==='var');
-      const statutsDeduits2=['abs-non','abs-am','ferie-non','arret','abs-enfant','abs-partielle','hors-contrat'];
+      const statutsDeduits2=['abs-non','abs-am','ferie-non','arret','abs-enfant','abs-partielle','hors-contrat','conges-non','decompte-conges'];
       const afficherDeduit2=!isPlanMinVar2||statutsDeduits2.includes(statut2);
       const hDeduitAffiche2=afficherDeduit2?hDeduit2:'';
-      cellHpm.style.color=hComp2?'var(--vt)':hDeduitAffiche2?'var(--al)':'var(--tx3)';
-      cellHpm.innerHTML=hComp2||(hDeduitAffiche2?'<span style="color:var(--al)">'+hDeduitAffiche2+'</span>':'—');
+      const estVraieDeduction2=statutsDeduits2.includes(statut2);
+      const couleurDeduit2=estVraieDeduction2?'var(--al)':'#555';
+      cellHpm.style.color=hComp2?'var(--vt)':hDeduitAffiche2?couleurDeduit2:'var(--tx3)';
+      cellHpm.innerHTML=hComp2||(hDeduitAffiche2?'<span style="color:'+couleurDeduit2+'">'+hDeduitAffiche2+'</span>':'—');
     }
     const now=new Date();
     const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
@@ -4828,13 +4832,16 @@ function validerFiche(contratId,key){
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
   saveToFirestore();
-  // Informer que le contrat est clôturé et peut désormais être archivé manuellement
+  // Informer que le contrat est clôturé : nettoyer les fiches/agendas futurs devenus inutiles, et signaler que l'archivage manuel (déplacement) est possible
   if(c.rupture&&c.rupture.confirmee){
     const dateFinContrat=getDateFinContrat(c);
     if(dateFinContrat){
       const [fy,fm]=[dateFinContrat.getFullYear(),dateFinContrat.getMonth()+1];
       const [ky,km]=key.split('-').map(Number);
       if(ky===fy&&km===fm&&!c.archive){
+        nettoyerFichesPostCloture(c);
+        S.contrats[cidx]=c;
+        localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
         toast('Dernière fiche validée — vous pouvez archiver ce contrat depuis la liste des contrats.');
       }
     }
