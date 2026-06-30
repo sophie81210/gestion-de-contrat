@@ -9,7 +9,7 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithEmailAndPassword,
-         createUserWithEmailAndPassword, sendPasswordResetEmail, signOut, onAuthStateChanged }
+         createUserWithEmailAndPassword, sendPasswordResetEmail, sendEmailVerification, signOut, onAuthStateChanged }
   from "https://www.gstatic.com/firebasejs/12.10.0/firebase-auth.js";
 import { getFirestore, doc, setDoc, getDoc, getDocs, collection, deleteDoc }
   from "https://www.gstatic.com/firebasejs/12.10.0/firebase-firestore.js";
@@ -30,7 +30,7 @@ const gp = new GoogleAuthProvider();
 
 window.fbLoginGoogle = async()=>{try{const r=await signInWithPopup(auth,gp);return{ok:true,user:r.user};}catch(e){return{ok:false,err:e.message};}};
 window.fbLoginEmail = async(email,pwd)=>{try{const r=await signInWithEmailAndPassword(auth,email,pwd);return{ok:true,user:r.user};}catch(e){return{ok:false,err:e.message};}};
-window.fbCreateEmail = async(email,pwd)=>{try{const r=await createUserWithEmailAndPassword(auth,email,pwd);return{ok:true,user:r.user};}catch(e){return{ok:false,err:e.message};}};
+window.fbCreateEmail = async(email,pwd)=>{try{const r=await createUserWithEmailAndPassword(auth,email,pwd);try{await sendEmailVerification(r.user);}catch(e2){console.error('Envoi email vérification:',e2);}return{ok:true,user:r.user};}catch(e){return{ok:false,err:e.message};}};
 window.fbResetPwd = async(email)=>{try{await sendPasswordResetEmail(auth,email);return{ok:true};}catch(e){return{ok:false,err:e.message};}};
 window.fbLogout = async()=>{try{await signOut(auth);return{ok:true};}catch(e){return{ok:false,err:e.message};}};
 window.fbSaveData = async(uid,data)=>{
@@ -63,6 +63,13 @@ window.fbGetAccesEmployeur = async(emailNormalise)=>{
   try{
     const snap=await getDoc(doc(db,'acces_employeurs',emailNormalise));
     return{ok:true,exists:snap.exists(),data:snap.exists()?snap.data():null};
+  }catch(e){return{ok:false,err:e.message};}
+};
+window.fbResendVerification = async()=>{
+  try{
+    if(!auth.currentUser) return{ok:false,err:'Aucun utilisateur connecté'};
+    await sendEmailVerification(auth.currentUser);
+    return{ok:true};
   }catch(e){return{ok:false,err:e.message};}
 };
 window.fbLoadData = async(uid)=>{
@@ -767,6 +774,14 @@ if(btnP && user && user.email==='coeurdassmat@gmail.com') btnP.style.display='in
     try{
       const acces=await window.fbGetAccesEmployeur(emailNorm);
       if(acces.ok&&acces.exists&&acces.data&&acces.data.uid!==user.uid){
+        // Pour une connexion email/mot de passe, exiger que l'email soit vérifié avant d'accorder l'accès employeur
+        // (la connexion Google est déjà vérifiée par Google, providerId='google.com')
+        const estGoogle=(user.providerData||[]).some(p=>p.providerId==='google.com');
+        if(!estGoogle&&!user.emailVerified){
+          hideLoader();
+          afficherEcranVerificationEmail();
+          return;
+        }
         await chargerModeEmployeur(acces.data.uid,acces.data.contratId);
         hideLoader();
         return;
@@ -809,6 +824,24 @@ async function chargerModeEmployeur(uidProprietaire,contratId){
     console.error('Chargement mode employeur:',e);
     alerte('Erreur lors du chargement de vos données.');
   }
+}
+
+function afficherEcranVerificationEmail(){
+  const sh=document.getElementById('shell');
+  sh.style.cssText='display:flex;flex-direction:column;flex:1;min-height:100vh;';
+  sh.innerHTML=`<div style="max-width:420px;margin:60px auto;text-align:center;padding:24px">
+    <div style="font-size:40px;margin-bottom:14px">📧</div>
+    <div style="font-size:18px;font-weight:700;margin-bottom:10px">Vérification de votre email requise</div>
+    <div style="font-size:14px;color:var(--tx2);margin-bottom:18px">Un email de vérification a été envoyé à votre adresse. Veuillez cliquer sur le lien qu'il contient, puis vous reconnecter.</div>
+    <button class="btn bp" onclick="renvoyerEmailVerification()">Renvoyer l'email de vérification</button>
+    <div style="margin-top:14px"><button class="btn bs" onclick="deconn()">Se déconnecter</button></div>
+  </div>`;
+}
+async function renvoyerEmailVerification(){
+  if(!window.fbResendVerification){toast('Connexion Firebase indisponible, réessayez plus tard.');return;}
+  const r=await window.fbResendVerification();
+  if(r.ok) toast('Email de vérification renvoyé ✓');
+  else toast('Erreur : '+r.err);
 }
 
 async function loginGoogle(){
