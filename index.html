@@ -47,6 +47,24 @@ window.fbSaveData = async(uid,data)=>{
     return{ok:true};
   }catch(e){return{ok:false,err:e.message};}
 };
+window.fbSetAccesEmployeur = async(emailNormalise,uid,contratId)=>{
+  try{
+    await setDoc(doc(db,'acces_employeurs',emailNormalise),{uid,contratId:String(contratId)});
+    return{ok:true};
+  }catch(e){return{ok:false,err:e.message};}
+};
+window.fbDeleteAccesEmployeur = async(emailNormalise)=>{
+  try{
+    await deleteDoc(doc(db,'acces_employeurs',emailNormalise));
+    return{ok:true};
+  }catch(e){return{ok:false,err:e.message};}
+};
+window.fbGetAccesEmployeur = async(emailNormalise)=>{
+  try{
+    const snap=await getDoc(doc(db,'acces_employeurs',emailNormalise));
+    return{ok:true,exists:snap.exists(),data:snap.exists()?snap.data():null};
+  }catch(e){return{ok:false,err:e.message};}
+};
 window.fbLoadData = async(uid)=>{
   try{
     const metaSnap=await getDoc(doc(db,'users',uid,'app','meta'));
@@ -1607,6 +1625,10 @@ function buildFicheContenu(source, c){
           </div>
           ${source.dateAvenant?`<div style="font-size:12px;color:#7c3aed;font-weight:600">Avenant n°${source.num} — effectif le ${new Date(source.dateAvenant).toLocaleDateString('fr-FR')}</div>`:''}
         </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;font-size:12px;color:var(--tx2)">
+        <span>Email employeur (accès lecture) : <strong style="color:var(--tx)">${c.emailEmployeurAutorise||'non défini'}</strong></span>
+        <button onclick="modifierEmailEmployeur(${c.id})" style="background:none;border:none;cursor:pointer;font-size:13px;color:var(--tx2);padding:2px 4px" title="Modifier">✏️</button>
       </div>
       <table style="width:100%;border-collapse:collapse">${lignesBase}</table>
     </div>
@@ -11881,6 +11903,41 @@ function renommerContrat(cid){
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
   renderDetTab(cid,'contrat');
   toast('Contrat renommé ✓');
+}
+async function modifierEmailEmployeur(cid){
+  const c=S.contrats.find(x=>x.id==cid);
+  if(!c) return;
+  const ancienEmail=c.emailEmployeurAutorise||'';
+  const nouvelEmail=prompt('Email de l\'employeur autorisé en lecture seule (laisser vide pour retirer l\'accès) :',ancienEmail);
+  if(nouvelEmail===null) return; // annulé
+  const email=nouvelEmail.trim().toLowerCase();
+  if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
+    alerte('Adresse email invalide.');
+    return;
+  }
+  if(email===ancienEmail) return;
+  if(!window.FB_USER||!window.fbSetAccesEmployeur||!window.fbDeleteAccesEmployeur){
+    alerte('Connexion Firebase indisponible, réessayez plus tard.');
+    return;
+  }
+  // Retirer l'ancien accès s'il existait
+  if(ancienEmail){
+    await window.fbDeleteAccesEmployeur(ancienEmail);
+  }
+  // Créer le nouvel accès si un email a été saisi
+  if(email){
+    const r=await window.fbSetAccesEmployeur(email,window.FB_USER.uid,cid);
+    if(!r.ok){
+      alerte('Erreur lors de l\'enregistrement de l\'accès : '+r.err);
+      return;
+    }
+  }
+  c.emailEmployeurAutorise=email||null;
+  _contratsModifies.add(cid);
+  saveToFirestore();
+  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  renderDetTab(cid,'contrat');
+  toast(email?'Accès employeur défini ✓':'Accès employeur retiré ✓');
 }
 
 function annulerAvenant(cid, avid){
