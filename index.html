@@ -757,10 +757,22 @@ window.entrerApresAuth = async function(user){
   window.FB_USER = user;
   document.getElementById('pg-login').style.display='none';
 const btnP=document.getElementById('btn-params');
-if(btnP && user && user.email==='coeurdassmat@gmail.com') btnP.style.display='inline-block';  
+if(btnP && user && user.email==='coeurdassmat@gmail.com') btnP.style.display='inline-block';
   const sh=document.getElementById('shell');
   sh.style.cssText='display:flex;flex-direction:column;flex:1;min-height:100vh;';
   showLoader('Chargement des données...');
+  // Vérifier d'abord si cet email correspond à un accès employeur (lecture seule sur un contrat précis)
+  const emailNorm=(user.email||'').trim().toLowerCase();
+  if(emailNorm&&window.fbGetAccesEmployeur){
+    try{
+      const acces=await window.fbGetAccesEmployeur(emailNorm);
+      if(acces.ok&&acces.exists&&acces.data&&acces.data.uid!==user.uid){
+        await chargerModeEmployeur(acces.data.uid,acces.data.contratId);
+        hideLoader();
+        return;
+      }
+    }catch(e){console.error('Vérification accès employeur:',e);}
+  }
   loadFromFirestore().then(()=>{
     hideLoader();
     goTo('auj');
@@ -771,6 +783,33 @@ if(btnP && user && user.email==='coeurdassmat@gmail.com') btnP.style.display='in
     reinitBoutonsMinuit();
   });
 };
+
+async function chargerModeEmployeur(uidProprietaire,contratId){
+  S.modeEmployeurLectureSeule=true;
+  try{
+    const r=await window.fbLoadData(uidProprietaire);
+    if(!r.ok){
+      alerte('Impossible de charger les données du contrat.');
+      return;
+    }
+    const c=(r.data.contrats||[]).find(x=>String(x.id)===String(contratId));
+    if(!c){
+      alerte('Le contrat associé à votre accès est introuvable.');
+      return;
+    }
+    S.contrats=[c];
+    S.params=r.data.params||{};
+    S.congesAM=r.data.congesAM||{};
+    // Masquer la navigation principale et l'icône de déconnexion classique, n'afficher que le détail du contrat
+    document.getElementById('shell').style.cssText='display:flex;flex-direction:column;flex:1;min-height:100vh;';
+    const navPrincipale=document.querySelector('.tabs');
+    if(navPrincipale) navPrincipale.style.display='none';
+    renderDetTab(c.id,'contrat');
+  }catch(e){
+    console.error('Chargement mode employeur:',e);
+    alerte('Erreur lors du chargement de vos données.');
+  }
+}
 
 async function loginGoogle(){
   if(!window.fbLoginGoogle){toast('Firebase en cours de chargement, réessayez');return;}
@@ -783,6 +822,7 @@ async function loginGoogle(){
   else toast('Erreur : '+r.err);
 }
 let modeInscription=false;
+function estLectureSeuleEmployeur(){ return !!(S.modeEmployeurLectureSeule); }
 function basculerModeEmail(){
   modeInscription=!modeInscription;
   const btn=document.getElementById('btn-email-action');
@@ -1621,15 +1661,16 @@ function buildFicheContenu(source, c){
         <div>
           <div style="display:flex;align-items:center;gap:8px">
             <div style="font-size:18px;font-weight:700;color:var(--m)">${c.nom||'—'}</div>
-            ${!c.cloture?`<button onclick="renommerContrat(${c.id})" style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--tx2);padding:2px 4px" title="Renommer">✏️</button>`:''}
+            ${(!c.cloture&&!estLectureSeuleEmployeur())?`<button onclick="renommerContrat(${c.id})" style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--tx2);padding:2px 4px" title="Renommer">✏️</button>`:''}
           </div>
           ${source.dateAvenant?`<div style="font-size:12px;color:#7c3aed;font-weight:600">Avenant n°${source.num} — effectif le ${new Date(source.dateAvenant).toLocaleDateString('fr-FR')}</div>`:''}
         </div>
       </div>
+      ${estLectureSeuleEmployeur()?'':`
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;font-size:12px;color:var(--tx2)">
         <span>Email employeur (accès lecture) : <strong style="color:var(--tx)">${c.emailEmployeurAutorise||'non défini'}</strong></span>
         <button onclick="modifierEmailEmployeur(${c.id})" style="background:none;border:none;cursor:pointer;font-size:13px;color:var(--tx2);padding:2px 4px" title="Modifier">✏️</button>
-      </div>
+      </div>`}
       <table style="width:100%;border-collapse:collapse">${lignesBase}</table>
     </div>
     <div class="card">
@@ -1695,7 +1736,7 @@ function renderDetTab(id,tab){
             </div>
            <div style="display:flex;gap:6px">
              <button class="btn bsm" style="background:#7c3aed;color:#fff;border:none" onclick="voirAvenant(${c.id},${a.id})">Voir</button>
-             <button class="btn bd bsm" onclick="annulerAvenant(${c.id},${a.id})">Annuler</button>
+             ${estLectureSeuleEmployeur()?'':`<button class="btn bd bsm" onclick="annulerAvenant(${c.id},${a.id})">Annuler</button>`}
            </div>
           </div>`).join('')}
       </div>`;
@@ -1705,14 +1746,14 @@ function renderDetTab(id,tab){
   <div class="card">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
       <div class="ctitle" style="margin:0">Agenda</div>
-      <button class="btn bs bsm" onclick="creerAgenda(${c.id})">+ Nouvel agenda</button>
+      ${estLectureSeuleEmployeur()?'':`<button class="btn bs bsm" onclick="creerAgenda(${c.id})">+ Nouvel agenda</button>`}
     </div>
     <div id="agenda-wrap-${c.id}">${renderAgendas({...cv,id:c.id})}</div>
   </div>`:''}
 
   <div style="display:flex;gap:8px;justify-content:center;padding:4px 0 16px;flex-wrap:wrap">
       <button class="btn bs" onclick="goTo('cont')">← Retour</button>
-      ${c.signe?`
+      ${estLectureSeuleEmployeur()?(c.signe?`<span style="display:inline-flex;align-items:center;gap:5px;padding:8px 14px;background:#e8f5ee;color:#3a6b4a;border-radius:20px;font-size:13px;font-weight:600">✓ Signé</span>`:''):(c.signe?`
         ${(()=>{
           const avBrouillon=c.avenants&&c.avenants.find(a=>!a.signe);
           return avBrouillon
@@ -1734,9 +1775,9 @@ function renderDetTab(id,tab){
           return `<button class="btn bd" onclick="annulerAvenant(${c.id},${avActif.id})">Annuler l'avenant n°${avActif.num}</button>`;
         })()}
         <span style="display:inline-flex;align-items:center;gap:5px;padding:8px 14px;background:#e8f5ee;color:#3a6b4a;border-radius:20px;font-size:13px;font-weight:600">✓ Signé</span>`
-      :`<button class="btn bp" onclick="modif(${c.id})">Modifier</button>`}
+      :`<button class="btn bp" onclick="modif(${c.id})">Modifier</button>`)}
 
-      <button class="btn bd" onclick="confSuppr(${c.id})">Supprimer</button>
+      ${estLectureSeuleEmployeur()?'':`<button class="btn bd" onclick="confSuppr(${c.id})">Supprimer</button>`}
     </div>`;
 }
   else if(tab==='presence'){
@@ -3115,7 +3156,7 @@ function ouvrirFiche(contratId,key){
       '<div style="display:flex;gap:4px;flex-wrap:wrap">'+REPAS_SYM.map((sym,ri)=>c.repas&&c.repas[ri]?
         `<label style="cursor:pointer;display:inline-flex;align-items:center;gap:1px" title="${REPAS_NOM[ri]}">
           <input type="checkbox" ${j.repas&&j.repas[ri]?'checked':''}
-            ${fiche.valide?'disabled':`onchange="majFicheRepas(${contratId},'${key}',${idx},${ri},this.checked)"`}
+            ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`onchange="majFicheRepas(${contratId},'${key}',${idx},${ri},this.checked)"`}
             style="width:12px;height:12px;accent-color:var(--m)">
           <span style="font-size:13px">${sym}</span>
         </label>`:'').join('')+'</div>'
@@ -3126,7 +3167,7 @@ function ouvrirFiche(contratId,key){
     const kmCell=kmVisible?`<td style="padding:3px 2px">
       <input type="number" style="width:38px;padding:2px 2px;border:1px solid var(--mb);border-radius:3px;font-size:11px" class="no-spin"
         placeholder="km" value="${j.km||''}"
-       ${fiche.valide?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'km',this.value)"`}>
+       ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'km',this.value)"`}>
     </td>`:aKm?'<td style="padding:3px 2px"><input type="number" style="width:38px;visibility:hidden" class="no-spin"></td>':'';
 
     const optsBase=['conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','a-selectionner','non-prevu','hors-contrat','repos','ferie','ferie-non'].includes(statutActuel)?statutActuel:statutPrevu;
@@ -3178,10 +3219,10 @@ function ouvrirFiche(contratId,key){
         prevuCell=`<td style="padding:3px 4px;border-left:2px solid ${couleurVolumeBrd}">
           <input type="time" value="${j.heureDebPrev||''}"
             style="width:68px;padding:2px 2px;border:1px solid var(--mb);border-radius:3px;font-size:11px;display:block;margin-bottom:2px"
-            ${fiche.valide?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'debPrev',this.value)"`}>
+            ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'debPrev',this.value)"`}>
           <input type="time" value="${j.heureFinPrev||''}"
             style="width:68px;padding:2px 2px;border:1px solid var(--mb);border-radius:3px;font-size:11px;display:block"
-            ${fiche.valide?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'finPrev',this.value)"`}>
+            ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'finPrev',this.value)"`}>
         </td>`;
       } else {
         prevuCell=`<td style="padding:4px 6px;font-size:12px;color:var(--tx3);text-align:center;border-left:2px solid ${couleurVolumeBrd}">—</td>`;
@@ -3224,10 +3265,10 @@ const statutPrevuJ=getStatutPrevu(c,j);
           <div>
             <input type="time" value="${j.heureDebReel||''}"
               style="width:68px;padding:2px 2px;border:1px solid var(--mb);${inputBorder};border-radius:3px;font-size:11px;display:block;margin-bottom:2px"
-              ${fiche.valide?'disabled':`oninput="majFiche(${contratId},'${key}',${idx},'debReel',this.value)"`}>
+              ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`oninput="majFiche(${contratId},'${key}',${idx},'debReel',this.value)"`}>
             <input type="time" value="${j.heureFinReel||''}"
               style="width:68px;padding:2px 2px;border:1px solid var(--mb);${inputBorder};border-radius:3px;font-size:11px;display:block"
-              ${fiche.valide?'disabled':`oninput="majFiche(${contratId},'${key}',${idx},'finReel',this.value)"`}>
+              ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`oninput="majFiche(${contratId},'${key}',${idx},'finReel',this.value)"`}>
           </div>   
         </div>`
         :`<span style="font-size:11px;color:var(--tx3);font-style:italic">—</span>`;
@@ -3269,19 +3310,19 @@ const statutPrevuJ=getStatutPrevu(c,j);
       <td style="padding:3px 4px;text-align:right;vertical-align:top">
         <select title="${getTooltipStatut(j.statut||statutPrevu||'')||''}" style="font-size:10px;padding:2px 3px;border:1px solid var(--mb);border-radius:3px;width:100%;max-width:130px;background:${bg}"
           onfocus="showMobileStatutTip(this.value||'${j.statut||statutPrevu||''}')" onblur="hideMobileStatutTip()"
-          ${fiche.valide?'disabled':`onchange="majFicheStatut(${contratId},'${key}',${idx},this.value)"`}>
+          ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`onchange="majFicheStatut(${contratId},'${key}',${idx},this.value)"`}>
           ${selectedOpts}
         </select>
         ${(repasVisible||aKm)?`<div style="display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap;margin-top:3px">
           ${repasVisible?'<div style="display:flex;gap:2px">'+REPAS_SYM.map((sym,ri)=>c.repas&&c.repas[ri]?
             `<label style="cursor:pointer;display:inline-flex;align-items:center;gap:1px" title="${REPAS_NOM[ri]}">
               <input type="checkbox" ${j.repas&&j.repas[ri]?'checked':''}
-                ${fiche.valide?'disabled':`onchange="majFicheRepas(${contratId},'${key}',${idx},${ri},this.checked)"`}
+                ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`onchange="majFicheRepas(${contratId},'${key}',${idx},${ri},this.checked)"`}
                 style="width:11px;height:11px;accent-color:var(--m)">
               <span style="font-size:12px">${sym}</span>
             </label>`:'').join('')+'</div>':''}
           ${aKm?`<input type="number" class="no-spin" style="width:36px;padding:1px 2px;border:1px solid var(--mb);border-radius:3px;font-size:10px" placeholder="km" value="${j.km||''}"
-            ${fiche.valide?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'km',this.value)"`}>`:'  '}
+            ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'km',this.value)"`}>`:'  '}
         </div>`:''}
       </td>
     </tr>`;
@@ -3317,7 +3358,7 @@ const statutPrevuJ=getStatutPrevu(c,j);
       <button class="btn bs bsm" onclick="if(S.ficheModifiee&&!confirm('Des modifications non enregistrées seront perdues. Continuer ?'))return;S.ficheModifiee=false;renderDetTab(${contratId},'presence')">← Retour</button>
       <span style="font-weight:700;font-size:15px;color:var(--m)">Feuille de présence — ${label}</span>
     ${fiche.valide?'<span style="color:var(--vt);font-size:13px;font-weight:600">✓ Validée</span>':''}
-    ${!fiche.valide?`<button class="btn bs bsm" style="margin-left:auto" onclick="enregistrerFiche(${contratId},'${key}')">💾</button>`:''}
+    ${(!fiche.valide&&!estLectureSeuleEmployeur())?`<button class="btn bs bsm" style="margin-left:auto" onclick="enregistrerFiche(${contratId},'${key}')">💾</button>`:''}
     </div>
     <div style="width:100%;overflow:hidden">
       <table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed">
@@ -3419,8 +3460,8 @@ const statutPrevuJ=getStatutPrevu(c,j);
       ${fiche.valide
         ?`<span style="color:var(--vt);font-size:13px;font-weight:600">✓ Feuille validée — lecture seule</span>
           <button class="btn bs bsm" onclick="imprimerFiche(${contratId},'${key}')">📄 Télécharger PDF</button>
-          ${peutDeverrouillerFiche(c,key)?`<button class="btn bs bsm" onclick="deverrouillerFiche(${contratId},'${key}')">🔓 Déverrouiller</button>`:''}`
-        :`<button class="btn bs" onclick="enregistrerFiche(${contratId},'${key}')">💾 Enregistrer</button>
+          ${(peutDeverrouillerFiche(c,key)&&!estLectureSeuleEmployeur())?`<button class="btn bs bsm" onclick="deverrouillerFiche(${contratId},'${key}')">🔓 Déverrouiller</button>`:''}`
+        :estLectureSeuleEmployeur()?'':`<button class="btn bs" onclick="enregistrerFiche(${contratId},'${key}')">💾 Enregistrer</button>
           <button class="btn bp" onclick="validerFiche(${contratId},'${key}')">✓ Valider la feuille du mois</button>`}
     </div>
     ${(()=>{
@@ -8840,11 +8881,11 @@ function renderAgendas(c){
 
     const calHtml = renderCalAgenda(c,ag,semainesFiltrees,false,c.id,agSource);
 
-    const btnSuppr=!estCommence
+    const btnSuppr=(!estCommence&&!estLectureSeuleEmployeur())
       ?`<button class="btn bd bsm" onclick="supprimerAgenda(${c.id},${ag.id})">Supprimer</button>`
       :'';
 
-    const btnModif=_agendaGeleTmp?'':
+    const btnModif=(_agendaGeleTmp||estLectureSeuleEmployeur())?'':
       `<button class="btn bs bsm" id="btn-modif-${ag.id}" onclick="ouvrirModifAgenda(${c.id},${ag.id})">✏️ Modifier</button>`;
 
     const html=`<div id="agenda-${ag.id}">
@@ -10680,8 +10721,8 @@ function renderRuptureCDD(c, cont){
   }
 
   const confirmeeHtml=rp.confirmee?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px">
-    ✓ Rupture confirmée — <button class="btn bd bsm" style="margin-left:8px" onclick="annulerRupture(${cid})">✕ Annuler</button>
-    <button class="btn bp bsm" style="margin-left:8px" onclick="sauvegarderRupture(${cid})">💾 Enregistrer</button>
+    ✓ Rupture confirmée${estLectureSeuleEmployeur()?'':` — <button class="btn bd bsm" style="margin-left:8px" onclick="annulerRupture(${cid})">✕ Annuler</button>
+    <button class="btn bp bsm" style="margin-left:8px" onclick="sauvegarderRupture(${cid})">💾 Enregistrer</button>`}
   </div>`:'' ;
 
   cont.innerHTML=`
@@ -10731,11 +10772,11 @@ function renderRuptureCDD(c, cont){
     </div>
     ${soldeHtml}
     <div style="display:flex;gap:8px;margin-top:12px">
-      ${!rp.confirmee?`<button class="btn bs" onclick="sauvegarderRupture(${cid})">💾 Enregistrer</button>`:''}
-      ${!rp.confirmee?`<button class="btn bpurple" onclick="confirmerRupture(${cid})">✓ Confirmer la rupture</button>`:''}
+      ${(!rp.confirmee&&!estLectureSeuleEmployeur())?`<button class="btn bs" onclick="sauvegarderRupture(${cid})">💾 Enregistrer</button>`:''}
+      ${(!rp.confirmee&&!estLectureSeuleEmployeur())?`<button class="btn bpurple" onclick="confirmerRupture(${cid})">✓ Confirmer la rupture</button>`:''}
     </div>`;
-  // Bloquer la simulation si confirmée via pointer-events
-  if(rp.confirmee){
+  // Bloquer la simulation si confirmée ou en mode lecture seule employeur, via pointer-events
+  if(rp.confirmee||estLectureSeuleEmployeur()){
     const simCard=cont.querySelector('#rp-motif-'+cid)?.closest('.card');
     if(simCard){
       simCard.style.pointerEvents='none';
@@ -10770,9 +10811,9 @@ function renderRupture(c, cont){
     const finOccHtml=c.rupture?.confirmee
       ?`<div class="card" style="margin-bottom:10px;background:#fff8e1;border-color:#f0c674">
           <div style="font-weight:600;color:#8a6500">✓ Fin de l'accueil confirmée le ${new Date(c.rupture.dateSignif).toLocaleDateString('fr-FR')}</div>
-          <button class="btn bs bsm" style="margin-top:8px" onclick="annulerRupture(${c.id})">✕ Annuler la confirmation</button>
+          ${estLectureSeuleEmployeur()?'':`<button class="btn bs bsm" style="margin-top:8px" onclick="annulerRupture(${c.id})">✕ Annuler la confirmation</button>`}
         </div>`
-      :`<div class="card" style="margin-bottom:10px">
+      :estLectureSeuleEmployeur()?'':`<div class="card" style="margin-bottom:10px">
           <div class="ctitle">Fin de l'accueil</div>
           <label style="font-size:12px;color:var(--tx2)">Dernier jour d'accueil</label>
           <input type="text" id="rp-occ-fin-${c.id}" value="${dateISOversTexte(rpOcc.dateSignif||'')}" placeholder="JJ/MM/AAAA" oninput="formaterSaisieDate(this)" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
@@ -11096,7 +11137,7 @@ function renderRupture(c, cont){
 
   const confirmeeHtml=rp.confirmee?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px;margin-bottom:10px">
     <div style="font-size:16px;font-weight:700;color:#856404;margin-bottom:6px">✓ Rupture confirmée</div>
-    <button class="btn bd bsm" onclick="annulerRupture(${cid})">✕ Annuler la confirmation</button>
+    ${estLectureSeuleEmployeur()?'':`<button class="btn bd bsm" onclick="annulerRupture(${cid})">✕ Annuler la confirmation</button>`}
   </div>`:'';
 
   cont.innerHTML=`
@@ -11131,11 +11172,11 @@ function renderRupture(c, cont){
     </div>
     ${soldeHtml}
     <div style="display:flex;gap:8px;margin-top:12px">
-      <button class="btn bs" onclick="sauvegarderRupture(${cid})">💾 Enregistrer</button>
-      ${!rp.confirmee?`<button class="btn bpurple" onclick="confirmerRupture(${cid})">✓ Confirmer la rupture</button>`:''}
+      ${estLectureSeuleEmployeur()?'':`<button class="btn bs" onclick="sauvegarderRupture(${cid})">💾 Enregistrer</button>`}
+      ${(!rp.confirmee&&!estLectureSeuleEmployeur())?`<button class="btn bpurple" onclick="confirmerRupture(${cid})">✓ Confirmer la rupture</button>`:''}
     </div>`;
-  // Bloquer la simulation si confirmée via pointer-events (CDD)
-  if(rp.confirmee){
+  // Bloquer la simulation si confirmée ou en mode lecture seule employeur
+  if(rp.confirmee||estLectureSeuleEmployeur()){
     cont.querySelectorAll('input,select,textarea,button:not([onclick*="annulerRupture"])').forEach(el=>{el.disabled=true;});
   }
 }
