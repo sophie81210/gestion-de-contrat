@@ -72,6 +72,13 @@ window.fbResendVerification = async()=>{
     return{ok:true};
   }catch(e){return{ok:false,err:e.message};}
 };
+window.fbDeleteUser = async()=>{
+  try{
+    if(!auth.currentUser) return{ok:false,err:'Aucun utilisateur connecté'};
+    await auth.currentUser.delete();
+    return{ok:true};
+  }catch(e){return{ok:false,err:e.message};}
+};
 window.fbLoadData = async(uid)=>{
   try{
     const metaSnap=await getDoc(doc(db,'users',uid,'app','meta'));
@@ -819,10 +826,50 @@ async function chargerModeEmployeur(uidProprietaire,contratId){
     document.getElementById('shell').style.cssText='display:flex;flex-direction:column;flex:1;min-height:100vh;';
     const navPrincipale=document.querySelector('.tabs');
     if(navPrincipale) navPrincipale.style.display='none';
+    // Bandeau employeur avec déconnexion et suppression de compte
+    const sh2=document.getElementById('shell');
+    let bandeau=document.getElementById('bandeau-employeur');
+    if(!bandeau){
+      bandeau=document.createElement('div');
+      bandeau.id='bandeau-employeur';
+      bandeau.style.cssText='display:flex;justify-content:flex-end;gap:10px;padding:8px 14px;font-size:12px;background:var(--mp);border-bottom:1px solid var(--mb)';
+      bandeau.innerHTML=`<button class="btn bs bsm" onclick="deconn()">Se déconnecter</button>
+        <button class="btn bd bsm" onclick="supprimerCompteEmployeur()">Supprimer mon compte</button>`;
+      sh2.insertBefore(bandeau,sh2.firstChild);
+    }
     renderDetTab(c.id,'contrat');
   }catch(e){
     console.error('Chargement mode employeur:',e);
     alerte('Erreur lors du chargement de vos données.');
+  }
+}
+async function supprimerCompteEmployeur(){
+  if(!confirm('Voulez-vous vraiment supprimer votre compte ?\n\nCette action est irréversible et vous perdrez l\'accès à ce contrat. Vous devrez redemander un accès si besoin.')) return;
+  if(!window.FB_USER){toast('Aucun utilisateur connecté');return;}
+  const emailNorm=(window.FB_USER.email||'').trim().toLowerCase();
+  showLoader('Suppression du compte...');
+  try{
+    if(emailNorm&&window.fbDeleteAccesEmployeur){
+      await window.fbDeleteAccesEmployeur(emailNorm);
+    }
+    if(window.fbDeleteUser){
+      const r=await window.fbDeleteUser();
+      if(!r.ok){
+        hideLoader();
+        alerte('Erreur lors de la suppression : '+r.err+'\n\nVotre accès au contrat a tout de même été révoqué. Veuillez vous déconnecter.');
+        return;
+      }
+    }
+    hideLoader();
+    toast('Compte supprimé ✓');
+    window.FB_USER=null;
+    document.getElementById('shell').classList.remove('on');
+    document.getElementById('shell').style.display='none';
+    document.getElementById('pg-login').style.display='flex';
+  }catch(e){
+    hideLoader();
+    if(e.code==='auth/requires-recent-login') alerte('Pour des raisons de sécurité, veuillez vous déconnecter puis vous reconnecter avant de supprimer votre compte.');
+    else alerte('Erreur lors de la suppression : '+e.message);
   }
 }
 
