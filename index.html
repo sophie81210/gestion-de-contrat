@@ -743,7 +743,7 @@ const S={
          // Clé séparée pour l'état des cloches
 S.showTodayMap = JSON.parse(localStorage.getItem("cam_showToday") || "{}");
 
-// Migration : passer les jours 'prevu' plan min/var en 'a-selectionner'
+// Migration : a-selectionner et jours-complementaires sont retirés, unifiés sur non-prevu/travaille (statuts communs à tous les types de contrat)
 (function migrerASelectionner(){
   let modifie=false;
   (S.contrats||[]).forEach(c=>{
@@ -752,8 +752,8 @@ S.showTodayMap = JSON.parse(localStorage.getItem("cam_showToday") || "{}");
     Object.values(c.fiches).forEach(fiche=>{
       if(fiche.valide) return;
       (fiche.jours||[]).forEach(j=>{
-        // Nettoyer a-selectionner sur jours avant dateDeb
-        if(j.statut==='a-selectionner'&&c.dateDeb&&j.date<c.dateDeb){
+        // Nettoyer jours avant dateDeb
+        if((j.statut==='a-selectionner'||j.statut==='jours-complementaires')&&c.dateDeb&&j.date<c.dateDeb){
           j.statut=null;
           delete j._jourPossible;
           modifie=true;
@@ -761,6 +761,15 @@ S.showTodayMap = JSON.parse(localStorage.getItem("cam_showToday") || "{}");
         // Corriger les fériés sur jours possibles qui ont statut a-selectionner au lieu de ferie
         if(j.statut==='a-selectionner'&&j.planVarPrevu&&c.th==='plan'&&(c.planType==='min'||c.planType==='var')&&isFerie(j.date,c)){
           j.statut='ferie';
+          modifie=true;
+        }
+        // Anciennes données : a-selectionner → non-prevu, jours-complementaires → travaille
+        if(j.statut==='a-selectionner'){
+          j.statut='non-prevu';
+          modifie=true;
+        }
+        if(j.statut==='jours-complementaires'){
+          j.statut='travaille';
           modifie=true;
         }
         if(j.statut===null&&j.planVarPrevu&&j._jourPossible!==false&&!(c.dateDeb&&j.date<c.dateDeb)){
@@ -776,7 +785,7 @@ S.showTodayMap = JSON.parse(localStorage.getItem("cam_showToday") || "{}");
           if(isFerie(j.date,c)&&c.th==='plan'&&(c.planType==='min'||c.planType==='var')){
             j.statut='ferie';
           } else {
-            j.statut='a-selectionner';
+            j.statut='non-prevu';
           }
           j._jourPossible=true;
           modifie=true;
@@ -2475,7 +2484,7 @@ function creerFiche(c,annee,mois){
     if(estPlanMinVar){
       if(estReposJour) statutInit='repos';
       else if(estFerieJour) statutInit='ferie';
-      else if(estJourPossible) statutInit='a-selectionner';
+      else if(estJourPossible) statutInit='non-prevu';
     }
     jours.push({
       date:dateStr,
@@ -2496,8 +2505,8 @@ function creerFiche(c,annee,mois){
 }
 
 
-// Helper : 'a-selectionner' se comporte comme 'prevu' dans tous les calculs
-function estStatutPrevu(s){ return s==='prevu'||s==='a-selectionner'||s==='reprise'; }
+// 'reprise' se comporte comme 'prevu' dans les calculs
+function estStatutPrevu(s){ return s==='prevu'||s==='reprise'; }
 function estDecompte(s){ return s==='decompte-acq'||s==='decompte-anticipe'||s==='decompte-conges'; }
 function estDecompteAcq(s){ return s==='decompte-acq'; }
 function estDecompteAnticipe(s){ return s==='decompte-anticipe'; }
@@ -2585,11 +2594,10 @@ function getStatutOptions(statutPrevu, isPlanMinVar, c, sourceActive){
     'prevu':['abs-partielle','abs-rem','abs-enfant','abs-non','arret','init'],
     // Jours non prévus : actions possibles selon le type de contrat
     'non-prevu': isPlanVar
-      ?['prevu','jours-complementaires','arret','init']
+      ?['prevu','travaille','arret','init']
       :['travaille','arret','init'],
     // Statuts simples : juste réinitialiser
     'travaille':['init'],
-    'jours-complementaires':['init'],
     'arret':['init'],
     'abs-partielle':['init'],
     'abs-rem':['init'],
@@ -2611,8 +2619,6 @@ function getStatutOptions(statutPrevu, isPlanMinVar, c, sourceActive){
     'decompte-acq':['reprise'],
     'decompte-anticipe':['reprise'],
     'reprise':['decompte-conges'],
-    // À sélectionner (plan min/var uniquement)
-    'a-selectionner':['prevu','jours-complementaires','non-prevu','abs-partielle','abs-rem','abs-enfant','abs-non','arret','init'],
   };
   const labels={
     'prevu':'Prévu','abs-rem':'Absence rémunérée','abs-enfant':'Abs. maladie enfant',
@@ -2620,8 +2626,8 @@ function getStatutOptions(statutPrevu, isPlanMinVar, c, sourceActive){
     'arret':'Arrêt de travail','non-prevu':'Non prévu','travaille':'Travaillé','repos':'Repos',
     'ferie':'Férié','conges-acq':'Congés','conges-non':'Congés','conges-anticipe':'Congés','conges-am':'Congés','conges-6j':'Non prévu',
     'init':'↺ Réinitialiser','hors-contrat':'Hors contrat','abs-partielle':'Absence partielle',
-    'decompte-conges':'Non prévu','decompte-acq':'Non prévu','decompte-anticipe':'Non prévu','a-selectionner':'À sélectionner',
-    'jours-complementaires':'Jour complémentaire','reprise':'Reprise'
+    'decompte-conges':'Non prévu','decompte-acq':'Non prévu','decompte-anticipe':'Non prévu',
+    'reprise':'Reprise'
   };
   return (opts[statutPrevu]||['init']).map(v=>`<option value="${v}">${labels[v]||v}</option>`).join('');
 }
@@ -2653,8 +2659,6 @@ function getTooltipStatut(s){
     'decompte-conges':"Le décompte des congés se poursuit jusqu'à la veille de la reprise",
     'decompte-acq':'Le décompte des congés acquis se poursuit',
     'decompte-anticipe':'Le décompte des congés anticipés se poursuit',
-    'jours-complementaires':'Jour compté en heures complémentaires / supplémentaires',
-    'a-selectionner':'Choisir le type de journée',
     'reprise':'Choisir le type de journée',
     'abs-partielle':'Indiquer les heures réelles, la différence sera déduite du salaire',
     'abs-rem':'Jour rémunéré, les indemnités ne sont pas versées',
@@ -2677,7 +2681,7 @@ function getStatutBg(statut){
     'abs-rem':'#f2f7f4','abs-enfant':'#fdecea','abs-non':'#fdecea','abs-am':'#fdecea','ferie-non':'#fdecea',
     'arret':'#fdecea','travaille':'#e8f5ee','conges':'#f0defc',
     'conges-anticipe':'#f5f0ff','conges-am':'#f5f0ff',
-    'abs-partielle':'#fcf3f2','hors-contrat':'#fcfcfc','decompte-conges':'#fcfcfc','decompte-acq':'#fcfcfc','decompte-anticipe':'#fcfcfc','reprise':'#e8f5ee','a-selectionner':'#f2f7f4',
+    'abs-partielle':'#fcf3f2','hors-contrat':'#fcfcfc','decompte-conges':'#fcfcfc','decompte-acq':'#fcfcfc','decompte-anticipe':'#fcfcfc','reprise':'#e8f5ee',
   };
   return bgs[statut]||'#fff';
 }
@@ -2744,7 +2748,7 @@ function renderPresence(c,cont){
   const moisSuivAfficheKey=moisSuivAffiche.getFullYear()+'-'+String(moisSuivAffiche.getMonth()+1).padStart(2,'0');
   // Inclure le mois suivant s'il a été créé explicitement (a des jours pointés)
   const ficheMoisSuiv=cUp.fiches&&cUp.fiches[moisSuivAfficheKey];
-  const moisMaxAffiche=ficheMoisSuiv&&ficheMoisSuiv.jours&&ficheMoisSuiv.jours.some(j=>j.statut&&j.statut!=='non-prevu'&&j.statut!=='a-selectionner')?moisSuivAfficheKey:moisMax;
+  const moisMaxAffiche=ficheMoisSuiv&&ficheMoisSuiv.jours&&ficheMoisSuiv.jours.some(j=>j.statut&&j.statut!=='non-prevu')?moisSuivAfficheKey:moisMax;
   const moisListe=Object.keys(cUp.fiches||{}).filter(k=>k<=moisMaxAffiche).sort().reverse();
   const fichesBtns=moisListe.map(key=>{
     const fiche=cUp.fiches[key];
@@ -2843,7 +2847,7 @@ function getStatutPrevu(c,j){
             const sv=getStatutJourVoisin(ds2);
             if(sv&&['repos','hors-contrat','non-prevu','ferie','ferie-non'].includes(sv)) continue;
             if(!sv) return 'prevu';
-            if(['prevu','travaille','abs-partielle','abs-rem','abs-enfant','a-selectionner'].includes(sv)) return sv;
+            if(['prevu','travaille','abs-partielle','abs-rem','abs-enfant'].includes(sv)) return sv;
             return sv;
           }
           return null;
@@ -3059,18 +3063,18 @@ function ouvrirFiche(contratId,key){
       j.heureFinPrev=prevus.fin;
     } else {
       // Planning : copier les heures prévues saisies dans l'onglet Planning, sans toucher aux jours
-      // déjà tranchés autrement (jour complémentaire = heures en réel, pas en prévu ; congés/absences/hors-contrat)
+      // déjà tranchés autrement (travaillé = heures en réel, pas en prévu ; congés/absences/hors-contrat)
       const planJourOF=(c.planning||{})[j.date];
-      const statutFigeOF=['jours-complementaires','conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat','arret','abs-non','abs-am','abs-enfant','ferie-non'].includes(j.statut);
+      const statutFigeOF=['travaille','conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat','arret','abs-non','abs-am','abs-enfant','ferie-non'].includes(j.statut);
       if(planJourOF&&planJourOF.d&&planJourOF.f&&!statutFigeOF){
         j.heureDebPrev=planJourOF.d;
         j.heureFinPrev=planJourOF.f;
-        if(!j.statut||j.statut==='a-selectionner') j.statut='prevu';
+        if(!j.statut||j.statut==='non-prevu') j.statut='prevu';
       }
     }
     j.planVarPrevu=!!(prevus.planVar);
-    // Pour plan min/var : semaines off → pas de 'a-selectionner'
-    if(isPlanMinVarFiche&&j.statut==='a-selectionner'){
+    // Pour plan min/var : semaines off → pas de 'non-prevu' forcé, garder null pour rester cohérent avec la migration
+    if(isPlanMinVarFiche&&j.statut==='non-prevu'&&j._jourPossible!==false){
       const semNum=getSemISO(j.date);
       const semAn=getSemAnnee(j.date);
       const agKey=getKeyAgenda(semNum,semAn);
@@ -3079,7 +3083,7 @@ function ouvrirFiche(contratId,key){
       const typeSem=agendaJour&&agendaJour.semaines&&agendaJour.semaines[agKey];
       if(typeSem==='off'){
         j.statut=null;
-        j._jourPossible=false; // empêche la migration de le remettre en a-selectionner
+        j._jourPossible=false; // empêche la migration de le remettre en non-prevu
       }
     }
   });
@@ -3121,7 +3125,7 @@ function ouvrirFiche(contratId,key){
       if(dateFinObj.getFullYear()===fky&&dateFinObj.getMonth()+1===fkm){
         fiche.jours.forEach(j=>{
           if(j.date>dateFin){
-            if(!j.statut||j.statut==='prevu'||j.statut==='a-selectionner'||j.statut==='non-prevu'||j.statut==='repos'){
+            if(!j.statut||j.statut==='prevu'||j.statut==='non-prevu'||j.statut==='repos'){
               j._horsContratCloture=true;
               j.statut='hors-contrat';
             }
@@ -3338,7 +3342,7 @@ function ouvrirFiche(contratId,key){
         </label>`:'').join('')+'</div>'
     }</td>`:aRepas?'<td></td>':'';
 
-    const kmStatutsVisibles=['prevu','travaille','abs-partielle','jours-complementaires'];
+    const kmStatutsVisibles=['prevu','travaille','abs-partielle'];
     const kmVisible=aKm&&kmStatutsVisibles.includes(statutActuel);
     const kmCell=kmVisible?`<td style="padding:3px 2px">
       <input type="number" style="width:38px;padding:2px 2px;border:1px solid var(--mb);border-radius:3px;font-size:11px" class="no-spin"
@@ -3346,7 +3350,7 @@ function ouvrirFiche(contratId,key){
        ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'km',this.value)"`}>
     </td>`:aKm?'<td style="padding:3px 2px"><input type="number" style="width:38px;visibility:hidden" class="no-spin"></td>':'';
 
-    const optsBase=['conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','a-selectionner','non-prevu','hors-contrat','repos','ferie','ferie-non'].includes(statutActuel)?statutActuel:statutPrevu;
+    const optsBase=['conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','non-prevu','hors-contrat','repos','ferie','ferie-non'].includes(statutActuel)?statutActuel:statutPrevu;
     const opts=getStatutOptions(optsBase, isPlanVar, c, sourceActive);
     let selectedOpts=opts.replace(`value="${statutActuel}"`,`value="${statutActuel}" selected`);
     if(!selectedOpts.includes('selected')){
@@ -3385,7 +3389,7 @@ function ouvrirFiche(contratId,key){
     }
     {
       const statutPrevuJ=getStatutPrevu(c,j);
-      const peutAvoirHeures=['prevu','travaille','abs-partielle','a-selectionner'].includes(statutPrevuJ);
+      const peutAvoirHeures=['prevu','travaille','abs-partielle'].includes(statutPrevuJ);
       // Coche verte : seulement si jour prévu sans modification (pas de statut forcé, pas d'heures réelles, pas de congé, pas hors-contrat)
       const statutForcé=j.statut&&j.statut!==statutPrevuJ;
       const estCongeOuHors=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat','arret','abs-non','abs-am','ferie-non','abs-enfant'].includes(j.statut||statutPrevuJ);
@@ -3408,7 +3412,7 @@ function ouvrirFiche(contratId,key){
     const borderDim=estDimanche?'border-bottom:2px solid var(--mb);':'';
     const bgFinal=bg;
     const borderAvenant=(dateDebAv&&j.date===dateDebAv)?'border-top:3px solid var(--m);':'';
-    const teinteJourCol=(isPlanVar&&couleurVolume!=='transparent'&&['a-selectionner','prevu','travaille','jours-complementaires'].includes(statutActuel))?`background:${couleurVolume};border-left:2px solid ${couleurVolumeBrd};`:'';
+    const teinteJourCol=(isPlanVar&&couleurVolume!=='transparent'&&['prevu','travaille'].includes(statutActuel))?`background:${couleurVolume};border-left:2px solid ${couleurVolumeBrd};`:'';
     return `<tr style="background:${bgFinal};${border}${borderDim}${borderAvenant}" ${borderAvenant?'title="Début de l\'avenant"':''}>
       <td style="padding:5px 4px;font-size:12px;font-weight:500;white-space:nowrap;${teinteJourCol}${manquant?'color:var(--al)':''}">${nomJour} ${numJour}</td>
       ${prevuCell}
@@ -3416,7 +3420,7 @@ function ouvrirFiche(contratId,key){
       ${(()=>{
         const isPlanMinVar=sourceActive.th==='plan'&&(sourceActive.planType==='min'||sourceActive.planType==='var');
         const estAbsAvecPrev=(['abs-rem','abs-non'].includes(statutActuel)&&isPlanMinVar);
-        const afficherHeures=['prevu','travaille','abs-partielle','a-selectionner','jours-complementaires'].includes(statutActuel);
+        const afficherHeures=['prevu','travaille','abs-partielle'].includes(statutActuel);
         // Pour abs-rem/abs-non plan min/var : masquer les heures réelles
         return (afficherHeures&&!estAbsAvecPrev)?`
         <div style="display:flex;align-items:center;gap:3px">
@@ -4967,45 +4971,15 @@ function majFicheStatut(contratId,key,idx,val){
     }
   }
   // init = réinitialiser au statut prévu (null = calculé depuis le contrat)
-  // Pour les jours possibles plan min/var : revenir à 'a-selectionner'
+  // Pour les jours possibles plan min/var : revenir à 'non-prevu'
   const estJourPossible=ficheSource.fiches[key].jours[idx]._jourPossible;
   const _statutAvantModif=ficheSource.fiches[key].jours[idx].statut; // sauvegarder avant modification
   const estFerieNonInit=(val==='init')&&_statutAvantModif==='ferie-non'&&isFerie(ficheSource.fiches[key].jours[idx].date,c);
-  ficheSource.fiches[key].jours[idx].statut=(val==='init')?(estFerieNonInit?null:(estJourPossible?'a-selectionner':null)):val||null;
+  ficheSource.fiches[key].jours[idx].statut=(val==='init')?(estFerieNonInit?null:(estJourPossible?'non-prevu':null)):val||null;
   // Pour plan min/var : réinitialiser aussi les heures prévues
   if(val==='init'&&(c.th==='plan'&&(c.planType==='min'||c.planType==='var'))){
     ficheSource.fiches[key].jours[idx].heureDebPrev=null;
     ficheSource.fiches[key].jours[idx].heureFinPrev=null;
-  }
-
-  // Basculement auto en non-prevu pour plan min/var quand quota atteint
-  if(val==='prevu'&&(c.th==='plan'&&(c.planType==='min'||c.planType==='var'))){
-    const fiche=ficheSource.fiches[key];
-    // Compter les jours 'prevu' par semaine et basculer les 'a-selectionner' excédentaires
-    const srcJour=getVersionActive(c,new Date(fiche.jours[idx].date));
-    const semKey=getSemISO(fiche.jours[idx].date);
-    // Trouver jMaxSem selon le type de semaine
-    let jMaxSem=srcJour.jMaxMin||4;
-    if(srcJour.planType==='var'&&srcJour.planVar){
-      const agKey=getKeyAgenda(semKey,getSemAnnee(fiche.jours[idx].date));
-      const agSrc=(srcJour.agendas||c.agendas||[]).find(ag=>{
-        const d=new Date(fiche.jours[idx].date);
-        return new Date(ag.dateDebut)<=d&&new Date(ag.dateFin)>=d;
-      });
-      const typeSem=agSrc&&agSrc.semaines&&agSrc.semaines[agKey];
-      const vol=typeSem?srcJour.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
-      if(vol) jMaxSem=vol.j||4;
-    }
-    // Compter les 'prevu' + absences déductibles dans la semaine pour le quota
-    const joursSem=fiche.jours.filter(j=>getSemISO(j.date)===semKey);
-    const statutsComptesQuota=['prevu','abs-non','abs-rem','abs-enfant','arret','abs-partielle'];
-    const nbPrevu=joursSem.filter(j=>statutsComptesQuota.includes(j.statut)).length;
-    // Si quota atteint, basculer les 'a-selectionner' restants en 'non-prevu'
-    if(nbPrevu>=jMaxSem){
-      joursSem.forEach(j=>{
-        if(j.statut==='a-selectionner') j.statut='non-prevu';
-      });
-    }
   }
   // Si on repasse en non-prévu ou repos, effacer les heures réelles
   const isPlanMinVarStatut=c.th==='plan'&&(c.planType==='min'||c.planType==='var');
@@ -5239,11 +5213,17 @@ function validerFiche(contratId,key){
       }
     }
   }
-  // Blocage validation si des jours 'a-selectionner' restent
   if(c.th==='plan'&&(c.planType==='min'||c.planType==='var')){
-    const joursASelectionner=c.fiches[key].jours.filter(j=>j.statut==='a-selectionner');
-    if(joursASelectionner.length>0){
-      alerte(`${joursASelectionner.length} jour(s) sont encore "À sélectionner" — veuillez les traiter avant de valider.`);
+    // Blocage si le planning n'est pas complet sur les jours possibles du mois
+    const jourNonPlanifieV=c.fiches[key].jours.some(jv=>{
+      if(!jv.date.startsWith(key)) return false;
+      const infosV=getInfosJourPlanning(c,jv.date);
+      if(!infosV.jourPossible) return false;
+      const pv=(c.planning||{})[jv.date];
+      return !(pv&&pv.d&&pv.f);
+    });
+    if(jourNonPlanifieV){
+      alerte('Le planning n\'est pas complet — tous les jours possibles doivent avoir des heures prévues avant de valider.');
       return;
     }
     // Blocage si heures prévues manquantes sur jours 'prevu'
@@ -5585,7 +5565,7 @@ function calcCongesContrat(c){
             let joursConges16PV=0;
             joursActifs.forEach(j=>{
               const sj=j.statut||getStatutPrevu(c,j);
-              if(['prevu','travaille','abs-partielle','abs-rem','jours-complementaires'].includes(sj)){
+              if(['prevu','travaille','abs-partielle','abs-rem'].includes(sj)){
                 joursNormauxPV++;
               } else if(['conges-acq','conges-anticipe'].includes(sj)){
                 joursConges16PV++;
@@ -5639,7 +5619,7 @@ function calcCongesContrat(c){
 
           jours.forEach(j=>{
             const statutJ=j.statut||getStatutPrevu(c,j);
-            if(['prevu','travaille','abs-partielle','abs-rem','jours-complementaires'].includes(statutJ)){
+            if(['prevu','travaille','abs-partielle','abs-rem'].includes(statutJ)){
               joursNormaux++;
             } else if(statutJ==='non-prevu'&&j.heureDebReel){
               // Jour non prévu travaillé : compte toujours en plus
@@ -6595,7 +6575,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     fichePrec.jours.forEach(j=>{
       const semKey=getSemISO(j.date);
       if(!semMoisCourant.has(semKey)) return;
-      if(j.heureDebReel&&j.heureFinReel&&(j.statut==='prevu'||j.statut==='travaille'||j.statut==='jours-complementaires'||j.statut==='ferie'||!j.statut)){
+      if(j.heureDebReel&&j.heureFinReel&&(j.statut==='prevu'||j.statut==='travaille'||j.statut==='ferie'||!j.statut)){
         if(!hParSemaine[semKey]) hParSemaine[semKey]=0;
         const hJourPrec=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
         hParSemaine[semKey]+=hJourPrec;
@@ -6613,7 +6593,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   fiche.jours.forEach(j=>{
     const semKey=getSemISO(j.date);
     if(!hParSemaine[semKey]) hParSemaine[semKey]=0;
-    if(j.heureDebReel&&j.heureFinReel&&(estStatutPrevu(j.statut)||j.statut==='travaille'||j.statut==='jours-complementaires'||j.statut==='ferie'||!j.statut)){
+    if(j.heureDebReel&&j.heureFinReel&&(estStatutPrevu(j.statut)||j.statut==='travaille'||j.statut==='ferie'||!j.statut)){
       const hReelJ=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
       const hPrevJ=j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:0;
       // Si le jour est payé sur la base du prévu (réel < prévu, pas de déduction), compter le prévu pour le seuil
@@ -6646,7 +6626,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     if(c.th==='plan'&&(c.planType==='min'||c.planType==='var')){
       if(!hPrevSaisieParSemaine) hPrevSaisieParSemaine={};
       if(!hPrevSaisieParSemaine[semKey]) hPrevSaisieParSemaine[semKey]=0;
-      const statutsComptablesPrev=['prevu','a-selectionner','abs-non','abs-rem','abs-enfant','arret','abs-partielle'];
+      const statutsComptablesPrev=['prevu','non-prevu','abs-non','abs-rem','abs-enfant','arret','abs-partielle'];
       if(j.heureDebPrev&&j.heureFinPrev&&statutsComptablesPrev.includes(j.statut)){
         hPrevSaisieParSemaine[semKey]+=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
       }
@@ -6955,7 +6935,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // Construction du seuil hebdo pour le décompte des HS ponctuelles :
     // comptent (au réel si dispo, sinon prévu) : travaillé, abs-partielle, prévu, conges-acq, conges-anticipe
     // ne comptent pas : férié chômé, absences non rémunérées, tous les decompte-* (jours non prévus)
-    const statsSeuilCompte=['travaille','jours-complementaires','abs-partielle','prevu','conges-acq','conges-anticipe'];
+    const statsSeuilCompte=['travaille','abs-partielle','prevu','conges-acq','conges-anticipe'];
     fiche.jours.forEach(j=>{
       const sk=getSemISO(j.date);
       if(!hSeuilParSem[sk]) hSeuilParSem[sk]=0;
@@ -7218,7 +7198,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           // Jours prévus/absences : hMoyJour (seulement si jour possible ET heures prévues ou jour prévu)
           const aHeuresPrev=jj.heureDebPrev&&jj.heureFinPrev;
           const estJourPrevu=joursPossiblesSemPS[jourIdxPS];
-          if(estJourPrevu&&(aHeuresPrev||statutPS==='prevu'||statutPS==='a-selectionner')){
+          if(estJourPrevu&&(aHeuresPrev||statutPS==='prevu'||statutPS==='non-prevu')){
             hTheoriques+=hMoyJour;
           }
         }
@@ -7292,7 +7272,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       if(periodeAv==='avant'&&dateJ>=dateAvenantStr){statut='hors-contrat';j._horsContratAvenant=true;}
       if(periodeAv==='apres'&&dateJ<dateAvenantStr){statut='hors-contrat';j._horsContratAvenant=true;}
     }
-    const estPresent=estStatutPrevu(statut)||statut==='travaille'||statut==='jours-complementaires'||statut==='abs-partielle'||statut==='abs-rem'||(!j.statut&&j.heureDebReel)||(statut==='travaille'&&!j.heureDebPrev);
+    const estPresent=estStatutPrevu(statut)||statut==='travaille'||statut==='abs-partielle'||statut==='abs-rem'||(!j.statut&&j.heureDebReel)||(statut==='travaille'&&!j.heureDebPrev);
     if(statut==='travaille'&&getStatutPrevu(c,j)==='non-prevu'){
       joursEnPlus++;
     }
@@ -7555,38 +7535,12 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           if(debReel<debPrev) depassJour+=debPrev-debReel;
           if(finReel>finPrev) depassJour+=finReel-finPrev;
         }
-        // Règle 3 bis : jour 'jours-complementaires' → désigné explicitement par l'utilisateur
-        // comme jour en plus (quota jMax atteint, ou jour non prévu) → toujours payé intégralement,
-        // pas de calcul au prorata (celui-ci sert uniquement aux jours 'prevu' dont la saisie
-        // globale de la semaine dépasse le volume, sans jour désigné)
-        if(j.statut==='jours-complementaires'){
-          compJour=(toM(j.heureFinReel)-toM(j.heureDebReel));
-        } else
-        // Règle 3 : jour 'travaille' sur jour non possible → toutes les heures en HC
+        // Règle 3 : jour 'travaille' → désigné explicitement par l'utilisateur comme jour en plus
+        // (non prévu au contrat, ou quota jours max déjà atteint cette semaine-là) → toujours payé
+        // intégralement, pas de calcul au prorata (celui-ci sert uniquement aux jours 'prevu' dont la
+        // saisie globale de la semaine dépasse le volume, sans jour désigné)
         if(j.statut==='travaille'){
-          const jourIdxTrav=j.jourSemaine===0?6:j.jourSemaine-1;
-          let jourPossible=false;
-          if(sourceActif.planType==='min'){
-            jourPossible=!!(sourceActif.joursMin&&sourceActif.joursMin[jourIdxTrav]);
-          } else if(sourceActif.planType==='var'&&sourceActif.planVar){
-            const agKeyTrav=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
-            const agendasTrav=(sourceActif.agendas||c.agendas||[]);
-            const agTrav=agendasTrav.find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date));
-            const typeSemTrav=agTrav&&agTrav.semaines&&agTrav.semaines[agKeyTrav];
-            const volTrav=typeSemTrav?sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemTrav):null;
-            jourPossible=!!(volTrav&&volTrav.jours&&volTrav.jours[jourIdxTrav]);
-          }
-          if(!jourPossible){
-            compJour=(toM(j.heureFinReel)-toM(j.heureDebReel));
-            // Jour non possible → toutes les heures en HC, pas de calcul hebdo
-          } else {
-        compJour=(depassHebdo>0?(()=>{
-          const hReelJour=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
-          const hReelSemMois=hReelSem-(hParSemainePrecMois[semKeyJ]||0);
-          const ratioJour=hReelSemMois>0?hReelJour/hReelSemMois:0;
-          return Math.max(0,hPrevSaisieSem-hAbsS-hVolContrat)*ratioJour*60;
-        })():0)+depassJour;
-          }
+          compJour=(toM(j.heureFinReel)-toM(j.heureDebReel));
         } else {
         compJour=(depassHebdo>0?(()=>{
           const hReelJour=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
@@ -13394,7 +13348,7 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
     // → un jour travaillé stoppe le décompte (reprise effective)
     const tousJoursFiche=Object.values(c.fiches||{}).flatMap(f=>f.jours||[]);
     const premierTravailleApres=tousJoursFiche
-      .filter(j=>j.date>finPeriode&&['travaille','jours-complementaires'].includes(j.statut))
+      .filter(j=>j.date>finPeriode&&j.statut==='travaille')
       .sort((a,b)=>a.date<b.date?-1:1)[0];
     if(premierTravailleApres){
       // Dernier décompté = veille du premier jour travaillé
