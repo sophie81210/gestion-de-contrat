@@ -2476,8 +2476,12 @@ function creerFiche(c,annee,mois){
     const estPlanMinVar=(c.th==='plan'&&(c.planType==='min'||c.planType==='var'));
     const avantDateDeb=!!(c.dateDeb&&dateStr<c.dateDeb);
     const estJourPossible=estPlanMinVar&&!avantDateDeb&&!!(prevus.planVar);
-    // Pour plan min/var : détecter les fériés sur jours possibles
-    const estFerieJour=estPlanMinVar&&estJourPossible&&isFerie(dateStr,c);
+    // Pour plan min/var : détecter les fériés sur jours possibles — statut 'ferie' seulement si coché
+    // comme travaillé au contrat (feriesTravailles) OU coché sur le planning pour cette semaine précise
+    const mmddCF=dateStr.slice(5);
+    const ferieDejaCocheContrat=(c.feriesTravailles||[]).includes(mmddCF);
+    const ferieCocheSurPlanning=!!(c.planning&&c.planning[dateStr]&&c.planning[dateStr].coche);
+    const estFerieJour=estPlanMinVar&&estJourPossible&&isFerie(dateStr,c)&&(ferieDejaCocheContrat||ferieCocheSurPlanning);
     const reposHebdoC=c.reposHebdo||0;
     const estReposJour=estPlanMinVar&&(jourSemaine===reposHebdoC);
     let statutInit=null;
@@ -3040,10 +3044,10 @@ function ouvrirFiche(contratId,key){
             const infosW=getInfosJourPlanning(c,jw.date);
             if(!infosW.jourPossible) return false;
             const pw=(c.planning||{})[jw.date];
-            return !(pw&&pw.d&&pw.f);
+            return !!(pw&&pw.coche&&!(pw.d&&pw.f));
           });
           if(jourNonPlanifie){
-            setTimeout(()=>toast('⚠ Planning incomplet — certains jours possibles n\u2019ont pas d\u2019heures prévues'),300);
+            setTimeout(()=>toast('⚠ Planning incomplet — des jours cochés n\u2019ont pas d\u2019heures prévues'),300);
           }
         }
       }
@@ -3070,6 +3074,14 @@ function ouvrirFiche(contratId,key){
         j.heureDebPrev=planJourOF.d;
         j.heureFinPrev=planJourOF.f;
         if(!j.statut||j.statut==='non-prevu') j.statut='prevu';
+      }
+      // Résoudre le statut férié selon feriesTravailles (contrat) ou la case cochée sur le planning,
+      // uniquement sur les jours pas encore tranchés autrement (ferie ↔ non-prevu)
+      if((j.statut==='ferie'||j.statut==='non-prevu'||!j.statut)&&isFerie(j.date,c)){
+        const mmddOF=j.date.slice(5);
+        const ferieContratOF=(c.feriesTravailles||[]).includes(mmddOF);
+        const ferieCocheOF=!!(c.planning&&c.planning[j.date]&&c.planning[j.date].coche);
+        j.statut=(ferieContratOF||ferieCocheOF)?'ferie':'non-prevu';
       }
     }
     j.planVarPrevu=!!(prevus.planVar);
@@ -3901,12 +3913,12 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
     }
 
     let jMaxSem=0, totalSemMin=0, couleurSem=null;
-    // Total de jours remplis sur la semaine (indépendant de l'ordre de saisie), pour verrouiller
-    // tous les jours vides une fois le quota jours-max atteint, peu importe lequel a été rempli en premier
-    let totalRempliSem=0;
+    // Total de jours cochés sur la semaine (jours normaux + fériés cochés comme travaillés),
+    // pour verrouiller les cases restantes une fois le quota jours-max atteint
+    let totalCocheSem=0;
     infosSemaine.forEach((infos,ji)=>{
       const pd=(c.planning&&c.planning[sem.jours[ji].date])||{};
-      if(infos.jourPossible&&!isJourCongeAM(sem.jours[ji].date)&&!infos.ferieChome&&pd.d&&pd.f) totalRempliSem++;
+      if((infos.jourPossible||infos.ferieChome)&&!isJourCongeAM(sem.jours[ji].date)&&pd.coche) totalCocheSem++;
     });
     const joursHtml=sem.jours.map((j,ji)=>{
       const infos=infosSemaine[ji];
@@ -3916,32 +3928,39 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       const numJour=j.dt.getDate();
       const estCongeAM=isJourCongeAM(j.date);
       const planData=(c.planning&&c.planning[j.date])||{};
-      const rempli=!!(planData.d&&planData.f);
-      if(rempli){ totalSemMin+=toM(planData.f)-toM(planData.d); }
+      const dejaCoche=!!planData.coche;
+      if(dejaCoche&&planData.d&&planData.f){ totalSemMin+=toM(planData.f)-toM(planData.d); }
       const borderAv=(dateDebAvP&&j.date===dateDebAvP)?'border-top:3px solid var(--m);':'';
-      const verrouilleQuota=infos.jourPossible&&!estCongeAM&&!infos.ferieChome&&!moisVerrouille&&!rempli&&infos.jMax>0&&totalRempliSem>=infos.jMax;
-      const estSaisissable=infos.jourPossible&&!estCongeAM&&!infos.ferieChome&&!moisVerrouille&&!verrouilleQuota;
+      const quotaAtteint=jMaxSem>0&&totalCocheSem>=jMaxSem;
+      const casesVerrouillee=!dejaCoche&&quotaAtteint&&!moisVerrouille;
+      const estSaisissable=(infos.jourPossible||infos.ferieChome)&&!estCongeAM&&!moisVerrouille&&!casesVerrouillee;
       let contenu;
-      if(infos.ferieChome){
-        contenu=`<span style="color:var(--tx3);font-size:12px">Férié chômé</span>`;
-      } else if(estCongeAM){
+      if(estCongeAM){
         contenu=`<span style="color:var(--tx3);font-size:12px">Congés de l’Ass’Mat</span>`;
-      } else if(!infos.jourPossible){
+      } else if(!infos.jourPossible&&!infos.ferieChome){
         contenu=`<span style="color:var(--tx3);font-size:12px">${infos.jamaisPossible?'Repos hebdomadaire':'Jour non prévu au contrat'}</span>`;
+      } else if(infos.ferieChome){
+        contenu=`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);cursor:${(moisVerrouille||casesVerrouillee)?'default':'pointer'}">
+          <input type="checkbox" ${dejaCoche?'checked':''} ${(moisVerrouille||casesVerrouillee)?'disabled':''}
+            onchange="toggleJourPlanning(${c.id},'${j.date}',this.checked,'${semKeyDom}',true)">
+          <span>Férié — compter comme travaillé cette semaine</span>
+        </label>`;
       } else {
         contenu=`<div style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tx2)">
+          <input type="checkbox" ${dejaCoche?'checked':''} ${(moisVerrouille||casesVerrouillee)?'disabled':''}
+            onchange="toggleJourPlanning(${c.id},'${j.date}',this.checked,'${semKeyDom}',false)">
           <span>de</span>
-          <input type="time" class="pln-deb" value="${planData.d||''}" ${(moisVerrouille||verrouilleQuota)?'disabled':''}
+          <input type="time" class="pln-deb" value="${planData.d||''}" ${(moisVerrouille||!dejaCoche)?'disabled':''}
             style="width:78px;padding:3px 4px;border:1px solid var(--mb);border-radius:3px;font-size:12px;background:#fff;color:var(--tx)"
             onchange="majPlanningJour(${c.id},'${j.date}','d',this.value,'${semKeyDom}')">
           <span>à</span>
-          <input type="time" class="pln-fin" value="${planData.f||''}" ${(moisVerrouille||verrouilleQuota)?'disabled':''}
+          <input type="time" class="pln-fin" value="${planData.f||''}" ${(moisVerrouille||!dejaCoche)?'disabled':''}
             style="width:78px;padding:3px 4px;border:1px solid var(--mb);border-radius:3px;font-size:12px;background:#fff;color:var(--tx)"
             onchange="majPlanningJour(${c.id},'${j.date}','f',this.value,'${semKeyDom}')">
         </div>`;
       }
       return `<div class="pln-jour" data-date="${j.date}" data-possible="${estSaisissable?'1':'0'}"
-        style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:var(--mp);opacity:${verrouilleQuota?'0.45':'1'};${borderAv}">
+        style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:var(--mp);opacity:${casesVerrouillee?'0.45':'1'};${borderAv}">
         <div style="width:60px;font-size:12px;font-weight:500;flex-shrink:0">${nomJourAbr} ${numJour}</div>
         <div style="flex:1">${contenu}</div>
       </div>`;
@@ -4033,10 +4052,45 @@ function majPlanningJour(contratId, dateStr, champ, val, semKeyDom){
   const ficheJ=c.fiches&&c.fiches[moisKeyJ];
   if((ficheJ&&ficheJ.valide)||estLectureSeuleEmployeur()) return; // mois validé ou accès employeur lecture seule
   if(!c.planning) c.planning={};
-  if(!c.planning[dateStr]) c.planning[dateStr]={};
+  if(!c.planning[dateStr]||!c.planning[dateStr].coche) return; // jour non coché : rien à modifier
   if(champ==='d') c.planning[dateStr].d=val||null;
   else c.planning[dateStr].f=val||null;
-  if(!c.planning[dateStr].d&&!c.planning[dateStr].f) delete c.planning[dateStr];
+  const cidx=S.contrats.findIndex(x=>x.id==contratId);
+  if(cidx!==-1) S.contrats[cidx]=c;
+  if(c.id) _contratsModifies.add(c.id);
+  saveToFirestore();
+  refreshPlanningTile(contratId, moisKeyJ);
+}
+
+function toggleJourPlanning(contratId, dateStr, checked, semKeyDom, estFerie){
+  const c=S.contrats.find(x=>x.id==contratId);
+  if(!c) return;
+  const moisKeyJ=dateStr.slice(0,7);
+  const ficheJ=c.fiches&&c.fiches[moisKeyJ];
+  if((ficheJ&&ficheJ.valide)||estLectureSeuleEmployeur()){ refreshPlanningTile(contratId, moisKeyJ); return; }
+  if(!c.planning) c.planning={};
+  if(checked){
+    const infos=getInfosJourPlanning(c,dateStr);
+    if(infos.jMax>0){
+      const semKeyISO=getSemISO(dateStr)+'-'+getSemAnnee(dateStr);
+      let totalCoche=0;
+      Object.keys(c.planning).forEach(dt=>{
+        if(dt===dateStr) return;
+        if((getSemISO(dt)+'-'+getSemAnnee(dt))!==semKeyISO) return;
+        if(c.planning[dt]&&c.planning[dt].coche) totalCoche++;
+      });
+      if(totalCoche>=infos.jMax){
+        toast('Nombre de jours maximum atteint pour cette semaine, vous pourrez ajouter un jour complémentaire sur la feuille de présence');
+        refreshPlanningTile(contratId, moisKeyJ);
+        return;
+      }
+    }
+    if(!c.planning[dateStr]) c.planning[dateStr]={};
+    c.planning[dateStr].coche=true;
+  } else {
+    // Décocher efface les heures saisies
+    delete c.planning[dateStr];
+  }
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
   if(c.id) _contratsModifies.add(c.id);
@@ -5214,16 +5268,16 @@ function validerFiche(contratId,key){
     }
   }
   if(c.th==='plan'&&(c.planType==='min'||c.planType==='var')){
-    // Blocage si le planning n'est pas complet sur les jours possibles du mois
+    // Blocage si des jours cochés sur le planning n'ont pas d'heures
     const jourNonPlanifieV=c.fiches[key].jours.some(jv=>{
       if(!jv.date.startsWith(key)) return false;
       const infosV=getInfosJourPlanning(c,jv.date);
       if(!infosV.jourPossible) return false;
       const pv=(c.planning||{})[jv.date];
-      return !(pv&&pv.d&&pv.f);
+      return !!(pv&&pv.coche&&!(pv.d&&pv.f));
     });
     if(jourNonPlanifieV){
-      alerte('Le planning n\'est pas complet — tous les jours possibles doivent avoir des heures prévues avant de valider.');
+      alerte('Certains jours cochés sur le planning n\'ont pas d\'heures prévues — veuillez les compléter avant de valider.');
       return;
     }
     // Blocage si heures prévues manquantes sur jours 'prevu'
