@@ -238,7 +238,8 @@ input[type=time].fi{width:auto;min-width:92px}
 .modal p{font-size:13px;color:var(--tx2);margin-bottom:18px;line-height:1.5}
 .modal-btns{display:flex;gap:10px;justify-content:center}
 .det-tabs{display:flex;gap:0;overflow-x:auto;background:rgba(210,185,168,.5);padding:0 4px;margin:-14px -14px 14px;border-bottom:1px solid var(--mb)}
-.det-tab{padding:10px 12px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:Calibri,sans-serif;background:none;border:none;border-bottom:3px solid transparent;color:rgba(60,30,15,.6);transition:all .2s}
+.det-tab{padding:8px 8px;font-size:11.5px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:Calibri,sans-serif;background:none;border:none;border-right:1px solid rgba(60,30,15,.12);border-bottom:3px solid transparent;color:rgba(60,30,15,.6);transition:all .2s}
+.det-tab:last-child{border-right:none}
 .det-tab.on{color:var(--m);border-bottom-color:var(--m);background:rgba(107,76,59,.08)}
 @keyframes spin{to{transform:rotate(360deg)}}
 /* ── Supprimer flèches inputs number ── */
@@ -3806,24 +3807,26 @@ function getInfosJourPlanning(c, dateStr){
   const agendas=src.agendas||c.agendas||[];
   const agenda=agendas.find(a=>new Date(a.dateDebut)<=d&&new Date(a.dateFin)>=d);
   const typeSem=agenda&&agenda.semaines&&agenda.semaines[agKey];
+  const aucunType=!typeSem||typeSem==='off';
   let jourPossible=false, jMax=0, volIdx=-1;
   if(src.planType==='min'){
-    jourPossible=!!(src.joursMin&&src.joursMin[jourIdx])&&typeSem!=='off';
+    jourPossible=!!(src.joursMin&&src.joursMin[jourIdx])&&!aucunType;
     jMax=src.jMaxMin||1;
     volIdx=0;
   } else if(src.planType==='var'){
     const planVarSrc=src.planVar||[];
-    const vi=(typeSem&&typeSem!=='off')?planVarSrc.findIndex((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):-1;
+    const vi=!aucunType?planVarSrc.findIndex((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):-1;
     if(vi>=0){
       jourPossible=!!(planVarSrc[vi].jours&&planVarSrc[vi].jours[jourIdx]);
       jMax=planVarSrc[vi].j||1;
       volIdx=vi;
     }
   }
-  return {jourPossible, jMax, volIdx, typeSem};
+  const couleur=volIdx>=0&&!aucunType?PLAN_COULEURS[volIdx%PLAN_COULEURS.length]:null;
+  return {jourPossible, jMax, volIdx, typeSem, aucunType, couleur};
 }
 
-function renderPlanningMoisTile(c, annee, moisIdx){
+function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
   const moisKeyTile=annee+'-'+String(moisIdx+1).padStart(2,'0');
   const ficheTile=c.fiches&&c.fiches[moisKeyTile];
   const moisVerrouille=!!(ficheTile&&ficheTile.valide)||estLectureSeuleEmployeur();
@@ -3849,22 +3852,26 @@ function renderPlanningMoisTile(c, annee, moisIdx){
   const dateDebAvP=avenantDuMoisP?avenantDuMoisP.dateAvenant:null;
   const JOURS_ABR_P=['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
 
+  let totalMoisMin=0;
   const semainesHtml=semaines.map((sem,si)=>{
     const semKeyDom=annee+'-'+moisIdx+'-'+si;
-    let jMaxSem=0, totalSemMin=0;
+    let jMaxSem=0, totalSemMin=0, couleurSem=null;
     const joursHtml=sem.jours.map(j=>{
       const infos=getInfosJourPlanning(c, j.date);
       if(infos.jMax>jMaxSem) jMaxSem=infos.jMax;
+      if(infos.couleur&&!couleurSem) couleurSem=infos.couleur;
       const nomJourAbr=JOURS_ABR_P[j.dt.getDay()===0?6:j.dt.getDay()-1];
       const numJour=j.dt.getDate();
       const estCongeAM=isJourCongeAM(j.date);
       const estFerieJ=isFerie(j.date, c);
       const planData=(c.planning&&c.planning[j.date])||{};
-      if(planData.d&&planData.f) totalSemMin+=toM(planData.f)-toM(planData.d);
+      if(planData.d&&planData.f){ totalSemMin+=toM(planData.f)-toM(planData.d); }
       const borderAv=(dateDebAvP&&j.date===dateDebAvP)?'border-top:3px solid var(--m);':'';
       const estSaisissable=infos.jourPossible&&!estCongeAM&&!moisVerrouille;
       let contenu;
-      if(!infos.jourPossible){
+      if(infos.aucunType){
+        contenu=`<span style="color:var(--tx3);font-size:12px">Aucun type de semaine assigné (agenda)</span>`;
+      } else if(!infos.jourPossible){
         contenu=`<span style="color:var(--tx3);font-size:12px">Jour non possible</span>`;
       } else if(estCongeAM){
         contenu=`<span style="color:#7c3aed;font-size:12px;font-weight:600">🔒 Congé (AM)</span>`;
@@ -3880,14 +3887,17 @@ function renderPlanningMoisTile(c, annee, moisIdx){
         </div>`;
       }
       return `<div class="pln-jour" data-date="${j.date}" data-possible="${estSaisissable?'1':'0'}"
-        style="display:flex;align-items:center;gap:8px;padding:5px 8px;${infos.jourPossible?'':'background:var(--mb)'};${borderAv}">
+        style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:var(--mp);${borderAv}">
         <div style="width:60px;font-size:12px;font-weight:500;flex-shrink:0">${nomJourAbr} ${numJour}${estFerieJ?' 🎌':''}</div>
         <div style="flex:1">${contenu}</div>
       </div>`;
     }).join('');
+    totalMoisMin+=totalSemMin;
+    const bgSem=couleurSem?couleurSem.bg+'40':'var(--mp)';
+    const brdSem=couleurSem?couleurSem.brd+'88':'var(--mb)';
     return `<div class="pln-sem" data-semkey="${semKeyDom}" data-contrat="${c.id}" data-jmax="${jMaxSem}"
-      style="border:1px solid var(--mb);border-radius:var(--rs);margin-bottom:8px;overflow:hidden">
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:var(--mp);font-size:11px;font-weight:600;color:var(--tx2)">
+      style="border:1px solid ${brdSem};border-radius:var(--rs);margin-bottom:8px;overflow:hidden">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:${bgSem};font-size:11px;font-weight:600;color:var(--tx2)">
         <span>Semaine ${getSemISO(sem.jours[0].date)}${jMaxSem?' — max '+jMaxSem+' j':''}</span>
         <span>Total : <span class="pln-total">${fmtH(totalSemMin)}</span></span>
       </div>
@@ -3895,14 +3905,40 @@ function renderPlanningMoisTile(c, annee, moisIdx){
     </div>`;
   }).join('');
 
-  return `<div class="card" style="margin-bottom:14px">
-    <div class="ctitle" style="margin-bottom:8px;display:flex;align-items:center;gap:8px">
-      ${MOIS[moisIdx]} ${annee}
-      ${moisVerrouille&&ficheTile&&ficheTile.valide?'<span style="font-size:11px;font-weight:600;color:var(--vt);background:#e8f5ee;padding:2px 8px;border-radius:10px">✓ Validé — verrouillé</span>':''}
-      ${estLectureSeuleEmployeur()?'<span style="font-size:11px;font-weight:600;color:var(--tx2);background:var(--mb);padding:2px 8px;border-radius:10px">🔒 Lecture seule</span>':''}
+  const idMois='pln-mois-'+c.id+'-'+moisKeyTile;
+  return `<div style="border:1px solid var(--mb);border-radius:8px;margin-bottom:10px;overflow:hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#f5f0ff;cursor:pointer" onclick="togglePlanningMois('${idMois}','pln-container-${c.id}')">
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="font-weight:700;font-size:14px;color:var(--m)">${MOIS[moisIdx]} ${annee}</div>
+        <span style="font-size:12px;color:var(--tx2)">Total : ${fmtH(totalMoisMin)}</span>
+        ${moisVerrouille&&ficheTile&&ficheTile.valide?'<span style="font-size:11px;font-weight:600;color:var(--vt);background:var(--vtc);padding:2px 8px;border-radius:10px">✓ Validé</span>':''}
+        ${estLectureSeuleEmployeur()?'<span style="font-size:11px;font-weight:600;color:var(--tx2);background:var(--mp);padding:2px 8px;border-radius:10px">🔒 Lecture seule</span>':''}
+      </div>
+      <span style="font-size:20px;color:var(--tx3)" id="${idMois}-arrow">${ouvert?'⌄':'›'}</span>
     </div>
-    ${semainesHtml}
+    <div id="${idMois}" style="display:${ouvert?'block':'none'};padding:12px;background:#fff">
+      ${semainesHtml}
+    </div>
   </div>`;
+}
+
+function togglePlanningMois(id, containerId){
+  const el=document.getElementById(id);
+  const arrow=document.getElementById(id+'-arrow');
+  if(!el) return;
+  const open=el.style.display==='block';
+  const container=document.getElementById(containerId);
+  if(container){
+    container.querySelectorAll('[id^="pln-mois-"]').forEach(oel=>{
+      if(oel.id===id||oel.id.endsWith('-arrow')) return;
+      oel.style.display='none';
+    });
+    container.querySelectorAll('[id$="-arrow"]').forEach(oarrow=>{
+      if(oarrow.id!==id+'-arrow') oarrow.textContent='›';
+    });
+  }
+  el.style.display=open?'none':'block';
+  if(arrow) arrow.textContent=open?'›':'⌄';
 }
 
 function renderPlanning(c, cont){
@@ -3910,21 +3946,30 @@ function renderPlanning(c, cont){
   const debut=new Date(c.dateDeb);
   const dateFinC=getDateFinContrat(c);
   const now=new Date();
-  const moisCourant=new Date(now.getFullYear(), now.getMonth(), 1);
-  const moisSuivant=new Date(now.getFullYear(), now.getMonth()+1, 1);
+  const moisCourantKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
   const debutMoisContrat=new Date(debut.getFullYear(), debut.getMonth(), 1);
-  const baseMois=debutMoisContrat>moisSuivant?[debutMoisContrat, new Date(debutMoisContrat.getFullYear(), debutMoisContrat.getMonth()+1, 1)]:[moisCourant, moisSuivant];
-  const mois=baseMois
-    .filter(m=>m>=debutMoisContrat)
-    .filter(m=>!dateFinC||m<=new Date(dateFinC.getFullYear(), dateFinC.getMonth(), 1))
-    .map(m=>({annee:m.getFullYear(), moisIdx:m.getMonth()}));
+  const moisSuivant=new Date(now.getFullYear(), now.getMonth()+1, 1);
+  const horizonMois=debutMoisContrat>moisSuivant?new Date(debutMoisContrat.getFullYear(), debutMoisContrat.getMonth()+1, 1):moisSuivant;
+  const limiteMois=dateFinC&&new Date(dateFinC.getFullYear(),dateFinC.getMonth(),1)<horizonMois?new Date(dateFinC.getFullYear(),dateFinC.getMonth(),1):horizonMois;
+  const mois=[];
+  let cur=new Date(debutMoisContrat);
+  while(cur<=limiteMois){
+    mois.push({annee:cur.getFullYear(), moisIdx:cur.getMonth()});
+    cur.setMonth(cur.getMonth()+1);
+  }
+  const containerId='pln-container-'+c.id;
   cont.innerHTML=`
     <div style="padding:6px 2px 12px;font-size:12px;color:var(--tx2)">
       Planning prévisionnel — les jours grisés ne sont pas possibles au contrat, les jours de congés (AM) sont verrouillés.
       Une fois le nombre de jours max atteint sur une semaine, les jours suivants se verrouillent automatiquement.
       <br><em>Aperçu visuel — pas encore relié au calcul de paie ni à la feuille de présence.</em>
     </div>
-    ${mois.length?mois.map(m=>renderPlanningMoisTile(c, m.annee, m.moisIdx)).join(''):'<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">Aucun mois à planifier pour l\'instant.</div></div>'}
+    <div id="${containerId}">
+      ${mois.length?mois.slice().reverse().map(m=>{
+        const mk=m.annee+'-'+String(m.moisIdx+1).padStart(2,'0');
+        return renderPlanningMoisTile(c, m.annee, m.moisIdx, mk===moisCourantKey);
+      }).join(''):'<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">Aucun mois à planifier pour l\'instant.</div></div>'}
+    </div>
     <div style="text-align:center;padding:16px 0">
       <button class="btn bs" onclick="renderDetTab(${c.id},'contrat')">← Retour</button>
     </div>
