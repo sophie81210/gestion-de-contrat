@@ -267,8 +267,8 @@ input[type=time].fi{width:auto;min-width:92px}
     <div id="login-choix-profil">
       <div style="text-align:center;font-size:13px;color:var(--tx2);margin-bottom:14px">Qui êtes-vous ?</div>
       <div style="display:flex;gap:10px;justify-content:center">
-        <button class="bg-btn" style="flex:1;padding:14px 8px;font-size:14px" onclick="choisirProfil('assmat')">👩 Assistante<br>Maternelle</button>
-        <button class="bg-btn" style="flex:1;padding:14px 8px;font-size:14px" onclick="choisirProfil('employeur')">👔 Employeur</button>
+        <button class="bg-btn" style="flex:1;padding:14px 8px;font-size:14px" onclick="choisirProfil('assmat')">👩<br>Je suis Ass’Mat</button>
+        <button class="bg-btn" style="flex:1;padding:14px 8px;font-size:14px" onclick="choisirProfil('employeur')">👔<br>Employeur</button>
       </div>
     </div>
 
@@ -3807,23 +3807,36 @@ function getInfosJourPlanning(c, dateStr){
   const agendas=src.agendas||c.agendas||[];
   const agenda=agendas.find(a=>new Date(a.dateDebut)<=d&&new Date(a.dateFin)>=d);
   const typeSem=agenda&&agenda.semaines&&agenda.semaines[agKey];
-  const aucunType=!typeSem||typeSem==='off';
-  let jourPossible=false, jMax=0, volIdx=-1;
+  const horsContrat=!agenda; // aucune donnée d'agenda du tout sur cette période
+  const semaineOff=typeSem==='off';
+  let jourPossible=false, jMax=0, volIdx=-1, planVarSrc=[];
+  let semaineCongesAM=false; // type assigné mais ne correspond à aucun volume du contrat = semaine violette
   if(src.planType==='min'){
-    jourPossible=!!(src.joursMin&&src.joursMin[jourIdx])&&!aucunType;
+    jourPossible=!!(src.joursMin&&src.joursMin[jourIdx])&&typeSem&&typeSem!=='off';
     jMax=src.jMaxMin||1;
     volIdx=0;
+    if(typeSem&&typeSem!=='off') semaineCongesAM=false; // plan min : un seul type, pas de notion de volume nommé
   } else if(src.planType==='var'){
-    const planVarSrc=src.planVar||[];
-    const vi=!aucunType?planVarSrc.findIndex((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):-1;
+    planVarSrc=src.planVar||[];
+    const vi=(typeSem&&typeSem!=='off')?planVarSrc.findIndex((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):-1;
+    if(typeSem&&typeSem!=='off'&&vi<0) semaineCongesAM=true; // un nom de type est là mais ne matche aucun volume → semaine violette
     if(vi>=0){
       jourPossible=!!(planVarSrc[vi].jours&&planVarSrc[vi].jours[jourIdx]);
       jMax=planVarSrc[vi].j||1;
       volIdx=vi;
     }
   }
+  // Repos hebdomadaire : jour jamais possible dans aucun des volumes/config du contrat (structurel), à distinguer d'un jour
+  // simplement non prévu dans le type de semaine assigné cette semaine-là
+  let jamaisPossible=true;
+  if(src.planType==='min'){
+    jamaisPossible=!(src.joursMin&&src.joursMin[jourIdx]);
+  } else if(src.planType==='var'){
+    jamaisPossible=!planVarSrc.some(v=>v.jours&&v.jours[jourIdx]);
+  }
+  const aucunType=horsContrat||semaineOff||semaineCongesAM;
   const couleur=volIdx>=0&&!aucunType?PLAN_COULEURS[volIdx%PLAN_COULEURS.length]:null;
-  return {jourPossible, jMax, volIdx, typeSem, aucunType, couleur};
+  return {jourPossible, jMax, volIdx, typeSem, aucunType, horsContrat, semaineOff, semaineCongesAM, jamaisPossible, couleur};
 }
 
 function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
@@ -3855,9 +3868,26 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
   let totalMoisMin=0;
   const semainesHtml=semaines.map((sem,si)=>{
     const semKeyDom=annee+'-'+moisIdx+'-'+si;
-    let jMaxSem=0, totalSemMin=0, couleurSem=null;
-    const joursHtml=sem.jours.map(j=>{
-      const infos=getInfosJourPlanning(c, j.date);
+    const infosSemaine=sem.jours.map(j=>getInfosJourPlanning(c, j.date));
+    const premiereInfo=infosSemaine[0];
+
+    // Cas semaine entière : hors contrat / semaine off / congés Ass'Mat — un seul message, pas de saisie
+    if(premiereInfo.horsContrat||premiereInfo.semaineOff||premiereInfo.semaineCongesAM){
+      const msgSem=premiereInfo.horsContrat?'Hors contrat'
+        :premiereInfo.semaineOff?'Semaine d’absence employeur'
+        :'Congés de l’Ass’Mat';
+      return `<div class="pln-sem" data-semkey="${semKeyDom}" data-contrat="${c.id}" data-jmax="0"
+        style="border:1px solid var(--mb);border-radius:var(--rs);margin-bottom:8px;overflow:hidden">
+        <div style="padding:4px 8px;background:var(--mp);font-size:11px;font-weight:600;color:var(--tx2)">
+          Semaine ${getSemISO(sem.jours[0].date)}
+        </div>
+        <div style="padding:12px;text-align:center;color:var(--tx3);font-size:12px">${msgSem}</div>
+      </div>`;
+    }
+
+    let jMaxSem=0, totalSemMin=0, couleurSem=null, compteRempli=0;
+    const joursHtml=sem.jours.map((j,ji)=>{
+      const infos=infosSemaine[ji];
       if(infos.jMax>jMaxSem) jMaxSem=infos.jMax;
       if(infos.couleur&&!couleurSem) couleurSem=infos.couleur;
       const nomJourAbr=JOURS_ABR_P[j.dt.getDay()===0?6:j.dt.getDay()-1];
@@ -3865,29 +3895,35 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       const estCongeAM=isJourCongeAM(j.date);
       const estFerieJ=isFerie(j.date, c);
       const planData=(c.planning&&c.planning[j.date])||{};
-      if(planData.d&&planData.f){ totalSemMin+=toM(planData.f)-toM(planData.d); }
+      const rempli=!!(planData.d&&planData.f);
+      if(rempli){ totalSemMin+=toM(planData.f)-toM(planData.d); }
       const borderAv=(dateDebAvP&&j.date===dateDebAvP)?'border-top:3px solid var(--m);':'';
-      const estSaisissable=infos.jourPossible&&!estCongeAM&&!moisVerrouille;
+      let verrouilleQuota=false;
+      if(infos.jourPossible&&!estCongeAM&&!moisVerrouille){
+        if(rempli) compteRempli++;
+        else if(infos.jMax>0&&compteRempli>=infos.jMax) verrouilleQuota=true;
+      }
+      const estSaisissable=infos.jourPossible&&!estCongeAM&&!moisVerrouille&&!verrouilleQuota;
       let contenu;
-      if(infos.aucunType){
-        contenu=`<span style="color:var(--tx3);font-size:12px">Aucun type de semaine assigné (agenda)</span>`;
-      } else if(!infos.jourPossible){
-        contenu=`<span style="color:var(--tx3);font-size:12px">Jour non possible</span>`;
+      if(!infos.jourPossible){
+        contenu=`<span style="color:var(--tx3);font-size:12px">${infos.jamaisPossible?'Repos hebdomadaire':'Jour non prévu au contrat'}</span>`;
       } else if(estCongeAM){
         contenu=`<span style="color:#7c3aed;font-size:12px;font-weight:600">🔒 Congé (AM)</span>`;
       } else {
-        contenu=`<div style="display:flex;gap:6px;align-items:center">
-          <input type="time" class="pln-deb" value="${planData.d||''}" ${moisVerrouille?'disabled':''}
+        contenu=`<div style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tx2)">
+          <span>de</span>
+          <input type="time" class="pln-deb" value="${planData.d||''}" ${(moisVerrouille||verrouilleQuota)?'disabled':''}
             style="width:78px;padding:3px 4px;border:1px solid var(--mb);border-radius:3px;font-size:12px"
             onchange="majPlanningJour(${c.id},'${j.date}','d',this.value,'${semKeyDom}')">
-          <span style="color:var(--tx3)">→</span>
-          <input type="time" class="pln-fin" value="${planData.f||''}" ${moisVerrouille?'disabled':''}
+          <span>à</span>
+          <input type="time" class="pln-fin" value="${planData.f||''}" ${(moisVerrouille||verrouilleQuota)?'disabled':''}
             style="width:78px;padding:3px 4px;border:1px solid var(--mb);border-radius:3px;font-size:12px"
             onchange="majPlanningJour(${c.id},'${j.date}','f',this.value,'${semKeyDom}')">
+          ${verrouilleQuota?'<span style="color:var(--tx3);font-size:11px">quota atteint</span>':''}
         </div>`;
       }
       return `<div class="pln-jour" data-date="${j.date}" data-possible="${estSaisissable?'1':'0'}"
-        style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:var(--mp);${borderAv}">
+        style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:var(--mp);opacity:${verrouilleQuota?'0.45':'1'};${borderAv}">
         <div style="width:60px;font-size:12px;font-weight:500;flex-shrink:0">${nomJourAbr} ${numJour}${estFerieJ?' 🎌':''}</div>
         <div style="flex:1">${contenu}</div>
       </div>`;
@@ -3906,8 +3942,8 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
   }).join('');
 
   const idMois='pln-mois-'+c.id+'-'+moisKeyTile;
-  return `<div style="border:1px solid var(--mb);border-radius:8px;margin-bottom:10px;overflow:hidden">
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#f5f0ff;cursor:pointer" onclick="togglePlanningMois('${idMois}','pln-container-${c.id}')">
+  return `<div id="pln-tile-${c.id}-${moisKeyTile}" style="border:1px solid var(--mb);border-radius:8px;margin-bottom:10px;overflow:hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#fff;cursor:pointer" onclick="togglePlanningMois('${idMois}','pln-container-${c.id}')">
       <div style="display:flex;align-items:center;gap:8px">
         <div style="font-weight:700;font-size:14px;color:var(--m)">${MOIS[moisIdx]} ${annee}</div>
         <span style="font-size:12px;color:var(--tx2)">Total : ${fmtH(totalMoisMin)}</span>
@@ -3946,7 +3982,6 @@ function renderPlanning(c, cont){
   const debut=new Date(c.dateDeb);
   const dateFinC=getDateFinContrat(c);
   const now=new Date();
-  const moisCourantKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
   const debutMoisContrat=new Date(debut.getFullYear(), debut.getMonth(), 1);
   const moisSuivant=new Date(now.getFullYear(), now.getMonth()+1, 1);
   const horizonMois=debutMoisContrat>moisSuivant?new Date(debutMoisContrat.getFullYear(), debutMoisContrat.getMonth()+1, 1):moisSuivant;
@@ -3965,10 +4000,7 @@ function renderPlanning(c, cont){
       <br><em>Aperçu visuel — pas encore relié au calcul de paie ni à la feuille de présence.</em>
     </div>
     <div id="${containerId}">
-      ${mois.length?mois.slice().reverse().map(m=>{
-        const mk=m.annee+'-'+String(m.moisIdx+1).padStart(2,'0');
-        return renderPlanningMoisTile(c, m.annee, m.moisIdx, mk===moisCourantKey);
-      }).join(''):'<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">Aucun mois à planifier pour l\'instant.</div></div>'}
+      ${mois.length?mois.slice().reverse().map(m=>renderPlanningMoisTile(c, m.annee, m.moisIdx, false)).join(''):'<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">Aucun mois à planifier pour l\'instant.</div></div>'}
     </div>
     <div style="text-align:center;padding:16px 0">
       <button class="btn bs" onclick="renderDetTab(${c.id},'contrat')">← Retour</button>
@@ -3989,41 +4021,19 @@ function majPlanningJour(contratId, dateStr, champ, val, semKeyDom){
   if(!c.planning[dateStr].d&&!c.planning[dateStr].f) delete c.planning[dateStr];
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
-  localStorage.setItem('cam_c', JSON.stringify(getContratsCompresses()));
   if(c.id) _contratsModifies.add(c.id);
-  const bandeau=document.getElementById('bandeau-non-enregistre');
-  if(bandeau) bandeau.style.display='block';
-  majPlanningUI(contratId, semKeyDom);
+  saveToFirestore();
+  refreshPlanningTile(contratId, moisKeyJ);
 }
 
-function majPlanningUI(contratId, semKeyDom){
-  const semDiv=document.querySelector(`.pln-sem[data-semkey="${semKeyDom}"][data-contrat="${contratId}"]`);
-  if(!semDiv) return;
-  const jMax=parseInt(semDiv.dataset.jmax||'0');
-  const joursPossibles=[...semDiv.querySelectorAll('.pln-jour[data-possible="1"]')];
-  let totalMin=0;
-  joursPossibles.forEach(jd=>{
-    const inpD=jd.querySelector('.pln-deb'), inpF=jd.querySelector('.pln-fin');
-    if(inpD&&inpF&&inpD.value&&inpF.value) totalMin+=toM(inpF.value)-toM(inpD.value);
-  });
-  const totSpan=semDiv.querySelector('.pln-total');
-  if(totSpan) totSpan.textContent=fmtH(totalMin);
-  let compte=0;
-  joursPossibles.forEach(jd=>{
-    const inpD=jd.querySelector('.pln-deb'), inpF=jd.querySelector('.pln-fin');
-    const rempli=!!(inpD&&inpF&&inpD.value&&inpF.value);
-    if(rempli){
-      compte++;
-      inpD.disabled=false; inpF.disabled=false;
-      jd.style.opacity='1';
-    } else if(jMax>0&&compte>=jMax){
-      inpD.disabled=true; inpF.disabled=true;
-      jd.style.opacity='0.45';
-    } else {
-      inpD.disabled=false; inpF.disabled=false;
-      jd.style.opacity='1';
-    }
-  });
+function refreshPlanningTile(contratId, moisKey){
+  const c=S.contrats.find(x=>x.id==contratId);
+  if(!c) return;
+  const [annee, moisNum]=moisKey.split('-').map(Number);
+  const idTile='pln-tile-'+contratId+'-'+moisKey;
+  const tileEl=document.getElementById(idTile);
+  if(!tileEl) return;
+  tileEl.outerHTML=renderPlanningMoisTile(c, annee, moisNum-1, true);
 }
 
 function imprimerFiche(contratId,key){
