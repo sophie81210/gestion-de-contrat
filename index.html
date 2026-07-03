@@ -2673,10 +2673,10 @@ function getTooltipStatut(s){
 function getStatutBg(statut){
   const bgs={
     'prevu':'#eaf5ee','non-prevu':'#fcfcfc','repos':'#e4eff7',
-    'ferie':'#fffbe6','conges-acq':'#84ab84','conges-non':'#84ab84','conges-6j':'#fcfcfc','conges-6j-fin':'#fcfcfc',
+    'ferie':'#fffbe6','conges-acq':'#f5f0ff','conges-non':'#f5f0ff','conges-6j':'#fcfcfc','conges-6j-fin':'#fcfcfc',
     'abs-rem':'#f2f7f4','abs-enfant':'#fdecea','abs-non':'#fdecea','abs-am':'#fdecea','ferie-non':'#fdecea',
     'arret':'#fdecea','travaille':'#e8f5ee','conges':'#f0defc',
-    'conges-anticipe':'#84ab84','conges-am':'#84ab84',
+    'conges-anticipe':'#f5f0ff','conges-am':'#f5f0ff',
     'abs-partielle':'#fcf3f2','hors-contrat':'#fcfcfc','decompte-conges':'#fcfcfc','decompte-acq':'#fcfcfc','decompte-anticipe':'#fcfcfc','reprise':'#e8f5ee','a-selectionner':'#f2f7f4',
   };
   return bgs[statut]||'#fff';
@@ -3026,6 +3026,22 @@ function ouvrirFiche(contratId,key){
       const semNonPointee=semDuMoisFiltrees.find(sk=>!semsViolettes.has(sk)&&!agV.semaines?.[sk]);
       if(semNonPointee){
         setTimeout(()=>toast('⚠ Agenda incomplet — certaines semaines ne sont pas encore pointées'),300);
+      } else {
+        // Agenda complet : vérifier que le planning couvre bien les jours possibles du mois
+        const srcPlanW=getVersionActive(c,debutMoisV);
+        const isPlanMinVarW=srcPlanW.th==='plan'&&(srcPlanW.planType==='min'||srcPlanW.planType==='var');
+        if(isPlanMinVarW){
+          const jourNonPlanifie=fiche.jours.some(jw=>{
+            if(!jw.date.startsWith(key)) return false;
+            const infosW=getInfosJourPlanning(c,jw.date);
+            if(!infosW.jourPossible) return false;
+            const pw=(c.planning||{})[jw.date];
+            return !(pw&&pw.d&&pw.f);
+          });
+          if(jourNonPlanifie){
+            setTimeout(()=>toast('⚠ Planning incomplet — certains jours possibles n\u2019ont pas d\u2019heures prévues'),300);
+          }
+        }
       }
     }
   }
@@ -3041,6 +3057,16 @@ function ouvrirFiche(contratId,key){
     if(!isPlanMinVarFiche){
       j.heureDebPrev=prevus.debut==='prévu'?null:prevus.debut;
       j.heureFinPrev=prevus.fin;
+    } else {
+      // Planning : copier les heures prévues saisies dans l'onglet Planning, sans toucher aux jours
+      // déjà tranchés autrement (jour complémentaire = heures en réel, pas en prévu ; congés/absences/hors-contrat)
+      const planJourOF=(c.planning||{})[j.date];
+      const statutFigeOF=['jours-complementaires','conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat','arret','abs-non','abs-am','abs-enfant','ferie-non'].includes(j.statut);
+      if(planJourOF&&planJourOF.d&&planJourOF.f&&!statutFigeOF){
+        j.heureDebPrev=planJourOF.d;
+        j.heureFinPrev=planJourOF.f;
+        if(!j.statut||j.statut==='a-selectionner') j.statut='prevu';
+      }
     }
     j.planVarPrevu=!!(prevus.planVar);
     // Pour plan min/var : semaines off → pas de 'a-selectionner'
@@ -3330,7 +3356,8 @@ function ouvrirFiche(contratId,key){
       selectedOpts=`<option value="${statutActuel}" selected>${lbl[statutActuel]||statutActuel}</option>`+opts;
     }
 
-    // Cellule "Prévu" — pour plan min/var : champs de saisie + couleur volume
+    // Cellule "Prévu" — rendu identique à fixe/sem (coche verte incluse) ; pour plan min/var,
+    // la couleur du volume est appliquée uniquement sur la colonne jour, pas sur toute la ligne
     let prevuCell='';
     let couleurVolume='transparent';
     let couleurVolumeBrd='var(--mb)';
@@ -3344,41 +3371,20 @@ function ouvrirFiche(contratId,key){
       const planVarSrc=srcJour.planVar||c.planVar||[];
       const planMinSrc=srcJour.planType==='min';
       let volIdx=-1;
-      let jourPossible=false;
       if(planMinSrc){
-        jourPossible=!!(srcJour.joursMin&&srcJour.joursMin[jourIdxPV])&&typeSemJour&&typeSemJour!=='off';
         volIdx=0; // plan min = couleur unique
       } else {
-        const volData=typeSemJour&&planVarSrc?planVarSrc.findIndex((v,i)=>(v.nom||'Volume '+(i+1))===typeSemJour):-1;
-        volIdx=volData;
-        if(volIdx>=0&&planVarSrc[volIdx]){
-          jourPossible=!!(planVarSrc[volIdx].jours&&planVarSrc[volIdx].jours[jourIdxPV]);
-        }
+        volIdx=typeSemJour&&planVarSrc?planVarSrc.findIndex((v,i)=>(v.nom||'Volume '+(i+1))===typeSemJour):-1;
       }
-      // Couleur diluée du volume (40% couleur + 60% blanc)
+      // Couleur diluée du volume (40% couleur + 60% blanc), pour la colonne jour uniquement
       if(volIdx>=0&&typeSemJour&&typeSemJour!=='off'){
         const cc=PLAN_COULEURS[volIdx%PLAN_COULEURS.length];
-        // Diluer : mélanger bg avec blanc à 40%
-        const dilueBg=cc.bg; // on garde la couleur mais on l'applique en opacity
         couleurVolume=cc.bg+'66'; // hex avec alpha 40%
         couleurVolumeBrd=cc.brd+'88';
       }
-      // Champs de saisie si jour possible, sinon —
-      // jours-complementaires : heures dans colonne réel, pas prévu
-      if(jourPossible&&!['non-prevu','hors-contrat','repos','jours-complementaires'].includes(statutActuel)){
-        prevuCell=`<td style="padding:3px 4px;border-left:2px solid ${couleurVolumeBrd}">
-          <input type="time" value="${j.heureDebPrev||''}"
-            style="width:68px;padding:2px 2px;border:1px solid var(--mb);border-radius:3px;font-size:11px;display:block;margin-bottom:2px"
-            ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'debPrev',this.value)"`}>
-          <input type="time" value="${j.heureFinPrev||''}"
-            style="width:68px;padding:2px 2px;border:1px solid var(--mb);border-radius:3px;font-size:11px;display:block"
-            ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'finPrev',this.value)"`}>
-        </td>`;
-      } else {
-        prevuCell=`<td style="padding:4px 6px;font-size:12px;color:var(--tx3);text-align:center;border-left:2px solid ${couleurVolumeBrd}">—</td>`;
-      }
-    } else {
-const statutPrevuJ=getStatutPrevu(c,j);
+    }
+    {
+      const statutPrevuJ=getStatutPrevu(c,j);
       const peutAvoirHeures=['prevu','travaille','abs-partielle','a-selectionner'].includes(statutPrevuJ);
       // Coche verte : seulement si jour prévu sans modification (pas de statut forcé, pas d'heures réelles, pas de congé, pas hors-contrat)
       const statutForcé=j.statut&&j.statut!==statutPrevuJ;
@@ -3400,12 +3406,13 @@ const statutPrevuJ=getStatutPrevu(c,j);
 
     const estDimanche=new Date(j.date).getDay()===0;
     const borderDim=estDimanche?'border-bottom:2px solid var(--mb);':'';
-    const bgFinal=isPlanVar&&couleurVolume!=='transparent'&&['a-selectionner','prevu','travaille','jours-complementaires'].includes(statutActuel)?couleurVolume:bg;
+    const bgFinal=bg;
     const borderAvenant=(dateDebAv&&j.date===dateDebAv)?'border-top:3px solid var(--m);':'';
+    const teinteJourCol=(isPlanVar&&couleurVolume!=='transparent'&&['a-selectionner','prevu','travaille','jours-complementaires'].includes(statutActuel))?`background:${couleurVolume};border-left:2px solid ${couleurVolumeBrd};`:'';
     return `<tr style="background:${bgFinal};${border}${borderDim}${borderAvenant}" ${borderAvenant?'title="Début de l\'avenant"':''}>
-      <td style="padding:5px 4px;font-size:12px;font-weight:500;white-space:nowrap;${manquant?'color:var(--al)':''}">${nomJour} ${numJour}</td>
+      <td style="padding:5px 4px;font-size:12px;font-weight:500;white-space:nowrap;${teinteJourCol}${manquant?'color:var(--al)':''}">${nomJour} ${numJour}</td>
       ${prevuCell}
-      <td style="padding:3px 4px;${isPlanVar?'border-left:2px solid '+couleurVolumeBrd+';':''}">
+      <td style="padding:3px 4px;">
       ${(()=>{
         const isPlanMinVar=sourceActive.th==='plan'&&(sourceActive.planType==='min'||sourceActive.planType==='var');
         const estAbsAvecPrev=(['abs-rem','abs-non'].includes(statutActuel)&&isPlanMinVar);
