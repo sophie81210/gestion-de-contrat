@@ -2596,10 +2596,9 @@ function getStatutOptions(statutPrevu, isPlanMinVar, c, sourceActive){
   const opts={
     // Jours prévus : changer le statut en absence
     'prevu':['abs-partielle','abs-rem','abs-enfant','abs-non','arret','init'],
-    // Jours non prévus : actions possibles selon le type de contrat
-    'non-prevu': isPlanVar
-      ?['prevu','travaille','arret','init']
-      :['travaille','arret','init'],
+    // Jours non prévus : seule option = travaillé (payé intégralement en HC), jamais 'prevu' directement
+    // (sinon les heures ne seraient pas comptées en HC mais comparées au prorata hebdo)
+    'non-prevu':['travaille','arret','init'],
     // Statuts simples : juste réinitialiser
     'travaille':['init'],
     'arret':['init'],
@@ -3362,7 +3361,7 @@ function ouvrirFiche(contratId,key){
        ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'km',this.value)"`}>
     </td>`:aKm?'<td style="padding:3px 2px"><input type="number" style="width:38px;visibility:hidden" class="no-spin"></td>':'';
 
-    const optsBase=['conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','non-prevu','hors-contrat','repos','ferie','ferie-non'].includes(statutActuel)?statutActuel:statutPrevu;
+    const optsBase=['conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','non-prevu','hors-contrat','repos','ferie','ferie-non','arret'].includes(statutActuel)?statutActuel:statutPrevu;
     const opts=getStatutOptions(optsBase, isPlanVar, c, sourceActive);
     let selectedOpts=opts.replace(`value="${statutActuel}"`,`value="${statutActuel}" selected`);
     if(!selectedOpts.includes('selected')){
@@ -3537,17 +3536,17 @@ function ouvrirFiche(contratId,key){
     <div style="width:100%;overflow:hidden">
       <table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed">
         <colgroup>
-          <col style="width:12%"><!-- Jour -->
-          <col style="width:13%"><!-- Prévu -->
+          <col style="width:9%"><!-- Jour -->
+          <col style="width:9.75%"><!-- Prévu -->
           <col style="width:17%"><!-- Réel -->
           <col style="width:8%"><!-- H± / H± sem -->
-          <col style="width:20%"><!-- Statut -->
+          <col style="width:26.25%"><!-- Statut -->
         </colgroup>
         </colgroup>
         <thead><tr style="background:var(--mp);position:sticky;top:0">
           <th style="padding:6px 4px;text-align:left;font-size:11px">Jour</th>
-          <th style="padding:6px 4px;font-size:11px">Prévu</th>
-          <th style="padding:6px 4px;font-size:11px">Réel</th>
+          <th style="padding:6px 4px;font-size:11px;text-align:left">Prévu</th>
+          <th style="padding:6px 4px;font-size:11px;text-align:left">Réel</th>
           <th style="padding:6px 4px;font-size:11px">${isPlanVar?'H± sem':'H±'}</th>
           <th style="padding:6px 4px;font-size:11px;text-align:right">Statut</th>
         </tr></thead>
@@ -3896,12 +3895,16 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
   const semainesHtml=semaines.map((sem,si)=>{
     const semKeyDom=annee+'-'+moisIdx+'-'+si;
     const infosSemaine=sem.jours.map(j=>getInfosJourPlanning(c, j.date));
-    const premiereInfo=infosSemaine[0];
 
     // Cas semaine entière : hors contrat / semaine off / congés Ass'Mat — un seul message, pas de saisie
-    if(premiereInfo.horsContrat||premiereInfo.semaineOff||premiereInfo.semaineCongesAM){
-      const msgSem=premiereInfo.horsContrat?'Hors contrat'
-        :premiereInfo.semaineOff?'Semaine d’absence employeur'
+    // (uniquement si TOUS les jours de la semaine partagent ce statut — une semaine de début/fin de contrat
+    // peut mélanger des jours hors-contrat et un jour possible, ex. contrat démarrant un samedi)
+    const tousHorsContrat=infosSemaine.every(i=>i.horsContrat);
+    const tousOff=infosSemaine.every(i=>i.semaineOff);
+    const tousCongesAM=infosSemaine.every(i=>i.semaineCongesAM);
+    if(tousHorsContrat||tousOff||tousCongesAM){
+      const msgSem=tousHorsContrat?'Hors contrat'
+        :tousOff?'Semaine d’absence employeur'
         :'Congés de l’Ass’Mat';
       return `<div class="pln-sem" data-semkey="${semKeyDom}" data-contrat="${c.id}" data-jmax="0"
         style="border:1px solid var(--mb);border-radius:var(--rs);margin-bottom:8px;overflow:hidden">
@@ -3913,13 +3916,17 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
     }
 
     let jMaxSem=0, totalSemMin=0, couleurSem=null;
-    // Total de jours cochés sur la semaine (jours normaux + fériés cochés comme travaillés),
-    // pour verrouiller les cases restantes une fois le quota jours-max atteint
+    // Total de jours cochés sur la semaine ISO complète (jours normaux + fériés cochés comme travaillés),
+    // y compris les jours d'un autre mois partageant la même semaine (semaine à cheval) — pour que
+    // l'affichage soit cohérent avec le verrouillage réel appliqué par toggleJourPlanning
     let totalCocheSem=0;
-    infosSemaine.forEach((infos,ji)=>{
-      const pd=(c.planning&&c.planning[sem.jours[ji].date])||{};
-      if((infos.jourPossible||infos.ferieChome)&&!isJourCongeAM(sem.jours[ji].date)&&pd.coche) totalCocheSem++;
-    });
+    if(sem.jours.length){
+      const semKeyISOSem=getSemISO(sem.jours[0].date)+'-'+getSemAnnee(sem.jours[0].date);
+      Object.keys(c.planning||{}).forEach(dt=>{
+        if((getSemISO(dt)+'-'+getSemAnnee(dt))!==semKeyISOSem) return;
+        if(c.planning[dt]&&c.planning[dt].coche&&!isJourCongeAM(dt)) totalCocheSem++;
+      });
+    }
     const joursHtml=sem.jours.map((j,ji)=>{
       const infos=infosSemaine[ji];
       if(infos.jMax>jMaxSem) jMaxSem=infos.jMax;
@@ -3933,10 +3940,22 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       const borderAv=(dateDebAvP&&j.date===dateDebAvP)?'border-top:3px solid var(--m);':'';
       const quotaAtteint=jMaxSem>0&&totalCocheSem>=jMaxSem;
       const casesVerrouillee=!dejaCoche&&quotaAtteint&&!moisVerrouille;
-      const estSaisissable=(infos.jourPossible||infos.ferieChome)&&!estCongeAM&&!moisVerrouille&&!casesVerrouillee;
+      // Férié entouré de congés (jour précédent ou suivant posé) : traité comme faisant partie de la
+      // période de congés, pas de case à cocher proposée
+      let ferieDansConges=false;
+      if(infos.ferieChome){
+        const dJ=new Date(j.date);
+        const dPrevJ=new Date(dJ); dPrevJ.setDate(dPrevJ.getDate()-1);
+        const dNextJ=new Date(dJ); dNextJ.setDate(dNextJ.getDate()+1);
+        const fmtJ=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
+        ferieDansConges=isJourCongeAM(fmtJ(dPrevJ))||isJourCongeAM(fmtJ(dNextJ));
+      }
+      const estSaisissable=(infos.jourPossible||(infos.ferieChome&&!ferieDansConges))&&!estCongeAM&&!moisVerrouille&&!casesVerrouillee;
       let contenu;
-      if(estCongeAM){
+      if(estCongeAM||ferieDansConges){
         contenu=`<span style="color:var(--tx3);font-size:12px">Congés de l’Ass’Mat</span>`;
+      } else if(infos.horsContrat){
+        contenu=`<span style="color:var(--tx3);font-size:12px">Hors contrat</span>`;
       } else if(!infos.jourPossible&&!infos.ferieChome){
         contenu=`<span style="color:var(--tx3);font-size:12px">${infos.jamaisPossible?'Repos hebdomadaire':'Jour non prévu au contrat'}</span>`;
       } else if(infos.ferieChome){
@@ -3986,7 +4005,6 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
         <div style="font-weight:700;font-size:14px;color:var(--m)">${MOIS[moisIdx]} ${annee}</div>
         <span style="font-size:12px;color:var(--tx2)" class="pln-total-mois">Total : <span id="${idMois}-total">${fmtH(totalMoisMin)}</span></span>
         ${moisVerrouille&&ficheTile&&ficheTile.valide?'<span style="font-size:11px;font-weight:600;color:var(--vt);background:var(--vtc);padding:2px 8px;border-radius:10px">✓ Validé</span>':''}
-        ${estLectureSeuleEmployeur()?'<span style="font-size:11px;font-weight:600;color:var(--tx2);background:var(--mp);padding:2px 8px;border-radius:10px">🔒 Lecture seule</span>':''}
       </div>
       <span style="font-size:20px;color:var(--tx3)" id="${idMois}-arrow">${ouvert?'⌄':'›'}</span>
     </div>
@@ -4033,9 +4051,7 @@ function renderPlanning(c, cont){
   const containerId='pln-container-'+c.id;
   cont.innerHTML=`
     <div style="padding:6px 2px 12px;font-size:12px;color:var(--tx2)">
-      Planning prévisionnel — les jours grisés ne sont pas possibles au contrat, les jours de congés (AM) sont verrouillés.
-      Une fois le nombre de jours max atteint sur une semaine, les jours suivants se verrouillent automatiquement.
-      <br><em>Aperçu visuel — pas encore relié au calcul de paie ni à la feuille de présence.</em>
+      Enregistrez votre planning tout en respectant les termes du contrat, vous pourrez ajouter des jours et heures complémentaires / supplémentaires depuis les feuilles de présence
     </div>
     <div id="${containerId}">
       ${mois.length?mois.slice().reverse().map(m=>renderPlanningMoisTile(c, m.annee, m.moisIdx, false)).join(''):'<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">Aucun mois à planifier pour l\'instant.</div></div>'}
@@ -5665,7 +5681,13 @@ function calcCongesContrat(c){
               }
               // abs-non, abs-am, ferie-non, conges-am → ignorés
             });
-            const contribNormPV=joursNormauxPV/jMaxSem;
+            // Plancher : une semaine sans congé ni arrêt garantit au moins jMaxSem (le quota contractuel),
+            // même si moins de jours ont été effectivement planifiés/travaillés — un jour non planifié
+            // n'est pas une absence, donc ne doit pas réduire l'acquisition. Ne s'applique pas si la semaine
+            // contient un congé (cas mixte volontairement laissé de côté, cf. discussion sur le remplacement
+            // des jours de congé par l'employeur sur d'autres jours possibles).
+            const compteEffectifPV=(joursConges16PV===0&&absArret===0&&jMaxSem>0)?Math.max(jMaxSem,joursNormauxPV):joursNormauxPV;
+            const contribNormPV=compteEffectifPV/jMaxSem;
             const contribCgPV=joursConges16PV*(1/jMaxSem); // 1/jours réels du volume actif
             const contribArretPV=absArret*(0.8)/jMaxSem;
             const prorata=Math.max(0,contribNormPV+contribCgPV);
@@ -6429,28 +6451,6 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
         }
       }
     });
-
-    // Semaine à cheval sur début/fin de contrat ou avenant : prorata
-    if(volTh&&!semTheoriquesVues.has(semKey)){
-      const lundiSem=new Date(dateEx);
-      while(lundiSem.getDay()!==1) lundiSem.setDate(lundiSem.getDate()-1);
-      const dimSem=new Date(lundiSem);dimSem.setDate(lundiSem.getDate()+6);
-      const lundiStr=lundiSem.getFullYear()+'-'+String(lundiSem.getMonth()+1).padStart(2,'0')+'-'+String(lundiSem.getDate()).padStart(2,'0');
-      const dimStr=dimSem.getFullYear()+'-'+String(dimSem.getMonth()+1).padStart(2,'0')+'-'+String(dimSem.getDate()).padStart(2,'0');
-      const dateDebContrat=c.dateDeb||'';
-      const dateAvenant=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant)?.dateAvenant||'';
-      const estChevalContratOuAvenant=(dateDebContrat&&lundiStr<dateDebContrat)||(dateAvenant&&lundiStr<=dateAvenant&&dimStr>=dateAvenant);
-      if(estChevalContratOuAvenant){
-        semTheoriquesVues.add(semKey);
-        const nbJoursPossiblesMois=joursDesSem.filter(jj=>{
-          const idx=jj.jourSemaine===0?6:jj.jourSemaine-1;
-          return volTh.jours&&volTh.jours[idx];
-        }).length;
-        const hDejaAjoute=semJoursCpt[semKey]*(volTh.h/(volTh.j||1));
-        hTheoriques-=hDejaAjoute;
-        hTheoriques+=volTh.h*(nbJoursPossiblesMois/(volTh.j||1));
-      }
-    }
   });
 
   return hTheoriques; // en heures
@@ -12413,6 +12413,13 @@ async function modifierEmailEmployeur(cid){
     return;
   }
   if(email===ancienEmail) return;
+  if(email){
+    const dejaUtilise=S.contrats.find(x=>x.id!==cid&&(x.emailEmployeurAutorise||'').toLowerCase()===email);
+    if(dejaUtilise){
+      alerte(`Cet email est déjà utilisé comme accès employeur sur le contrat "${dejaUtilise.nom||dejaUtilise.id}". Retirez d'abord cet accès sur l'autre contrat avant de le réutiliser ici.`);
+      return;
+    }
+  }
   if(!window.FB_USER||!window.fbSetAccesEmployeur||!window.fbDeleteAccesEmployeur){
     alerte('Connexion Firebase indisponible, réessayez plus tard.');
     return;
