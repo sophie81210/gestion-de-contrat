@@ -3036,7 +3036,7 @@ function ouvrirFiche(contratId,key){
       // le mois — un mois peut désormais être à cheval entre deux cycles d'agenda à l'anniversaire)
       const semNonPointee=semDuMoisFiltrees.find(sk=>{
         if(semsViolettes.has(sk)) return false;
-        const jourDeCetteSem=fiche.jours.find(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))===sk);
+        const jourDeCetteSem=fiche.jours.find(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))===sk&&!(c.dateDeb&&j.date<c.dateDeb)&&j.statut!=='hors-contrat');
         if(!jourDeCetteSem) return false;
         const dateJourSem=new Date(jourDeCetteSem.date);
         const agPourCetteSem=tousAgendasV.find(ag=>new Date(ag.dateDebut)<=dateJourSem&&new Date(ag.dateFin)>=dateJourSem);
@@ -6811,80 +6811,14 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     });
   }
   if(c.th==='plan'&&(c.planType==='min'||c.planType==='var')){
-    const hAbsJoursCptTh={};
     fiche.jours.forEach(j=>{
-      // Inclure aussi les jours avant c.dateDeb (non marqués hors-contrat mais hors période)
       const estHorsContrat=(j.statut||'')==='hors-contrat';
       const estAvantDebut=!!(c.dateDeb&&j.date<c.dateDeb);
       if(!estHorsContrat&&!estAvantDebut) return;
-      // Pour les jours avant dateDeb avec statut null : vérifier si non déduits
-      if(estAvantDebut&&!estHorsContrat){
-        // Ces jours ne sont pas marqués hors-contrat mais peuvent être non déduits
-        // → les exclure de hTheoriques si le mois précédent peut compléter
-        const jourIdxTh2=j.jourSemaine===0?6:j.jourSemaine-1;
-        const semNumTh=getSemISO(j.date);
-        const srcTh=getVersionActive(c,new Date(j.date));
-        const jourPossibleTh=srcTh.planType==='var'?srcTh.planVar?.some(v=>v.jours&&v.jours[jourIdxTh2]):(srcTh.joursMin&&srcTh.joursMin[jourIdxTh2]);
-        if(!jourPossibleTh){joursHCExclus.add(j.date);return;}
-        let jMaxTh=srcTh.jMaxMin||1;
-        if(srcTh.planType==='var'&&srcTh.planVar){
-          const tJ=srcTh.planVar.reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
-          const tS=srcTh.planVar.reduce((t,v)=>t+(v.s||0),0);
-          jMaxTh=tS>0?tJ/tS:jMaxTh;
-        }
-        const debutMoisStr2=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0')+'-01';
-        const possPrec=joursCalendairePossibles(semNumTh,debutMoisStr2,srcTh);
-        const aDeduire=Math.max(0,Math.round(jMaxTh)-possPrec);
-        const cpt=joursHCExclus._cpt=joursHCExclus._cpt||{};
-        if(!cpt[semNumTh]) cpt[semNumTh]=0;
-        if(possPrec>=Math.round(jMaxTh)||cpt[semNumTh]>=aDeduire){
-          joursHCExclus.add(j.date);
-        } else {
-          cpt[semNumTh]++;
-        }
-        return;
-      }
       const jourIdxTh2=j.jourSemaine===0?6:j.jourSemaine-1;
-      const semNumTh=getSemISO(j.date);
       const srcTh=getVersionActive(c,new Date(j.date));
       const jourPossibleTh=srcTh.planType==='var'?srcTh.planVar?.some(v=>v.jours&&v.jours[jourIdxTh2]):(srcTh.joursMin&&srcTh.joursMin[jourIdxTh2]);
-      if(!jourPossibleTh){joursHCExclus.add(j.date);return;}
-      let jMaxTh=srcTh.jMaxMin||1;
-      if(srcTh.planType==='var'&&srcTh.planVar){
-        const tJ=srcTh.planVar.reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
-        const tS=srcTh.planVar.reduce((t,v)=>t+(v.s||0),0);
-        jMaxTh=tS>0?tJ/tS:jMaxTh;
-      }
-      const estDebutMois2=j.date<(c.dateDeb||'');
-      const joursDesSemTh=fiche.jours.filter(jj=>getSemISO(jj.date)===semNumTh);
-      const aDesJoursDansPeriodeTh=joursDesSemTh.some(jj=>!jj._horsContratAvenant);
-      const estFinPeriode2=periodeAv==='avant'&&j._horsContratAvenant&&aDesJoursDansPeriodeTh;
-      let deduitTh=false;
-      if(estDebutMois2&&c.dateDeb){
-        const debutMoisStr2=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0')+'-01';
-        const possPrec2=joursCalendairePossibles(semNumTh,debutMoisStr2,srcTh);
-        const aDeduireTh=Math.max(0,Math.round(jMaxTh)-possPrec2);
-        if(!hAbsJoursCptTh[semNumTh]) hAbsJoursCptTh[semNumTh]=0;
-        if(possPrec2<Math.round(jMaxTh)&&hAbsJoursCptTh[semNumTh]<aDeduireTh){
-          deduitTh=true;hAbsJoursCptTh[semNumTh]++;
-        }
-      } else if(estFinPeriode2){
-        const moisSuivStr2=fiche.mois===11?(fiche.annee+1)+'-01-01':fiche.annee+'-'+String(fiche.mois+2).padStart(2,'0')+'-01';
-        const possSuiv2=joursCalendairePossiblesApres(semNumTh,moisSuivStr2,srcTh);
-        if(possSuiv2<Math.round(jMaxTh)){
-          const aDeduireTh2=Math.max(0,Math.round(jMaxTh)-possSuiv2);
-          if(!hAbsJoursCptTh[semNumTh]) hAbsJoursCptTh[semNumTh]=0;
-          if(hAbsJoursCptTh[semNumTh]<aDeduireTh2){
-            deduitTh=true;hAbsJoursCptTh[semNumTh]++;
-          }
-        }
-      } else {
-        if(!hAbsJoursCptTh[semNumTh]) hAbsJoursCptTh[semNumTh]=0;
-        if(hAbsJoursCptTh[semNumTh]<Math.round(jMaxTh)){
-          deduitTh=true;hAbsJoursCptTh[semNumTh]++;
-        }
-      }
-      if(!deduitTh) joursHCExclus.add(j.date);
+      if(jourPossibleTh) joursHCExclus.add(j.date);
     });
   }
   const hSemMoyTh=(hMensu*12/nbSemActif);
