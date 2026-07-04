@@ -7304,8 +7304,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const hAbsDedJoursCpt={};
   const hAbsDedJoursCpt2={};
   if(sourceActif.th==='plan'||c.th==='plan'||sourceActif.th==='sem'||c.th==='sem'){
-    // Pour plan sem : moyenne pondérée / jours possibles (union de tous les types de semaine),
-    // cohérent avec calcHTheoriquesPlanSem — un jour hors contrat n'a légalement aucun type précis
+    // Pour plan sem et plan var : moyenne pondérée / jours possibles (union), cohérent avec
+    // calcHTheoriquesPlanSem/PlanVar — un jour hors contrat n'a légalement aucun type/volume précis
     let hSemMoyAbsPS=0, nbJoursPossiblesAbsPS=1;
     if(sourceActif.th==='sem'||c.th==='sem'){
       const semTypesAbs=sourceActif.semTypes||c.semTypes||[];
@@ -7323,6 +7323,15 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       nbJoursPossiblesAbsPS=joursPossiblesAbsPS.filter(Boolean).length||1;
       var joursPossiblesAbsPSArr=joursPossiblesAbsPS;
     }
+    let hSemMoyAbsPV=0, nbJoursPossiblesAbsPV=1, joursPossiblesAbsPVArr=null;
+    if((sourceActif.planType==='var'||c.planType==='var')&&(sourceActif.planVar||c.planVar)){
+      const planVarAbs=sourceActif.planVar||c.planVar;
+      let totalHAnnuelPV=0, totalSPV=0;
+      planVarAbs.forEach(v=>{ totalHAnnuelPV+=(v.h||0)*(v.s||0); totalSPV+=(v.s||0); });
+      hSemMoyAbsPV=totalSPV>0?(totalHAnnuelPV/totalSPV):0;
+      joursPossiblesAbsPVArr=Array.from({length:7},(_,idx)=>planVarAbs.some(v=>v.jours&&v.jours[idx]));
+      nbJoursPossiblesAbsPV=joursPossiblesAbsPVArr.filter(Boolean).length||1;
+    }
     fiche.jours.forEach(j=>{
       const statut=j.statut||getStatutPrevu(c,j);
       const absDeduitesPre=['abs-non','abs-am','ferie-non','arret','abs-partielle','hors-contrat'];
@@ -7331,24 +7340,17 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       if(!hAbsParSemaine[semKeyPre]) hAbsParSemaine[semKeyPre]=0;
       if(j.heureDebPrev&&j.heureFinPrev){
         hAbsParSemaine[semKeyPre]+=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
-      } else if((sourceActif.planType==='var'||c.planType==='var')&&(sourceActif.planVar||c.planVar)){
-        const planVarAbs=sourceActif.planVar||c.planVar;
-        const agKeyPre=getKeyAgenda(semKeyPre,getSemAnnee(j.date));
-        const typeSemPre=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKeyPre];
-        const volPre=typeSemPre?planVarAbs.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemPre):null;
+      } else if((sourceActif.planType==='var'||c.planType==='var')&&joursPossiblesAbsPVArr){
         const jourIdxPre=j.jourSemaine===0?6:j.jourSemaine-1;
-        if(volPre&&volPre.jours&&volPre.jours[jourIdxPre]){
-          if(!hAbsJoursCpt[semKeyPre]) hAbsJoursCpt[semKeyPre]=0;
-          if(hAbsJoursCpt[semKeyPre]<(volPre.j||1)){
-            hAbsParSemaine[semKeyPre]+=(volPre.h/(volPre.j||1));
-            hAbsJoursCpt[semKeyPre]++;
-          }
+        if(joursPossiblesAbsPVArr[jourIdxPre]){
+          hAbsParSemaine[semKeyPre]+=hSemMoyAbsPV/nbJoursPossiblesAbsPV;
         }
       } else if(c.planType==='fix'||c.planType==='min'){
         const jourIdxPre=j.jourSemaine===0?6:j.jourSemaine-1;
         const joursPossibles=c.joursMin||[];
+        const nbJoursCochesMin=joursPossibles.filter(Boolean).length||(c.jMaxMin||5);
         if(joursPossibles[jourIdxPre]){
-          hAbsParSemaine[semKeyPre]+=(c.hMin||0)/(c.jMaxMin||5);
+          hAbsParSemaine[semKeyPre]+=(c.hMin||0)/nbJoursCochesMin;
         }
       } else if(sourceActif.th==='sem'||c.th==='sem'){
         const jourIdxPreSem=j.jourSemaine===0?6:j.jourSemaine-1;
