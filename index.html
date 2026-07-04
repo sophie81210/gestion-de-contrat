@@ -7431,115 +7431,21 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       } else if(j.heureDebPrev&&j.heureFinPrev&&!estStatutPrevu(statut)&&statut!=='travaille'&&!(j._horsContratAvenant&&periodeAv==='apres')){
         horsContratDeduit=true;
       } else if(c.th==='plan'&&(c.planVar||c.planType==='min')){
-        // Les jours hors-période sont couverts par hAbsHorsPeriode → pas de double comptage
+        // Les jours hors-période (avenant) sont couverts par hAbsHorsPeriode → pas de double comptage
         if(j._horsContratAvenant&&dateAvenantStr){
           // déjà compté dans hAbsHorsPeriode
         } else {
-        const semKeyHC=getSemISO(j.date);
-        const agKeyHC=getKeyAgenda(semKeyHC,getSemAnnee(j.date));
-        const srcJourHC=getVersionActive(c,new Date(j.date));
-        const agendasHC=(srcJourHC.agendas||c.agendas||[]);
-        const agendaHC=agendasHC.find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date))||agendaMois;
-        const typeSemHC=agendaHC&&agendaHC.semaines&&agendaHC.semaines[agKeyHC];
-        const planVarActif=sourceActif.planVar||c.planVar;
-        const planTypeActif=sourceActif.planType||c.planType;
-        const joursMinActif=sourceActif.joursMin||c.joursMin;
-        const jMaxMinActif=sourceActif.jMaxMin||c.jMaxMin;
-        const volHC=planTypeActif==='var'&&typeSemHC?planVarActif.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemHC):null;
-        const jourIdxHC=j.jourSemaine===0?6:j.jourSemaine-1;
-        if(volHC&&volHC.jours&&volHC.jours[jourIdxHC]){
-          const [ay,am]=j.date.split('-').map(Number);
-          const [ddy2,ddm2,ddd2]=c.dateDeb.split('-').map(Number);
-          const dateDebC=new Date(ddy2,ddm2-1,ddd2);
-          const semDebut=new Date(ay,am-1,parseInt(j.date.split('-')[2]));
-          let joursDansContrat=0;
-          for(let d=1;d<=13;d++){
-            const cur=new Date(semDebut);
-            cur.setDate(semDebut.getDate()+d);
-            const curStr=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
-            if(cur>=dateDebC&&getSemISO(curStr)===getSemISO(j.date)){
-              const idx=cur.getDay()===0?6:cur.getDay()-1;
-              if(volHC.jours[idx]) joursDansContrat++;
-            }
-          }
-          if(!hAbsDedJoursCpt[semKeyHC]) hAbsDedJoursCpt[semKeyHC]=0;
-          if(hAbsDedJoursCpt[semKeyHC]+joursDansContrat<(volHC.j||1)){
-            hAbsDedJoursCpt[semKeyHC]++;
-            horsContratDeduit=true;
-          }
-        }
-        if(!volHC){
-          const jourPossibleHC=planTypeActif==='var'?planVarActif.some(v=>v.jours&&v.jours[jourIdxHC]):(joursMinActif&&joursMinActif[jourIdxHC]);
-          if(jourPossibleHC){
-            const semNumHC=getSemISO(j.date);
-            const anneeJ=getSemAnnee(j.date);
-            const estDebutContratHC=j.date<(c.dateDeb||'');
-            const joursDesSemHC=fiche.jours.filter(jj=>getSemISO(jj.date)===semNumHC);
-            const aDesJoursDansPeriode=joursDesSemHC.some(jj=>!jj._horsContratAvenant);
-            const estFinPeriodeHC=periodeAv==='avant'&&j._horsContratAvenant&&aDesJoursDansPeriode;
-            // Construire objet volume uniforme pour plan min
-            let volHCUnif=null;
-            if(planTypeActif==='min') volHCUnif={jours:joursMinActif,j:jMaxMinActif||1,h:sourceActif.hMin||c.hMin||0};
-            else if(planTypeActif==='var'&&planVarActif) volHCUnif=planVarActif.find(v=>v.jours&&v.jours[jourIdxHC]);
-            const limiteCheval=estDebutContratHC?c.dateDeb:dateAvenantStr;
-            const estChevalHC=!!(limiteCheval&&estSemaineChevalSur(semNumHC,limiteCheval,anneeJ)&&(estDebutContratHC||estFinPeriodeHC));
-            if(estChevalHC&&volHCUnif){
-              const sensHC=estDebutContratHC?'avant':'apres';
-              const cochesHCCount=joursCochesHCDansVol(semNumHC,limiteCheval,sensHC,volHCUnif,anneeJ);
-              if(!hAbsJoursCpt[semKeyHC]) hAbsJoursCpt[semKeyHC]=0;
-              if(cochesHCCount>0&&hAbsJoursCpt[semKeyHC]<cochesHCCount){
-                horsContratDeduit=true;
-                hAbsJoursCpt[semKeyHC]++;
-              }
-            } else {
-              // Semaine normale hors-contrat : logique jours max (mois adjacent peut compenser)
-              let jMaxMoy=jMaxMinActif||planVarActif?.reduce((t,v)=>t+(v.j||0)*(v.s||0),0)/(planVarActif?.reduce((t,v)=>t+(v.s||0),0)||1)||1;
-              if(planTypeActif==='var'&&planVarActif){
-                const totalJ=planVarActif.reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
-                const totalS=planVarActif.reduce((t,v)=>t+(v.s||0),0);
-                jMaxMoy=totalS>0?totalJ/totalS:jMaxMoy;
-              } else if(planTypeActif==='min'){
-                jMaxMoy=jMaxMinActif||1;
-              }
-              // Règle semaine partielle : vérifier si le mois adjacent peut compléter jMaxMoy
-              const joursDeСetteSemDansMois=fiche.jours.filter(jj=>getSemISO(jj.date)===semNumHC);
-              const estDebutMois=j.date<(c.dateDeb||'');
-              if(estDebutMois&&c.dateDeb){
-                const debutMoisStr=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0')+'-01';
-                const joursPossiblesPrec=joursCalendairePossibles(semNumHC,debutMoisStr,sourceActif);
-                if(joursPossiblesPrec>=Math.round(jMaxMoy)){
-                  // Le mois précédent peut compléter → pas de déduction
-                } else {
-                  const aDeduire=Math.max(0,Math.round(jMaxMoy)-joursPossiblesPrec);
-                  if(!hAbsJoursCpt[semKeyHC]) hAbsJoursCpt[semKeyHC]=0;
-                  if(hAbsJoursCpt[semKeyHC]<aDeduire){
-                    horsContratDeduit=true;
-                    hAbsJoursCpt[semKeyHC]++;
-                  }
-                }
-              } else if(estFinPeriodeHC){
-                const moisSuivStr=fiche.mois===11?(fiche.annee+1)+'-01-01':fiche.annee+'-'+String(fiche.mois+2).padStart(2,'0')+'-01';
-                const srcFin=planVarActif?{planType:planTypeActif,planVar:planVarActif,joursMin:joursMinActif}:sourceActif;
-                const joursPossiblesSuiv=joursCalendairePossiblesApres(semNumHC,moisSuivStr,srcFin);
-                if(joursPossiblesSuiv>=Math.round(jMaxMoy)){
-                } else {
-                  const aDeduire=Math.max(0,Math.round(jMaxMoy)-joursPossiblesSuiv);
-                  if(!hAbsJoursCpt[semKeyHC]) hAbsJoursCpt[semKeyHC]=0;
-                  if(hAbsJoursCpt[semKeyHC]<aDeduire){
-                    horsContratDeduit=true;
-                    hAbsJoursCpt[semKeyHC]++;
-                  }
-                }
-              } else {
-                if(!hAbsJoursCpt[semKeyHC]) hAbsJoursCpt[semKeyHC]=0;
-                if(hAbsJoursCpt[semKeyHC]<Math.round(jMaxMoy)){
-                  horsContratDeduit=true;
-                  hAbsJoursCpt[semKeyHC]++;
-                }
-              }
-            }
-          }
-        }
+          // Jour hors contrat (avant la date d'embauche) : aucun volume précis ne peut légalement
+          // s'appliquer puisque le contrat n'existe pas encore → toujours déduit s'il est possible
+          // dans l'union de tous les volumes/jours possibles, sans plafond par quota (cohérent avec
+          // calcHTheoriquesPlanVar/PlanMin et joursHCExclus, corrigés dans le même sens aujourd'hui)
+          const srcJourHC=getVersionActive(c,new Date(j.date));
+          const planVarActif2=srcJourHC.planVar||c.planVar;
+          const planTypeActif2=srcJourHC.planType||c.planType;
+          const joursMinActif2=srcJourHC.joursMin||c.joursMin;
+          const jourIdxHC2=j.jourSemaine===0?6:j.jourSemaine-1;
+          const jourPossibleHC2=planTypeActif2==='var'?(planVarActif2&&planVarActif2.some(v=>v.jours&&v.jours[jourIdxHC2])):(joursMinActif2&&joursMinActif2[jourIdxHC2]);
+          if(jourPossibleHC2) horsContratDeduit=true;
         }
       } else if(c.th!=='plan'){
         // CORRECTION : semaine 'off' pour contrats fixe/sem
@@ -7841,30 +7747,37 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         // Plan min/var : sans heures prévues saisies → pas de déduction (sauf hors-contrat)
         hPrev=0;
       } else if(c.th==='plan'&&c.planType==='min'){
-        const semKeyAbs=getSemISO(j.date);
         const jourIdx2=j.jourSemaine===0?6:j.jourSemaine-1;
-        const jourPossible=c.joursMin&&c.joursMin[jourIdx2];
+        const srcMinAbs=getVersionActive(c,new Date(j.date));
+        const joursMinActif=srcMinAbs.joursMin||c.joursMin||[];
+        const jourPossible=joursMinActif&&joursMinActif[jourIdx2];
         if(jourPossible){
-          // Semaine à cheval sur dateAvenantStr : diviseur = jours possibles
-          const lundiSemMin=new Date(j.date);lundiSemMin.setDate(lundiSemMin.getDate()-(lundiSemMin.getDay()||7)+1);
-          const dimSemMin=new Date(lundiSemMin);dimSemMin.setDate(dimSemMin.getDate()+6);
-          const estChevalAvenantMin=dateAvenantStr&&lundiSemMin<=new Date(dateAvenantStr)&&dimSemMin>=new Date(dateAvenantStr);
-          const jMaxVol=sourceActif.jMaxMin||4;
-          const joursMinActif=sourceActif.joursMin||c.joursMin||[];
-          const jouchesCochesMin=joursMinActif.filter(Boolean).length||jMaxVol;
-          const diviseurMin=estChevalAvenantMin?jouchesCochesMin:jMaxVol;
-          const limiteMin=estChevalAvenantMin?jouchesCochesMin:jMaxVol;
-          if(!hAbsDedJoursCpt2[semKeyAbs]) hAbsDedJoursCpt2[semKeyAbs]=0;
-          if(hAbsDedJoursCpt2[semKeyAbs]<limiteMin){
-            hPrev=(sourceActif.hMin||0)/diviseurMin;
-            hAbsDedJoursCpt2[semKeyAbs]++;
-          } else {
-            hPrev=0;
-          }
+          // Toujours volume/jours cochés, jamais jMax — cohérent avec calcHTheoriquesPlanMin (plan min
+          // n'a qu'un seul rythme possible, pas d'ambiguïté à trancher qu'il soit hors contrat ou non)
+          const jouchesCochesMin=joursMinActif.filter(Boolean).length||(srcMinAbs.jMaxMin||4);
+          hPrev=(srcMinAbs.hMin||0)/jouchesCochesMin;
         } else {
           hPrev=0;
         }
       } else if(c.th==='plan'&&c.planType==='var'&&c.planVar){
+        const jourIdxHCplanvar=j.jourSemaine===0?6:j.jourSemaine-1;
+        if(statut==='hors-contrat'){
+          // Jour hors contrat : aucun volume précis ne peut légalement s'appliquer (le contrat n'existe
+          // pas encore) → toujours la moyenne pondérée / jours possibles (union), qu'un type soit
+          // assigné ou non à cette semaine — cohérent avec calcHTheoriquesPlanVar et joursHCExclus
+          const srcHCplanvar=getVersionActive(c,new Date(j.date));
+          const planVarHC2=srcHCplanvar.planVar||c.planVar;
+          const jourPossibleMoyHC=planVarHC2&&planVarHC2.some(v=>v.jours&&v.jours[jourIdxHCplanvar]);
+          if(jourPossibleMoyHC){
+            const totJHC2=planVarHC2.reduce((t,v)=>t+(v.h||0)*(v.s||0),0);
+            const totSHC2=planVarHC2.reduce((t,v)=>t+(v.s||0),0);
+            const hSemMoyHC2=totSHC2>0?totJHC2/totSHC2:0;
+            const nbJoursPossiblesHC2=Array.from({length:7},(_,idx)=>planVarHC2.some(v=>v.jours&&v.jours[idx])).filter(Boolean).length||1;
+            hPrev=hSemMoyHC2/nbJoursPossiblesHC2;
+          } else {
+            hPrev=0;
+          }
+        } else {
         const semKeyAbs=getSemISO(j.date);
         let hVolSem=hPrevuParSemaine[semKeyAbs]||0;
         if(!hVolSem&&agendaMois){
@@ -7881,16 +7794,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         });
         const jourPossible=volSem&&volSem.jours&&volSem.jours[jourIdx2];
         if(!jourPossible&&!volSem){
-          const jourIdxHC=j.jourSemaine===0?6:j.jourSemaine-1;
-          const jourPossibleMoy=sourceActif.planVar&&sourceActif.planVar.some(v=>v.jours&&v.jours[jourIdxHC]);
-          if(jourPossibleMoy){
-            const totJ=sourceActif.planVar.reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
-            const totS=sourceActif.planVar.reduce((t,v)=>t+(v.s||0),0);
-            const jMoyHC=totS>0?totJ/totS:5;
-            hPrev=(hMensu*12/nbSemActif)/jMoyHC;
-          } else {
-            hPrev=0;
-          }
+          hPrev=0;
         } else if(!jourPossible){hPrev=0;}
         else{
           // Semaine à cheval sur dateAvenantStr : diviseur = jours possibles
@@ -7908,6 +7812,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           } else {
             hPrev=0;
           }
+        }
         }
       } else if(c.th==='fixe'||c.th==='sem'){
         const semKeyHCF=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
