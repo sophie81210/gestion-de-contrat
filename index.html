@@ -6755,7 +6755,33 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const typeSem=agendaMois.semaines&&agendaMois.semaines[agKey];
       const planVarRef=sourceActif.planVar||c.planVar;
       const vol=typeSem?planVarRef.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
-      if(vol) hPrevuParSemaine[semKey]=vol.h;
+      if(vol){
+        // Semaine à cheval sur le début du contrat/avenant : proratiser le volume de référence selon
+        // la part de jours possibles réellement sous contrat — sinon un jour travaillé en tout début de
+        // semaine ne déclenche jamais de dépassement, alors que le quota de la semaine a déjà été
+        // "consommé" par la partie hors contrat (comptée à part, à la moyenne)
+        const lundiV2=new Date(j.date); lundiV2.setDate(lundiV2.getDate()-(lundiV2.getDay()||7)+1);
+        const dimV2=new Date(lundiV2); dimV2.setDate(lundiV2.getDate()+6);
+        const fmtV2=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
+        const lundiVStr2=fmtV2(lundiV2), dimVStr2=fmtV2(dimV2);
+        const dateDebC2=c.dateDeb;
+        const dateAvenant2=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant)?.dateAvenant;
+        let limiteCheval2=null;
+        if(dateDebC2&&lundiVStr2<dateDebC2&&dimVStr2>=dateDebC2) limiteCheval2=dateDebC2;
+        else if(dateAvenant2&&lundiVStr2<=dateAvenant2&&dimVStr2>=dateAvenant2) limiteCheval2=dateAvenant2;
+        if(limiteCheval2&&vol.jours){
+          let joursApresLimite=0;
+          for(let d=0;d<7;d++){
+            const cur=new Date(lundiV2); cur.setDate(lundiV2.getDate()+d);
+            const curStr=fmtV2(cur);
+            const idx=d;
+            if(vol.jours[idx]&&curStr>=limiteCheval2) joursApresLimite++;
+          }
+          hPrevuParSemaine[semKey]=vol.h*(joursApresLimite/(vol.j||1));
+        } else {
+          hPrevuParSemaine[semKey]=vol.h;
+        }
+      }
     }
     if(c.th==='plan'&&c.planType==='min'&&!hPrevuParSemaine[semKey]){
       hPrevuParSemaine[semKey]=sourceActif.hMin||c.hMin||0;
