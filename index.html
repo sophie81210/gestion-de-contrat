@@ -1995,9 +1995,9 @@ function renderDetTab(id,tab){
         // Fonction : calcul heures prévues régularisation pour une période (dateDebStr→dateFinStr inclus)
         // Exclut semaines 'off' et jours de congés
         function calcHPrevuReg(dateDebStr, dateFinStr){
-          let hPrevu=0;
           const semTraitees=new Set();
           const semJoursCpt={};
+          const semaineActuel={}, semaineGaranti={}, semainesVues=[];
           // Pour les semaines à cheval, initialiser avec le mois précédent
           const [dy,dm]=dateDebStr.split('-').map(Number);
           const moisPrecStr=dm===1?(dy-1)+'-12':dy+'-'+String(dm-1).padStart(2,'0');
@@ -2057,29 +2057,34 @@ function renderDetTab(id,tab){
               const estConge=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges'].includes(jour.statut);
               if(estConge){cur.setDate(cur.getDate()+1);continue;}
 
-              // Calculer heures prévues selon type de contrat
+              if(!semaineActuel[semKey]){ semaineActuel[semKey]=0; semaineGaranti[semKey]=0; semainesVues.push(semKey); }
+
+              // Réel saisi ce jour (0 si rien saisi)
               if(jour.heureDebPrev&&jour.heureFinPrev){
                 const m=toMins(jour.heureFinPrev)-toMins(jour.heureDebPrev);
-                if(m>0) hPrevu+=m/60;
-              } else if(source.th==='plan'&&source.planType==='var'&&source.planVar&&ag){
-                const volR=typeSem?source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
+                if(m>0) semaineActuel[semKey]+=m/60;
+              }
+
+              // Volume garanti ce jour (indépendamment du réel saisi, pour comparaison en fin de semaine)
+              if(source.th==='plan'&&source.planType==='var'&&source.planVar&&ag&&typeSem){
+                const volR=source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);
                 if(volR&&volR.jours){
                   const jourIdx=jour.jourSemaine===0?6:jour.jourSemaine-1;
                   if(volR.jours[jourIdx]){
                     if(!semJoursCpt[semKey]) semJoursCpt[semKey]=0;
                     if(semJoursCpt[semKey]<(volR.j||1)){
-                      hPrevu+=volR.h/(volR.j||1);
+                      semaineGaranti[semKey]+=volR.h/(volR.j||1);
                       semJoursCpt[semKey]++;
                     }
                   }
                 }
-              } else if(source.th==='plan'&&source.planType==='min'){
+              } else if(source.th==='plan'&&source.planType==='min'&&typeSem){
                 const jourIdx=jour.jourSemaine===0?6:jour.jourSemaine-1;
                 const jourCoche=source.joursMin&&source.joursMin[jourIdx];
-                if(jourCoche&&typeSem){
+                if(jourCoche){
                   if(!semJoursCpt[semKey]) semJoursCpt[semKey]=0;
                   if(semJoursCpt[semKey]<(source.jMaxMin||4)){
-                    hPrevu+=(source.hMin||0)/(source.jMaxMin||4);
+                    semaineGaranti[semKey]+=(source.hMin||0)/(source.jMaxMin||4);
                     semJoursCpt[semKey]++;
                   }
                 }
@@ -2092,14 +2097,14 @@ function renderDetTab(id,tab){
                   const totSHCPrevu=source.planVar.reduce((t,v)=>t+(v.s||0),0);
                   const hSemMoyHCPrevu=totSHCPrevu>0?totJHCPrevu/totSHCPrevu:0;
                   const nbJoursPossiblesHCPrevu=Array.from({length:7},(_,idx)=>source.planVar.some(v=>v.jours&&v.jours[idx])).filter(Boolean).length||1;
-                  hPrevu+=hSemMoyHCPrevu/nbJoursPossiblesHCPrevu;
+                  semaineGaranti[semKey]+=hSemMoyHCPrevu/nbJoursPossiblesHCPrevu;
                 }
               } else if(source.th==='plan'&&source.planType==='min'&&!typeSem){
                 const jourIdxHCPrevu=jour.jourSemaine===0?6:jour.jourSemaine-1;
                 const joursMinHCPrevu=source.joursMin||[];
                 if(joursMinHCPrevu[jourIdxHCPrevu]){
                   const joursCochesHCPrevu=joursMinHCPrevu.filter(Boolean).length||(source.jMaxMin||4);
-                  hPrevu+=(source.hMin||0)/joursCochesHCPrevu;
+                  semaineGaranti[semKey]+=(source.hMin||0)/joursCochesHCPrevu;
                 }
               } else if(source.th==='sem'&&source.semTypes&&!typeSem){
                 const jourIdxHCSemPrevu=jour.jourSemaine===0?6:jour.jourSemaine-1;
@@ -2117,13 +2122,25 @@ function renderDetTab(id,tab){
                   const hSemMoyHCSemPrevu=totalJAnnuelHCSemPrevu>0?(totalHAnnuelHCSemPrevu/nbSemActifHCSemPrevu):0;
                   const joursPossiblesArrHCSemPrevu=Array.from({length:7},(_,idx)=>source.semTypes.some(st=>st.jours&&st.jours[idx]&&st.jours[idx].d));
                   const nbJoursPossiblesHCSemPrevu=joursPossiblesArrHCSemPrevu.filter(Boolean).length||1;
-                  hPrevu+=hSemMoyHCSemPrevu/nbJoursPossiblesHCSemPrevu;
+                  semaineGaranti[semKey]+=hSemMoyHCSemPrevu/nbJoursPossiblesHCSemPrevu;
                 }
               }
-              // fixe/sem : heureDebPrev/heureFinPrev déjà gérés ci-dessus
+              // fixe/sem (avec type pointé) : heureDebPrev/heureFinPrev déjà pris en compte comme réel ;
+              // pas de notion de "garanti" séparée puisque leur planning suit directement le type pointé
+              if((source.th==='fixe'||(source.th==='sem'&&typeSem))&&jour.heureDebPrev&&jour.heureFinPrev){
+                const mFS=toMins(jour.heureFinPrev)-toMins(jour.heureDebPrev);
+                if(mFS>0) semaineGaranti[semKey]+=mFS/60;
+              }
             }
             cur.setDate(cur.getDate()+1);
           }
+          // Le "prévu" garanti est le maximum entre le réel effectivement saisi et le volume garanti au
+          // contrat, semaine par semaine — jamais la somme brute des heures saisies seules (sinon un
+          // planning en-deçà du volume ferait perdre la garantie de la règle n°1)
+          let hPrevu=0;
+          semainesVues.forEach(sk=>{
+            hPrevu+=Math.max(semaineActuel[sk]||0, semaineGaranti[sk]||0);
+          });
           return hPrevu;
         }
 
@@ -2160,7 +2177,7 @@ function renderDetTab(id,tab){
                   semJoursCpt[semKey]=true;
                   hTheo+=hMensuSource*12/nbSemSource;
                 }
-              } else if(jour.heureDebPrev&&jour.heureFinPrev){
+              } else if(jour.heureDebPrev&&jour.heureFinPrev&&source.th!=='plan'){
                 hTheo+=(toMins(jour.heureFinPrev)-toMins(jour.heureDebPrev))/60;
               } else if(source.th==='plan'&&source.planType==='var'&&source.planVar&&ag){
                 const vol=typeSem?source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
@@ -2237,9 +2254,9 @@ function renderDetTab(id,tab){
           if(!estPartielle) return source.hMensu||0;
           // Mois partiel (avenant en cours de mois) : prorata
           const [dy,dm]=dateDebStr.split('-').map(Number);
-          const moisKeyHM=dy+'-'+String(dm).padStart(2,'0');
-          const ficheHM=c.fiches&&c.fiches[moisKeyHM];
-          const hTheoMois=ficheHM?parseFloat(calcRecapFiche(c,ficheHM).hTheoriques||0):0;
+          const debutMois=dy+'-'+String(dm).padStart(2,'0')+'-01';
+          const finMois=dateFinLimite||(dy+'-'+String(dm).padStart(2,'0')+'-'+String(new Date(dy,dm,0).getDate()).padStart(2,'0'));
+          const hTheoMois=calcHTheoReg(debutMois, finMois);
           if(!hTheoMois) return source.hMensu||0;
           return (source.hMensu||0)*(hPrevuPartie/hTheoMois);
         }
@@ -2298,22 +2315,8 @@ function renderDetTab(id,tab){
 
             if(avenantsduMois.length===0){
               // Mois sans avenant : hMensu fixe (mensualisation lissée)
-              // hPrevu = heures théoriques garanties (calcRecapFiche), pas la somme des heures
-              // effectivement saisies au planning — sinon un planning en-deçà du volume ferait perdre
-              // la garantie de volume (règle n°1)
-              hPrevu=parseFloat(calcRecapFiche(c,fiche).hTheoriques||0);
+              hPrevu=calcHPrevuReg(debutMois, finMois);
               hMensuReg=calcHMensuReg(debutMois, finMois, hPrevu, false);
-            } else if(avenantsduMois.length===1){
-              const avDate=avenantsduMois[0];
-              const veilleAv=(()=>{
-                const [avy,avm,avd]=avDate.split('-').map(Number);
-                const dV=new Date(avy,avm-1,avd-1);
-                return dV.getFullYear()+'-'+String(dV.getMonth()+1).padStart(2,'0')+'-'+String(dV.getDate()).padStart(2,'0');
-              })();
-              const hTheoAvant=parseFloat(calcRecapFiche(c,fiche,null,veilleAv,null,avDate,'avant').hTheoriques||0);
-              const hTheoApres=parseFloat(calcRecapFiche(c,fiche,null,null,null,avDate,'apres').hTheoriques||0);
-              hPrevu=hTheoAvant+hTheoApres;
-              hMensuReg=calcHMensuReg(debutMois, veilleAv, hTheoAvant, true, veilleAv)+calcHMensuReg(avDate, finMois, hTheoApres, true, finMois);
             } else {
               // Mois avec avenant : calculer chaque partie avec prorata
               const bornes=[debutMois,...avenantsduMois,null];
