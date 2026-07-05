@@ -3409,12 +3409,12 @@ function ouvrirFiche(contratId,key){
       const COULEUR_TRAVAILLEE={bg:'#B8E6B8',brd:'#4CAF50'};
       const COULEUR_OFF={bg:'#F4C0D1',brd:'#D4537E'};
       if(typeSemJour==='off'){
-        couleurVolume=COULEUR_OFF.bg+'66';
-        couleurVolumeBrd=COULEUR_OFF.brd+'88';
+        couleurVolume=COULEUR_OFF.bg;
+        couleurVolumeBrd=COULEUR_OFF.brd;
       } else if(srcJour.th==='fixe'||srcJour.planType==='min'){
         // Rythme unique (pas de notion de "type") : toujours vert pour une semaine travaillée
-        couleurVolume=COULEUR_TRAVAILLEE.bg+'66';
-        couleurVolumeBrd=COULEUR_TRAVAILLEE.brd+'88';
+        couleurVolume=COULEUR_TRAVAILLEE.bg;
+        couleurVolumeBrd=COULEUR_TRAVAILLEE.brd;
       } else if(srcJour.planType==='var'||srcJour.th==='sem'){
         let volIdx=-1;
         if(srcJour.planType==='var'){
@@ -3426,8 +3426,8 @@ function ouvrirFiche(contratId,key){
         }
         if(volIdx>=0){
           const cc=PLAN_COULEURS[volIdx%PLAN_COULEURS.length];
-          couleurVolume=cc.bg+'66';
-          couleurVolumeBrd=cc.brd+'88';
+          couleurVolume=cc.bg;
+          couleurVolumeBrd=cc.brd;
         }
       }
     }
@@ -3601,25 +3601,26 @@ function ouvrirFiche(contratId,key){
       </div>
     </div>`:''}
    ${isPlanVar?(()=>{
-      // Légende des volumes pour plan min/var
+      // Légende des volumes pour plan var uniquement (plan min n'a qu'un seul rythme, pas utile)
       const srcLeg=getVersionActive(c,new Date(annee,mois,1));
       const planVarLeg=srcLeg.planVar||c.planVar||[];
       const planMinLeg=srcLeg.planType==='min';
+      if(planMinLeg) return '';
       const buildLegLine=(src,titre)=>{
         const pvLeg=src.planVar||[];
         const pmLeg=src.planType==='min';
         let html=`<div style="display:flex;flex-direction:column;gap:4px;margin:4px 0;font-size:12px">`;
         if(titre) html+=`<span style="color:var(--tx2);font-weight:600">${titre} :</span>`;
         if(pmLeg){
-          const cc=PLAN_COULEURS[0];
-          html+=`<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:14px;height:14px;border-radius:3px;background:${cc.bg}66;border:1px solid ${cc.brd}88;display:inline-block"></span><span>${src.hMin}h/sem — ${src.jMaxMin}j max</span></span>`;
+          const cc={bg:'#B8E6B8',brd:'#4CAF50'};
+          html+=`<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:14px;height:14px;border-radius:3px;background:${cc.bg};border:1px solid ${cc.brd};display:inline-block"></span><span>${src.hMin}h/sem — ${src.jMaxMin}j max</span></span>`;
         } else {
           pvLeg.forEach((v,i)=>{
             const cc=PLAN_COULEURS[i%PLAN_COULEURS.length];
-            html+=`<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:14px;height:14px;border-radius:3px;background:${cc.bg}66;border:1px solid ${cc.brd}88;display:inline-block"></span><span>${v.nom||'Volume '+(i+1)} — ${v.h}h/sem, ${v.j}j max</span></span>`;
+            html+=`<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:14px;height:14px;border-radius:3px;background:${cc.bg};border:1px solid ${cc.brd};display:inline-block"></span><span>${v.nom||'Volume '+(i+1)} — ${v.h}h/sem, ${v.j}j max</span></span>`;
           });
         }
-        html+='<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:14px;height:14px;border-radius:3px;background:#e0e0e0;border:1px solid #bbb;display:inline-block"></span><span>Absence employeur</span></span>';
+        html+='<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:14px;height:14px;border-radius:3px;background:#F4C0D1;border:1px solid #D4537E;display:inline-block"></span><span>Absence employeur</span></span>';
         html+='</div>';
         return html;
       };
@@ -10589,14 +10590,23 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
       return new Date(a.dateDebut)<=dm&&new Date(a.dateFin)>=pm;
     });
     let hPrevu=0;
-    (fiche.jours||[]).forEach(j=>{
-      const semKey=getSemISO(j.date);
-      const agKey=getKeyAgenda(semKey,getSemAnnee(j.date));
-      const typeSem=ag&&ag.semaines&&ag.semaines[agKey];
-      if(typeSem==='off') return;
-      if(['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges'].includes(j.statut)) return;
-      if(j.heureDebPrev&&j.heureFinPrev) hPrevu+=(toMins(j.heureFinPrev)-toMins(j.heureDebPrev))/60;
-    });
+    const estPlanMinVarRegul=source.th==='plan'&&(source.planType==='min'||source.planType==='var');
+    if(estPlanMinVarRegul){
+      // Plan min/var : le salaire dû se base sur le volume garanti au contrat (hThéoriques, déjà
+      // correct pour les semaines hors contrat/à cheval), pas sur les heures effectivement saisies au
+      // planning — sinon un planning en-deçà du volume ferait perdre la garantie de la règle n°1
+      // ("si les heures prévues sont inférieures au volume du contrat, le volume du contrat est payé")
+      hPrevu=parseFloat(recapMois.hTheoriques||0);
+    } else {
+      (fiche.jours||[]).forEach(j=>{
+        const semKey=getSemISO(j.date);
+        const agKey=getKeyAgenda(semKey,getSemAnnee(j.date));
+        const typeSem=ag&&ag.semaines&&ag.semaines[agKey];
+        if(typeSem==='off') return;
+        if(['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges'].includes(j.statut)) return;
+        if(j.heureDebPrev&&j.heureFinPrev) hPrevu+=(toMins(j.heureFinPrev)-toMins(j.heureDebPrev))/60;
+      });
+    }
     // Déduire les heures d'absence des heures réelles (proportionnellement aux heures prévues)
     const hAbsReelles=hMensuMois>0?(hAbsDedMois/hMensuMois)*hPrevu:0;
     tranches[idx].prevu+=Math.max(0,hPrevu-hAbsReelles);
