@@ -1054,6 +1054,99 @@ function getContratsCompresses(){
   });
 }
 
+// Fonction de diagnostic temporaire — réplique calcHPrevuReg pour investigation en console
+function debugHPrevuReg(contratId, dateDebStr, dateFinStr){
+  const c=S.contrats.find(x=>x.id==contratId);
+  if(!c){ console.log('Contrat introuvable'); return; }
+  const semJoursCpt={};
+  const semaineActuel={}, semaineGaranti={}, semainesVues=[];
+  const [dy2,dm2,dd2]=dateDebStr.split('-').map(Number);
+  const [fy,fm,fd]=dateFinStr.split('-').map(Number);
+  const cur=new Date(dy2,dm2-1,dd2);
+  const fin=new Date(fy,fm-1,fd);
+  const detail=[];
+  while(cur<=fin){
+    const dateStr=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
+    const moisKey=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0');
+    const fiche=c.fiches&&c.fiches[moisKey];
+    const jour=fiche&&fiche.jours.find(j=>j.date===dateStr);
+    if(jour){
+      const source=getVersionActive(c,cur);
+      const agendas=source.agendas||c.agendas||[];
+      const ag=agendas.find(a=>{
+        const pm=new Date(cur.getFullYear(),cur.getMonth(),1);
+        const dm3=new Date(cur.getFullYear(),cur.getMonth()+1,0);
+        return new Date(a.dateDebut)<=dm3&&new Date(a.dateFin)>=pm;
+      });
+      const semKey=getSemISO(dateStr);
+      const agKey=getKeyAgenda(semKey,getSemAnnee(dateStr));
+      const typeSem=ag&&ag.semaines&&ag.semaines[agKey];
+      let ligne={date:dateStr, statut:jour.statut, typeSem, heureDebPrev:jour.heureDebPrev, heureFinPrev:jour.heureFinPrev, th:source.th, planType:source.planType};
+      if(typeSem==='off'){ ligne.exclu='off'; detail.push(ligne); cur.setDate(cur.getDate()+1); continue; }
+      const estConge=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges'].includes(jour.statut);
+      if(estConge){ ligne.exclu='conge'; detail.push(ligne); cur.setDate(cur.getDate()+1); continue; }
+      if(!semaineActuel[semKey]){ semaineActuel[semKey]=0; semaineGaranti[semKey]=0; semainesVues.push(semKey); }
+      if(jour.heureDebPrev&&jour.heureFinPrev){
+        const m=toMins(jour.heureFinPrev)-toMins(jour.heureDebPrev);
+        if(m>0){ semaineActuel[semKey]+=m/60; ligne.actuelAjoute=m/60; }
+      }
+      if(source.th==='plan'&&source.planType==='var'&&source.planVar&&ag&&typeSem){
+        const volR=source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);
+        if(volR&&volR.jours){
+          const jourIdx=jour.jourSemaine===0?6:jour.jourSemaine-1;
+          if(volR.jours[jourIdx]){
+            if(!semJoursCpt[semKey]) semJoursCpt[semKey]=0;
+            if(semJoursCpt[semKey]<(volR.j||1)){
+              semaineGaranti[semKey]+=volR.h/(volR.j||1);
+              ligne.garantiAjoute=volR.h/(volR.j||1);
+              semJoursCpt[semKey]++;
+            }
+          }
+        }
+      } else if(source.th==='plan'&&source.planType==='min'&&typeSem){
+        const jourIdx=jour.jourSemaine===0?6:jour.jourSemaine-1;
+        const jourCoche=source.joursMin&&source.joursMin[jourIdx];
+        if(jourCoche){
+          if(!semJoursCpt[semKey]) semJoursCpt[semKey]=0;
+          if(semJoursCpt[semKey]<(source.jMaxMin||4)){
+            semaineGaranti[semKey]+=(source.hMin||0)/(source.jMaxMin||4);
+            ligne.garantiAjoute=(source.hMin||0)/(source.jMaxMin||4);
+            semJoursCpt[semKey]++;
+          }
+        }
+      } else if(source.th==='plan'&&source.planType==='var'&&source.planVar&&!typeSem){
+        const jourIdxHC=jour.jourSemaine===0?6:jour.jourSemaine-1;
+        const joursPossiblesHC=source.planVar.some(v=>v.jours&&v.jours[jourIdxHC]);
+        if(joursPossiblesHC){
+          const totJHC=source.planVar.reduce((t,v)=>t+(v.h||0)*(v.s||0),0);
+          const totSHC=source.planVar.reduce((t,v)=>t+(v.s||0),0);
+          const hSemMoyHC=totSHC>0?totJHC/totSHC:0;
+          const nbJoursPossiblesHC=Array.from({length:7},(_,idx)=>source.planVar.some(v=>v.jours&&v.jours[idx])).filter(Boolean).length||1;
+          semaineGaranti[semKey]+=hSemMoyHC/nbJoursPossiblesHC;
+          ligne.garantiAjoute=hSemMoyHC/nbJoursPossiblesHC;
+        }
+      } else if(source.th==='plan'&&source.planType==='min'&&!typeSem){
+        const jourIdxHC=jour.jourSemaine===0?6:jour.jourSemaine-1;
+        const joursMinHC=source.joursMin||[];
+        if(joursMinHC[jourIdxHC]){
+          const joursCochesHC=joursMinHC.filter(Boolean).length||(source.jMaxMin||4);
+          semaineGaranti[semKey]+=(source.hMin||0)/joursCochesHC;
+          ligne.garantiAjoute=(source.hMin||0)/joursCochesHC;
+        }
+      }
+      detail.push(ligne);
+    }
+    cur.setDate(cur.getDate()+1);
+  }
+  console.log('Détail par jour:', detail);
+  console.log('Par semaine — actuel:', semaineActuel);
+  console.log('Par semaine — garanti:', semaineGaranti);
+  let hPrevu=0;
+  semainesVues.forEach(sk=>{ hPrevu+=Math.max(semaineActuel[sk]||0, semaineGaranti[sk]||0); });
+  console.log('TOTAL hPrevu:', hPrevu);
+  return hPrevu;
+}
+
 async function saveToFirestoreSync(){
   if(!window.FB_USER||!window.fbSaveData) return;
   if(_contratsModifies.size===0) return {ok:true}; // rien à sauvegarder
