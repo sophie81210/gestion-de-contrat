@@ -2237,9 +2237,9 @@ function renderDetTab(id,tab){
           if(!estPartielle) return source.hMensu||0;
           // Mois partiel (avenant en cours de mois) : prorata
           const [dy,dm]=dateDebStr.split('-').map(Number);
-          const debutMois=dy+'-'+String(dm).padStart(2,'0')+'-01';
-          const finMois=dateFinLimite||(dy+'-'+String(dm).padStart(2,'0')+'-'+String(new Date(dy,dm,0).getDate()).padStart(2,'0'));
-          const hTheoMois=calcHTheoReg(debutMois, finMois);
+          const moisKeyHM=dy+'-'+String(dm).padStart(2,'0');
+          const ficheHM=c.fiches&&c.fiches[moisKeyHM];
+          const hTheoMois=ficheHM?parseFloat(calcRecapFiche(c,ficheHM).hTheoriques||0):0;
           if(!hTheoMois) return source.hMensu||0;
           return (source.hMensu||0)*(hPrevuPartie/hTheoMois);
         }
@@ -2298,8 +2298,22 @@ function renderDetTab(id,tab){
 
             if(avenantsduMois.length===0){
               // Mois sans avenant : hMensu fixe (mensualisation lissée)
-              hPrevu=calcHPrevuReg(debutMois, finMois);
+              // hPrevu = heures théoriques garanties (calcRecapFiche), pas la somme des heures
+              // effectivement saisies au planning — sinon un planning en-deçà du volume ferait perdre
+              // la garantie de volume (règle n°1)
+              hPrevu=parseFloat(calcRecapFiche(c,fiche).hTheoriques||0);
               hMensuReg=calcHMensuReg(debutMois, finMois, hPrevu, false);
+            } else if(avenantsduMois.length===1){
+              const avDate=avenantsduMois[0];
+              const veilleAv=(()=>{
+                const [avy,avm,avd]=avDate.split('-').map(Number);
+                const dV=new Date(avy,avm-1,avd-1);
+                return dV.getFullYear()+'-'+String(dV.getMonth()+1).padStart(2,'0')+'-'+String(dV.getDate()).padStart(2,'0');
+              })();
+              const hTheoAvant=parseFloat(calcRecapFiche(c,fiche,null,veilleAv,null,avDate,'avant').hTheoriques||0);
+              const hTheoApres=parseFloat(calcRecapFiche(c,fiche,null,null,null,avDate,'apres').hTheoriques||0);
+              hPrevu=hTheoAvant+hTheoApres;
+              hMensuReg=calcHMensuReg(debutMois, veilleAv, hTheoAvant, true, veilleAv)+calcHMensuReg(avDate, finMois, hTheoApres, true, finMois);
             } else {
               // Mois avec avenant : calculer chaque partie avec prorata
               const bornes=[debutMois,...avenantsduMois,null];
@@ -8204,8 +8218,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // ── Rétrocompat retour (pour calcBrutTotal et régularisation) ──
   const montantCompBrutMaj=(hComp*(1+majCompPct)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))*txBrut;
   const montantSupBrutMaj=hSup*(1+majSup)*txBrut;
-  const montantCompNet=parseFloat((montantTotalComp+montantExo*(hComp*(1+majCompPct)/((hComp*(1+majCompPct)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))||1))).toFixed(2));
-  const montantSupNet=parseFloat((montantTotalSup+montantExo*(hSup*(1+majSup)/((hComp*(1+majCompPct)+hSup*(1+majSup)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))||1))).toFixed(2));
+  const denomExoNet=(hComp*(1+majCompPct)+hSup*(1+majSup)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))||1;
+  const exoSupPart=parseFloat((montantExo*(hSup*(1+majSup)/denomExoNet)).toFixed(2));
+  const exoCompPart=parseFloat((montantExo-exoSupPart).toFixed(2)); // reste exact, évite l'écart d'arrondi
+  const montantCompNet=parseFloat((montantTotalComp+exoCompPart).toFixed(2));
+  const montantSupNet=parseFloat((montantTotalSup+exoSupPart).toFixed(2));
   const montantCompBrut=parseFloat(montantCompBrutMaj.toFixed(2));
   const montantSupBrut=parseFloat(montantSupBrutMaj.toFixed(2));
   // Férié sur jour prévu : majoration seule, sans exo charges
