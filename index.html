@@ -6618,6 +6618,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const hPrevSaisieParSemaine={};
   const hCompParSemaine={}; // HC par semaine (via compJour)
   const hPrevuParSemaine={};
+  const hAbsHorsContratParSemaine={};
   const hParSemaineFerie={}; // heures prévues fériés non travaillés pour calcul HS
   const hParSemainePrecMois={};
   const moisPrecStr=fiche.mois===0
@@ -6756,10 +6757,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const planVarRef=sourceActif.planVar||c.planVar;
       const vol=typeSem?planVarRef.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
       if(vol){
-        // Semaine à cheval sur le début du contrat/avenant : proratiser le volume de référence selon
-        // la part de jours possibles réellement sous contrat — sinon un jour travaillé en tout début de
-        // semaine ne déclenche jamais de dépassement, alors que le quota de la semaine a déjà été
-        // "consommé" par la partie hors contrat (comptée à part, à la moyenne)
+        // Semaine à cheval sur le début du contrat/avenant : le volume de référence de la semaine est
+        // réduit exactement de l'absence hors contrat déjà déduite pour cette semaine (à la moyenne) —
+        // pas d'un ratio séparé, pour éviter de compter deux fois le même hors contrat (une fois ici,
+        // une fois via hAbsS dans le calcul de dépassement)
         const lundiV2=new Date(j.date); lundiV2.setDate(lundiV2.getDate()-(lundiV2.getDay()||7)+1);
         const dimV2=new Date(lundiV2); dimV2.setDate(lundiV2.getDate()+6);
         const fmtV2=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
@@ -6770,14 +6771,21 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         if(dateDebC2&&lundiVStr2<dateDebC2&&dimVStr2>=dateDebC2) limiteCheval2=dateDebC2;
         else if(dateAvenant2&&lundiVStr2<=dateAvenant2&&dimVStr2>=dateAvenant2) limiteCheval2=dateAvenant2;
         if(limiteCheval2&&vol.jours){
-          let joursApresLimite=0;
+          const planVarUnion=sourceActif.planVar||c.planVar;
+          const totJUn=planVarUnion.reduce((t,v)=>t+(v.h||0)*(v.s||0),0);
+          const totSUn=planVarUnion.reduce((t,v)=>t+(v.s||0),0);
+          const hSemMoyUn=totSUn>0?totJUn/totSUn:0;
+          const joursPossiblesUn=Array.from({length:7},(_,idx)=>planVarUnion.some(v=>v.jours&&v.jours[idx]));
+          const nbJoursPossiblesUn=joursPossiblesUn.filter(Boolean).length||1;
+          let joursHorsContrat=0;
           for(let d=0;d<7;d++){
             const cur=new Date(lundiV2); cur.setDate(lundiV2.getDate()+d);
             const curStr=fmtV2(cur);
-            const idx=d;
-            if(vol.jours[idx]&&curStr>=limiteCheval2) joursApresLimite++;
+            if(joursPossiblesUn[d]&&curStr<limiteCheval2) joursHorsContrat++;
           }
-          hPrevuParSemaine[semKey]=vol.h*(joursApresLimite/(vol.j||1));
+          const hAbsHorsContratSem=joursHorsContrat*(hSemMoyUn/nbJoursPossiblesUn);
+          hPrevuParSemaine[semKey]=Math.max(0,vol.h-hAbsHorsContratSem);
+          hAbsHorsContratParSemaine[semKey]=hAbsHorsContratSem;
         } else {
           hPrevuParSemaine[semKey]=vol.h;
         }
@@ -7580,7 +7588,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         compJour=0;
       } else if(thActif==='plan'&&(sourceActif.planType==='var'||sourceActif.planType==='min')){
         const semKeyJ=getSemISO(j.date);
-        const hAbsS=hAbsParSemaine[semKeyJ]||0;
+        const hAbsS=Math.max(0,(hAbsParSemaine[semKeyJ]||0)-(hAbsHorsContratParSemaine[semKeyJ]||0));
         const hReelSem=hParSemaine[semKeyJ]||0;
         // Règle 1 : dépassement hebdo (heures prévues saisies vs volume contrat)
         const hPrevSaisieSem=(hPrevSaisieParSemaine||{})[semKeyJ]||0;
