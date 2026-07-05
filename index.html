@@ -6346,7 +6346,10 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
       return;
     }
 
-    if(!typeSemTh) return; // pas de type → pas de contribution
+    // Pas de "return" si aucun type n'est pointé : plan min n'a qu'un seul rythme possible (contrairement
+    // à plan sem/var), donc l'absence de pointage (semaine hors contrat avec le nouvel agenda à dates
+    // exactes, ou simplement pas encore pointée) ne doit pas empêcher le calcul — seul un 'off' explicite
+    // (absence employeur) doit contribuer 0
 
     // Jours fériés sur jours possibles dans cette semaine travaillée
     joursDesSem.forEach(jj=>{
@@ -6792,7 +6795,32 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       }
     }
     if(c.th==='plan'&&c.planType==='min'&&!hPrevuParSemaine[semKey]){
-      hPrevuParSemaine[semKey]=sourceActif.hMin||c.hMin||0;
+      const hMinRef=sourceActif.hMin||c.hMin||0;
+      const joursMinRef=sourceActif.joursMin||c.joursMin||[];
+      const jMaxMinRef=sourceActif.jMaxMin||c.jMaxMin||4;
+      const lundiVM=new Date(j.date); lundiVM.setDate(lundiVM.getDate()-(lundiVM.getDay()||7)+1);
+      const dimVM=new Date(lundiVM); dimVM.setDate(lundiVM.getDate()+6);
+      const fmtVM=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
+      const lundiVMStr=fmtVM(lundiVM), dimVMStr=fmtVM(dimVM);
+      const dateDebM=c.dateDeb;
+      const dateAvenantM=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant)?.dateAvenant;
+      let limiteChevalM=null;
+      if(dateDebM&&lundiVMStr<dateDebM&&dimVMStr>=dateDebM) limiteChevalM=dateDebM;
+      else if(dateAvenantM&&lundiVMStr<=dateAvenantM&&dimVMStr>=dateAvenantM) limiteChevalM=dateAvenantM;
+      if(limiteChevalM){
+        const joursCochesM=joursMinRef.filter(Boolean).length||jMaxMinRef;
+        let joursHorsContratM=0;
+        for(let d=0;d<7;d++){
+          const cur=new Date(lundiVM); cur.setDate(lundiVM.getDate()+d);
+          const curStr=fmtVM(cur);
+          if(joursMinRef[d]&&curStr<limiteChevalM) joursHorsContratM++;
+        }
+        const hAbsHorsContratM=joursHorsContratM*(hMinRef/joursCochesM);
+        hPrevuParSemaine[semKey]=Math.max(0,hMinRef-hAbsHorsContratM);
+        hAbsHorsContratParSemaine[semKey]=hAbsHorsContratM;
+      } else {
+        hPrevuParSemaine[semKey]=hMinRef;
+      }
     }
     if((sourceActif.th==='sem'||c.th==='sem')&&(c.tc==='52'||sourceActif.tc==='52')&&!hPrevuParSemaine[semKey]){
       const agKeyPS2=getKeyAgenda(semKey,getSemAnnee(j.date));
