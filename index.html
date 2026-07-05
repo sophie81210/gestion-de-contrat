@@ -7826,6 +7826,30 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         if(isAbsenceEmployeur(agendaMois,semKeyHCF)){
           // Semaine off : toutes les heures réelles comptent en HC, pas de seuil
           hPrev=0;
+        } else if(statut==='hors-contrat'&&c.th==='sem'){
+          // Jour hors contrat en plan sem : aucun type précis ne peut légalement s'appliquer →
+          // moyenne pondérée / jours possibles (union), cohérent avec calcHTheoriquesPlanSem
+          const srcHCsem=getVersionActive(c,new Date(j.date));
+          const semTypesHC=srcHCsem.semTypes||c.semTypes||[];
+          const jourIdxHCsem=j.jourSemaine===0?6:j.jourSemaine-1;
+          const jourPossibleHCsem=semTypesHC.some(st=>st.jours&&st.jours[jourIdxHCsem]&&st.jours[jourIdxHCsem].d);
+          if(jourPossibleHCsem){
+            let totalHAnnuelHC=0, totalJAnnuelHC=0;
+            semTypesHC.forEach(st=>{
+              const hSemHC=(st.jours||[]).reduce((s,j2)=>j2&&j2.d&&j2.f?s+(toM(j2.f)-toM(j2.d))/60:s,0);
+              const jSemHC=(st.jours||[]).filter(j2=>j2&&j2.d).length;
+              const nbFoisHC=parseFloat(st.nb||0);
+              totalHAnnuelHC+=hSemHC*nbFoisHC;
+              totalJAnnuelHC+=jSemHC*nbFoisHC;
+            });
+            const nbSemActifHC=srcHCsem.nbSem||c.nbSem||46;
+            const hSemMoyHC=totalJAnnuelHC>0?(totalHAnnuelHC/nbSemActifHC):0;
+            const joursPossiblesHC=Array.from({length:7},(_,idx)=>semTypesHC.some(st=>st.jours&&st.jours[idx]&&st.jours[idx].d));
+            const nbJoursPossiblesHC=joursPossiblesHC.filter(Boolean).length||1;
+            hPrev=hSemMoyHC/nbJoursPossiblesHC;
+          } else {
+            hPrev=0;
+          }
         } else {
           // Vérifier si ce jour précis est normalement prévu au planning (pas seulement la semaine)
           const jourIdxFS=j.jourSemaine===0?6:j.jourSemaine-1;
