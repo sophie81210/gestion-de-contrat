@@ -3053,7 +3053,7 @@ function ouvrirFiche(contratId,key){
           const jourNonPlanifie=fiche.jours.some(jw=>{
             if(!jw.date.startsWith(key)) return false;
             const infosW=getInfosJourPlanning(c,jw.date);
-            if(!infosW.jourPossible) return false;
+            if(!infosW.jourPossible||infosW.ferieChome) return false;
             const pw=(c.planning||{})[jw.date];
             return !!(pw&&pw.coche&&!(pw.d&&pw.f));
           });
@@ -3395,31 +3395,40 @@ function ouvrirFiche(contratId,key){
       selectedOpts=`<option value="${statutActuel}" selected>${lbl[statutActuel]||statutActuel}</option>`+opts;
     }
 
-    // Cellule "Prévu" — rendu identique à fixe/sem (coche verte incluse) ; pour plan min/var,
-    // la couleur du volume est appliquée uniquement sur la colonne jour, pas sur toute la ligne
+    // Cellule "Prévu" — rendu identique à fixe/sem (coche verte incluse) ; la couleur du type de semaine
+    // (ou vert pour un rythme fixe unique, rose pour une semaine off) est appliquée sur la colonne jour,
+    // pour tous les types de contrat, sur tous les jours de la semaine (pas seulement les jours prévus)
     let prevuCell='';
     let couleurVolume='transparent';
     let couleurVolumeBrd='var(--mb)';
-    if(isPlanVar){
+    {
       const srcJour=getVersionActive(c,new Date(j.date));
-      const jourIdxPV=j.jourSemaine===0?6:j.jourSemaine-1;
       const agendasJour=(srcJour.agendas||c.agendas||[]);
       const agendaJour=agendasJour.find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date))||agendaMois;
       const typeSemJour=agendaJour&&agendaJour.semaines&&agendaJour.semaines[j.semKey];
-      // Trouver l'index du volume pour la couleur
-      const planVarSrc=srcJour.planVar||c.planVar||[];
-      const planMinSrc=srcJour.planType==='min';
-      let volIdx=-1;
-      if(planMinSrc){
-        volIdx=0; // plan min = couleur unique
-      } else {
-        volIdx=typeSemJour&&planVarSrc?planVarSrc.findIndex((v,i)=>(v.nom||'Volume '+(i+1))===typeSemJour):-1;
-      }
-      // Couleur diluée du volume (40% couleur + 60% blanc), pour la colonne jour uniquement
-      if(volIdx>=0&&typeSemJour&&typeSemJour!=='off'){
-        const cc=PLAN_COULEURS[volIdx%PLAN_COULEURS.length];
-        couleurVolume=cc.bg+'66'; // hex avec alpha 40%
-        couleurVolumeBrd=cc.brd+'88';
+      const COULEUR_TRAVAILLEE={bg:'#B8E6B8',brd:'#4CAF50'};
+      const COULEUR_OFF={bg:'#F4C0D1',brd:'#D4537E'};
+      if(typeSemJour==='off'){
+        couleurVolume=COULEUR_OFF.bg+'66';
+        couleurVolumeBrd=COULEUR_OFF.brd+'88';
+      } else if(srcJour.th==='fixe'||srcJour.planType==='min'){
+        // Rythme unique (pas de notion de "type") : toujours vert pour une semaine travaillée
+        couleurVolume=COULEUR_TRAVAILLEE.bg+'66';
+        couleurVolumeBrd=COULEUR_TRAVAILLEE.brd+'88';
+      } else if(srcJour.planType==='var'||srcJour.th==='sem'){
+        let volIdx=-1;
+        if(srcJour.planType==='var'){
+          const planVarSrc=srcJour.planVar||c.planVar||[];
+          volIdx=typeSemJour?planVarSrc.findIndex((v,i)=>(v.nom||'Volume '+(i+1))===typeSemJour):-1;
+        } else if(srcJour.th==='sem'){
+          const semTypesSrc=srcJour.semTypes||c.semTypes||[];
+          volIdx=typeSemJour?semTypesSrc.findIndex(st=>st.nom===typeSemJour):-1;
+        }
+        if(volIdx>=0){
+          const cc=PLAN_COULEURS[volIdx%PLAN_COULEURS.length];
+          couleurVolume=cc.bg+'66';
+          couleurVolumeBrd=cc.brd+'88';
+        }
       }
     }
     {
@@ -3447,7 +3456,7 @@ function ouvrirFiche(contratId,key){
     const borderDim=estDimanche?'border-bottom:2px solid var(--mb);':'';
     const bgFinal=bg;
     const borderAvenant=(dateDebAv&&j.date===dateDebAv)?'border-top:3px solid var(--m);':'';
-    const teinteJourCol=(isPlanVar&&couleurVolume!=='transparent'&&['prevu','travaille'].includes(statutActuel))?`background:${couleurVolume};border-left:2px solid ${couleurVolumeBrd};`:'';
+    const teinteJourCol=couleurVolume!=='transparent'?`background:${couleurVolume};border-left:2px solid ${couleurVolumeBrd};`:'';
     return `<tr style="background:${bgFinal};${border}${borderDim}${borderAvenant}" ${borderAvenant?'title="Début de l\'avenant"':''}>
       <td style="padding:5px 4px;font-size:12px;font-weight:500;white-space:nowrap;${teinteJourCol}${manquant?'color:var(--al)':''}">${nomJour} ${numJour}</td>
       ${prevuCell}
@@ -5345,7 +5354,7 @@ function validerFiche(contratId,key){
     const jourNonPlanifieV=c.fiches[key].jours.some(jv=>{
       if(!jv.date.startsWith(key)) return false;
       const infosV=getInfosJourPlanning(c,jv.date);
-      if(!infosV.jourPossible) return false;
+      if(!infosV.jourPossible||infosV.ferieChome) return false;
       const pv=(c.planning||{})[jv.date];
       return !!(pv&&pv.coche&&!(pv.d&&pv.f));
     });
