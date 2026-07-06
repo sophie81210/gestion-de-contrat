@@ -1997,37 +1997,7 @@ function renderDetTab(id,tab){
         // Exclut semaines 'off' et jours de congés
         function calcHPrevuReg(dateDebStr, dateFinStr){
           let hPrevu=0;
-          const semTraitees=new Set();
-          const semJoursCpt={};
-          // Pour les semaines à cheval, initialiser avec le mois précédent
-          const [dy,dm]=dateDebStr.split('-').map(Number);
-          const moisPrecStr=dm===1?(dy-1)+'-12':dy+'-'+String(dm-1).padStart(2,'0');
-          const fichePrecReg=c.fiches&&c.fiches[moisPrecStr];
-          const sourceDebut=getVersionActive(c,new Date(dateDebStr));
-          const agendasDebut=sourceDebut.agendas||c.agendas||[];
-          const agDebut=agendasDebut.find(ag=>{
-            const [ay,am]=dateDebStr.split('-').map(Number);
-            const pm=new Date(ay,am-1,1);
-            const dm2=new Date(ay,am,0);
-            return new Date(ag.dateDebut)<=dm2&&new Date(ag.dateFin)>=pm;
-          });
-          if(fichePrecReg&&sourceDebut.th==='plan'&&sourceDebut.planType==='var'&&sourceDebut.planVar&&agDebut){
-            fichePrecReg.jours.forEach(j=>{
-              if(j.date>=dateDebStr) return;
-              const semKeyR=getSemISO(j.date);
-              const agKeyR=getKeyAgenda(semKeyR,getSemAnnee(j.date));
-              const typeSemR=agDebut.semaines&&agDebut.semaines[agKeyR];
-              if(typeSemR==='off') return;
-              const volR=typeSemR?sourceDebut.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemR):null;
-              if(volR&&volR.jours){
-                const jourIdxR=j.jourSemaine===0?6:j.jourSemaine-1;
-                if(volR.jours[jourIdxR]){
-                  if(!semJoursCpt[semKeyR]) semJoursCpt[semKeyR]=0;
-                  if(semJoursCpt[semKeyR]<(volR.j||1)) semJoursCpt[semKeyR]++;
-                }
-              }
-            });
-          }
+          const semainesCompteesVM=new Set(); // semaines var/min déjà comptées (une seule fois chacune)
 
           // Collecter tous les jours de la période
           const [dy2,dm2,dd2]=dateDebStr.split('-').map(Number);
@@ -2048,44 +2018,122 @@ function renderDetTab(id,tab){
                 return new Date(a.dateDebut)<=dm3&&new Date(a.dateFin)>=pm;
               });
               const semKey=getSemISO(dateStr);
-              const agKey=getKeyAgenda(semKey,getSemAnnee(dateStr));
+              const semAnnee=getSemAnnee(dateStr);
+              const agKey=getKeyAgenda(semKey,semAnnee);
               const typeSem=ag&&ag.semaines&&ag.semaines[agKey];
 
-              // Exclure semaines 'off'
-              if(typeSem==='off'){cur.setDate(cur.getDate()+1);continue;}
+              const estPlanMinVarHP=source.th==='plan'&&(source.planType==='var'||source.planType==='min');
 
-              // Exclure jours de congés
-              const estConge=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges'].includes(jour.statut);
-              if(estConge){cur.setDate(cur.getDate()+1);continue;}
+              if(estPlanMinVarHP){
+                // Plan var/min : jamais le planning ni les heures prévues pour une semaine complète
+                // (trop variables, ne représentent pas la mensualisation) — uniquement l'agenda,
+                // une fois par semaine
+                const semUnique=semAnnee+'-'+semKey;
+                if(!semainesCompteesVM.has(semUnique)){
+                  semainesCompteesVM.add(semUnique);
+                  if(typeSem&&typeSem!=='off'){
+                    const lundiSem=new Date(cur); lundiSem.setDate(cur.getDate()-(cur.getDay()||7)+1);
+                    const dimSem=new Date(lundiSem); dimSem.setDate(lundiSem.getDate()+6);
+                    const fmtSem=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
+                    const lundiSemStr=fmtSem(lundiSem), dimSemStr=fmtSem(dimSem);
+                    const dateDebC=c.dateDeb;
+                    const dateAvenantC=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant)?.dateAvenant;
+                    const dateRuptureC=c.rupture&&c.rupture.confirmee?c.rupture.dateFinContrat:null;
+                    let limiteDebut=null;
+                    if(dateDebC&&lundiSemStr<dateDebC&&dimSemStr>=dateDebC) limiteDebut=dateDebC;
+                    else if(dateAvenantC&&lundiSemStr<=dateAvenantC&&dimSemStr>=dateAvenantC) limiteDebut=dateAvenantC;
+                    let limiteFin=null;
+                    if(dateRuptureC&&lundiSemStr<=dateRuptureC&&dimSemStr>dateRuptureC) limiteFin=dateRuptureC;
 
-              // Calculer heures prévues selon type de contrat
-              if(jour.heureDebPrev&&jour.heureFinPrev){
-                const m=toMins(jour.heureFinPrev)-toMins(jour.heureDebPrev);
-                if(m>0) hPrevu+=m/60;
-              } else if(source.th==='plan'&&source.planType==='var'&&source.planVar&&ag){
-                const volR=typeSem?source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
-                if(volR&&volR.jours){
-                  const jourIdx=jour.jourSemaine===0?6:jour.jourSemaine-1;
-                  if(volR.jours[jourIdx]){
-                    if(!semJoursCpt[semKey]) semJoursCpt[semKey]=0;
-                    if(semJoursCpt[semKey]<(volR.j||1)){
-                      hPrevu+=volR.h/(volR.j||1);
-                      semJoursCpt[semKey]++;
+                    // Volume et motif possible selon le type de plan
+                    let volH=0, joursPattern=null;
+                    if(source.planType==='var'&&source.planVar){
+                      const vol=source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);
+                      if(vol){ volH=vol.h; joursPattern=vol.jours; }
+                    } else if(source.planType==='min'){
+                      volH=source.hMin||0;
+                      joursPattern=source.joursMin;
+                    }
+
+                    if(volH&&joursPattern){
+                      if(limiteDebut||limiteFin){
+                        // Semaine à cheval sur début (ou avenant) ou fin de contrat : quota disponible
+                        // = volume complet - absence hors contrat de cette semaine (moyenne pondérée /
+                        // jours possibles union), même mécanisme que sur les feuilles de présence
+                        let joursPossiblesUnion, nbJoursPossiblesUnion, hSemMoy;
+                        if(source.planType==='var'&&source.planVar){
+                          const totJ=source.planVar.reduce((t,v)=>t+(v.h||0)*(v.s||0),0);
+                          const totS=source.planVar.reduce((t,v)=>t+(v.s||0),0);
+                          hSemMoy=totS>0?totJ/totS:0;
+                          joursPossiblesUnion=Array.from({length:7},(_,idx)=>source.planVar.some(v=>v.jours&&v.jours[idx]));
+                        } else {
+                          hSemMoy=volH;
+                          joursPossiblesUnion=joursPattern;
+                        }
+                        nbJoursPossiblesUnion=joursPossiblesUnion.filter(Boolean).length||1;
+                        let joursHorsContrat=0;
+                        for(let d=0;d<7;d++){
+                          const jd=new Date(lundiSem); jd.setDate(lundiSem.getDate()+d);
+                          const jdStr=fmtSem(jd);
+                          if(limiteDebut&&joursPossiblesUnion[d]&&jdStr<limiteDebut) joursHorsContrat++;
+                          else if(limiteFin&&joursPossiblesUnion[d]&&jdStr>limiteFin) joursHorsContrat++;
+                        }
+                        const hAbsHorsContratSem=joursHorsContrat*(hSemMoy/nbJoursPossiblesUnion);
+                        hPrevu+=Math.max(0,volH-hAbsHorsContratSem);
+                      } else {
+                        // Semaine à cheval sur deux mois calendaires (sans lien avec le contrat) ?
+                        const moisLundiSem=lundiSem.getMonth(), moisDimSem=dimSem.getMonth();
+                        if(moisLundiSem!==moisDimSem||lundiSem.getFullYear()!==dimSem.getFullYear()){
+                          // Prévu plafonné au volume, jour par jour, dans la portion de la semaine qui
+                          // tombe dans CE mois — avec report entre les deux mois pour ne jamais dupliquer
+                          // ni perdre de quota (une semaine à cheval sur une fin de mois ne doit jamais
+                          // faire perdre des heures disponibles)
+                          const sommePlafonneePeriode=(dateDebLoc,dateFinLoc)=>{
+                            let somme=0;
+                            for(let d=0;d<7;d++){
+                              const jd=new Date(lundiSem); jd.setDate(lundiSem.getDate()+d);
+                              const jdStr=fmtSem(jd);
+                              if(jdStr<dateDebLoc||jdStr>dateFinLoc) continue;
+                              const moisKeyJd=jd.getFullYear()+'-'+String(jd.getMonth()+1).padStart(2,'0');
+                              const ficheJd=c.fiches&&c.fiches[moisKeyJd];
+                              const jourJd=ficheJd&&ficheJd.jours.find(jj=>jj.date===jdStr);
+                              if(jourJd&&jourJd.heureDebPrev&&jourJd.heureFinPrev){
+                                somme+=Math.max(0,(toMins(jourJd.heureFinPrev)-toMins(jourJd.heureDebPrev))/60);
+                              }
+                            }
+                            return Math.min(somme,volH);
+                          };
+                          if(moisLundiSem===cur.getMonth()&&lundiSem.getFullYear()===cur.getFullYear()){
+                            // On traite le mois de début de semaine (fin de mois) : prévu plafonné au
+                            // volume, uniquement sur la portion de la semaine dans ce mois
+                            const finDeMois=new Date(cur.getFullYear(),cur.getMonth()+1,0);
+                            hPrevu+=sommePlafonneePeriode(lundiSemStr,fmtSem(finDeMois));
+                          } else {
+                            // On traite le mois de fin de semaine (mois suivant) : volume complet moins
+                            // ce qui a déjà été alloué (plafonné) dans le mois précédent
+                            const finMoisPrec=new Date(cur.getFullYear(),cur.getMonth(),0);
+                            const dejaAlloue=sommePlafonneePeriode(lundiSemStr,fmtSem(finMoisPrec));
+                            hPrevu+=Math.max(0,volH-dejaAlloue);
+                          }
+                        } else {
+                          // Semaine complète, aucun cheval : volume plein
+                          hPrevu+=volH;
+                        }
+                      }
                     }
                   }
+                  // typeSem absent ou 'off' : semaine hors contrat entière, ou off — 0, pas de volume garanti
                 }
-              } else if(source.th==='plan'&&source.planType==='min'){
-                const jourIdx=jour.jourSemaine===0?6:jour.jourSemaine-1;
-                const jourCoche=source.joursMin&&source.joursMin[jourIdx];
-                if(jourCoche&&typeSem){
-                  if(!semJoursCpt[semKey]) semJoursCpt[semKey]=0;
-                  if(semJoursCpt[semKey]<(source.jMaxMin||4)){
-                    hPrevu+=(source.hMin||0)/(source.jMaxMin||4);
-                    semJoursCpt[semKey]++;
-                  }
+              } else {
+                // Fixe/sem : logique inchangée (heures prévues au planning, off/congés exclus)
+                if(typeSem==='off'){ cur.setDate(cur.getDate()+1); continue; }
+                const estConge=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges'].includes(jour.statut);
+                if(estConge){ cur.setDate(cur.getDate()+1); continue; }
+                if(jour.heureDebPrev&&jour.heureFinPrev){
+                  const m=toMins(jour.heureFinPrev)-toMins(jour.heureDebPrev);
+                  if(m>0) hPrevu+=m/60;
                 }
               }
-              // fixe/sem : heureDebPrev/heureFinPrev déjà gérés ci-dessus
             }
             cur.setDate(cur.getDate()+1);
           }
@@ -2096,6 +2144,7 @@ function renderDetTab(id,tab){
         function calcHTheoReg(dateDebStr, dateFinStr){
           let hTheo=0;
           const semJoursCpt={};
+          const semainesCompteesVMTh=new Set();
           const [dy,dm,dd]=dateDebStr.split('-').map(Number);
           const [fy,fm,fd]=dateFinStr.split('-').map(Number);
           const cur=new Date(dy,dm-1,dd);
@@ -2114,10 +2163,12 @@ function renderDetTab(id,tab){
                 return new Date(a.dateDebut)<=dm2&&new Date(a.dateFin)>=pm;
               });
               const semKey=getSemISO(dateStr);
-              const agKey=getKeyAgenda(semKey,getSemAnnee(dateStr));
+              const semAnnee=getSemAnnee(dateStr);
+              const agKey=getKeyAgenda(semKey,semAnnee);
               const typeSem=ag&&ag.semaines&&ag.semaines[agKey];
               const hMensuSource=source.hMensu||0;
               const nbSemSource=source.nbSem||46;
+              const estPlanMinVarTh=source.th==='plan'&&(source.planType==='var'||source.planType==='min');
 
               if(typeSem==='off'){
                 // Semaine off : ajouter hSemMoy une seule fois par semaine
@@ -2125,30 +2176,23 @@ function renderDetTab(id,tab){
                   semJoursCpt[semKey]=true;
                   hTheo+=hMensuSource*12/nbSemSource;
                 }
-              } else if(jour.heureDebPrev&&jour.heureFinPrev){
-                hTheo+=(toMins(jour.heureFinPrev)-toMins(jour.heureDebPrev))/60;
-              } else if(source.th==='plan'&&source.planType==='var'&&source.planVar&&ag){
-                const vol=typeSem?source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
-                if(vol&&vol.jours){
-                  const jourIdx=jour.jourSemaine===0?6:jour.jourSemaine-1;
-                  if(vol.jours[jourIdx]){
-                    if(!semJoursCpt[semKey]) semJoursCpt[semKey]=0;
-                    if(typeof semJoursCpt[semKey]==='number'&&semJoursCpt[semKey]<(vol.j||1)){
-                      hTheo+=vol.h/(vol.j||1);
-                      semJoursCpt[semKey]++;
+              } else if(estPlanMinVarTh){
+                // Plan var/min : agenda uniquement, volume complet de la semaine, une fois — jamais
+                // le planning (trop variable, ne représente pas la mensualisation)
+                const semUnique=semAnnee+'-'+semKey;
+                if(!semainesCompteesVMTh.has(semUnique)){
+                  semainesCompteesVMTh.add(semUnique);
+                  if(typeSem){
+                    if(source.planType==='var'&&source.planVar){
+                      const vol=source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);
+                      if(vol) hTheo+=vol.h;
+                    } else if(source.planType==='min'){
+                      hTheo+=source.hMin||0;
                     }
                   }
                 }
-              } else if(source.th==='plan'&&source.planType==='min'){
-                const jourIdx=jour.jourSemaine===0?6:jour.jourSemaine-1;
-                const jourCoche=source.joursMin&&source.joursMin[jourIdx];
-                if(jourCoche&&typeSem){
-                  if(!semJoursCpt[semKey]) semJoursCpt[semKey]=0;
-                  if(typeof semJoursCpt[semKey]==='number'&&semJoursCpt[semKey]<(source.jMaxMin||4)){
-                    hTheo+=(source.hMin||0)/(source.jMaxMin||4);
-                    semJoursCpt[semKey]++;
-                  }
-                }
+              } else if(jour.heureDebPrev&&jour.heureFinPrev){
+                hTheo+=(toMins(jour.heureFinPrev)-toMins(jour.heureDebPrev))/60;
               }
             }
             cur.setDate(cur.getDate()+1);
@@ -2290,7 +2334,11 @@ function renderDetTab(id,tab){
               montantMensu=parseFloat(Math.max(0,hMensuReg*txNetMois-(recapMois?.montantAbsences||0)).toFixed(2));
             }
             let hReel=0;
-            if(ficheMois){
+            const srcRegulHR=getVersionActive(c,new Date(debutMoisRegul));
+            const estPlanMinVarHR=srcRegulHR.th==='plan'&&(srcRegulHR.planType==='min'||srcRegulHR.planType==='var');
+            if(ficheMois&&estPlanMinVarHR){
+              hReel=calcHPrevuReg(debutMoisRegul, finMoisRegul);
+            } else if(ficheMois){
               const statutsExclus=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-conges',
                 'abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat'];
               ficheMois.jours.forEach(j=>{
