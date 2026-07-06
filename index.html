@@ -4099,19 +4099,71 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       const borderAv=(dateDebAvP&&j.date===dateDebAvP)?'border-top:3px solid var(--m);':'';
       const quotaAtteint=jMaxSem>0&&totalCocheSem>=jMaxSem;
       const casesVerrouillee=!dejaCoche&&quotaAtteint&&!moisVerrouille;
-      // Férié entouré de congés (jour précédent ou suivant posé) : traité comme faisant partie de la
-      // période de congés, pas de case à cocher proposée
+      // Semaine partiellement en congés (même critère que la coloration de l'agenda : jours possibles
+      // vs jours posés) : un jour de congé isolé au sein d'une semaine par ailleurs normale propose une
+      // case à cocher (comme un férié), plutôt que d'être verrouillé comme une vraie semaine de congés
+      let estSemCongesPartiellePln=false;
+      if(estCongeAM){
+        const srcPln=getVersionActive(c,j.dt);
+        let joursPossiblesIdxPln=null;
+        if(srcPln.th==='plan'&&srcPln.planType==='var'&&srcPln.planVar){
+          joursPossiblesIdxPln=Array.from({length:7},(_,i)=>i).filter(i=>{
+            if(i===(srcPln.reposHebdo||c.reposHebdo||0)) return false;
+            const idxLun=i===0?6:i-1;
+            return srcPln.planVar.some(v=>v.jours&&v.jours[idxLun]);
+          });
+        } else if(srcPln.th==='plan'&&srcPln.planType==='min'&&srcPln.joursMin){
+          joursPossiblesIdxPln=Array.from({length:7},(_,i)=>i).filter(i=>{
+            if(i===(srcPln.reposHebdo||c.reposHebdo||0)) return false;
+            const idxLun=i===0?6:i-1;
+            return !!srcPln.joursMin[idxLun];
+          });
+        }
+        if(joursPossiblesIdxPln){
+          const estComplete=joursPossiblesIdxPln.every(jourSem=>{
+            const jourMatch=sem.jours.find(jj=>jj.dt.getDay()===jourSem);
+            return jourMatch?(isJourCongeAM(jourMatch.date)||isFerie(jourMatch.date,c)):true;
+          });
+          estSemCongesPartiellePln=!estComplete;
+        }
+      }
+      // Férié dans une vraie période de congés : verrouillé seulement si tous les AUTRES jours possibles
+      // de la semaine (hors le férié lui-même) sont posés en congés — un jour de congé isolé adjacent
+      // (ex. un pont) ne suffit pas à le considérer comme une période de congés
       let ferieDansConges=false;
       if(infos.ferieChome){
-        const dJ=new Date(j.date);
-        const dPrevJ=new Date(dJ); dPrevJ.setDate(dPrevJ.getDate()-1);
-        const dNextJ=new Date(dJ); dNextJ.setDate(dNextJ.getDate()+1);
-        const fmtJ=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
-        ferieDansConges=isJourCongeAM(fmtJ(dPrevJ))||isJourCongeAM(fmtJ(dNextJ));
+        const srcPlnF=getVersionActive(c,j.dt);
+        let joursPossiblesIdxF=null;
+        if(srcPlnF.th==='plan'&&srcPlnF.planType==='var'&&srcPlnF.planVar){
+          joursPossiblesIdxF=Array.from({length:7},(_,i)=>i).filter(i=>{
+            if(i===(srcPlnF.reposHebdo||c.reposHebdo||0)) return false;
+            const idxLun=i===0?6:i-1;
+            return srcPlnF.planVar.some(v=>v.jours&&v.jours[idxLun]);
+          });
+        } else if(srcPlnF.th==='plan'&&srcPlnF.planType==='min'&&srcPlnF.joursMin){
+          joursPossiblesIdxF=Array.from({length:7},(_,i)=>i).filter(i=>{
+            if(i===(srcPlnF.reposHebdo||c.reposHebdo||0)) return false;
+            const idxLun=i===0?6:i-1;
+            return !!srcPlnF.joursMin[idxLun];
+          });
+        }
+        if(joursPossiblesIdxF){
+          const jourFerieDow=j.dt.getDay();
+          ferieDansConges=joursPossiblesIdxF.filter(dow=>dow!==jourFerieDow).every(jourSem=>{
+            const jourMatch=sem.jours.find(jj=>jj.dt.getDay()===jourSem);
+            return jourMatch?(isJourCongeAM(jourMatch.date)||isFerie(jourMatch.date,c)):true;
+          });
+        }
       }
-      const estSaisissable=(infos.jourPossible||(infos.ferieChome&&!ferieDansConges))&&!estCongeAM&&!moisVerrouille&&!casesVerrouillee;
+      const estSaisissable=(infos.jourPossible||(infos.ferieChome&&!ferieDansConges)||(estCongeAM&&estSemCongesPartiellePln))&&(!estCongeAM||estSemCongesPartiellePln)&&!moisVerrouille&&!casesVerrouillee;
       let contenu;
-      if(estCongeAM||ferieDansConges){
+      if(estCongeAM&&estSemCongesPartiellePln){
+        contenu=`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);cursor:${(moisVerrouille||casesVerrouillee)?'default':'pointer'}">
+          <input type="checkbox" ${dejaCoche?'checked':''} ${(moisVerrouille||casesVerrouillee)?'disabled':''}
+            onchange="toggleJourPlanning(${c.id},'${j.date}',this.checked,'${semKeyDom}',true)">
+          <span>Congé (à compter comme jour prévu)</span>
+        </label>`;
+      } else if(estCongeAM||ferieDansConges){
         contenu=`<span style="color:var(--tx3);font-size:12px">Congés de l’Ass’Mat</span>`;
       } else if(infos.horsContrat){
         contenu=`<span style="color:var(--tx3);font-size:12px">Hors contrat</span>`;
@@ -6157,10 +6209,12 @@ function getHJourFerie(c, sourceActif, dateStr, agendaMois, estSemConges){
     return 0;
   }
 
-  // 52 sem min et var : si jour possible valeur volume / jour max
+  // 52 sem min et var : si jour possible valeur volume / jours possibles (pas jMax — le type est
+  // toujours connu en 52 semaines, aucune ambiguïté à couvrir par un plafond)
   if(tc==='52'&&planType==='min'){
     if(sourceActif.joursMin&&sourceActif.joursMin[jourIdx]){
-      return (sourceActif.hMin||0)/(sourceActif.jMaxMin||1);
+      const nbJoursPossiblesMin=sourceActif.joursMin.filter(Boolean).length||1;
+      return (sourceActif.hMin||0)/nbJoursPossiblesMin;
     }
     return 0;
   }
@@ -6170,7 +6224,8 @@ function getHJourFerie(c, sourceActif, dateStr, agendaMois, estSemConges){
     const typeSem=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKey];
     const vol=typeSem&&sourceActif.planVar?sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
     if(vol&&vol.jours&&vol.jours[jourIdx]){
-      return (vol.h||0)/(vol.j||1);
+      const nbJoursPossiblesVol=vol.jours.filter(Boolean).length||1;
+      return (vol.h||0)/nbJoursPossiblesVol;
     }
     return 0;
   }
@@ -6231,11 +6286,28 @@ function getHJourFerie(c, sourceActif, dateStr, agendaMois, estSemConges){
     return 0;
   }
 
-  // 46 sem var : si jour possible valeur volume moyen / jour max moyen
+  // 46 sem var : semaine de congés (type inconnu) → moyenne pondérée / jours possibles union (comme un
+  // jour de congé, aucun volume précis ne peut légalement s'appliquer) ; semaine travaillée (type
+  // connu, via la case à cocher du planning) → volume spécifique de cette semaine / jMax de ce volume
   if(planType==='var'){
     const jourPossibleVar=sourceActif.planVar&&sourceActif.planVar.some(v=>v.jours&&v.jours[jourIdx]);
     if(!jourPossibleVar) return 0;
-    return hMoyJour;
+    if(estSemConges){
+      const totalSAnnuel=sourceActif.planVar.reduce((t,v)=>t+(v.s||0),0);
+      const hSemMoyF=totalSAnnuel>0?totalHAnnuel/totalSAnnuel:0;
+      const joursPossiblesUnionF=Array.from({length:7},(_,idx)=>sourceActif.planVar.some(v=>v.jours&&v.jours[idx]));
+      const nbJoursPossiblesUnionF=joursPossiblesUnionF.filter(Boolean).length||1;
+      return hSemMoyF/nbJoursPossiblesUnionF;
+    } else {
+      const semKey=getSemISO(dateStr);
+      const agKey=getKeyAgenda(semKey,getSemAnnee(dateStr));
+      const typeSem=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKey];
+      const vol=sourceActif.planVar&&typeSem?sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
+      if(vol&&vol.jours&&vol.jours[jourIdx]){
+        return (vol.h||0)/(vol.j||1);
+      }
+      return 0;
+    }
   }
 
   return 0;
