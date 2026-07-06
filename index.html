@@ -7119,6 +7119,52 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const hMoyJourGlobal=(sourceActif.nbSem&&sourceActif.nbSem>0)?(hMensu*12/sourceActif.nbSem)/joursMaxMoyen:hMensu/20;
   const semTheoriquesVues=new Set();
   const semJoursCpt={};
+  // Pré-remplir avec ce qui a déjà été compté le mois précédent, pour une semaine à cheval entre deux
+  // mois calendaires (indépendamment du début/fin de contrat, déjà géré par joursHCExclus) — sinon le
+  // calcul de chaque mois ignore ce que l'autre a déjà compté pour la même semaine ISO, et peut compter
+  // plus de jours que le jMax réel de cette semaine au total sur les deux mois combinés
+  if(fichePrec&&(sourceActif.th==='plan'||c.th==='plan')&&(sourceActif.planType==='min'||c.planType==='min'||sourceActif.planType==='var'||c.planType==='var')){
+    const semMoisCourantTh=new Set(fiche.jours.map(j=>getSemISO(j.date)));
+    const tousAgendasPrecTh=[...(sourceActif.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
+    const joursParSemainePrecTh={};
+    fichePrec.jours.forEach(j=>{
+      const semNumPrec=getSemISO(j.date);
+      if(!semMoisCourantTh.has(semNumPrec)) return;
+      const semAnPrec=getSemAnnee(j.date);
+      const semKeyPrecTh=semAnPrec+'-S'+String(semNumPrec).padStart(2,'0');
+      if(!joursParSemainePrecTh[semKeyPrecTh]) joursParSemainePrecTh[semKeyPrecTh]=[];
+      joursParSemainePrecTh[semKeyPrecTh].push(j);
+    });
+    Object.keys(joursParSemainePrecTh).forEach(semKeyPrecTh=>{
+      const joursSemPrecTh=joursParSemainePrecTh[semKeyPrecTh];
+      const semNumPrecTh=parseInt(semKeyPrecTh.split('-S')[1]);
+      const semAnPrecTh=parseInt(semKeyPrecTh.split('-')[0]);
+      const agKeyPrecTh=getKeyAgenda(semNumPrecTh,semAnPrecTh);
+      const dateExPrecTh=joursSemPrecTh[0].date;
+      const agPourSemPrecTh=tousAgendasPrecTh.find(ag=>new Date(ag.dateDebut)<=new Date(dateExPrecTh)&&new Date(ag.dateFin)>=new Date(dateExPrecTh));
+      const typeSemPrecTh=agPourSemPrecTh&&agPourSemPrecTh.semaines&&agPourSemPrecTh.semaines[agKeyPrecTh];
+      if(!typeSemPrecTh||typeSemPrecTh==='off') return;
+      const planTypeTh=sourceActif.planType||c.planType;
+      let volPrecTh=null;
+      if(planTypeTh==='var'){
+        const planVarPrecTh=sourceActif.planVar||c.planVar||[];
+        volPrecTh=planVarPrecTh.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemPrecTh);
+      } else {
+        volPrecTh={jours:sourceActif.joursMin||c.joursMin,j:sourceActif.jMaxMin||c.jMaxMin};
+      }
+      if(!volPrecTh||!volPrecTh.jours) return;
+      let cptPrecTh=0;
+      joursSemPrecTh.forEach(j=>{
+        const estHorsContratPrecTh=(j.statut||'')==='hors-contrat'||!!(c.dateDeb&&j.date<c.dateDeb);
+        if(estHorsContratPrecTh) return;
+        const statutPrecTh=j.statut||getStatutPrevu(sourceActif||c,j);
+        if(['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe','reprise','ferie'].includes(statutPrecTh)) return;
+        const jourIdxPrecTh=j.jourSemaine===0?6:j.jourSemaine-1;
+        if(volPrecTh.jours[jourIdxPrecTh]&&cptPrecTh<(volPrecTh.j||1)) cptPrecTh++;
+      });
+      if(cptPrecTh>0) semJoursCpt[semKeyPrecTh]=cptPrecTh;
+    });
+  }
   const semJoursCptAv={}; // compteur séparé pour jours _horsContratAvenant
   // Pour plan min/var : précalculer les jours hors-contrat à exclure de hTheoriques
   const joursHCExclus=new Set();
