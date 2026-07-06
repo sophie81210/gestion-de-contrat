@@ -4354,6 +4354,13 @@ function toggleJourPlanning(contratId, dateStr, checked, semKeyDom, estFerie){
   if(c.id) _contratsModifies.add(c.id);
   saveToFirestore();
   refreshPlanningTile(contratId, moisKeyJ);
+  // La semaine modifiée peut être à cheval sur le mois précédent ou suivant (tuile potentiellement
+  // affichée en même temps) — les rafraîchir aussi, sans effet si elles ne sont pas dans le DOM
+  const [ay0,am0]=moisKeyJ.split('-').map(Number);
+  const moisPrecJ=am0===1?(ay0-1)+'-12':ay0+'-'+String(am0-1).padStart(2,'0');
+  const moisSuivJ=am0===12?(ay0+1)+'-01':ay0+'-'+String(am0+1).padStart(2,'0');
+  refreshPlanningTile(contratId, moisPrecJ);
+  refreshPlanningTile(contratId, moisSuivJ);
 }
 
 function refreshPlanningTile(contratId, moisKey){
@@ -7861,8 +7868,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       } else if(thActif==='plan'&&(sourceActif.planType==='var'||sourceActif.planType==='min')){
         const semKeyJ=getSemISO(j.date);
         const hAbsS=Math.max(0,(hAbsParSemaine[semKeyJ]||0)-(hAbsHorsContratParSemaine[semKeyJ]||0));
-        // Règle 1 : dépassement hebdo (heures prévues saisies vs volume contrat)
-        const hPrevSaisieSem=(hPrevSaisieParSemaine||{})[semKeyJ]||0;
+        // Règle 1 : dépassement hebdo (heures prévues saisies vs volume contrat) — inclut le prévu du
+        // mois précédent pour cette même semaine à cheval, sinon un dépassement réparti entre deux mois
+        // ne serait jamais détecté ni par l'un ni par l'autre pris isolément
+        const hPrevSaisieSem=((hPrevSaisieParSemaine||{})[semKeyJ]||0)+(hPrevSaisieParSemainePrecMois[semKeyJ]||0);
         const hVolContrat=hPrevuParSemaine[semKeyJ]||0;
         const depassHebdo=Math.max(0,hPrevSaisieSem-hVolContrat);
         // Règle 2 : dépassement journalier (réel > prévu saisi)
