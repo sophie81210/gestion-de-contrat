@@ -2246,17 +2246,34 @@ function renderDetTab(id,tab){
         const tranches=[];
         moisTries.forEach(key=>{
           const [ay,am]=key.split('-').map(Number);
-          const dateF=new Date(ay,am-1,1);
-          let idx=0;
-          while(true){
-            const debutTranche=new Date(ddy+idx,ddm-1,1);
-            const finTranche=new Date(ddy+idx+1,ddm-1,1);
-            if(dateF>=debutTranche&&dateF<finTranche) break;
-            idx++;
-            if(idx>20) break;
+          const debutMoisCheck=ay+'-'+String(am).padStart(2,'0')+'-01';
+          const finMoisCheck=ay+'-'+String(am).padStart(2,'0')+'-'+String(new Date(ay,am,0).getDate()).padStart(2,'0');
+          const aUnAvenantCeMois=datesAvenants.some(d=>d>debutMoisCheck&&d<=finMoisCheck);
+          // Anniversaire exact dans ce mois (même mois que dateDebContrat, année postérieure), et
+          // aucun avenant réel ce mois-là (dans ce cas le mécanisme avenant existant ferme/rouvre déjà
+          // proprement le cycle, pas besoin d'un découpage supplémentaire)
+          const contientAnniversaire=am===ddm&&ay>ddy&&!aUnAvenantCeMois;
+          if(contientAnniversaire){
+            const dateAnniv=ay+'-'+String(ddm).padStart(2,'0')+'-'+String(ddd).padStart(2,'0');
+            const idxApres=ay-ddy;
+            const idxAvant=idxApres-1;
+            if(!tranches[idxAvant]) tranches[idxAvant]=[];
+            if(!tranches[idxApres]) tranches[idxApres]=[];
+            tranches[idxAvant].push({key,portion:'avant',dateAnniv});
+            tranches[idxApres].push({key,portion:'apres',dateAnniv});
+          } else {
+            const dateF=new Date(ay,am-1,1);
+            let idx=0;
+            while(true){
+              const debutTranche=new Date(ddy+idx,ddm-1,ddd);
+              const finTranche=new Date(ddy+idx+1,ddm-1,ddd);
+              if(dateF>=debutTranche&&dateF<finTranche) break;
+              idx++;
+              if(idx>20) break;
+            }
+            if(!tranches[idx]) tranches[idx]=[];
+            tranches[idx].push(key);
           }
-          if(!tranches[idx]) tranches[idx]=[];
-          tranches[idx].push(key);
         });
 
         let tableauxHtml='';
@@ -2266,18 +2283,28 @@ function renderDetTab(id,tab){
           const tIdx=tranches.indexOf(tranchesFiltrees[tranchesFiltrees.length-1-tIdxRev]);
           const anneeDebut=new Date(dateDebContrat.getFullYear()+tIdx,dateDebContrat.getMonth(),dateDebContrat.getDate());
           // Fin d'année = veille de l'anniversaire → afficher le mois précédent
-          const anneeFinDate=new Date(dateDebContrat.getFullYear()+tIdx+1,dateDebContrat.getMonth(),0); // dernier jour du mois précédent
+          const anneeFinDate=new Date(dateDebContrat.getFullYear()+tIdx+1,dateDebContrat.getMonth(),dateDebContrat.getDate()-1); // veille de l'anniversaire exact
           const label='Année '+(tIdx+1)+' ('+anneeDebut.toLocaleDateString('fr-FR',{month:'short',year:'numeric'})+' → '+anneeFinDate.toLocaleDateString('fr-FR',{month:'short',year:'numeric'})+')';
           const labelPdf=label;
           let totMensu=0,totPrevu=0;
 
-          const lignes=moisList.map(key=>{
+          const lignes=moisList.map(item=>{
+            const key=typeof item==='string'?item:item.key;
+            const portionAnniv=typeof item==='string'?null:item.portion;
+            const dateAnniv=typeof item==='string'?null:item.dateAnniv;
             const fiche=c.fiches[key];
             const [ay2,am2]=key.split('-').map(Number);
-            const moisLabel=MOIS[am2-1]+' '+ay2;
-            const debutMois=ay2+'-'+String(am2).padStart(2,'0')+'-01';
+            const veilleAnniv=dateAnniv?(()=>{
+              const [any,anm,and]=dateAnniv.split('-').map(Number);
+              const d=new Date(any,anm-1,and-1);
+              return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+            })():null;
+            const moisLabel=MOIS[am2-1]+' '+ay2+(portionAnniv==='avant'?' (1)':portionAnniv==='apres'?' (2)':'');
+            let debutMois=ay2+'-'+String(am2).padStart(2,'0')+'-01';
             const finMoisDate=new Date(ay2,am2,0);
-            const finMois=ay2+'-'+String(am2).padStart(2,'0')+'-'+String(finMoisDate.getDate()).padStart(2,'0');
+            let finMois=ay2+'-'+String(am2).padStart(2,'0')+'-'+String(finMoisDate.getDate()).padStart(2,'0');
+            if(portionAnniv==='avant') finMois=veilleAnniv;
+            else if(portionAnniv==='apres') debutMois=dateAnniv;
 
             // Trouver les avenants qui tombent dans ce mois, sauf le 1er (pas de mois partiel)
             const avenantsduMois=datesAvenants.filter(d=>d>debutMois&&d<=finMois);
@@ -2353,6 +2380,18 @@ function renderDetTab(id,tab){
               txNetMois=parseFloat(recapMois?.txNetExact||0);
               montantMensu=parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)-(recapMois?.montantAbsences||0)).toFixed(2));
               debutMoisRegul=debutMois; finMoisRegul=veilleAvenantReg||finMois;
+            } else if(portionAnniv==='avant'){
+              // Portion avant l'anniversaire exact (mois scindé, pas d'avenant réel) — même mécanique
+              // que 46→46, avec la date anniversaire comme frontière synthétique
+              const recapMois=ficheMois?calcRecapFiche(c,ficheMois,null,veilleAnniv,veilleAnniv,dateAnniv,'avant'):null;
+              txNetMois=parseFloat(recapMois?.txNetExact||0);
+              montantMensu=parseFloat(Math.max(0,hMensuReg*txNetMois-(recapMois?.montantAbsences||0)).toFixed(2));
+              debutMoisRegul=debutMois; finMoisRegul=finMois;
+            } else if(portionAnniv==='apres'){
+              const recapMois=ficheMois?calcRecapFiche(c,ficheMois,dateAnniv,null,dateAnniv,dateAnniv,'apres'):null;
+              txNetMois=parseFloat(recapMois?.txNetExact||0);
+              montantMensu=parseFloat(Math.max(0,hMensuReg*txNetMois-(recapMois?.montantAbsences||0)).toFixed(2));
+              debutMoisRegul=debutMois; finMoisRegul=finMois;
             } else {
               // Mois normal
               const recapMois=ficheMois?calcRecapFiche(c,ficheMois):null;
@@ -10628,7 +10667,6 @@ function calcSoldeConges46(c){
 }
 
 function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
-  const [ddy,ddm]=c.dateDeb?c.dateDeb.split('-').map(Number):[new Date().getFullYear(),new Date().getMonth()+1];
   const moisTries=Object.keys(c.fiches||{}).filter(k=>{
     if(!c.fiches[k].valide) return false;
     if(dateDebutLimite||dateFinLimite){
@@ -10639,18 +10677,8 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
     }
     return true;
   }).sort();
-  const tranches={};
+  let totalMensu=0, totalPrevu=0;
   moisTries.forEach(key=>{
-    const [ay,am]=key.split('-').map(Number);
-    const dateF=new Date(ay,am-1,1);
-    let idx=0;
-    while(true){
-      const debutTranche=new Date(ddy+idx,ddm-1,1);
-      const finTranche=new Date(ddy+idx+1,ddm-1,1);
-      if(dateF>=debutTranche&&dateF<finTranche) break;
-      idx++;if(idx>20) break;
-    }
-    if(!tranches[idx]) tranches[idx]={mensu:0,prevu:0};
     const fiche=c.fiches[key];
     const [ay2,am2]=key.split('-').map(Number);
     const source=getVersionActive(c,new Date(ay2,am2-1,1));
@@ -10665,8 +10693,7 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
     const recapMois=avenantMois?calcRecapFiche(c,fiche,null,veilleAvenantStr,null,avenantMois.dateAvenant,'avant'):calcRecapFiche(c,fiche);
     const hAbsDedMois=parseFloat(recapMois.hAbsDeduit||0);
     const hMensuMois=parseFloat(recapMois.hMensu||source.hMensu||0);
-    tranches[idx].mensu+=Math.max(0,hMensuMois-hAbsDedMois);
-    tranches[idx].hAbsDed=(tranches[idx].hAbsDed||0)+hAbsDedMois;
+    totalMensu+=Math.max(0,hMensuMois-hAbsDedMois);
     // Heures prévues (sans off ni congés)
     const agendas=source.agendas||c.agendas||[];
     const ag=agendas.find(a=>{
@@ -10693,10 +10720,8 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
     }
     // Déduire les heures d'absence des heures réelles (proportionnellement aux heures prévues)
     const hAbsReelles=hMensuMois>0?(hAbsDedMois/hMensuMois)*hPrevu:0;
-    tranches[idx].prevu+=Math.max(0,hPrevu-hAbsReelles);
+    totalPrevu+=Math.max(0,hPrevu-hAbsReelles);
   });
-  let totalMensu=0,totalPrevu=0;
-  Object.values(tranches).forEach(t=>{totalMensu+=t.mensu;totalPrevu+=t.prevu;});
   return {totalMensu:parseFloat(totalMensu.toFixed(2)),totalPrevu:parseFloat(totalPrevu.toFixed(2)),diff:parseFloat((totalPrevu-totalMensu).toFixed(2))};
 }
 
