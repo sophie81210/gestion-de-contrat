@@ -9413,6 +9413,19 @@ function renderAgendas(c){
     const dFin=new Date(ag.dateFin);
     const estCommence=dDebut<=aujourd;
     const estTermine=dFin<aujourd;
+    // Suppression autorisée tant qu'aucune fiche concernée par cet agenda n'est validée — pas selon
+    // que sa date de début soit passée ou non (avec l'agenda à dates exactes, un agenda peut avoir
+    // commencé sans qu'aucun mois n'ait encore été validé)
+    const moisConcernesAg=[];
+    {
+      const curM=new Date(dDebut.getFullYear(),dDebut.getMonth(),1);
+      const finM=new Date(dFin.getFullYear(),dFin.getMonth(),1);
+      while(curM<=finM){
+        moisConcernesAg.push(curM.getFullYear()+'-'+String(curM.getMonth()+1).padStart(2,'0'));
+        curM.setMonth(curM.getMonth()+1);
+      }
+    }
+    const aUneFicheValideeAg=moisConcernesAg.some(mk=>c.fiches&&c.fiches[mk]&&c.fiches[mk].valide);
     const label=dDebut.toLocaleDateString('fr-FR',{month:'long',year:'numeric'})
       +' → '+dFin.toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
 
@@ -9499,7 +9512,7 @@ function renderAgendas(c){
 
     const calHtml = renderCalAgenda(c,ag,semainesFiltrees,false,c.id,agSource);
 
-    const btnSuppr=(!estCommence&&!estLectureSeuleEmployeur())
+    const btnSuppr=(!aUneFicheValideeAg&&!estLectureSeuleEmployeur())
       ?`<button class="btn bd bsm" onclick="supprimerAgenda(${c.id},${ag.id})">Supprimer</button>`
       :'';
 
@@ -9982,6 +9995,22 @@ function peindreAgenda(key,cid,agid){
   if(!pinceau){toast('Sélectionnez d\'abord un pinceau');return;}
   if(ag.semaines[key]===pinceau)delete ag.semaines[key];
   else ag.semaines[key]=pinceau;
+  // Si la semaine peinte est la dernière semaine de cet agenda (celle qui chevauche le suivant),
+  // répercuter la même valeur sur la 1ère semaine de l'agenda suivant s'il existe déjà — pour que
+  // remplir cette semaine après coup n'introduise pas de conflit entre les deux cycles
+  const agKeyFinAg=ag._semFin?getKeyAgenda(ag._semFin.sem,ag._semFin.annee):null;
+  if(agKeyFinAg===key){
+    const agendasSource=source.agendas||[];
+    const agSuivant=agendasSource.find(a2=>a2.id!==ag.id&&a2.dateDebut>ag.dateFin);
+    if(agSuivant){
+      const agKeyDebSuivant=agSuivant._semDebut?getKeyAgenda(agSuivant._semDebut.sem,agSuivant._semDebut.annee):null;
+      if(agKeyDebSuivant===key){
+        if(!agSuivant.semaines) agSuivant.semaines={};
+        if(ag.semaines[key]) agSuivant.semaines[key]=ag.semaines[key];
+        else delete agSuivant.semaines[key];
+      }
+    }
+  }
   // Le type de la semaine a changé : réinitialiser le planning de cette semaine (les jours possibles
   // ont pu changer, les heures déjà saisies ne correspondent plus forcément au nouveau type)
   const estPlanMinVarPeint=source.th==='plan'&&(source.planType==='min'||source.planType==='var');
