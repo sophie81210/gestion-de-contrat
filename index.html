@@ -6765,12 +6765,15 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   let montantAbsences=0;
   let hTheoriques=0;
   const hParSemaine={};
+  const hReelParSemaine={}; // purement réel (sans max avec le prévu), pour le ratio journalier
   const hPrevSaisieParSemaine={};
   const hCompParSemaine={}; // HC par semaine (via compJour)
   const hPrevuParSemaine={};
   const hAbsHorsContratParSemaine={};
   const hParSemaineFerie={}; // heures prévues fériés non travaillés pour calcul HS
   const hParSemainePrecMois={};
+  const hReelParSemainePrecMois={}; // purement réel, contrepartie de hParSemainePrecMois
+  const hPrevSaisieParSemainePrecMois={}; // report du prévu du mois précédent (semaine à cheval)
   const moisPrecStr=fiche.mois===0
     ?(fiche.annee-1)+'-12'
     :fiche.annee+'-'+String(fiche.mois).padStart(2,'0');
@@ -6878,6 +6881,18 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         hParSemaine[semKey]+=hJourPrec;
         if(!hParSemainePrecMois[semKey]) hParSemainePrecMois[semKey]=0;
         hParSemainePrecMois[semKey]+=hJourPrec;
+        if(!hReelParSemaine[semKey]) hReelParSemaine[semKey]=0;
+        hReelParSemaine[semKey]+=hJourPrec;
+        if(!hReelParSemainePrecMois[semKey]) hReelParSemainePrecMois[semKey]=0;
+        hReelParSemainePrecMois[semKey]+=hJourPrec;
+      }
+      // Report du prévu saisi le mois précédent pour cette même semaine à cheval (pour ne pas fausser
+      // le ratio de répartition du dépassement hebdo entre les jours des deux mois)
+      const statutsComptablesPrevPrec=['prevu','non-prevu','abs-non','abs-rem','abs-enfant','arret','abs-partielle'];
+      if(j.heureDebPrev&&j.heureFinPrev&&statutsComptablesPrevPrec.includes(j.statut)){
+        const hPrevJourPrec=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
+        if(!hPrevSaisieParSemainePrecMois[semKey]) hPrevSaisieParSemainePrecMois[semKey]=0;
+        hPrevSaisieParSemainePrecMois[semKey]+=hPrevJourPrec;
       }
     });
   }
@@ -6890,12 +6905,17 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   fiche.jours.forEach(j=>{
     const semKey=getSemISO(j.date);
     if(!hParSemaine[semKey]) hParSemaine[semKey]=0;
+    if(!hReelParSemaine[semKey]) hReelParSemaine[semKey]=0;
     if(j.heureDebReel&&j.heureFinReel&&(estStatutPrevu(j.statut)||j.statut==='travaille'||j.statut==='ferie'||!j.statut)){
       const hReelJ=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
       const hPrevJ=j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:0;
       // Si le jour est payé sur la base du prévu (réel < prévu, pas de déduction), compter le prévu pour le seuil
       // Si dépassement (réel > prévu), compter le réel
       hParSemaine[semKey]+=Math.max(hReelJ,hPrevJ);
+      // Compteur séparé, purement réel (sans max), pour la répartition proportionnelle du dépassement
+      // hebdomadaire entre les jours de la semaine (ratioJour) — sinon un jour payé sur la base du
+      // prévu (réel < prévu) fausserait le ratio des autres jours de la même semaine
+      hReelParSemaine[semKey]+=hReelJ;
     } else if(!j.heureDebReel&&j.statut==='ferie'&&j.heureDebPrev&&j.heureFinPrev){
       // Férié prévu non travaillé : heures prévues pour calcul HS uniquement
       if(!hParSemaineFerie[semKey]) hParSemaineFerie[semKey]=0;
@@ -7764,7 +7784,6 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       } else if(thActif==='plan'&&(sourceActif.planType==='var'||sourceActif.planType==='min')){
         const semKeyJ=getSemISO(j.date);
         const hAbsS=Math.max(0,(hAbsParSemaine[semKeyJ]||0)-(hAbsHorsContratParSemaine[semKeyJ]||0));
-        const hReelSem=hParSemaine[semKeyJ]||0;
         // Règle 1 : dépassement hebdo (heures prévues saisies vs volume contrat)
         const hPrevSaisieSem=(hPrevSaisieParSemaine||{})[semKeyJ]||0;
         const hVolContrat=hPrevuParSemaine[semKeyJ]||0;
@@ -7783,9 +7802,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           compJour=(toM(j.heureFinReel)-toM(j.heureDebReel));
         } else {
         compJour=(depassHebdo>0?(()=>{
-          const hReelJour=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
-          const hReelSemMois=hReelSem-(hParSemainePrecMois[semKeyJ]||0);
-          const ratioJour=hReelSemMois>0?hReelJour/hReelSemMois:0;
+          const hPrevJour=j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:0;
+          const hPrevSaisieSemMois=hPrevSaisieSem-(hPrevSaisieParSemainePrecMois[semKeyJ]||0);
+          const ratioJour=hPrevSaisieSemMois>0?hPrevJour/hPrevSaisieSemMois:0;
           return Math.max(0,hPrevSaisieSem-hAbsS-hVolContrat)*ratioJour*60;
         })():0)+depassJour;
         }
