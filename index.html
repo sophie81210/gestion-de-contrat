@@ -5446,20 +5446,20 @@ function validerFiche(contratId,key){
         [getVersionActive(c,debutMoisV), getVersionActive(c,new Date(avenantDuMoisV.dateAvenant))]:
         [getVersionActive(c,debutMoisV)];
       const tousAgendas=[...new Set(versionsAVerifier.flatMap(sv=>(sv.agendas||c.agendas||[])))];
-      const agV=tousAgendas.find(ag=>new Date(ag.dateDebut)<=finMoisV&&new Date(ag.dateFin)>=debutMoisV);
-      if(agV){
-        // Calculer les semaines violettes du mois
+      if(tousAgendas.length){
+        // Calculer les semaines du mois (hors jours hors contrat, rien à pointer avant l'embauche)
         const semDuMois=[...new Set(c.fiches[key].jours.map(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))))];
         const semDuMoisFiltrees=semDuMois.filter(sk=>{
           return c.fiches[key].jours.some(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))===sk&&
             j.date.startsWith(key)&&
-            new Date(j.date).getDay()!==(agV.reposHebdo||c.reposHebdo||0)&&
-            new Date(j.date).getDay()!==0);
+            new Date(j.date).getDay()!==(c.reposHebdo||0)&&
+            new Date(j.date).getDay()!==0&&
+            !(c.dateDeb&&j.date<c.dateDeb)&&
+            j.statut!=='hors-contrat');
         });
         // Semaines violettes = semaines avec beaucoup de congés/fériés
-        const semsCongesScoreV=semDuMois.map(sk=>{
+        const semsCongesScoreV=semDuMoisFiltrees.map(sk=>{
           let nb=0;
-          // Compter les jours posés/fériés dans cette semaine
           c.fiches[key].jours.forEach(j=>{
             if(getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))!==sk) return;
             if(S.congesAM) Object.values(S.congesAM).forEach(cgAm=>{if(cgAm?.jours?.[j.date]==='pose') nb++;});
@@ -5469,8 +5469,17 @@ function validerFiche(contratId,key){
         }).filter(x=>x.nb>=5);
         semsCongesScoreV.sort((a,b)=>b.nb-a.nb);
         const semsViolettes=new Set(semsCongesScoreV.slice(0,5).map(x=>x.sk));
-        // Vérifier que toutes les semaines non violettes sont pointées
-        const semNonPointee=semDuMoisFiltrees.find(sk=>!semsViolettes.has(sk)&&!agV.semaines?.[sk]);
+        // Vérifier chaque semaine contre l'agenda qui la couvre réellement (pas un seul agenda pour
+        // tout le mois — un mois peut être à cheval entre deux cycles d'agenda à l'anniversaire)
+        const semNonPointee=semDuMoisFiltrees.find(sk=>{
+          if(semsViolettes.has(sk)) return false;
+          const jourDeCetteSem=c.fiches[key].jours.find(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))===sk&&!(c.dateDeb&&j.date<c.dateDeb)&&j.statut!=='hors-contrat');
+          if(!jourDeCetteSem) return false;
+          const dateJourSem=new Date(jourDeCetteSem.date);
+          const agPourCetteSem=tousAgendas.find(ag=>new Date(ag.dateDebut)<=dateJourSem&&new Date(ag.dateFin)>=dateJourSem);
+          if(!agPourCetteSem) return true;
+          return !agPourCetteSem.semaines?.[sk];
+        });
         if(semNonPointee){
           alerte('L\'agenda n\'est pas complet — toutes les semaines doivent être pointées avant de valider.');
           return;
