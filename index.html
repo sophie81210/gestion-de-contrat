@@ -6024,16 +6024,31 @@ function calcCongesContrat(c){
       if(semTerminee){
         // Pour plan var : calcul par semaine avec jours possibles réels
         if(c.th==='plan'&&c.planType==='var'){
+          // Déterminer le volume actif via l'agenda en priorité — fonctionne même si aucun jour n'a de
+          // données (semaine entièrement "non prévu" mais bien dans le contrat, rien coché sur le
+          // planning) ; sinon, retomber sur les jours effectivement remplis pour l'inférer
+          const dateRepPV=jours[0].date;
+          const dRefPV=new Date(parseInt(dateRepPV.split('-')[0]),parseInt(dateRepPV.split('-')[1])-1,parseInt(dateRepPV.split('-')[2]));
+          const sourcePV=getVersionActive(c,dRefPV);
+          const agendasPV=sourcePV.agendas||c.agendas||[];
+          const agPV=agendasPV.find(a=>new Date(a.dateDebut)<=dRefPV&&new Date(a.dateFin)>=dRefPV);
+          const agKeyPV=getKeyAgenda(getSemISO(dateRepPV),getSemAnnee(dateRepPV));
+          const typeSemPV=agPV&&agPV.semaines&&agPV.semaines[agKeyPV];
+          const volAgendaPV=(typeSemPV&&typeSemPV!=='off'&&sourcePV.planVar)
+            ?sourcePV.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemPV):null;
           // Identifier le volume actif pour cette semaine
           // (on prend le volume dont les jours correspondent aux jours présents)
           const joursActifs=jours.filter(j=>!['hors-contrat','repos','non-prevu'].includes(j.statut||getStatutPrevu(c,j)));
-          if(joursActifs.length===0){totalSemaines+=0;} // semaine sans jours actifs
+          if(joursActifs.length===0&&!volAgendaPV){totalSemaines+=0;} // semaine sans jours actifs ni type d'agenda connu
           else {
             // Trouver le volume actif : celui dont les jours possibles couvrent cette semaine
             // On prend le volume avec le plus de jours possibles parmi ceux qui matchent
             let jMaxSem=joursMax; // fallback
-            if(c.planVar){
-              // Vérifier quel volume est actif selon l'agenda (via typeSemTh)
+            let joursPatternPV=null;
+            if(volAgendaPV){
+              jMaxSem=volAgendaPV.j||joursMax;
+              joursPatternPV=volAgendaPV.jours||null;
+            } else if(c.planVar){
               // Sinon prendre le volume dont les jours possibles incluent les jours actifs
               const joursIdx=joursActifs.map(j=>{
                 const jj=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])).getDay();
@@ -6041,7 +6056,7 @@ function calcCongesContrat(c){
               });
               // Trouver le volume dont tous les jours actifs sont possibles
               const volMatch=c.planVar.find(v=>v.jours&&joursIdx.every(idx=>v.jours[idx]));
-              if(volMatch) jMaxSem=volMatch.j||joursMax;
+              if(volMatch){ jMaxSem=volMatch.j||joursMax; joursPatternPV=volMatch.jours||null; }
             }
             // Compter les jours actifs pour plan var
             // Normaux : prevu, travaille, abs-partielle, abs-rem → 1
@@ -6088,14 +6103,31 @@ function calcCongesContrat(c){
             // Le plancher est réduit du nombre de jours hors contrat de cette semaine (début/fin de contrat
             // à cheval) — sinon une semaine très majoritairement hors contrat garantirait quand même
             // l'acquisition d'une semaine complète dès qu'un seul jour est réellement dans le contrat.
-            const joursHorsContratSemPV=jours.filter(j=>(j.statut||getStatutPrevu(c,j))==='hors-contrat').length;
-            const jMaxSemAjustePV=Math.max(0,jMaxSem-joursHorsContratSemPV);
+            // Le plancher est plafonné au nombre de jours possibles du volume qui tombent réellement
+            // dans le contrat cette semaine (pas jMaxSem moins le nombre de jours hors contrat — une
+            // semaine ne débutant que le vendredi, sur un motif lundi-vendredi, jMax 4, ne doit garantir
+            // qu'1 jour, pas jMax-4=0 ni jMax=4).
+            let joursPossiblesEnContratPV=jMaxSem;
+            if(joursPatternPV){
+              joursPossiblesEnContratPV=0;
+              for(let dpv=0;dpv<7;dpv++){
+                if(!joursPatternPV[dpv]) continue;
+                const jourMatchPV=jours.find(jj=>{
+                  const dJpv=new Date(jj.date.split('-')[0],parseInt(jj.date.split('-')[1])-1,parseInt(jj.date.split('-')[2]));
+                  return (dJpv.getDay()===0?6:dJpv.getDay()-1)===dpv;
+                });
+                if(!jourMatchPV) continue;
+                const estHCPV=(jourMatchPV.statut||getStatutPrevu(c,jourMatchPV))==='hors-contrat'||(c.dateDeb&&jourMatchPV.date<c.dateDeb);
+                if(!estHCPV) joursPossiblesEnContratPV++;
+              }
+            }
+            const jMaxSemAjustePV=Math.min(jMaxSem,joursPossiblesEnContratPV);
             const compteEffectifPV=(joursConges16PV===0&&absArret===0&&jMaxSemAjustePV>0)?Math.max(jMaxSemAjustePV,joursNormauxPV):joursNormauxPV;
             const contribNormPV=compteEffectifPV/jMaxSem;
             const contribCgPV=joursConges16PV*(1/jMaxSem); // 1/jours réels du volume actif
             const contribArretPV=absArret*(0.8)/jMaxSem;
             const prorata=Math.max(0,contribNormPV+contribCgPV);
-            console.log('DEBUG conges semaine',semKey,'jMaxSem:',jMaxSem,'joursHorsContrat:',joursHorsContratSemPV,'jMaxSemAjuste:',jMaxSemAjustePV,'joursNormauxPV:',joursNormauxPV,'joursConges16PV:',joursConges16PV,'compteEffectifPV:',compteEffectifPV,'prorata:',prorata);
+            console.log('DEBUG conges semaine',semKey,'jMaxSem:',jMaxSem,'joursPossiblesEnContrat:',joursPossiblesEnContratPV,'jMaxSemAjuste:',jMaxSemAjustePV,'joursNormauxPV:',joursNormauxPV,'joursConges16PV:',joursConges16PV,'compteEffectifPV:',compteEffectifPV,'prorata:',prorata);
             totalSemaines+=prorata;
             totalSemainesArret+=contribArretPV;
           }
@@ -6199,6 +6231,31 @@ function calcCongesContrat(c){
             }
             // abs-non, conges-am, repos, non-prevu, hors-contrat → ignorés
           });
+
+          // Plan min uniquement : plancher — une semaine sans congé ni arrêt garantit au moins le nombre
+          // de jours possibles réellement dans le contrat cette semaine (plafonné au quota), même si
+          // rien n'a été rempli/coché — un jour non planifié n'est pas une absence, ne doit pas réduire
+          // l'acquisition
+          if(c.th==='plan'&&c.planType==='min'&&joursConges16===0&&absArret===0){
+            const sourceMinPl=getVersionActive(c,new Date(jours[0].date.split('-')[0],parseInt(jours[0].date.split('-')[1])-1,parseInt(jours[0].date.split('-')[2])));
+            const joursPatternMinPl=sourceMinPl.joursMin||c.joursMin;
+            let joursPossiblesEnContratMin=joursMaxSem;
+            if(joursPatternMinPl){
+              joursPossiblesEnContratMin=0;
+              for(let dpm=0;dpm<7;dpm++){
+                if(!joursPatternMinPl[dpm]) continue;
+                const jourMatchMin=jours.find(jj=>{
+                  const dJpm=new Date(jj.date.split('-')[0],parseInt(jj.date.split('-')[1])-1,parseInt(jj.date.split('-')[2]));
+                  return (dJpm.getDay()===0?6:dJpm.getDay()-1)===dpm;
+                });
+                if(!jourMatchMin) continue;
+                const estHCMin=(jourMatchMin.statut||getStatutPrevu(c,jourMatchMin))==='hors-contrat'||(c.dateDeb&&jourMatchMin.date<c.dateDeb);
+                if(!estHCMin) joursPossiblesEnContratMin++;
+              }
+            }
+            const joursMaxSemAjusteMin=Math.min(joursMaxSem,joursPossiblesEnContratMin);
+            if(joursMaxSemAjusteMin>0) joursNormaux=Math.max(joursNormaux,joursMaxSemAjusteMin);
+          }
 
           // Contribution en fraction de semaine (plafonnée à 1 semaine max)
           const contributionNormale=joursNormaux/joursMaxSem;
