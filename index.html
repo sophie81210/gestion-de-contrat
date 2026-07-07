@@ -2767,7 +2767,7 @@ function getStatutOptions(statutPrevu, isPlanMinVar, c, sourceActive){
     'ferie-non':['init'],
     // Repos et fériés : exceptions possibles
     'repos':['travaille','init'],
-    'ferie':['ferie-non','travaille','init'],
+    'ferie':['travaille','init'],
     // Congés : gérés par le calendrier AM
     'conges-acq':['conges-acq'],
     'conges-non':['conges-non'],
@@ -3266,13 +3266,12 @@ function ouvrirFiche(contratId,key){
         j.heureFinPrev=null;
         if(j.statut==='prevu') j.statut='non-prevu';
       }
-      // Résoudre le statut férié selon feriesTravailles (contrat) ou la case cochée sur le planning,
-      // uniquement sur les jours pas encore tranchés autrement (ferie ↔ non-prevu)
+      // Un jour férié reste toujours affiché "Férié" (comme les autres types de contrat), qu'il soit
+      // coché ou non sur le planning — la case ne contrôle que le décompte dans le quota (ailleurs),
+      // pas le statut affiché ici, pour que la majoration férié se déclenche bien s'il est ensuite
+      // marqué "travaillé"
       if((j.statut==='ferie'||j.statut==='non-prevu'||!j.statut)&&isFerie(j.date,c)){
-        const mmddOF=j.date.slice(5);
-        const ferieContratOF=(c.feriesTravailles||[]).includes(mmddOF);
-        const ferieCocheOF=!!(planningRef&&planningRef[j.date]&&planningRef[j.date].coche);
-        j.statut=(ferieContratOF||ferieCocheOF)?'ferie':'non-prevu';
+        j.statut='ferie';
       }
     }
     j.planVarPrevu=!!(prevus.planVar);
@@ -4408,15 +4407,17 @@ function enregistrerPlanningMois(contratId, moisKey){
     const ag=agendas.find(a=>new Date(a.dateDebut)<=dCur&&new Date(a.dateFin)>=dCur);
     const agKey=getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr));
     const typeSem=ag&&ag.semaines&&ag.semaines[agKey];
-    let volH=0, joursPattern=null;
+    let volH=0, joursPattern=null, jMaxVol=1;
     if(typeSem&&typeSem!=='off'){
       if(source.planType==='var'&&source.planVar){
         const vol=source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);
         volH=vol?vol.h:0;
         joursPattern=vol?vol.jours:null;
+        jMaxVol=vol?(vol.j||1):1;
       } else if(source.planType==='min'){
         volH=source.hMin||0;
         joursPattern=source.joursMin;
+        jMaxVol=source.jMaxMin||1;
       }
     }
     if(!(volH>0&&joursPattern)) continue;
@@ -4458,7 +4459,9 @@ function enregistrerPlanningMois(contratId, moisKey){
     Object.keys(c.planning).forEach(dt=>{
       if((getSemISO(dt)+'-'+getSemAnnee(dt))!==semKeyISO) return;
       const pd2=c.planning[dt];
-      if(pd2&&pd2.coche&&pd2.d&&pd2.f) totalSemaine+=(toM(pd2.f)-toM(pd2.d))/60;
+      if(!pd2||!pd2.coche) return;
+      if(pd2.d&&pd2.f) totalSemaine+=(toM(pd2.f)-toM(pd2.d))/60;
+      else totalSemaine+=volH/jMaxVol; // férié coché (pas de champs d'heures) : compte pour volume/jMax
     });
     if(totalSemaine>volH+0.01){
       erreurs.push(`Semaine ${getSemISO(dateStr)} : ${fmtH(totalSemaine*60)} prévues pour un volume de ${fmtH(volH*60)} — ajoutez le surplus sur les heures réelles de la feuille de présence`);
@@ -8285,7 +8288,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const feriesTravJ=sourceActif.feriesTravailles||[];
       const jourSemJ=new Date(j.date).getDay(); // 0=dim,1=lun...6=sam
       const estFerieContrat=isFerie(j.date,c)&&statut==='travaille';
-      const estFeriePrevu=estFerieContrat&&!!(j.heureDebPrev&&j.heureFinPrev); // jour prévu au planning qui est aussi férié
+      const estPlanMinVarFerie=sourceActif.th==='plan'&&(sourceActif.planType==='min'||sourceActif.planType==='var');
+      const estFeriePrevu=estFerieContrat&&(estPlanMinVarFerie
+        ?!!(c.planning&&c.planning[j.date]&&c.planning[j.date].coche)
+        :!!(j.heureDebPrev&&j.heureFinPrev)); // jour prévu au planning qui est aussi férié
       const estFerieNonPrevu=estFerieContrat&&!estFeriePrevu;
       const estReposJ=jourSemJ===(sourceActif.reposHebdo||c.reposHebdo||0)&&statut==='travaille'&&!isFerie(j.date,c);
       if(estFeriePrevu){
