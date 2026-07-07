@@ -1055,8 +1055,13 @@ function getContratsCompresses(){
       });
       fichesClean[k]={...f,jours:joursClean};
     });
-    const {_regulHtml:_, _regulDirty:__, ...cClean}=c;
-    return {...cClean,fiches:fichesClean};
+    const {_regulHtml:_, _regulDirty:__, _planningSauvegarde:planningSauve, ...cClean}=c;
+    // Si un planning "brouillon" (non encore validé via le bouton Enregistrer) existe en mémoire, ne
+    // jamais l'enregistrer — utiliser la dernière version réellement validée à la place, pour qu'une
+    // sauvegarde déclenchée ailleurs (ex. la feuille de présence) ne fige pas accidentellement des
+    // heures en cours de saisie qui dépassent le volume ou n'ont pas encore été vérifiées
+    const planningAEnregistrer=planningSauve!==undefined?planningSauve:c.planning;
+    return {...cClean,fiches:fichesClean,planning:planningAEnregistrer};
   });
 }
 
@@ -1182,6 +1187,10 @@ function goTo(p){
   if(S.ficheModifiee){
     if(!confirm('Des modifications non enregistrées seront perdues. Continuer ?')) return;
     S.ficheModifiee=false;
+  }
+  if(S.planningModifie){
+    if(!confirm('Des modifications du planning non enregistrées seront perdues. Continuer ?')) return;
+    S.planningModifie=false;
   }
   S.page = p;
   // Si on quitte le formulaire, réinitialiser S.enEd (sauf si c'est modif qui navigue)
@@ -1626,6 +1635,10 @@ function switchDetTab(tab,id){
   if(S.ficheModifiee){
     if(!confirm('Des modifications non enregistrées seront perdues. Continuer ?')) return;
     S.ficheModifiee=false;
+  }
+  if(S.planningModifie&&tab!=='planning'){
+    if(!confirm('Des modifications du planning non enregistrées seront perdues. Continuer ?')) return;
+    S.planningModifie=false;
   }
   S.detTab=tab;
   document.querySelectorAll('.det-tab').forEach(b=>b.classList.toggle('on',b.textContent===DET_LABELS[tab]));
@@ -3215,7 +3228,8 @@ function ouvrirFiche(contratId,key){
       const agKeyOF2=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
       const typeSemOF2=agOF2&&agOF2.semaines&&agOF2.semaines[agKeyOF2];
       const semaineOffOF=typeSemOF2==='off';
-      const planJourOF=(c.planning||{})[j.date];
+      const planningRef=c._planningSauvegarde!==undefined?c._planningSauvegarde:c.planning;
+      const planJourOF=(planningRef||{})[j.date];
       const statutFigeOF=['travaille','conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat','arret','abs-non','abs-am','abs-enfant','ferie-non'].includes(j.statut);
       if(semaineOffOF&&!statutFigeOF){
         // Semaine désormais "off" : ignorer tout planning résiduel (même s'il reste des jours cochés
@@ -3239,7 +3253,7 @@ function ouvrirFiche(contratId,key){
       if((j.statut==='ferie'||j.statut==='non-prevu'||!j.statut)&&isFerie(j.date,c)){
         const mmddOF=j.date.slice(5);
         const ferieContratOF=(c.feriesTravailles||[]).includes(mmddOF);
-        const ferieCocheOF=!!(c.planning&&c.planning[j.date]&&c.planning[j.date].coche);
+        const ferieCocheOF=!!(planningRef&&planningRef[j.date]&&planningRef[j.date].coche);
         j.statut=(ferieContratOF||ferieCocheOF)?'ferie':'non-prevu';
       }
     }
@@ -4267,6 +4281,11 @@ function togglePlanningMois(id, containerId){
 
 function renderPlanning(c, cont){
   if(!c.dateDeb){ cont.innerHTML='<div class="card">Date de début du contrat manquante.</div>'; return; }
+  // Sauvegarde du dernier état de planning réellement validé (bouton Enregistrer) — tant qu'aucune
+  // modification n'a été enregistrée, elle reflète simplement l'état actuel (rien en brouillon)
+  if(c._planningSauvegarde===undefined){
+    c._planningSauvegarde=JSON.parse(JSON.stringify(c.planning||{}));
+  }
   const debut=new Date(c.dateDeb);
   const dateFinC=getDateFinContrat(c);
   const now=new Date();
@@ -4337,6 +4356,7 @@ function majPlanningJour(contratId, dateStr, champ, val, semKeyDom){
 
 // Marque le mois comme ayant des changements non enregistrés (affiche/active le bouton Enregistrer)
 function marquerPlanningNonEnregistre(contratId, moisKey){
+  S.planningModifie=true;
   const idMois='pln-mois-'+contratId+'-'+moisKey;
   const btn=document.getElementById(idMois+'-btn-save');
   if(btn){ btn.disabled=false; btn.textContent='Enregistrer *'; }
@@ -4431,9 +4451,13 @@ function enregistrerPlanningMois(contratId, moisKey){
     return;
   }
   if(c.id) _contratsModifies.add(c.id);
+  c._planningSauvegarde=JSON.parse(JSON.stringify(c.planning||{}));
   saveToFirestore();
   const btn=document.getElementById('pln-mois-'+contratId+'-'+moisKey+'-btn-save');
   if(btn){ btn.disabled=true; btn.textContent='Enregistré ✓'; }
+  // Ne lever le drapeau global que si aucun autre mois n'a encore de modification en attente
+  const autreMoisModifie=[...document.querySelectorAll('[id$="-btn-save"]')].some(b=>b!==btn&&b.textContent.includes('*'));
+  if(!autreMoisModifie) S.planningModifie=false;
   toast('Planning enregistré');
 }
 
