@@ -6045,23 +6045,38 @@ function calcCongesContrat(c){
             }
             // Compter les jours actifs pour plan var
             // Normaux : prevu, travaille, abs-partielle, abs-rem → 1
-            // conges-acq, conges-anticipe → 1/6
+            // conges-acq, conges-anticipe → 1/jMaxSem
             // ferie → 1 si dans les jours du volume actif
             // abs-non, conges-am → 0
+            // Semaine à cheval : le plancher plafonne 1 (voir plus bas)
+            // Pour une semaine PARTIELLEMENT en congés/fériés (pas la semaine entière), un jour de congé
+            // ou férié isolé ne compte pour l'acquisition que si sa case "compter comme jour prévu" est
+            // cochée sur le planning — même logique que celle qui décide s'il compte dans le quota
+            const joursPossiblesIdxCgPV=Array.from({length:7},(_,i)=>i).filter(i=>c.planVar&&c.planVar.some(v=>v.jours&&v.jours[i]));
+            const semaineCompleteCgPV=joursPossiblesIdxCgPV.length>0&&joursPossiblesIdxCgPV.every(dow=>{
+              const jourMatch=jours.find(jj=>{
+                const dJ=new Date(jj.date.split('-')[0],parseInt(jj.date.split('-')[1])-1,parseInt(jj.date.split('-')[2]));
+                return (dJ.getDay()===0?6:dJ.getDay()-1)===dow;
+              });
+              if(!jourMatch) return true;
+              const stJM=jourMatch.statut||getStatutPrevu(c,jourMatch);
+              return ['conges-acq','conges-anticipe','conges-non','ferie'].includes(stJM);
+            });
             let joursNormauxPV=0;
             let joursConges16PV=0;
             joursActifs.forEach(j=>{
               const sj=j.statut||getStatutPrevu(c,j);
+              const cocheCgPV=!!(c.planning&&c.planning[j.date]&&c.planning[j.date].coche);
               if(['prevu','travaille','abs-partielle','abs-rem'].includes(sj)){
                 joursNormauxPV++;
               } else if(['conges-acq','conges-anticipe'].includes(sj)){
-                joursConges16PV++;
+                if(semaineCompleteCgPV||cocheCgPV) joursConges16PV++;
               } else if(sj==='ferie'){
                 // Vérifier si le jour est dans le volume actif (jours du planVar)
                 const jourIdx=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])).getDay();
                 const jourIdxISO=jourIdx===0?6:jourIdx-1;
                 const volActif=c.planVar?c.planVar.find(v=>v.jours&&v.jours[jourIdxISO]):null;
-                if(volActif) joursNormauxPV++;
+                if(volActif&&(semaineCompleteCgPV||cocheCgPV)) joursNormauxPV++;
               }
               // abs-non, abs-am, ferie-non, conges-am → ignorés
             });
@@ -6080,6 +6095,7 @@ function calcCongesContrat(c){
             const contribCgPV=joursConges16PV*(1/jMaxSem); // 1/jours réels du volume actif
             const contribArretPV=absArret*(0.8)/jMaxSem;
             const prorata=Math.max(0,contribNormPV+contribCgPV);
+            console.log('DEBUG conges semaine',semKey,'jMaxSem:',jMaxSem,'joursHorsContrat:',joursHorsContratSemPV,'jMaxSemAjuste:',jMaxSemAjustePV,'joursNormauxPV:',joursNormauxPV,'joursConges16PV:',joursConges16PV,'compteEffectifPV:',compteEffectifPV,'prorata:',prorata);
             totalSemaines+=prorata;
             totalSemainesArret+=contribArretPV;
           }
@@ -6110,13 +6126,31 @@ function calcCongesContrat(c){
           // Jours normaux : prevu, travaille, abs-rem, abs-partielle → comptent pour 1
           // arret → comptabilisé séparément à 0.8
           // abs-non, abs-am, ferie-non, conges-am → ne comptent pas
-          // conges-acq, conges-anticipe → comptent pour 1/6 (règle légale)
+          // conges-acq, conges-anticipe → comptent pour 1/joursMaxSem
           // ferie → compte pour 1 seulement si jour habituellement travaillé
           let joursNormaux=0;
-          let joursConges16=0; // jours à compter pour 1/6
+          let joursConges16=0;
+
+          // Plan min uniquement : semaine "complète" en congés/fériés (pour ne pas gater le comptage
+          // par la case cochée sur une vraie semaine entière de congés, comme pour plan var)
+          let semaineCompleteCgMin=true;
+          if(c.th==='plan'&&c.planType==='min'){
+            const joursPossiblesIdxCgMin=Array.from({length:7},(_,i)=>i).filter(i=>c.joursMin&&c.joursMin[i]);
+            semaineCompleteCgMin=joursPossiblesIdxCgMin.length>0&&joursPossiblesIdxCgMin.every(dow=>{
+              const jourMatch=jours.find(jj=>{
+                const dJ=new Date(jj.date.split('-')[0],parseInt(jj.date.split('-')[1])-1,parseInt(jj.date.split('-')[2]));
+                return (dJ.getDay()===0?6:dJ.getDay()-1)===dow;
+              });
+              if(!jourMatch) return true;
+              const stJM=jourMatch.statut||getStatutPrevu(c,jourMatch);
+              return ['conges-acq','conges-anticipe','conges-non','ferie'].includes(stJM);
+            });
+          }
 
           jours.forEach(j=>{
             const statutJ=j.statut||getStatutPrevu(c,j);
+            const cocheCgMin=!!(c.planning&&c.planning[j.date]&&c.planning[j.date].coche);
+            const gateMinOk=!(c.th==='plan'&&c.planType==='min')||semaineCompleteCgMin||cocheCgMin;
             if(['prevu','travaille','abs-partielle','abs-rem'].includes(statutJ)){
               joursNormaux++;
             } else if(statutJ==='non-prevu'&&j.heureDebReel){
@@ -6137,7 +6171,7 @@ function calcCongesContrat(c){
                 const joursMinCg=sourceCg.joursMin;
                 jourEstPossibleCg=joursMinCg?!!joursMinCg[jourIdxCg]:true;
               }
-              if(jourEstPossibleCg) joursConges16++;
+              if(jourEstPossibleCg&&gateMinOk) joursConges16++;
             } else if(statutJ==='ferie'){
               // Compte pour 1 seulement si le jour est habituellement travaillé
               const jourIdx=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])).getDay();
@@ -6160,8 +6194,8 @@ function calcCongesContrat(c){
                   estTravaille=sourceJF.semTypes.some(st=>st.jours&&st.jours[jourIdxISO]);
                 }
               }
-              else if(c.th==='plan'&&c.planType==='min'&&sourceJF.joursFixe) estTravaille=!!(sourceJF.joursFixe[jourIdxISO]);
-              if(estTravaille) joursNormaux++;
+              else if(c.th==='plan'&&c.planType==='min'&&sourceJF.joursMin) estTravaille=!!(sourceJF.joursMin[jourIdxISO]);
+              if(estTravaille&&gateMinOk) joursNormaux++;
             }
             // abs-non, conges-am, repos, non-prevu, hors-contrat → ignorés
           });
