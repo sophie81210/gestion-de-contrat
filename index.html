@@ -7526,13 +7526,78 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // Reconstruire les heures théoriques par semaine
     const hThParSem={};
     const hSeuilParSem={};
-    fiche.jours.forEach(j=>{
-      const sk=getSemISO(j.date);
-      if(!hThParSem[sk]) hThParSem[sk]=0;
-      if(j.heureDebPrev&&j.heureFinPrev){
-        hThParSem[sk]+=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
-      }
-    });
+    const estPlanMinVarTh=sourceActif.th==='plan'&&(sourceActif.planType==='min'||sourceActif.planType==='var');
+    if(estPlanMinVarTh){
+      const semainesTraiteesTh=new Set();
+      fiche.jours.forEach(j=>{
+        const sk=getSemISO(j.date);
+        const skAn=getSemAnnee(j.date);
+        const semUniqueTh=skAn+'-'+sk;
+        if(!hThParSem[sk]) hThParSem[sk]=0;
+        if(semainesTraiteesTh.has(semUniqueTh)) return;
+        semainesTraiteesTh.add(semUniqueTh);
+        const dCurTh=new Date(j.date);
+        const agendasTh=sourceActif.agendas||c.agendas||[];
+        const agTh=agendasTh.find(a=>new Date(a.dateDebut)<=dCurTh&&new Date(a.dateFin)>=dCurTh);
+        const agKeyTh=getKeyAgenda(sk,skAn);
+        const typeSemTh2=agTh&&agTh.semaines&&agTh.semaines[agKeyTh];
+        if(!typeSemTh2||typeSemTh2==='off') return; // rien à ajouter (hors contrat entier ou off)
+        let volHTh=0, joursPatternTh=null;
+        if(sourceActif.planType==='var'&&sourceActif.planVar){
+          const volTh=sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemTh2);
+          volHTh=volTh?volTh.h:0;
+          joursPatternTh=volTh?volTh.jours:null;
+        } else if(sourceActif.planType==='min'){
+          volHTh=sourceActif.hMin||0;
+          joursPatternTh=sourceActif.joursMin;
+        }
+        if(!(volHTh>0&&joursPatternTh)) return;
+        // Semaine à cheval sur début/fin de contrat (ou avenant) : quota disponible, même mécanisme
+        // que sur les feuilles de présence et le planning
+        const lundiSemTh=new Date(dCurTh); lundiSemTh.setDate(dCurTh.getDate()-(dCurTh.getDay()||7)+1);
+        const dimSemTh=new Date(lundiSemTh); dimSemTh.setDate(lundiSemTh.getDate()+6);
+        const fmtSemTh=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
+        const lundiSemStrTh=fmtSemTh(lundiSemTh), dimSemStrTh=fmtSemTh(dimSemTh);
+        const dateDebCTh=c.dateDeb;
+        const dateAvenantCTh=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant)?.dateAvenant;
+        const dateRuptureCTh=c.rupture&&c.rupture.confirmee?c.rupture.dateFinContrat:null;
+        let limiteDebutTh=null, limiteFinTh=null;
+        if(dateDebCTh&&lundiSemStrTh<dateDebCTh&&dimSemStrTh>=dateDebCTh) limiteDebutTh=dateDebCTh;
+        else if(dateAvenantCTh&&lundiSemStrTh<=dateAvenantCTh&&dimSemStrTh>=dateAvenantCTh) limiteDebutTh=dateAvenantCTh;
+        if(dateRuptureCTh&&lundiSemStrTh<=dateRuptureCTh&&dimSemStrTh>dateRuptureCTh) limiteFinTh=dateRuptureCTh;
+        if(limiteDebutTh||limiteFinTh){
+          let joursPossiblesUnionTh, hSemMoyTh;
+          if(sourceActif.planType==='var'&&sourceActif.planVar){
+            const totJTh=sourceActif.planVar.reduce((t,v)=>t+(v.h||0)*(v.s||0),0);
+            const totSTh=sourceActif.planVar.reduce((t,v)=>t+(v.s||0),0);
+            hSemMoyTh=totSTh>0?totJTh/totSTh:0;
+            joursPossiblesUnionTh=Array.from({length:7},(_,idx)=>sourceActif.planVar.some(v=>v.jours&&v.jours[idx]));
+          } else {
+            hSemMoyTh=volHTh;
+            joursPossiblesUnionTh=joursPatternTh;
+          }
+          const nbJoursPossiblesUnionTh=joursPossiblesUnionTh.filter(Boolean).length||1;
+          let joursHorsContratTh=0;
+          for(let dd3=0;dd3<7;dd3++){
+            const jd=new Date(lundiSemTh); jd.setDate(lundiSemTh.getDate()+dd3);
+            const jdStr=fmtSemTh(jd);
+            if(joursPossiblesUnionTh[dd3]&&limiteDebutTh&&jdStr<limiteDebutTh) joursHorsContratTh++;
+            else if(joursPossiblesUnionTh[dd3]&&limiteFinTh&&jdStr>limiteFinTh) joursHorsContratTh++;
+          }
+          const hAbsHorsContratSemTh=joursHorsContratTh*(hSemMoyTh/nbJoursPossiblesUnionTh);
+          volHTh=Math.max(0,volHTh-hAbsHorsContratSemTh);
+        }
+        hThParSem[sk]=volHTh;
+      });
+    } else {
+      fiche.jours.forEach(j=>{
+        const sk=getSemISO(j.date);
+        if(!hThParSem[sk]) hThParSem[sk]=0;
+        if(j.heureDebPrev&&j.heureFinPrev){
+          hThParSem[sk]+=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
+        }
+      });
+    }
     // Construction du seuil hebdo pour le décompte des HS ponctuelles :
     // comptent (au réel si dispo, sinon prévu) : travaillé, abs-partielle, prévu, conges-acq, conges-anticipe
     // ne comptent pas : férié chômé, absences non rémunérées, tous les decompte-* (jours non prévus)
