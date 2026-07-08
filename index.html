@@ -8349,9 +8349,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         // Règle 3 : jour 'travaille' → désigné explicitement par l'utilisateur comme jour en plus
         // (non prévu au contrat, ou quota jours max déjà atteint cette semaine-là). Pour plan var/min :
         // le volume est payé même si rien n'est pointé au planning (cf. tous les autres calculs du
-        // jour), donc si le volume de la semaine dépasse déjà 45h, ce jour ajouté par-dessus part
-        // entièrement en heures sup ponctuelles, pas en heures complémentaires — les heures déjà
-        // prévues (le volume lui-même) ne sont jamais concernées, seul l'ajout l'est.
+        // jour) — si le volume de la semaine dépasse déjà 45h, ce jour ajouté par-dessus ne doit pas
+        // compter en heures complémentaires (compJour=0) ; le mécanisme hebdomadaire plus loin
+        // (seuilSup, qui passe à 45h fixe dès qu'une semaine contient un jour "travaillé") se charge
+        // de le comptabiliser en heures sup ponctuelles à sa place, sans double comptage.
         if(j.statut==='travaille'){
           const hJourTrav=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
           if(hVolContrat>45){
@@ -8750,13 +8751,18 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     }
   });
   // Jours "travaillé" (non prévus) ajoutés sur une semaine dont le volume dépasse déjà 45h (plan
-  // var/min) : entièrement en heures sup ponctuelles, jamais recomptés par le mécanisme ci-dessus
-  // (qui ne voit que hParSemaine/hPrevuParSemaine, pas la distinction jour par jour)
+  // var/min) : entièrement en heures sup ponctuelles, mais seulement la part qui n'est pas déjà
+  // comptée par le mécanisme ci-dessus (qui compare déjà le réel total de la semaine au volume — si le
+  // volume était atteint/dépassé avant l'ajout, ce mécanisme capte déjà tout ou partie de l'ajout).
   Object.entries(window._hTravailleVersHS||{}).forEach(([semKey,h])=>{
     if(h>0){
-      hSup+=h;
-      hSupNormal+=h;
-      hSupParSemaine[semKey]=(hSupParSemaine[semKey]||0)+h;
+      const dejaCompte=hSupParSemaine[semKey]||0;
+      const aAjouter=Math.max(0,h-dejaCompte);
+      if(aAjouter>0){
+        hSup+=aAjouter;
+        hSupNormal+=aAjouter;
+        hSupParSemaine[semKey]=dejaCompte+aAjouter;
+      }
     }
   });
   // hCompMaj = somme par semaine de max(0, hCompSem - hSupParSemaine[semKey])
