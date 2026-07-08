@@ -8154,6 +8154,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       (f.jours||[]).forEach(j=>{if(j.statut==='abs-enfant') nbAbsEnfantAnneeCont++;});
     }
   });
+  window._hTravailleVersHS={};
   fiche.jours.forEach(j=>{
     let statut=j.statut||getStatutPrevu(c,j);
     // Règle paiement férié : si encadré par arret sur jour prévu travaillé
@@ -8347,18 +8348,32 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           if(finReel>finPrev) depassJour+=finReel-finPrev;
         }
         // Règle 3 : jour 'travaille' → désigné explicitement par l'utilisateur comme jour en plus
-        // (non prévu au contrat, ou quota jours max déjà atteint cette semaine-là) → toujours payé
-        // intégralement, pas de calcul au prorata (celui-ci sert uniquement aux jours 'prevu' dont la
-        // saisie globale de la semaine dépasse le volume, sans jour désigné)
+        // (non prévu au contrat, ou quota jours max déjà atteint cette semaine-là). Pour plan var/min :
+        // le volume est payé même si rien n'est pointé au planning (cf. tous les autres calculs du
+        // jour), donc si le volume de la semaine dépasse déjà 45h, ce jour ajouté par-dessus part
+        // entièrement en heures sup ponctuelles, pas en heures complémentaires — les heures déjà
+        // prévues (le volume lui-même) ne sont jamais concernées, seul l'ajout l'est.
         if(j.statut==='travaille'){
-          compJour=(toM(j.heureFinReel)-toM(j.heureDebReel));
+          const hJourTrav=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
+          if(hVolContrat>45){
+            compJour=0;
+            if(!window._hTravailleVersHS) window._hTravailleVersHS={};
+            window._hTravailleVersHS[semKeyJ]=(window._hTravailleVersHS[semKeyJ]||0)+hJourTrav;
+          } else {
+            compJour=hJourTrav*60;
+          }
         } else {
+        const depassJourVersHS=(hVolContrat>45)?depassJour:0;
+        if(depassJourVersHS>0){
+          if(!window._hTravailleVersHS) window._hTravailleVersHS={};
+          window._hTravailleVersHS[semKeyJ]=(window._hTravailleVersHS[semKeyJ]||0)+depassJourVersHS/60;
+        }
         compJour=(depassHebdo>0?(()=>{
           const hPrevJour=j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:0;
           const hPrevSaisieSemMois=hPrevSaisieSem-(hPrevSaisieParSemainePrecMois[semKeyJ]||0);
           const ratioJour=hPrevSaisieSemMois>0?hPrevJour/hPrevSaisieSemMois:0;
           return Math.max(0,hPrevSaisieSem-hAbsS-hVolContrat)*ratioJour*60;
-        })():0)+depassJour;
+        })():0)+(depassJour-depassJourVersHS);
         }
       } else if(debPrev!==null&&finPrev!==null&&!isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))){
         if(debReel<debPrev) compJour+=debPrev-debReel;
@@ -8740,6 +8755,16 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       hSupParSemaine[semKey]=(hSupParSemaine[semKey]||0)+hSupSem;
     }
   });
+  // Jours "travaillé" (non prévus) ajoutés sur une semaine dont le volume dépasse déjà 45h (plan
+  // var/min) : entièrement en heures sup ponctuelles, jamais recomptés par le mécanisme ci-dessus
+  // (qui ne voit que hParSemaine/hPrevuParSemaine, pas la distinction jour par jour)
+  Object.entries(window._hTravailleVersHS||{}).forEach(([semKey,h])=>{
+    if(h>0){
+      hSup+=h;
+      hSupNormal+=h;
+      hSupParSemaine[semKey]=(hSupParSemaine[semKey]||0)+h;
+    }
+  });
   // hCompMaj = somme par semaine de max(0, hCompSem - hSupParSemaine[semKey])
   hCompMaj=Object.keys(hCompParSemaine).reduce((total,semKey)=>{
     const hCompSem=hCompParSemaine[semKey]||0;
@@ -8810,7 +8835,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const montantMaj1erMai=parseFloat((hMaj1erMai*maj1erMaiPct*txNet).toFixed(2));
 
   // ── Exonération de charges (11,31% sur brut des heures hors férié prévu, y compris HS mensualisées) ──
-  const hExoBrut=(hComp*(1+majCompPct)+hSup*(1+majSup)+hMensuMaj*(1+majSup)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))*txBrut;
+  // hMensuMaj réduit de l'absence éventuellement déduite sur la part HS (hAbsDeduitHS), pour que
+  // l'exonération reflète les heures sup réellement payées ce mois, pas le volume contractuel brut
+  const hMensuMajExo=Math.max(0,hMensuMaj-(typeof hAbsDeduitHS!=='undefined'?hAbsDeduitHS:0));
+  const hExoBrut=(hComp*(1+majCompPct)+hSup*(1+majSup)+hMensuMajExo*(1+majSup)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))*txBrut;
   const montantExo=parseFloat((hExoBrut*0.1131).toFixed(2));
 
   // ── Totaux comp/sup ──
