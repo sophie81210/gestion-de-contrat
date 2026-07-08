@@ -729,6 +729,20 @@ function eclaircir(hex,pct){
 }
 // Parse une date "AAAA-MM-JJ" en heure locale (jamais new Date(chaîne), qui s'interprète en UTC et peut
 // décaler d'un jour selon le fuseau horaire de l'utilisateur)
+// Nombre réel de semaines actives d'un contrat/avenant, dérivé des types saisis (semTypes ou planVar) —
+// jamais un nombre par défaut (46/52...) : "contrat 46" est un type de contrat, pas un nombre de
+// semaines fixe. Ne retombe sur nbSem/tc que si aucun type n'est encore saisi (contrat en cours d'édition).
+function getNbSemReel(source, c){
+  if(source.th==='sem'&&source.semTypes&&source.semTypes.length){
+    const tot=source.semTypes.reduce((t,st)=>t+parseFloat(st.nb||0),0);
+    if(tot>0) return tot;
+  }
+  if(source.th==='plan'&&source.planType==='var'&&source.planVar&&source.planVar.length){
+    const tot=source.planVar.reduce((t,v)=>t+parseFloat(v.s||0),0);
+    if(tot>0) return tot;
+  }
+  return source.nbSem||(c&&c.nbSem)||((source.tc==='52'||(c&&c.tc==='52'))?52:46);
+}
 function parseDateLoc(str){
   const [py,pm,pd]=str.split('-').map(Number);
   return new Date(py,pm-1,pd);
@@ -1756,13 +1770,13 @@ function buildFicheContenu(source, c){
       return source.hMensu.toFixed(2)+'h';
     })()],
     ['Heures hebdo moyennes', (()=>{
-      const nbSem=source.tc==='52'?52:parseFloat(source.nbSem||46);
+      const nbSem=getNbSemReel(source,c);
       if(!source.hMensu||!nbSem) return '—';
       const hHebdo=source.hMensu*12/nbSem;
       return hHebdo.toFixed(2)+'h';
     })()],
     ['Jours mensuels moyens', (()=>{
-      const nbSem=source.tc==='52'?52:parseFloat(source.nbSem||46);
+      const nbSem=getNbSemReel(source,c);
       let joursAnn=0;
       if(source.th==='fixe'&&source.joursFixe){
         const jSem=(source.joursFixe||[]).filter(Boolean).length;
@@ -2236,7 +2250,7 @@ function renderDetTab(id,tab){
               const agKey=getKeyAgenda(semKey,semAnnee);
               const typeSem=ag&&ag.semaines&&ag.semaines[agKey];
               const hMensuSource=source.hMensu||0;
-              const nbSemSource=source.nbSem||46;
+              const nbSemSource=getNbSemReel(source,c);
               const estPlanMinVarTh=source.th==='plan'&&(source.planType==='var'||source.planType==='min');
 
               if(typeSem==='off'){
@@ -3494,7 +3508,7 @@ function ouvrirFiche(contratId,key){
         const estPossibleAff2=srcAff2.th==='sem'&&srcAff2.semTypes&&srcAff2.semTypes.some(st=>st.jours&&st.jours[jourIdxAff2]?.d);
         if(estPossibleAff2){
           const nbJPossAff2=Array.from({length:7},(_,i)=>i).filter(i=>i!==(srcAff2.reposHebdo||c.reposHebdo||0)&&srcAff2.semTypes.some(st=>st.jours&&st.jours[i===0?6:i-1]?.d)).length||1;
-          const hSemMoyAff2=(srcAff2.hMensu||0)*12/(srcAff2.nbSem||46);
+          const hSemMoyAff2=(srcAff2.hMensu||0)*12/getNbSemReel(srcAff2,c);
           const hPrevAff2=hSemMoyAff2/nbJPossAff2;
           if(hPrevAff2>0) hDeduit='−'+fmtH(Math.round(hPrevAff2*60));
         }
@@ -3524,7 +3538,7 @@ function ouvrirFiche(contratId,key){
         const srcAff=getVersionActive(c,new Date(j.date));
         if(srcAff.th==='sem'&&srcAff.semTypes){
           const nbJPossAff=Array.from({length:7},(_,i)=>i).filter(i=>i!==(srcAff.reposHebdo||c.reposHebdo||0)&&srcAff.semTypes.some(st=>st.jours&&st.jours[i===0?6:i-1]?.d)).length||1;
-          const hSemMoyAff=(srcAff.hMensu||0)*12/(srcAff.nbSem||46);
+          const hSemMoyAff=(srcAff.hMensu||0)*12/getNbSemReel(srcAff,c);
           const hPrevAff=hSemMoyAff/nbJPossAff;
           if(hPrevAff>0) hDeduit='−'+fmtH(Math.round(hPrevAff*60));
         } else {
@@ -4803,7 +4817,7 @@ function calcSoldeToutCompte(c, key){
       const regBrut=parseFloat((reg.diff*txBrut).toFixed(2));
       const regNet=parseFloat((regBrut*coefNet).toFixed(2));
       const hMensuSrc=source.hMensu||0;
-      const nbJoursSrc=parseFloat(((source.nbSem||46)*hMensuSrc/12/(hMensuSrc/((source.joursFixe||[]).filter(j=>j).length||5)||1)).toFixed(2));
+      const nbJoursSrc=parseFloat((getNbSemReel(source,c)*hMensuSrc/12/(hMensuSrc/((source.joursFixe||[]).filter(j=>j).length||5)||1)).toFixed(2));
       const hParJour=hMensuSrc>0&&nbJoursSrc>0?hMensuSrc/nbJoursSrc:0;
       const hRegul=txBrut>0?regBrut/txBrut:0;
       const joursRegul=hParJour>0?parseFloat((hRegul/hParJour).toFixed(1)):0;
@@ -6549,7 +6563,7 @@ function getHJourFerie(c, sourceActif, dateStr, agendaMois, estSemConges){
       totalJAnnuel+=(v.j||0)*(v.s||0);
     });
   } else if(planType==='min'){
-    const nbSem=sourceActif.nbSem||c.nbSem||46;
+    const nbSem=getNbSemReel(sourceActif,c);
     totalHAnnuel=(sourceActif.hMin||0)*nbSem;
     totalJAnnuel=(sourceActif.jMaxMin||1)*nbSem;
   }
@@ -6609,22 +6623,24 @@ function getHJourFerie(c, sourceActif, dateStr, agendaMois, estSemConges){
 }
 
 function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriquesVues, joursHCExclus){
-  // Calcule les heures théoriques pour un contrat plan sem 46 sem
+  // Calcule les heures théoriques pour un contrat plan sem
   // Logique : par semaine selon le type dans l'agenda. Semaines off = hSemMoy. Décompte = hSemMoy/6.
   const semTypes=sourceActif.semTypes||[];
-  const nbSemActif=sourceActif.nbSem||c.nbSem||46;
   const hMensuTh=sourceActif.hMensu||c.hMensu||0;
 
-  // Calculer hMoyJour et hSemMoy depuis les semTypes
-  let totalHAnnuel=0, totalJAnnuel=0;
+  // Calculer hMoyJour, hSemMoy et le nombre réel de semaines actives depuis les semTypes eux-mêmes —
+  // jamais un nombre "par défaut" (46/52...) : "contrat 46" est un type de contrat, pas un nombre de
+  // semaines fixe (un 46 peut tout à fait n'avoir que 20 ou 26 semaines actives selon les types saisis)
+  let totalHAnnuel=0, totalJAnnuel=0, nbSemActif=0;
   semTypes.forEach(st=>{
     const hSem=(st.jours||[]).reduce((s,j)=>j&&j.d&&j.f?s+(toM(j.f)-toM(j.d))/60:s,0);
     const jSem=(st.jours||[]).filter(j=>j&&j.d).length;
     const nbFois=parseFloat(st.nb||0);
     totalHAnnuel+=hSem*nbFois;
     totalJAnnuel+=jSem*nbFois;
+    nbSemActif+=nbFois;
   });
-  if(totalHAnnuel<=0||totalJAnnuel<=0) return hMensuTh;
+  if(totalHAnnuel<=0||totalJAnnuel<=0||nbSemActif<=0) return hMensuTh;
 
   const hMoyJour=totalHAnnuel/totalJAnnuel;
   const hSemMoyPS=totalHAnnuel/nbSemActif;
@@ -6833,7 +6849,7 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
   const joursMinTh=sourceActif.joursMin||c.joursMin||[];
   const jMaxMinTh=sourceActif.jMaxMin||c.jMaxMin||4;
   const hMinTh=sourceActif.hMin||c.hMin||0;
-  const nbSemActif=sourceActif.nbSem||c.nbSem||46;
+  const nbSemActif=getNbSemReel(sourceActif,c);
   const hMensuTh=sourceActif.hMensu||c.hMensu||0;
   const hSemMoyTh=hMensuTh*12/nbSemActif;
 
@@ -6927,7 +6943,7 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
   // Calcule les heures théoriques pour un contrat plan var 46 sem
   // Logique : par semaine, selon le volume de l'agenda. Semaines off = moyenne. Décompte congés = hSemMoy/6
   const planVarTh=sourceActif.planVar||c.planVar||[];
-  const nbSemActif=planVarTh.reduce((t,v)=>t+(v.s||0),0)||sourceActif.nbSem||c.nbSem||46;
+  const nbSemActif=planVarTh.reduce((t,v)=>t+(v.s||0),0)||getNbSemReel(sourceActif,c);
 
   // hSemMoy = moyenne pondérée des volumes
   const hSemMoyPV=planVarTh.length>0
@@ -7070,9 +7086,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const dateRefVersion=dateRefStr?new Date(dateRefStr):new Date(fiche.annee,fiche.mois+1,0);
   const sourceActif=getVersionActive(c, dateRefVersion);
   // Calculer le vrai nombre de semaines pour plan var (somme des s de chaque volume)
-  const nbSemActif=sourceActif.planType==='var'&&sourceActif.planVar
-    ?sourceActif.planVar.reduce((t,v)=>t+(v.s||0),0)||sourceActif.nbSem||46
-    :sourceActif.nbSem||c.nbSem||(sourceActif.tc==='52'||c.tc==='52'?52:46);
+  const nbSemActif=getNbSemReel(sourceActif,c);
   const debutMois=new Date(fiche.annee,fiche.mois,1);
   const finMois=new Date(fiche.annee,fiche.mois+1,0);
   const avenantDuMois=c.avenants&&c.avenants.find(av=>{
@@ -8034,7 +8048,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         totalHAnnuelAbs+=hSemAbs*nbFoisAbs;
         totalJAnnuelAbs+=jSemAbs*nbFoisAbs;
       });
-      const nbSemActifAbs=sourceActif.nbSem||c.nbSem||46;
+      const nbSemActifAbs=getNbSemReel(sourceActif,c);
       hSemMoyAbsPS=totalJAnnuelAbs>0?(totalHAnnuelAbs/nbSemActifAbs):0;
       const joursPossiblesAbsPS=Array.from({length:7},(_,idx)=>semTypesAbs.some(st=>st.jours&&st.jours[idx]&&st.jours[idx].d));
       nbJoursPossiblesAbsPS=joursPossiblesAbsPS.filter(Boolean).length||1;
@@ -8456,7 +8470,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           hPrev=jf&&jf.d&&jf.f?(toM(jf.f)-toM(jf.d))/60:0;
         } else if(sourceActif.th==='sem'&&sourceActif.semTypes){
           const nbJPoss=Array.from({length:7},(_,i)=>i).filter(i=>i!==(sourceActif.reposHebdo||c.reposHebdo||0)&&sourceActif.semTypes.some(st=>st.jours&&st.jours[i===0?6:i-1]?.d)).length||1;
-          const hSemMoyOff=(sourceActif.hMensu||0)*12/(sourceActif.nbSem||46);
+          const hSemMoyOff=(sourceActif.hMensu||0)*12/getNbSemReel(sourceActif,c);
           hPrev=hSemMoyOff/nbJPoss;
         } else if(sourceActif.th==='plan'){
           if(sourceActif.planType==='min'){
@@ -8563,7 +8577,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
               totalHAnnuelHC+=hSemHC*nbFoisHC;
               totalJAnnuelHC+=jSemHC*nbFoisHC;
             });
-            const nbSemActifHC=srcHCsem.nbSem||c.nbSem||46;
+            const nbSemActifHC=getNbSemReel(srcHCsem,c);
             const hSemMoyHC=totalJAnnuelHC>0?(totalHAnnuelHC/nbSemActifHC):0;
             const joursPossiblesHC=Array.from({length:7},(_,idx)=>semTypesHC.some(st=>st.jours&&st.jours[idx]&&st.jours[idx].d));
             const nbJoursPossiblesHC=joursPossiblesHC.filter(Boolean).length||1;
@@ -8823,7 +8837,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           indemCongeNbJours=nbAcqMois;
           if(fiche.mois===4&&c.tc!=='52'){
             // Mai pour 46 sem : paiement en maintien de salaire (taux mai × hSemMoy/6)
-            const nbSemContrat=parseFloat(sourceActif.nbSem||46);
+            const nbSemContrat=getNbSemReel(sourceActif,c);
             const hSemMoy=parseFloat(hMensu||0)*12/nbSemContrat;
             const hJourMai=hSemMoy/6;
             indemCongeMois=parseFloat((hJourMai*txNet*nbAcqMois).toFixed(2));
@@ -10170,7 +10184,7 @@ function ouvrirModifAgenda(cid,agid){
 if(source.tc!=='52'&&source.th!=='sem'&&!(source.th==='plan'&&source.planType==='var')){
     const compteTrav=Object.values(ag.semaines||{}).filter(v=>v==='on').length;
     const compteOff=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
-    const nbSemAttendu=source.nbSem||46;
+    const nbSemAttendu=getNbSemReel(source,c);
     pHtml+=`<div class="pinceau-btn ${pinceau==='on'?'actif':''}" style="background:${eclaircir('#6B8060',0.55)};color:#4E5F46;--brd:#4E5F46" onclick="setAgendaPinceau(${cid},${agid},'on')">✅ Travaillée <strong>(${compteTrav}/${nbSemAttendu})</strong></div>`;
     const maxOff=Math.max(0,47-nbSemAttendu);
     const depasse=false; // limite off supprimée
@@ -10184,7 +10198,7 @@ if(source.tc!=='52'&&source.th!=='sem'&&!(source.th==='plan'&&source.planType===
     });
     if(source.tc!=='52'){
       const compteOffS=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
-      const nbSemSrc=source.nbSem||46;
+      const nbSemSrc=getNbSemReel(source,c);
       const maxOffS=Math.max(0,47-nbSemSrc);
       const depasseS=false; // limite off supprimée
       pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:${eclaircir('#C99B9B',0.45)};color:#A87878;--brd:#A87878" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong style="color:${depasseS?'var(--al)':'inherit'}">(${compteOffS}/${maxOffS}${depasseS?' ⚠':''})</strong></div>`;
@@ -10193,7 +10207,7 @@ if(source.tc!=='52'&&source.th!=='sem'&&!(source.th==='plan'&&source.planType===
   if(source.th==='plan'&&source.planType==='fix'){
     const compteTrav=Object.values(ag.semaines||{}).filter(v=>v==='on').length;
     const compteOff=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
-    const attenduesTravFix=source.nbSem||46;
+    const attenduesTravFix=getNbSemReel(source,c);
     pHtml+=`<div class="pinceau-btn ${pinceau==='on'?'actif':''}" style="background:${eclaircir('#6B8060',0.55)};color:#4E5F46;--brd:#4E5F46" onclick="setAgendaPinceau(${cid},${agid},'on')">✅ Travaillée <strong>(${compteTrav})</strong></div>`;
     const maxOff=Math.max(0,47-nbSemAttendu);
     const depasse=false; // limite off supprimée
@@ -10208,7 +10222,7 @@ if(source.tc!=='52'&&source.th!=='sem'&&!(source.th==='plan'&&source.planType===
     });
    if(source.tc!=='52'){
       const compteOffS=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
-      const nbSemSrc=source.nbSem||46;
+      const nbSemSrc=getNbSemReel(source,c);
       const maxOffS=Math.max(0,47-nbSemSrc);
       const depasseS=false; // limite off supprimée
       pHtml+=`<div class="pinceau-btn ${pinceau==='off'?'actif':''}" style="background:${eclaircir('#C99B9B',0.45)};color:#A87878;--brd:#A87878" onclick="setAgendaPinceau(${cid},${agid},'off')">🏢 Absence employeur <strong style="color:${depasseS?'var(--al)':'inherit'}">(${compteOffS}/${maxOffS}${depasseS?' ⚠':''})</strong></div>`;
@@ -10582,7 +10596,7 @@ function validerModifAgenda(cid,agid){
   }
   // Bloquer si trop de semaines off
   const compteOff=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
-  const nbSemSrc=source.nbSem||46;
+  const nbSemSrc=getNbSemReel(source,c);
   // Limite semaines off supprimée
 
   toast('Agenda enregistré ✓');
@@ -11230,7 +11244,7 @@ function calcSoldeConges46(c){
   const totalBrutDepuisJuin=calcBrutTotal(c,dateJuin,dateSit);
   const dixiemeEnCours=parseFloat((totalBrutDepuisJuin*0.1).toFixed(2));
   const sourceActuelle=getVersionActive(c,dateSit);
-  const hHebdo=(sourceActuelle.hMensu||0)*12/(sourceActuelle.nbSem||46);
+  const hHebdo=(sourceActuelle.hMensu||0)*12/getNbSemReel(sourceActuelle,c);
   const txBrut=sourceActuelle.txBrut||0;
   const maintienEnCours=parseFloat((joursEnCours*hHebdo/6*txBrut).toFixed(2));
   montantEnCoursBrut=Math.max(dixiemeEnCours,maintienEnCours);
@@ -12374,7 +12388,7 @@ function calcIndemniteConges(c, anneeRef){
   // Moyenne hebdo
   let hHebdo=0;
   if(sourceM.th==='fixe'||sourceM.th==='sem'){
-    hHebdo=parseFloat(((sourceM.hMensu||c.hMensu)*12/(sourceM.nbSem||c.nbSem||46)).toFixed(2));
+    hHebdo=parseFloat(((sourceM.hMensu||c.hMensu)*12/getNbSemReel(sourceM,c)).toFixed(2));
   } else if(sourceM.th==='plan'&&sourceM.planType==='var'&&sourceM.planVar){
     const totH=sourceM.planVar.reduce((t,v)=>t+(v.h||0)*(v.s||0),0);
     const totS=sourceM.planVar.reduce((t,v)=>t+(v.s||0),0);
