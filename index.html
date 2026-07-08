@@ -6659,7 +6659,6 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
   // Parcourir toutes les semaines du mois
   const semaines=new Set(fiche.jours.map(j=>getSemISO(j.date)+'-'+getSemAnnee(j.date)));
   semaines.forEach(semNumAn=>{
-    const hTheoriquesAvant=hTheoriques;
     const [semNumStr, semAn]=semNumAn.split('-');
     const semNum=parseInt(semNumStr);
     const joursDesSem=fiche.jours.filter(jj=>getSemISO(jj.date)===semNum&&getSemAnnee(jj.date)===parseInt(semAn));
@@ -6826,18 +6825,25 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
         hTheoriques+=hSemMoyPS;
       }
     }
-    console.log('DEBUG th planSem semaine',semNumAn,'contribution:',hTheoriques-hTheoriquesAvant,'total cumule:',hTheoriques);
   });
 
   // Jours hors contrat (avant dateDeb, ou hors période d'avenant), un par un : s'il s'agit d'un jour
   // possible (union de tous les types de semaine), moyenne pondérée / jours possibles — comme pour une
   // semaine de congés/off, puisqu'aucun type précis ne peut légalement s'appliquer avant l'embauche.
+  // Ne s'applique QUE si la semaine n'a aucun type connu dans l'agenda (avant le début de l'agenda) —
+  // si la semaine a un type connu (ex. la toute première semaine de l'agenda, à cheval sur le début de
+  // contrat), le bloc "type" ci-dessus l'a déjà traitée intégralement (volume moins les jours prévus
+  // hors contrat), ne pas la recompter ici sous peine de double comptage.
   fiche.jours.forEach(jj=>{
     if(!joursHCExclus||!joursHCExclus.has(jj.date)) return;
+    const semNumJJ=getSemISO(jj.date), semAnJJ=getSemAnnee(jj.date);
+    const agKeyJJ=getKeyAgenda(semNumJJ,semAnJJ);
+    const agPourSemJJ=tousAgendas.find(ag=>parseDateLoc(ag.dateDebut)<=new Date(jj.date.split('-')[0],parseInt(jj.date.split('-')[1])-1,parseInt(jj.date.split('-')[2]))&&parseDateLoc(ag.dateFin)>=new Date(jj.date.split('-')[0],parseInt(jj.date.split('-')[1])-1,parseInt(jj.date.split('-')[2])));
+    const typeSemJJ=agPourSemJJ&&agPourSemJJ.semaines&&agPourSemJJ.semaines[agKeyJJ];
+    if(typeSemJJ) return; // semaine déjà traitée intégralement par le bloc type
     const idx=jj.jourSemaine===0?6:jj.jourSemaine-1;
     if(joursPossiblesSem[idx]){
       hTheoriques+=hSemMoyPS/nbJoursPossiblesSem;
-      console.log('DEBUG th planSem hors-contrat jour',jj.date,'ajout:',hSemMoyPS/nbJoursPossiblesSem,'total cumule:',hTheoriques);
     }
   });
 
