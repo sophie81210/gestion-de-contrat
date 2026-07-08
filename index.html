@@ -7787,9 +7787,25 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       });
     }
     // Construction du seuil hebdo pour le décompte des HS ponctuelles :
-    // comptent (au réel si dispo, sinon prévu) : travaillé, abs-partielle, prévu, conges-acq, conges-anticipe
-    // ne comptent pas : férié chômé, absences non rémunérées, tous les decompte-* (jours non prévus)
+    // Pour plan var/min : le volume est payé (garanti) même si rien n'est pointé au planning, donc il
+    // compte dans le seuil des 45h dès le départ — seul un jour "travaillé" (non prévu, en plus du
+    // volume) s'ajoute par-dessus. Un férié acquis mais non travaillé ne s'ajoute jamais (déjà couvert
+    // par le volume).
+    // Pour fixe/sem : comptent (au réel si dispo, sinon prévu) : travaillé, abs-partielle, prévu,
+    // conges-acq, conges-anticipe ; ne comptent pas : férié chômé, absences non rémunérées, decompte-*
     const statsSeuilCompte=['travaille','abs-partielle','prevu','conges-acq','conges-anticipe'];
+    if(estPlanMinVarTh){
+      Object.keys(hThParSem).forEach(sk=>{ hSeuilParSem[sk]=hThParSem[sk]; });
+      fiche.jours.forEach(j=>{
+        const sk=getSemISO(j.date);
+        if(!hSeuilParSem[sk]) hSeuilParSem[sk]=0;
+        const stJ=j.statut||getStatutPrevu(c,j);
+        if(stJ!=='travaille') return; // seul un jour travaillé (non prévu) s'ajoute par-dessus le volume
+        let hJourSeuil=0;
+        if(j.heureDebReel&&j.heureFinReel) hJourSeuil=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
+        hSeuilParSem[sk]+=hJourSeuil;
+      });
+    } else {
     fiche.jours.forEach(j=>{
       const sk=getSemISO(j.date);
       if(!hSeuilParSem[sk]) hSeuilParSem[sk]=0;
@@ -7800,6 +7816,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       else if(j.heureDebPrev&&j.heureFinPrev) hJourSeuil=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
       hSeuilParSem[sk]+=hJourSeuil;
     });
+    }
     // Pour plan-sem 52 : compléter les semaines à cheval avec les heures totales du type
     if(sourceActif.th==='sem'&&sourceActif.semTypes&&(c.tc==='52'||sourceActif.tc==='52')){
       const tousAgendasCh=[...(sourceActif.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
