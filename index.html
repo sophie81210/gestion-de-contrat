@@ -6756,14 +6756,21 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
         const dimStr=dimSem.getFullYear()+'-'+String(dimSem.getMonth()+1).padStart(2,'0')+'-'+String(dimSem.getDate()).padStart(2,'0');
         const estCheval=lundiStr<debutMoisStr||dimStr>finMoisStr||(c.dateDeb&&lundiStr<c.dateDeb&&dimStr>=c.dateDeb)||((c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&lundiStr<=av.dateAvenant&&dimStr>=av.dateAvenant));
         if(estCheval){
-          // Jours présents dans le mois : travaillés → heures du semType, congés → hSemMoy/6
+          // Jours présents dans le mois : travaillés → heures du semType, congés → hSemMoy/6, hors
+          // contrat → moyenne pondérée / jours possibles (comme pour une semaine sans type connu —
+          // avant l'embauche, aucun horaire précis ne peut légalement s'appliquer, même si le type de
+          // la semaine est par ailleurs connu pour sa portion dans le contrat)
           const statsCongésCheval=['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe','reprise'];
           let hCheval=0;
           for(let i=0;i<7;i++){
             const jourDate=new Date(lundiSem);jourDate.setDate(lundiSem.getDate()+i);
             const jourStr=jourDate.getFullYear()+'-'+String(jourDate.getMonth()+1).padStart(2,'0')+'-'+String(jourDate.getDate()).padStart(2,'0');
             if(jourStr<debutMoisStr||jourStr>finMoisStr) continue;
-            if(joursHCExclus&&joursHCExclus.has(jourStr)) continue;
+            if(joursHCExclus&&joursHCExclus.has(jourStr)){
+              const jourIdxHC2=jourDate.getDay()===0?6:jourDate.getDay()-1;
+              if(joursPossiblesSem[jourIdxHC2]) hCheval+=hSemMoyPS/nbJoursPossiblesSem;
+              continue;
+            }
             // Trouver le jour dans la fiche
             const jourFiche=joursDesSem.find(jj=>jj.date===jourStr);
             const stJour=jourFiche?.statut||getStatutPrevu(sourceActif||c,jourFiche||{date:jourStr,jourSemaine:jourDate.getDay()===0?0:jourDate.getDay()});
@@ -6783,6 +6790,9 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
               hCheval+=hJourReelCh;
             }
           }
+          // Plan sem : le planning est connu (contrairement à plan var/min), donc on déduit simplement
+          // les heures prévues qui tombent hors contrat — pas de notion de "volume/jours possibles"
+          // comme pour plan var, puisqu'ici les heures exactes de chaque jour prévu sont connues.
           hTheoriques+=hCheval;
         } else {
           if(c.tc==='52'||sourceActif.tc==='52'){
