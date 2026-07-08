@@ -3197,9 +3197,19 @@ function ouvrirFiche(contratId,key){
           !(c.dateDeb&&j.date<c.dateDeb)&& // hors contrat : rien à pointer
           j.statut!=='hors-contrat');
       });
+      // Inclure les jours du mois adjacent pour les semaines à cheval, sinon leur score de congés est
+      // sous-évalué (seule la portion de la semaine dans CE mois est comptée) et une vraie semaine de
+      // congés à cheval n'est pas reconnue comme telle, déclenchant l'avertissement à tort
+      const [kyAdj,kmAdj]=key.split('-').map(Number);
+      const moisPrecKeyV=kmAdj===1?(kyAdj-1)+'-12':kyAdj+'-'+String(kmAdj-1).padStart(2,'0');
+      const moisSuivKeyV=kmAdj===12?(kyAdj+1)+'-01':kyAdj+'-'+String(kmAdj+1).padStart(2,'0');
+      const joursAdjacentsV=[
+        ...((c.fiches&&c.fiches[moisPrecKeyV]&&c.fiches[moisPrecKeyV].jours)||[]),
+        ...((c.fiches&&c.fiches[moisSuivKeyV]&&c.fiches[moisSuivKeyV].jours)||[])
+      ];
       const semsCongesScoreV=semDuMoisFiltrees.map(sk=>{
         let nb=0;
-        fiche.jours.forEach(j=>{
+        [...fiche.jours,...joursAdjacentsV].forEach(j=>{
           if(getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))!==sk) return;
           if(S.congesAM) Object.values(S.congesAM).forEach(cgAm=>{if(cgAm?.jours?.[j.date]==='pose') nb++;});
           if(isFerie(j.date,c)) nb++;
@@ -4080,7 +4090,7 @@ function getInfosJourPlanning(c, dateStr){
     jamaisPossible=!planVarSrc.some(v=>v.jours&&v.jours[jourIdx]);
   }
   const aucunType=horsContrat||semaineOff||semaineCongesAM;
-  const couleur=volIdx>=0&&!aucunType?PLAN_COULEURS[volIdx%PLAN_COULEURS.length]:null;
+  const couleur=volIdx>=0&&!aucunType?(src.planType==='min'?{bg:'#6B8060',txt:'#2E3B27',brd:'#4E5F46'}:PLAN_COULEURS[volIdx%PLAN_COULEURS.length]):null;
   const estFerie=isFerie(dateStr, c);
   const mmddF=dateStr.slice(5);
   const feriesTravSrc=src.feriesTravailles||c.feriesTravailles||[];
@@ -4225,7 +4235,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
         contenu=`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);cursor:${(moisVerrouille||casesVerrouillee)?'default':'pointer'}">
           <input type="checkbox" ${dejaCoche?'checked':''} ${(moisVerrouille||casesVerrouillee)?'disabled':''}
             onchange="toggleJourPlanning(${c.id},'${j.date}',this.checked,'${semKeyDom}',true)">
-          <span>Congé (à compter comme jour prévu)</span>
+          <span>Congé (sur jour prévu)</span>
         </label>`;
       } else if(estCongeAM||ferieDansConges){
         contenu=`<span style="color:var(--tx3);font-size:12px">Congés de l’Ass’Mat</span>`;
@@ -4237,7 +4247,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
         contenu=`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);cursor:${(moisVerrouille||casesVerrouillee)?'default':'pointer'}">
           <input type="checkbox" ${dejaCoche?'checked':''} ${(moisVerrouille||casesVerrouillee)?'disabled':''}
             onchange="toggleJourPlanning(${c.id},'${j.date}',this.checked,'${semKeyDom}',true)">
-          <span>Férié (à compter comme jour prévu)</span>
+          <span>Férié (sur jour prévu)</span>
         </label>`;
       } else {
         contenu=`<div style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tx2)">
@@ -5241,13 +5251,9 @@ function buildRecapHtml(recap, solde, regul52, c){
         const _txBrutRL=_txN>0&&coefNR>0?_txN/coefNR:0;
         const _txNMajL=_txBrutRL*(1+_majSupPct)*coefNR;
         const _salMajMensuL=parseFloat((_hMaj*_txNMajL).toFixed(2));
-        const _hNormL=parseFloat(recap.hMensuNorm||recap.hMensu-_hMaj);
-        const _salNormMensuL=parseFloat((_hNormL*_txN).toFixed(2));
-        const _montantAbsNormL=parseFloat(recap.montantAbsences||0)-_montantAbsMajL;
-        const _mensuTotL=_salNormMensuL+_salMajMensuL;
-        const _retenueTotL=_montantAbsNormL+_montantAbsMajL;
-        const _ratioL=_mensuTotL>0?(_mensuTotL-_retenueTotL)/_mensuTotL:1;
-        const _infoMsgHS='Ratio heures sup maintenu :\n('+_mensuTotL.toFixed(2)+' \u20ac \u2212 '+_retenueTotL.toFixed(2)+' \u20ac) / '+_mensuTotL.toFixed(2)+' \u20ac = '+_ratioL.toFixed(4)+'\n\u2192 '+_salMajMensuL.toFixed(2)+' \u20ac \u00d7 '+_ratioL.toFixed(4)+' = '+(_salMajMensuL-_montantAbsMajL).toFixed(2)+' \u20ac vers\u00e9s, soit '+_montantAbsMajL.toFixed(2)+' \u20ac d\u00e9duits';
+        const _hThTotalL=parseFloat(recap.hTheoriques||0);
+        const _hAbsL=parseFloat(recap.hAbs||0);
+        const _infoMsgHS='Heures sup. mensualis\u00e9es d\'absence :\n'+_salMajMensuL.toFixed(2)+' \u20ac / '+_hThTotalL.toFixed(2)+'h th\u00e9oriques \u00d7 '+_hAbsL.toFixed(2)+'h d\'absence = '+_montantAbsMajL.toFixed(2)+' \u20ac d\u00e9duits';
         const _absIdHS='_infoAbsMsgHS_'+(Date.now()+Math.random()).toString(36).slice(2);
         html+=ligneG('<span style="display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:4px"><span>Heures supp. d\'absence</span><button onclick="event.stopPropagation();alerte(document.getElementById(\''+_absIdHS+'\').textContent)" style="background:none;border:1px solid var(--tx3);border-radius:50%;width:16px;height:16px;min-width:16px;font-size:10px;cursor:pointer;color:var(--tx2);padding:0;line-height:1;flex:none">i</button></span><span id="'+_absIdHS+'" hidden>'+_infoMsgHS+'</span>', '\u2212 '+_hAbsDedHSL.toFixed(2)+' h \u2014 '+_montantAbsMajL.toFixed(2)+' \u20ac','','var(--al)');
       }
@@ -5714,10 +5720,18 @@ function validerFiche(contratId,key){
             !(c.dateDeb&&j.date<c.dateDeb)&&
             j.statut!=='hors-contrat');
         });
-        // Semaines violettes = semaines avec beaucoup de congés/fériés
+        // Semaines violettes = semaines avec beaucoup de congés/fériés — inclure le mois adjacent pour
+        // les semaines à cheval, sinon leur score est sous-évalué et le blocage se déclenche à tort
+        const [kyB,kmB]=key.split('-').map(Number);
+        const moisPrecKeyB=kmB===1?(kyB-1)+'-12':kyB+'-'+String(kmB-1).padStart(2,'0');
+        const moisSuivKeyB=kmB===12?(kyB+1)+'-01':kyB+'-'+String(kmB+1).padStart(2,'0');
+        const joursAdjacentsB=[
+          ...((c.fiches&&c.fiches[moisPrecKeyB]&&c.fiches[moisPrecKeyB].jours)||[]),
+          ...((c.fiches&&c.fiches[moisSuivKeyB]&&c.fiches[moisSuivKeyB].jours)||[])
+        ];
         const semsCongesScoreV=semDuMoisFiltrees.map(sk=>{
           let nb=0;
-          c.fiches[key].jours.forEach(j=>{
+          [...c.fiches[key].jours,...joursAdjacentsB].forEach(j=>{
             if(getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))!==sk) return;
             if(S.congesAM) Object.values(S.congesAM).forEach(cgAm=>{if(cgAm?.jours?.[j.date]==='pose') nb++;});
             if(isFerie(j.date,c)) nb++;
