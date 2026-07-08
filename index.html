@@ -8737,13 +8737,45 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     if(hMensuMaj>0){
       // Méthode officielle (texte des impôts / instruction interministérielle DSS/5B/2019/71) :
       // répartition proportionnelle de la retenue entre HN et HS, selon leur part respective dans la
-      // mensualisation totale — jamais de condition de seuil hebdomadaire (45h), la répartition
-      // s'applique systématiquement dès qu'il y a des heures sup mensualisées et de l'absence
+      // mensualisation totale — mais seulement si l'absence touche au moins une semaine dont le volume
+      // structurel (le type de semaine assigné, ou le volume pour plan var/min) dépasse 45h ; sinon
+      // cette absence ne peut pas avoir réduit de la mensu HS (aucune semaine concernée n'en génère),
+      // toute la retenue reste sur la mensu HN
+      const statsAbsPourSeuilHS=['abs-non','abs-am','arret','abs-enfant','abs-partielle','conges-non','decompte-conges','hors-contrat'];
+      const semsAvecAbsHS=new Set();
+      fiche.jours.forEach(j=>{
+        const stAbsHS=j.statut||getStatutPrevu(c,j);
+        if(statsAbsPourSeuilHS.includes(stAbsHS)) semsAvecAbsHS.add(getSemISO(j.date)+'-'+getSemAnnee(j.date));
+      });
+      let semaineHS45Atteinte=false;
+      semsAvecAbsHS.forEach(skHS=>{
+        const [semNumHS,semAnHS]=skHS.split('-');
+        const jourRepHS=fiche.jours.find(j=>(getSemISO(j.date)+'-'+getSemAnnee(j.date))===skHS);
+        if(!jourRepHS) return;
+        const dRepHS=new Date(jourRepHS.date.split('-')[0],parseInt(jourRepHS.date.split('-')[1])-1,parseInt(jourRepHS.date.split('-')[2]));
+        const srcHS=getVersionActive(c,dRepHS);
+        const agsHS=srcHS.agendas||c.agendas||[];
+        const agHS=agsHS.find(ag=>parseDateLoc(ag.dateDebut)<=dRepHS&&parseDateLoc(ag.dateFin)>=dRepHS);
+        const agKeyHS=getKeyAgenda(parseInt(semNumHS),parseInt(semAnHS));
+        const typeHS=agHS&&agHS.semaines&&agHS.semaines[agKeyHS];
+        if(!typeHS||typeHS==='off') return;
+        let hSemTypeHS=0;
+        if(srcHS.th==='sem'&&srcHS.semTypes){
+          const stHS=srcHS.semTypes.find(st=>st.nom===typeHS);
+          if(stHS) hSemTypeHS=(stHS.jours||[]).reduce((s,j)=>j&&j.d&&j.f?s+(toM(j.f)-toM(j.d))/60:s,0);
+        } else if(srcHS.planType==='var'&&srcHS.planVar){
+          const volHS=srcHS.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeHS);
+          if(volHS) hSemTypeHS=volHS.h||0;
+        } else if(srcHS.planType==='min'){
+          hSemTypeHS=srcHS.hMin||0;
+        }
+        if(hSemTypeHS>45) semaineHS45Atteinte=true;
+      });
       const txNetMaj=txBrut*(1+majSup52)*coefNetR;
       const mensuHNBrute=hMensuNorm*txNetPrecis;
       const mensuMajBrute=hMensuMaj*txNetMaj;
-      const montantAbsNorm=parseFloat((mensuHNBrute*hAbs/hTheoriques).toFixed(2));
-      const montantAbsMaj=parseFloat((mensuMajBrute*hAbs/hTheoriques).toFixed(2));
+      const montantAbsNorm=semaineHS45Atteinte?parseFloat((mensuHNBrute*hAbs/hTheoriques).toFixed(2)):parseFloat((mensuHNBrute*hAbs/hTheoriques+mensuMajBrute*hAbs/hTheoriques).toFixed(2));
+      const montantAbsMaj=semaineHS45Atteinte?parseFloat((mensuMajBrute*hAbs/hTheoriques).toFixed(2)):0;
       montantAbsences=parseFloat((montantAbsNorm+montantAbsMaj).toFixed(2));
       montantAbsMajStored=montantAbsMaj;
       hAbsDeduitHS=txNetMaj>0?parseFloat((montantAbsMaj/txNetMaj).toFixed(2)):0;
