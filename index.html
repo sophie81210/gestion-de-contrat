@@ -202,8 +202,10 @@ input[type=time].fi{width:auto;min-width:92px}
 .bd{background:#fff;color:var(--rg);border:1px solid #d4a0a0}.bd:hover{background:var(--rgc)}
 .bpurple{background:#5a3a6b;color:#fff}.bpurple:hover{background:#6d4a80}
 .bsm{padding:6px 13px;font-size:12px}
-.barr{background:var(--vt);color:var(--vtc);padding:11px 22px;border-radius:22px;font-size:14px;font-weight:600;border:none;cursor:pointer;font-family:Calibri,sans-serif}
-.bdep{background:var(--rg);color:var(--rgc);padding:11px 22px;border-radius:22px;font-size:14px;font-weight:600;border:none;cursor:pointer;font-family:Calibri,sans-serif}
+.barr{background:#4E5F46;color:#fff;padding:11px 22px;border-radius:22px;font-size:14px;font-weight:600;border:none;cursor:pointer;font-family:Calibri,sans-serif}
+.bdep{background:#A85F42;color:#fff;padding:11px 22px;border-radius:22px;font-size:14px;font-weight:600;border:none;cursor:pointer;font-family:Calibri,sans-serif}
+.barr.fait{background:#DDEADA;color:#4E5F46;opacity:1}
+.bdep.fait{background:#F4DDD5;color:#A85F42;opacity:1}
 .erow{display:flex;align-items:center;gap:18px;padding:18px 15px;background:#fff;border-radius:var(--r);border:1px solid var(--mb);margin-bottom:14px;flex-wrap:wrap}
 .ename{flex:1;font-weight:600;font-size:15px;min-width:80px;color:var(--m);cursor:pointer}
 .ename:hover{color:var(--m2)}
@@ -1271,15 +1273,13 @@ function renderAuj(){
         <div class="eheure" id="h-${ct.id}">${heureInfo}</div>
       </div>
       <div class="ebtns" style="cursor:pointer" ondblclick="voirC(${ct.id})">
-        <button id="btn-arr-${ct.id}" class="barr"
-          onclick="clicArrivee(${ct.id})"
-          style="${arrFait ? 'opacity:.45;' : ''}">
+        <button id="btn-arr-${ct.id}" class="barr ${arrFait?'fait':''}"
+          onclick="clicArrivee(${ct.id})">
           Arrivée
         </button>
 
-        <button id="btn-dep-${ct.id}" class="bdep"
-          onclick="clicDepart(${ct.id})"
-          style="${depFait ? 'opacity:.45;' : ''}">
+        <button id="btn-dep-${ct.id}" class="bdep ${depFait?'fait':''}"
+          onclick="clicDepart(${ct.id})">
           Départ
         </button>
       </div>
@@ -4038,12 +4038,13 @@ function getInfosJourPlanning(c, dateStr){
   const typeSem=agenda&&agenda.semaines&&agenda.semaines[agKey];
   const horsContrat=!agenda; // aucune donnée d'agenda du tout sur cette période
   const semaineOff=typeSem==='off';
-  let jourPossible=false, jMax=0, volIdx=-1, planVarSrc=[];
+  let jourPossible=false, jMax=0, volIdx=-1, volH=0, planVarSrc=[];
   let semaineCongesAM=false; // type assigné mais ne correspond à aucun volume du contrat = semaine violette
   if(src.planType==='min'){
     jourPossible=!!(src.joursMin&&src.joursMin[jourIdx])&&typeSem&&typeSem!=='off';
     jMax=src.jMaxMin||1;
     volIdx=0;
+    volH=src.hMin||0;
     if(typeSem&&typeSem!=='off') semaineCongesAM=false; // plan min : un seul type, pas de notion de volume nommé
   } else if(src.planType==='var'){
     planVarSrc=src.planVar||[];
@@ -4053,6 +4054,7 @@ function getInfosJourPlanning(c, dateStr){
       jourPossible=!!(planVarSrc[vi].jours&&planVarSrc[vi].jours[jourIdx]);
       jMax=planVarSrc[vi].j||1;
       volIdx=vi;
+      volH=planVarSrc[vi].h||0;
     }
   }
   // Repos hebdomadaire : jour jamais possible dans aucun des volumes/config du contrat (structurel), à distinguer d'un jour
@@ -4069,7 +4071,7 @@ function getInfosJourPlanning(c, dateStr){
   const mmddF=dateStr.slice(5);
   const feriesTravSrc=src.feriesTravailles||c.feriesTravailles||[];
   const ferieChome=estFerie&&!feriesTravSrc.includes(mmddF);
-  return {jourPossible, jMax, volIdx, typeSem, aucunType, horsContrat, semaineOff, semaineCongesAM, jamaisPossible, couleur, estFerie, ferieChome};
+  return {jourPossible, jMax, volIdx, volH, typeSem, aucunType, horsContrat, semaineOff, semaineCongesAM, jamaisPossible, couleur, estFerie, ferieChome};
 }
 
 function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
@@ -4122,7 +4124,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       </div>`;
     }
 
-    let jMaxSem=0, totalSemMin=0, couleurSem=null;
+    let jMaxSem=0, volHSem=0, totalSemMin=0, couleurSem=null;
     // Total de jours cochés sur la semaine ISO complète (jours normaux + fériés cochés comme travaillés),
     // y compris les jours d'un autre mois partageant la même semaine (semaine à cheval) — pour que
     // l'affichage soit cohérent avec le verrouillage réel appliqué par toggleJourPlanning
@@ -4136,7 +4138,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
     }
     const joursHtml=sem.jours.map((j,ji)=>{
       const infos=infosSemaine[ji];
-      if(infos.jMax>jMaxSem) jMaxSem=infos.jMax;
+      if(infos.jMax>jMaxSem){ jMaxSem=infos.jMax; volHSem=infos.volH; }
       if(infos.couleur&&!couleurSem) couleurSem=infos.couleur;
       const nomJourAbr=JOURS_ABR_P[j.dt.getDay()===0?6:j.dt.getDay()-1];
       const numJour=j.dt.getDate();
@@ -4250,7 +4252,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
     return `<div class="pln-sem" data-semkey="${semKeyDom}" data-contrat="${c.id}" data-jmax="${jMaxSem}"
       style="border:1px solid ${brdSem};border-radius:var(--rs);margin-bottom:8px;overflow:hidden">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:${bgSem};font-size:11px;font-weight:600;color:var(--tx2)">
-        <span>Semaine ${getSemISO(sem.jours[0].date)}${jMaxSem?' — maximum '+jMaxSem+' jours':''}</span>
+        <span>Semaine ${getSemISO(sem.jours[0].date)}${jMaxSem?' — maximum '+jMaxSem+' jours':''}${volHSem?' — '+volHSem+'h max':''}</span>
         <span>Total : <span class="pln-total">${fmtH(totalSemMin)}</span></span>
       </div>
       ${joursHtml}
@@ -10192,7 +10194,7 @@ if(source.tc!=='52'&&source.th!=='sem'&&!(source.th==='plan'&&source.planType===
     source.semTypes.forEach((st,i)=>{
       const cc=PLAN_COULEURS[i%PLAN_COULEURS.length];
       const compte=Object.values(ag.semaines||{}).filter(v=>v===st.nom).length;
-      pHtml+=`<div class="pinceau-btn ${pinceau===st.nom?'actif':''}" style="background:${eclaircir(cc.bg,0.45)};color:${cc.brd};--brd:${cc.brd}" onclick="setAgendaPinceau(${cid},${agid},'${st.nom}')">${st.nom} <strong>(${compte}/${st.nb})</strong></div>`;
+      pHtml+=`<div class="pinceau-btn ${pinceau===st.nom?'actif':''}" style="background:${eclaircir(cc.bg,0.45)};color:${cc.txt};--brd:${cc.brd}" onclick="setAgendaPinceau(${cid},${agid},'${st.nom}')">${st.nom} <strong>(${compte}/${st.nb})</strong></div>`;
     });
     if(source.tc!=='52'){
       const compteOffS=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
@@ -10216,7 +10218,7 @@ if(source.tc!=='52'&&source.th!=='sem'&&!(source.th==='plan'&&source.planType===
       const cc=PLAN_COULEURS[i%PLAN_COULEURS.length];
       const nom=v.nom||('Volume '+(i+1));
       const compte=Object.values(ag.semaines||{}).filter(x=>x===nom).length;
-      pHtml+=`<div class="pinceau-btn ${pinceau===nom?'actif':''}" style="background:${eclaircir(cc.bg,0.45)};color:${cc.brd};--brd:${cc.brd}" onclick="setAgendaPinceau(${cid},${agid},'${nom}')">${nom} (${v.h}h) <strong>(${compte}/${v.s})</strong></div>`;
+      pHtml+=`<div class="pinceau-btn ${pinceau===nom?'actif':''}" style="background:${eclaircir(cc.bg,0.45)};color:${cc.txt};--brd:${cc.brd}" onclick="setAgendaPinceau(${cid},${agid},'${nom}')">${nom} (${v.h}h) <strong>(${compte}/${v.s})</strong></div>`;
     });
    if(source.tc!=='52'){
       const compteOffS=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
@@ -10443,10 +10445,10 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
         bg=eclaircir('#C99B9B',0.45);brd='#A87878';txt='#A87878';
       } else if(source.th==='sem'&&source.semTypes){
         const idx=source.semTypes.findIndex(st=>st.nom===val);
-        if(idx>=0){const cc=PLAN_COULEURS[idx%PLAN_COULEURS.length];bg=eclaircir(cc.bg,0.45);brd=cc.brd;txt=cc.brd;}
+        if(idx>=0){const cc=PLAN_COULEURS[idx%PLAN_COULEURS.length];bg=eclaircir(cc.bg,0.45);brd=cc.brd;txt=cc.txt;}
       } else if(source.planType==='var'&&source.planVar){
         const idx=source.planVar.findIndex((v,i)=>(v.nom||'Volume '+(i+1))===val);
-        if(idx>=0){const cc=PLAN_COULEURS[idx%PLAN_COULEURS.length];bg=eclaircir(cc.bg,0.45);brd=cc.brd;txt=cc.brd;}
+        if(idx>=0){const cc=PLAN_COULEURS[idx%PLAN_COULEURS.length];bg=eclaircir(cc.bg,0.45);brd=cc.brd;txt=cc.txt;}
       } else if(val==='on'){
         bg=eclaircir('#6B8060',0.45);brd='#4E5F46';txt='#4E5F46';
       }
