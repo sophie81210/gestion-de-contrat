@@ -7005,6 +7005,19 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
     const volTh=typeSemTh?planVarTh.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemTh):null;
     if(!semJoursCpt[semKey]) semJoursCpt[semKey]=0;
 
+    // Semaine à cheval sur le début de contrat/avenant (certains jours hors contrat cette semaine) :
+    // plan var ne connaît pas le planning précis de la portion hors contrat (contrairement à plan sem),
+    // donc on donne directement le quota disponible (volume moins la moyenne pondérée des jours hors
+    // contrat), jamais le prévu exact du ou des jours restants — sinon double comptage avec la moyenne
+    // hors contrat calculée séparément plus bas
+    const joursHCDeCetteSem=volTh?joursDesSem.filter(jj=>joursHCExclus&&joursHCExclus.has(jj.date)&&joursPossiblesSem[jj.jourSemaine===0?6:jj.jourSemaine-1]).length:0;
+    if(volTh&&joursHCDeCetteSem>0){
+      const quotaDispoPV=Math.max(0,volTh.h-joursHCDeCetteSem*(hSemMoyPV/nbJoursPossiblesSem));
+      hTheoriques+=quotaDispoPV;
+      semJoursCpt[semKey]=volTh.j||1; // semaine considérée complète, plus rien à ajouter par jour
+      return;
+    }
+
     joursDesSem.forEach(jj=>{
       if(joursHCExclus&&joursHCExclus.has(jj.date)) return;
       const jourIdxTh=jj.jourSemaine===0?6:jj.jourSemaine-1;
@@ -7058,10 +7071,14 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
   // Jours hors contrat (avant dateDeb, ou hors période d'avenant), un par un : s'il s'agit d'un jour
   // possible (union de tous les volumes du contrat), moyenne pondérée / jours possibles — comme pour une
   // semaine de congés/off, puisqu'aucun volume précis ne peut légalement s'appliquer avant l'embauche
-  // (le contrat n'existe pas encore). Couvre aussi bien une semaine entièrement hors contrat que la
-  // portion hors contrat d'une semaine à cheval sur le début du contrat/avenant.
+  // (le contrat n'existe pas encore). Ne s'applique que si la semaine n'a aucun volume connu dans
+  // l'agenda — sinon déjà traitée intégralement ci-dessus (quota disponible), ne pas recompter.
   fiche.jours.forEach(jj=>{
     if(!joursHCExclus||!joursHCExclus.has(jj.date)) return;
+    const semNumJJv=getSemISO(jj.date), semAnJJv=getSemAnnee(jj.date);
+    const agKeyJJv=getKeyAgenda(semNumJJv,semAnJJv);
+    const agPourSemJJv=tousAgendas.find(ag=>ag.semaines&&ag.semaines[agKeyJJv]);
+    if(agPourSemJJv&&agPourSemJJv.semaines[agKeyJJv]&&agPourSemJJv.semaines[agKeyJJv]!=='off') return;
     const idx=jj.jourSemaine===0?6:jj.jourSemaine-1;
     if(joursPossiblesSem[idx]) hTheoriques+=hSemMoyPV/nbJoursPossiblesSem;
   });
