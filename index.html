@@ -6176,7 +6176,15 @@ function calcCongesContrat(c){
             }
             const jMaxSemAjustePV=Math.min(jMaxSem,joursPossiblesEnContratPV);
             const compteEffectifPV=(joursConges16PV===0&&absArret===0&&jMaxSemAjustePV>0)?Math.max(jMaxSemAjustePV,joursNormauxPV):joursNormauxPV;
-            const contribNormPV=compteEffectifPV/jMaxSem;
+            // La part au-delà du plancher (jour(s) travaillé(s) en plus du motif) se valorise avec la
+            // moyenne annuelle de jours travaillés/semaine (jours totaux de l'année / nb de semaines
+            // réel du contrat), pas avec jMax — sinon un jMax faible (1 ou 2) fait exploser la valeur
+            // d'un seul jour ajouté (ex. jMax=1 : 2 jours travaillés = 2 semaines d'acquisition d'un coup)
+            const totalJAnnuelPV=(c.planVar||[]).reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
+            const nbSemAnnuelPV=(c.planVar||[]).reduce((t,v)=>t+(v.s||0),0);
+            const moyenneJourSemPV=nbSemAnnuelPV>0?totalJAnnuelPV/nbSemAnnuelPV:jMaxSem;
+            const jourExtraPV=Math.max(0,compteEffectifPV-jMaxSemAjustePV);
+            const contribNormPV=(Math.min(compteEffectifPV,jMaxSemAjustePV)/jMaxSem)+(moyenneJourSemPV>0?jourExtraPV/moyenneJourSemPV:0);
             const contribCgPV=joursConges16PV*(1/jMaxSem); // 1/jours réels du volume actif
             const contribArretPV=absArret*(0.8)/jMaxSem;
             const prorata=Math.max(0,contribNormPV+contribCgPV);
@@ -6203,7 +6211,19 @@ function calcCongesContrat(c){
               if(stSemAcq) joursMaxSem=(stSemAcq.jours||[]).filter(j=>j&&j.d).length||joursMax;
               else joursMaxSem=sourceSem.semTypes[0].jours.filter(j=>j).length||joursMax;
             } else {
-              joursMaxSem=sourceSem.semTypes[0].jours.filter(j=>j).length||joursMax;
+              // Contrat 46 sem (pas d'agenda de référence) : identifier le type réel de cette semaine à
+              // partir des jours effectivement travaillés/prévus, au lieu de toujours prendre le premier
+              // type saisi (semTypes[0]) — sinon une semaine correspondant à un autre type que le
+              // premier est divisée par le mauvais jMax.
+              const joursActifsIdxAcq=jours.filter(jj=>{
+                const stJJ=jj.statut||getStatutPrevu(c,jj);
+                return !['hors-contrat','repos','non-prevu'].includes(stJJ);
+              }).map(jj=>{
+                const dJJ=new Date(jj.date.split('-')[0],parseInt(jj.date.split('-')[1])-1,parseInt(jj.date.split('-')[2]));
+                return dJJ.getDay()===0?6:dJJ.getDay()-1;
+              });
+              const stMatchAcq=joursActifsIdxAcq.length>0?sourceSem.semTypes.find(st=>st.jours&&joursActifsIdxAcq.every(idx=>st.jours[idx]&&st.jours[idx].d)):null;
+              joursMaxSem=stMatchAcq?(stMatchAcq.jours||[]).filter(j=>j&&j.d).length||joursMax:(sourceSem.semTypes[0].jours.filter(j=>j).length||joursMax);
             }
           }
 
@@ -6312,7 +6332,20 @@ function calcCongesContrat(c){
           }
 
           // Contribution en fraction de semaine (plafonnée à 1 semaine max)
-          const contributionNormale=joursNormaux/joursMaxSem;
+          // Pour plan sem : la part au-delà de joursMaxSem (jour(s) travaillé(s) en plus du motif) se
+          // valorise avec la moyenne annuelle de jours travaillés/semaine, pas joursMaxSem — même
+          // principe que pour plan var, pour éviter qu'un jMax faible fasse exploser la valeur d'un
+          // seul jour ajouté.
+          let contributionNormale;
+          if(c.th==='sem'&&c.semTypes){
+            const totalJAnnuelSem=c.semTypes.reduce((t,st)=>t+(st.jours||[]).filter(j=>j&&j.d).length*parseFloat(st.nb||0),0);
+            const nbSemAnnuelSem=c.semTypes.reduce((t,st)=>t+parseFloat(st.nb||0),0);
+            const moyenneJourSemSem=nbSemAnnuelSem>0?totalJAnnuelSem/nbSemAnnuelSem:joursMaxSem;
+            const jourExtraSem=Math.max(0,joursNormaux-joursMaxSem);
+            contributionNormale=(Math.min(joursNormaux,joursMaxSem)/joursMaxSem)+(moyenneJourSemSem>0?jourExtraSem/moyenneJourSemSem:0);
+          } else {
+            contributionNormale=joursNormaux/joursMaxSem;
+          }
           const contributionConges=joursConges16*(1/joursMaxSem); // 1/jours réels de la semaine type
           const contributionArret=absArret*(0.8)/joursMaxSem;
           const prorata=Math.max(0,contributionNormale+contributionConges);
