@@ -6268,6 +6268,7 @@ function calcCongesContrat(c){
           // conges-acq, conges-anticipe → comptent pour 1/joursMaxSem
           // ferie → compte pour 1 seulement si jour habituellement travaillé
           let joursNormaux=0;
+          let joursTravailleFSM=0;
           let joursConges16=0;
 
           // Plan min uniquement : semaine "complète" en congés/fériés (pour ne pas gater le comptage
@@ -6290,11 +6291,14 @@ function calcCongesContrat(c){
             const statutJ=j.statut||getStatutPrevu(c,j);
             const cocheCgMin=!!(c.planning&&c.planning[j.date]&&c.planning[j.date].coche);
             const gateMinOk=!(c.th==='plan'&&c.planType==='min')||semaineCompleteCgMin||cocheCgMin;
-            if(['prevu','travaille','abs-partielle','abs-rem'].includes(statutJ)){
+            if(['travaille','reprise'].includes(statutJ)){
+              // Toujours en plus du motif normal, compte via la moyenne, jamais plafonné (11 juillet)
+              joursTravailleFSM++;
+            } else if(['prevu','abs-partielle','abs-rem'].includes(statutJ)){
               joursNormaux++;
             } else if(statutJ==='non-prevu'&&j.heureDebReel){
               // Jour non prévu travaillé : compte toujours en plus
-              joursNormaux++;
+              joursTravailleFSM++;
             } else if(['conges-acq','conges-anticipe'].includes(statutJ)){
               // Compte seulement si le jour est prévu/possible au contrat (sinon jour non prévu = ne compte pas)
               const [jcy,jcm,jcd]=j.date.split('-').map(Number);
@@ -6376,10 +6380,13 @@ function calcCongesContrat(c){
             const totalJAnnuelSem=c.semTypes.reduce((t,st)=>t+(st.jours||[]).filter(j=>j&&j.d).length*parseFloat(st.nb||0),0);
             const nbSemAnnuelSem=c.semTypes.reduce((t,st)=>t+parseFloat(st.nb||0),0);
             const moyenneJourSemSem=nbSemAnnuelSem>0?totalJAnnuelSem/nbSemAnnuelSem:joursMaxSem;
-            const jourExtraSem=Math.max(0,joursNormaux-joursMaxSem);
+            const jourExtraSem=Math.max(0,joursNormaux-joursMaxSem)+joursTravailleFSM;
             contributionNormale=(Math.min(joursNormaux,joursMaxSem)/joursMaxSem)+(moyenneJourSemSem>0?jourExtraSem/moyenneJourSemSem:0);
+            console.log('DEBUG acq sem',getSemISO(jours[0].date),'joursNormaux:',joursNormaux,'joursMaxSem:',joursMaxSem,'joursTravailleFSM:',joursTravailleFSM,'totalJAnnuelSem:',totalJAnnuelSem,'nbSemAnnuelSem:',nbSemAnnuelSem,'moyenneJourSemSem:',moyenneJourSemSem,'contributionNormale:',contributionNormale);
           } else {
-            contributionNormale=joursNormaux/joursMaxSem;
+            // Fixe/min : un seul rythme, la moyenne se confond avec joursMaxSem lui-même
+            const jourExtraFM=Math.max(0,joursNormaux-joursMaxSem)+joursTravailleFSM;
+            contributionNormale=(Math.min(joursNormaux,joursMaxSem)/joursMaxSem)+(joursMaxSem>0?jourExtraFM/joursMaxSem:0);
           }
           const contributionConges=joursConges16*(1/joursMaxSem); // 1/jours réels de la semaine type
           const contributionArret=absArret*(0.8)/joursMaxSem;
