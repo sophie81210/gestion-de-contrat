@@ -4060,7 +4060,8 @@ function getInfosJourPlanning(c, dateStr){
   const agendas=src.agendas||c.agendas||[];
   const agenda=agendas.find(a=>new Date(a.dateDebut)<=d&&new Date(a.dateFin)>=d);
   const typeSem=agenda&&agenda.semaines&&agenda.semaines[agKey];
-  const horsContrat=!agenda; // aucune donnée d'agenda du tout sur cette période
+  const horsContrat=!agenda&&(d<new Date(c.dateDeb)||(c.dateFin&&d>new Date(c.dateFin)));
+  const agendaManquant=!agenda&&!horsContrat; // dans le contrat, mais aucun type assigné pour cette semaine
   const semaineOff=typeSem==='off';
   let jourPossible=false, jMax=0, volIdx=-1, volH=0, planVarSrc=[];
   let semaineCongesAM=false; // type assigné mais ne correspond à aucun volume du contrat = semaine violette
@@ -4095,7 +4096,7 @@ function getInfosJourPlanning(c, dateStr){
   const mmddF=dateStr.slice(5);
   const feriesTravSrc=src.feriesTravailles||c.feriesTravailles||[];
   const ferieChome=estFerie&&!feriesTravSrc.includes(mmddF);
-  return {jourPossible, jMax, volIdx, volH, typeSem, aucunType, horsContrat, semaineOff, semaineCongesAM, jamaisPossible, couleur, estFerie, ferieChome};
+  return {jourPossible, jMax, volIdx, volH, typeSem, aucunType, horsContrat, agendaManquant, semaineOff, semaineCongesAM, jamaisPossible, couleur, estFerie, ferieChome};
 }
 
 function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
@@ -4133,10 +4134,12 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
     // (uniquement si TOUS les jours de la semaine partagent ce statut — une semaine de début/fin de contrat
     // peut mélanger des jours hors-contrat et un jour possible, ex. contrat démarrant un samedi)
     const tousHorsContrat=infosSemaine.every(i=>i.horsContrat);
+    const tousAgendaManquant=infosSemaine.every(i=>i.agendaManquant);
     const tousOff=infosSemaine.every(i=>i.semaineOff);
     const tousCongesAM=infosSemaine.every(i=>i.semaineCongesAM);
-    if(tousHorsContrat||tousOff||tousCongesAM){
+    if(tousHorsContrat||tousAgendaManquant||tousOff||tousCongesAM){
       const msgSem=tousHorsContrat?'Hors contrat'
+        :tousAgendaManquant?'Agenda non renseigné pour cette semaine'
         :tousOff?'Semaine d’absence employeur'
         :'Congés de l’Ass’Mat';
       return `<div class="pln-sem" data-semkey="${semKeyDom}" data-contrat="${c.id}" data-jmax="0"
@@ -4241,6 +4244,8 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
         contenu=`<span style="color:var(--tx3);font-size:12px">Congés de l’Ass’Mat</span>`;
       } else if(infos.horsContrat){
         contenu=`<span style="color:var(--tx3);font-size:12px">Hors contrat</span>`;
+      } else if(infos.agendaManquant){
+        contenu=`<span style="color:var(--tx3);font-size:12px">Agenda non renseigné</span>`;
       } else if(!infos.jourPossible&&!infos.ferieChome){
         contenu=`<span style="color:var(--tx3);font-size:12px">${infos.jamaisPossible?'Repos hebdomadaire':'Jour non prévu au contrat'}</span>`;
       } else if(infos.ferieChome){
@@ -4504,6 +4509,31 @@ function enregistrerPlanningMois(contratId, moisKey){
     return;
   }
   if(c.id) _contratsModifies.add(c.id);
+  // Réinitialiser le réel (feuille de présence) des jours dont le prévu (planning) vient de changer —
+  // pour éviter qu'un écart (heures complémentaires...) apparaisse silencieusement sans que
+  // l'utilisateur comprenne qu'il vient d'une modification du planning, pas d'une saisie volontaire.
+  const ancienPlanning=c._planningSauvegarde||{};
+  const finMoisReset=new Date(ay,am,0);
+  for(let dR=1; dR<=finMoisReset.getDate(); dR++){
+    const dateStrR=ay+'-'+String(am).padStart(2,'0')+'-'+String(dR).padStart(2,'0');
+    const ancien=ancienPlanning[dateStrR];
+    const nouveau=c.planning&&c.planning[dateStrR];
+    const ancienCoche=!!(ancien&&ancien.coche);
+    const nouveauCoche=!!(nouveau&&nouveau.coche);
+    const ancienD=ancien&&ancien.coche?(ancien.d||null):null;
+    const ancienF=ancien&&ancien.coche?(ancien.f||null):null;
+    const nouveauD=nouveau&&nouveau.coche?(nouveau.d||null):null;
+    const nouveauF=nouveau&&nouveau.coche?(nouveau.f||null):null;
+    const aChange=ancienCoche!==nouveauCoche||ancienD!==nouveauD||ancienF!==nouveauF;
+    if(!aChange) continue;
+    const ficheR=c.fiches&&c.fiches[dateStrR.slice(0,7)];
+    if(!ficheR||ficheR.valide) continue;
+    const jourR=(ficheR.jours||[]).find(jj=>jj.date===dateStrR);
+    if(jourR&&(jourR.heureDebReel||jourR.heureFinReel)){
+      jourR.heureDebReel=null;
+      jourR.heureFinReel=null;
+    }
+  }
   c._planningSauvegarde=JSON.parse(JSON.stringify(c.planning||{}));
   saveToFirestore();
   const btn=document.getElementById('pln-mois-'+contratId+'-'+moisKey+'-btn-save');
@@ -14226,7 +14256,6 @@ function calcSeuilAcquis(c, anneeDebut, premierJourPose){
 function majFichesCgAm(anneeDebut, sauvegarder=true){
   const data=S.congesAM[anneeDebut];
   if(!data)return;
-  console.log('DEBUG majFichesCgAm APPEL anneeDebut:',anneeDebut,'sauvegarder:',sauvegarder);
 
   const joursPoses=Object.keys(data.jours).filter(d=>data.jours[d]==='pose').sort();
   if(!joursPoses.length){
@@ -14522,7 +14551,6 @@ if(tousNonPrevus){
 
     let compteurCumulatif=0; // compteur cumulatif entre les périodes d'une même pose
     periodes.forEach(({debut,fin})=>{
-      console.log('DEBUG periode',debut,'->',fin,'compteurCumulatif au debut:',compteurCumulatif);
       const premierTrav=premierJourTravaille(c,debut,fin);
       const finDate=new Date(fin);
       const apresFinDate=new Date(finDate);apresFinDate.setDate(apresFinDate.getDate()+1);
@@ -14990,7 +15018,6 @@ if(tousNonPrevus){
           if(statsC.includes(j.statut)) compteurCumulatif++;
         });
       });
-      console.log('DEBUG periode',debut,'->',fin,'compteurCumulatif a la fin:',compteurCumulatif,'quotaAcquis:',quotaAcquis,'quotaAnticipeTotal:',quotaAnticipeTotal);
     });
            
 // Traiter les fériés non cochés dans les congés AM
