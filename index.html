@@ -6159,11 +6159,16 @@ function calcCongesContrat(c){
               return ['conges-acq','conges-anticipe','conges-non','ferie'].includes(stJM);
             });
             let joursNormauxPV=0;
+            let joursTravaillePV=0;
             let joursConges16PV=0;
             joursActifs.forEach(j=>{
               const sj=j.statut||getStatutPrevu(c,j);
               const cocheCgPV=!!(c.planning&&c.planning[j.date]&&c.planning[j.date].coche);
-              if(['prevu','travaille','abs-partielle','abs-rem'].includes(sj)){
+              if(sj==='travaille'){
+                // Jour "travaillé" : toujours en plus du motif normal, compte via la moyenne quelle que
+                // soit sa place par rapport au jMax de la semaine (à la demande explicite du 11 juillet)
+                joursTravaillePV++;
+              } else if(['prevu','abs-partielle','abs-rem'].includes(sj)){
                 joursNormauxPV++;
               } else if(['conges-acq','conges-anticipe'].includes(sj)){
                 if(semaineCompleteCgPV||cocheCgPV) joursConges16PV++;
@@ -6210,12 +6215,11 @@ function calcCongesContrat(c){
             // moyenne annuelle de jours travaillés/semaine (jours totaux de l'année / nb de semaines
             // réel du contrat), pas avec jMax — sinon un jMax faible (1 ou 2) fait exploser la valeur
             // d'un seul jour ajouté (ex. jMax=1 : 2 jours travaillés = 2 semaines d'acquisition d'un coup)
-            const totalJAnnuelPV=(c.planVar||[]).reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
+            const totalJAnnuelPV=(c.planVar||[]).reduce((t,v)=>t+((v.jours||[]).filter(Boolean).length)*(v.s||0),0);
             const nbSemAnnuelPV=(c.planVar||[]).reduce((t,v)=>t+(v.s||0),0);
             const moyenneJourSemPV=nbSemAnnuelPV>0?totalJAnnuelPV/nbSemAnnuelPV:jMaxSem;
-            const jourExtraPV=Math.max(0,compteEffectifPV-jMaxSemAjustePV);
+            const jourExtraPV=Math.max(0,compteEffectifPV-jMaxSemAjustePV)+joursTravaillePV;
             const contribNormPV=(Math.min(compteEffectifPV,jMaxSemAjustePV)/jMaxSem)+(moyenneJourSemPV>0?jourExtraPV/moyenneJourSemPV:0);
-            console.log('DEBUG acq PV semaine',getSemISO(jours[0].date),'joursNormauxPV:',joursNormauxPV,'joursConges16PV:',joursConges16PV,'absArret:',absArret,'jMaxSemAjustePV:',jMaxSemAjustePV,'compteEffectifPV:',compteEffectifPV,'jourExtraPV:',jourExtraPV,'moyenneJourSemPV:',moyenneJourSemPV,'contribNormPV:',contribNormPV);
             const contribCgPV=joursConges16PV*(1/jMaxSem); // 1/jours réels du volume actif
             const contribArretPV=absArret*(0.8)/jMaxSem;
             const prorata=Math.max(0,contribNormPV+contribCgPV);
