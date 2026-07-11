@@ -3716,7 +3716,7 @@ function ouvrirFiche(contratId,key){
           ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`onchange="majFicheStatut(${contratId},'${key}',${idx},this.value)"`}>
           ${selectedOpts}
         </select>
-        ${(repasVisible||aKm)?`<div style="display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap;margin-top:3px">
+        ${(repasVisible||kmVisible)?`<div style="display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap;margin-top:3px">
           ${repasVisible?'<div style="display:flex;gap:2px">'+REPAS_SYM.map((sym,ri)=>c.repas&&c.repas[ri]?
             `<label style="cursor:pointer;display:inline-flex;align-items:center;gap:1px" title="${REPAS_NOM[ri]}">
               <input type="checkbox" ${j.repas&&j.repas[ri]?'checked':''}
@@ -3724,7 +3724,7 @@ function ouvrirFiche(contratId,key){
                 style="width:11px;height:11px;accent-color:var(--m)">
               <span style="font-size:12px">${sym}</span>
             </label>`:'').join('')+'</div>':''}
-          ${aKm?`<input type="number" class="no-spin" style="width:36px;padding:1px 2px;border:1px solid var(--mb);border-radius:3px;font-size:10px" placeholder="km" value="${j.km||''}"
+          ${kmVisible?`<input type="number" class="no-spin" style="width:36px;padding:1px 2px;border:1px solid var(--mb);border-radius:3px;font-size:10px" placeholder="km" value="${j.km||''}"
             ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'km',this.value)"`}>`:'  '}
         </div>`:''}
       </td>
@@ -6382,7 +6382,6 @@ function calcCongesContrat(c){
             const moyenneJourSemSem=nbSemAnnuelSem>0?totalJAnnuelSem/nbSemAnnuelSem:joursMaxSem;
             const jourExtraSem=Math.max(0,joursNormaux-joursMaxSem)+joursTravailleFSM;
             contributionNormale=(Math.min(joursNormaux,joursMaxSem)/joursMaxSem)+(moyenneJourSemSem>0?jourExtraSem/moyenneJourSemSem:0);
-            console.log('DEBUG acq sem',getSemISO(jours[0].date),'joursNormaux:',joursNormaux,'joursMaxSem:',joursMaxSem,'joursTravailleFSM:',joursTravailleFSM,'totalJAnnuelSem:',totalJAnnuelSem,'nbSemAnnuelSem:',nbSemAnnuelSem,'moyenneJourSemSem:',moyenneJourSemSem,'contributionNormale:',contributionNormale);
           } else {
             // Fixe/min : un seul rythme, la moyenne se confond avec joursMaxSem lui-même
             const jourExtraFM=Math.max(0,joursNormaux-joursMaxSem)+joursTravailleFSM;
@@ -9429,8 +9428,7 @@ function validerEssai(){
     }
   } else {
     // Calculer le max selon le nombre de jours prévus par semaine
-    const joursCoches=Array.from(document.querySelectorAll('[name="joursFixe"]:checked')||[]).length
-      ||(()=>{const st=document.querySelectorAll('.sem-type-jours');let mx=0;st.forEach(s=>{const n=s.querySelectorAll('input:checked').length;if(n>mx)mx=n;});return mx;})();
+    const joursCoches=getMaxJoursSemaineForm();
     const peMax=joursCoches>=4?2:3;
     if(val>peMax){
       errEl.textContent='Maximum '+peMax+' mois ('+( joursCoches>=4?'4 jours ou plus par semaine':'moins de 4 jours par semaine')+')';
@@ -9584,13 +9582,8 @@ function selTC(el,v){
           const deb=new Date(cOcc.dateDeb.split('-')[0],parseInt(cOcc.dateDeb.split('-')[1])-1,parseInt(cOcc.dateDeb.split('-')[2]));
           const now=new Date();
           const moisEcoules=Math.floor((now-deb)/(1000*60*60*24*30.5));
-          let joursParSemOcc=0;
-          const joursFixeEl=document.querySelectorAll('#cond-fixe input[type="checkbox"]');
-          joursFixeEl.forEach(cb=>{if(cb.checked) joursParSemOcc++;});
-          if(joursParSemOcc===0){
-            const semTypesEls=document.querySelectorAll('.sem-type-jours input:checked');
-            joursParSemOcc=semTypesEls.length||5;
-          }
+          let joursParSemOcc=getMaxJoursSemaineForm();
+          if(joursParSemOcc===0) joursParSemOcc=5;
           const periodeEssaiMax=joursParSemOcc>=4?2:3;
           const essaiRestant=Math.max(0,periodeEssaiMax-moisEcoules);
           fpe.value=essaiRestant;
@@ -9660,6 +9653,38 @@ function selInd(el,v){
 }
 
 // ══ JOURS ══
+// Compte le maximum de jours/semaine cochés, tous types de contrat confondus (fixe, plan sem, plan
+// var, plan min) — utilisé pour la règle légale "4 jours ou plus/semaine limite la période d'essai à
+// 2 mois". Les cases à cocher des jours utilisent des id différents selon le type (jamais de classe ou
+// name commun), d'où cette fonction dédiée plutôt qu'un simple querySelectorAll.
+function getMaxJoursSemaineForm(){
+  let mx=0;
+  // Fixe : id="fixe-cb-{i}"
+  const nFixe=document.querySelectorAll('[id^="fixe-cb-"]:checked').length;
+  if(nFixe>mx) mx=nFixe;
+  // Plan min : id="plan-min-jour-{i}"
+  const nMin=document.querySelectorAll('[id^="plan-min-jour-"]:checked').length;
+  if(nMin>mx) mx=nMin;
+  // Plan sem : id="sem{n}-cb-{i}" — max par type (chaque semaine type est indépendante)
+  const semParType={};
+  document.querySelectorAll('[id^="sem"][id*="-cb-"]:checked').forEach(cb=>{
+    const m=cb.id.match(/^sem(\d+)-cb-\d+$/);
+    if(!m) return;
+    const n=m[1];
+    semParType[n]=(semParType[n]||0)+1;
+  });
+  Object.values(semParType).forEach(n=>{if(n>mx) mx=n;});
+  // Plan var : id="pv-jour-{n}-{i}" — max par volume
+  const pvParType={};
+  document.querySelectorAll('[id^="pv-jour-"]:checked').forEach(cb=>{
+    const m=cb.id.match(/^pv-jour-(\d+)-\d+$/);
+    if(!m) return;
+    const n=m[1];
+    pvParType[n]=(pvParType[n]||0)+1;
+  });
+  Object.values(pvParType).forEach(n=>{if(n>mx) mx=n;});
+  return mx;
+}
 function initJ(containerId,prefix){
   const el=document.getElementById(containerId);if(!el)return;
   el.innerHTML=JOURS.map((j,i)=>`
@@ -11019,8 +11044,7 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
   if(S.typeDuree!=='cdd'&&S.tc!=='occ'){
     const peVal=parseFloat(document.getElementById('f-periode-essai')?.value)||0;
     if(peVal>0){
-      const joursCochesVal=Array.from(document.querySelectorAll('[name="joursFixe"]:checked')||[]).length
-        ||(()=>{const st=document.querySelectorAll('.sem-type-jours');let mx=0;st.forEach(s=>{const n=s.querySelectorAll('input:checked').length;if(n>mx)mx=n;});return mx;})();
+      const joursCochesVal=getMaxJoursSemaineForm();
       const peMaxVal=joursCochesVal>=4?2:3;
       if(peVal>peMaxVal){
         alerte('Période d\'essai trop longue : maximum '+peMaxVal+' mois ('+(joursCochesVal>=4?'4 jours ou plus par semaine':'moins de 4 jours par semaine')+').');
@@ -11100,8 +11124,7 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
     if(peVal===''||peVal===null||peVal===undefined) return null; // non renseigné
     const pe=parseFloat(peVal)||0;
     // Limiter à 2 mois si >=4 jours/sem
-    const joursCoches=Array.from(document.querySelectorAll('[name="joursFixe"]:checked')||[]).length
-      ||(()=>{const st=document.querySelectorAll('.sem-type-jours');let mx=0;st.forEach(s=>{const n=s.querySelectorAll('input:checked').length;if(n>mx)mx=n;});return mx;})();
+    const joursCoches=getMaxJoursSemaineForm();
     const peMax=joursCoches>=4?2:3;
     if(pe>peMax){
       manquants.push('période d\'essai dépasse le maximum ('+peMax+' mois pour '+(joursCoches>=4?'4 jours et plus':'moins de 4 jours')+' par semaine)');
