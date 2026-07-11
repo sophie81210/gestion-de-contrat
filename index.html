@@ -5900,9 +5900,9 @@ function _validerFicheSuite(contratId,key,c){
   const anneeAmValSuivante=getAnneeAmPourDate(key.split('-')[0]+'-'+(parseInt(key.split('-')[1])+1<13?String(parseInt(key.split('-')[1])+1).padStart(2,'0'):'01'));
   if(anneeAmValSuivante!==anneeAmVal){majFichesCgAm(anneeAmValSuivante, false);majFichesCgAm(anneeAmValSuivante, false);}
   toast('Feuille de '+MOIS[c.fiches[key].mois]+' validée !');
-  // Avertissement 30 avril à la validation de février
+  // Avertissement 30 avril à la validation de janvier
   const [kvy,kvm]=key.split('-').map(Number);
-  if(kvm===2){
+  if(kvm===1){
     const msgs=[];
     // Contrats 52 sem : vérifier si tous les congés acquis seront pris avant le 30 avril
     if(c.tc==='52'&&c.conges){
@@ -9911,8 +9911,13 @@ function getAnneesAmManquantes(ag){
   let cur=new Date(dDebut.getFullYear(),dDebut.getMonth(),1);
   while(cur<=dFin){
     const anneeAm=cur.getMonth()>=5?cur.getFullYear():cur.getFullYear()-1;
+    // Créer le conteneur vide s'il n'existe pas du tout, pour que l'utilisateur puisse au moins
+    // accéder à l'onglet Congés Ass'Mat et commencer à le remplir — mais le calendrier reste
+    // "manquant" tant qu'aucune pose n'y est identifiée (sans quoi le mécanisme des 5 semaines
+    // violettes se rabat sur les fériés comme seul repère, donnant de faux positifs).
+    if(!S.congesAM[anneeAm]) S.congesAM[anneeAm]={enfants:0,jours:{}};
     const data=S.congesAM[anneeAm];
-    if(!data||!Object.values(data.jours||{}).some(v=>v==='pose')){
+    if(!Object.values(data.jours||{}).some(v=>v==='pose')){
       if(!manquantes.includes(anneeAm)) manquantes.push(anneeAm);
     }
     cur.setMonth(cur.getMonth()+1);
@@ -10434,6 +10439,31 @@ function setAgendaPinceau(cid,agid,val){
 
 function getAgendaWarnings(c,ag,semaines,semsCongesSet){
   const warnings=[];
+  // Avertir (sans bloquer) si le calendrier des congés Ass'Mat n'a pas ses 30 jours posés pour une
+  // année couverte par cet agenda — même seuil que le compteur du calendrier AM — nécessaire pour que
+  // les semaines de congés s'affichent en violet sur l'agenda et ne soient pas peintes "travaillé" par
+  // erreur.
+  getAnneesAmManquantes(ag); // s'assure que les conteneurs d'année existent (sans bloquer)
+  const anneesAmIncompletesWarn=[];
+  {
+    const dDebAm=ag.dateDebut?new Date(ag.dateDebut):null;
+    const dFinAm=ag.dateFin?new Date(ag.dateFin):null;
+    if(dDebAm&&dFinAm){
+      let curAm=new Date(dDebAm.getFullYear(),dDebAm.getMonth(),1);
+      while(curAm<=dFinAm){
+        const anneeAmW=curAm.getMonth()>=5?curAm.getFullYear():curAm.getFullYear()-1;
+        if(!anneesAmIncompletesWarn.some(x=>x.annee===anneeAmW)){
+          const dataAmW=S.congesAM&&S.congesAM[anneeAmW];
+          const jPosesW=dataAmW?Object.values(dataAmW.jours||{}).filter(v=>v==='pose').length:0;
+          if(jPosesW<30) anneesAmIncompletesWarn.push({annee:anneeAmW,jPoses:jPosesW});
+        }
+        curAm.setMonth(curAm.getMonth()+1);
+      }
+    }
+  }
+  if(anneesAmIncompletesWarn.length>0){
+    warnings.push('Calendrier des congés Ass\'Mat incomplet pour l\'année : '+anneesAmIncompletesWarn.map(x=>x.annee+'/'+(x.annee+1)+' ('+x.jPoses+'/30 jours posés)').join(', ')+' — les semaines de congés risquent de ne pas s\'afficher correctement.');
+  }
   // Avertir si des semaines ne sont pas pointées (ni off, ni colorées en congés)
   const estPSV52Warn=(c.tc==='52')&&((c.th==='sem')||(c.th==='plan'&&(c.planType==='var'||c.planType==='sem')));
   const jourReposWarn=(c&&(c.reposHebdo||0));
@@ -10671,9 +10701,9 @@ function peindreAgenda(key,cid,agid){
   const res=trouverAgenda(c,agid);
   if(!res)return;
   const {ag,source}=res;
-  // Bloquer si calendrier AM non rempli
-  const manquantesPeinture=getAnneesAmManquantes(ag);
-  if(manquantesPeinture.length>0){alerteCalendrierAM(manquantesPeinture);return;}
+  // Le calendrier AM non rempli n'est plus bloquant — juste un avertissement dans le bandeau orange
+  // de l'agenda (getAgendaWarnings). On s'assure quand même que le conteneur de l'année existe.
+  getAnneesAmManquantes(ag);
   // Bloquer si semaine congés (colorée violet) — sauf pour plan sem et plan var
   const estPSV=(source.th==='sem')||(source.th==='plan'&&source.planType==='var');
   if(!estPSV){
@@ -15254,10 +15284,15 @@ function enregistrerCgAm(){
     });
   }
   S.cgAmModifie=false;
-  // Vérifier 12 jours consécutifs mai-octobre pour chaque année AM
+  // Vérifier 12 jours consécutifs mai-octobre pour chaque année AM — en ignorant les années vides
+  // (aucun jour posé du tout), qui peuvent traîner comme entrées fantômes sans rapport avec l'année
+  // réellement modifiée
   const avertissements=[];
   Object.keys(S.congesAM||{}).forEach(am=>{
     const anneeAm=parseInt(am);
+    const dataAm=S.congesAM[am];
+    const aDesJoursPoses=dataAm&&dataAm.jours&&Object.values(dataAm.jours).some(v=>v==='pose');
+    if(!aDesJoursPoses) return;
     if(!verifier12JoursConsecutifs(anneeAm)){
       avertissements.push('⚠ '+anneeAm+'/'+(anneeAm+1)+' : aucune prise de 12 jours consécutifs entre mai et octobre.');
     }
