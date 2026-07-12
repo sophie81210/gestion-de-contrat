@@ -2702,8 +2702,8 @@ function creerFiche(c,annee,mois){
 }
 
 
-// 'reprise' se comporte comme 'prevu' dans les calculs
-function estStatutPrevu(s){ return s==='prevu'||s==='reprise'; }
+// 'reprise' se comporte comme 'travaille' dans les calculs de paie (jour ajouté, pas prévu au planning)
+function estStatutPrevu(s){ return s==='prevu'; }
 function estDecompte(s){ return s==='decompte-acq'||s==='decompte-anticipe'||s==='decompte-conges'; }
 function estDecompteAcq(s){ return s==='decompte-acq'; }
 function estDecompteAnticipe(s){ return s==='decompte-anticipe'; }
@@ -3580,7 +3580,7 @@ function ouvrirFiche(contratId,key){
 
     // Cases repas uniquement pour jours prévus et absences partielles
     const jourStatut=j.statut||getStatutPrevu(c,j);
-    const repasVisible=aRepas&&(estStatutPrevu(jourStatut)||jourStatut==='travaille'||jourStatut==='abs-partielle');
+    const repasVisible=aRepas&&(estStatutPrevu(jourStatut)||jourStatut==='travaille'||jourStatut==='reprise'||jourStatut==='abs-partielle');
     const repasCell=repasVisible?`<td style="padding:2px 4px;font-size:13px;min-width:90px">${
       '<div style="display:flex;gap:4px;flex-wrap:wrap">'+REPAS_SYM.map((sym,ri)=>c.repas&&c.repas[ri]?
         `<label style="cursor:pointer;display:inline-flex;align-items:center;gap:1px" title="${REPAS_NOM[ri]}">
@@ -3869,7 +3869,7 @@ function ouvrirFiche(contratId,key){
       </table>
     </div>
     <div class="card" style="margin-top:10px">
-      <div class="ctitle">Cumul — ${label}</div>
+      <div class="ctitle">Déclaration Pajemploi — ${label}</div>
       <table id="recap-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
         ${buildRecapCumul(recap,recap2,calcSoldeToutCompte(c, key),c)}
       </table>
@@ -3878,6 +3878,12 @@ function ouvrirFiche(contratId,key){
       <div class="ctitle">Récapitulatif — ${label}</div>
       <table id="recap-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
         ${buildRecapHtml(recap, calcSoldeToutCompte(c, key), calcRegul52(c, key), c)}
+      </table>
+    </div>
+    <div class="card" style="margin-top:10px">
+      <div class="ctitle">Déclaration Pajemploi — ${label}</div>
+      <table id="recap-pj-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
+        ${buildRecapPajemploi(recap, c)}
       </table>
     </div>`}
     <div style="text-align:center;padding:14px 0">
@@ -4823,6 +4829,8 @@ function enregistrerFiche(contratId,key){
     const el=document.getElementById('recap-'+contratId+'-'+key);
     if(!el)return;
     el.innerHTML=buildRecapHtml(recap, null, null, c);
+    const elPj=document.getElementById('recap-pj-'+contratId+'-'+key);
+    if(elPj) elPj.innerHTML=buildRecapPajemploi(recap, c);
   }
 }
 
@@ -5310,27 +5318,6 @@ function buildRecapHtml(recap, solde, regul52, c){
     if(recap.regul52Fiche) html+=ligneG('Régularisation congés '+recap.regul52Fiche.anneeRef+'/'+(recap.regul52Fiche.anneeRef+1)+' (10ème)', recap.regul52Fiche.diff.toFixed(2)+' € net', true, 'var(--m)');
     if(_hasRegul&&_diffEuros>0) html+=ligneG('Régularisation passage en contrat 52 semaines', _diffEuros.toFixed(2)+' € net', true, 'var(--m)');
     if(parseFloat(recap.montantCongesNonAcquis||0)>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--al)">dont congés non acquis ('+recap.nbCongesNonAcquis+' j) — '+recap.montantCongesNonAcquis.toFixed(2)+' € déduits</td></tr>';
-    if(parseFloat(recap.hComp||0)>0||parseFloat(recap.hSup||0)>0||parseFloat(recap.hMensuMaj||0)>0) html+=ligneG('Taux horaire net', recap.txNet+' \u20AC', true);
-    // Séparateur
-    // Partie basse : cumuls
-    html+=ligneG('Jours travaillés', (recap.nbJoursTrav+_joursRegul).toFixed(1)+' j', false, '', _hasRegul&&_joursRegul>0);
-    if(_hasRegul&&_joursRegul>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont '+_joursRegul.toFixed(1)+' j régularisés</td></tr>';
-    const _hMajE2=parseFloat(recap.hMensuMaj||0);
-    const _txNetE2=parseFloat(recap.txNet||0);
-    const _indemCongeMoisE2=parseFloat(recap.indemCongeMois||0);
-    const _hCongesPayesDecl=_txNetE2>0?_indemCongeMoisE2/_txNetE2:0;
-    const _hNormDecl=Math.max(0,(recap.hMensuNorm||recap.hMensu||0)-((recap.hAbsDeduit||0)-(recap.hAbsDeduitHS||0))+_hRegul46)+_hCongesPayesDecl;
-    html+=ligneG('Heures normales à déclarer', _hNormDecl.toFixed(2)+' h', true, '', (_hasRegul&&_hRegul46>0)||_hCongesPayesDecl>0);
-    if(_hasRegul&&_hRegul46>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont '+_hRegul46.toFixed(2)+' h régularisées</td></tr>';
-    if(_hCongesPayesDecl>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont '+_hCongesPayesDecl.toFixed(2)+' h de congés payés</td></tr>';
-    const _hCompDecl=parseFloat(recap.hComp||0);
-    if(_hCompDecl>0) html+=ligneG('Heures complémentaires à déclarer', _hCompDecl.toFixed(2)+' h', true);
-    {
-      // hAbsHS = part des absences sur HS
-      const _hAbsDeduitHS2=parseFloat(recap.hAbsDeduitHS||0);
-      const _hSupDecl=Math.max(0,_hMajE2-_hAbsDeduitHS2+parseFloat(recap.hSup||0));
-      if(_hSupDecl>0) html+=ligneG('Heures supp. à déclarer', _hSupDecl.toFixed(2)+' h', true);
-    }
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
   }
   // ── Section heures complémentaires et majorées ──
@@ -5356,36 +5343,66 @@ function buildRecapHtml(recap, solde, regul52, c){
   }
 
   if(parseFloat(recap.indemCongeMois||0)>0) html+=ligneG('Indemnité congés payés ('+recap.indemCongeNbJours+' j)', recap.indemCongeMois.toFixed(2)+' €', true, 'var(--m)');
-  const _regul52Diff=recap.regul52Fiche?parseFloat(recap.regul52Fiche.diff||0):0;
-  html+=ligneG('Salaire net à déclarer', (parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)+_diffEuros+_regul52Diff).toFixed(2)+' €', true, 'var(--m)', _hasRegul&&_diffEuros>0);
-  if(_hasRegul&&_diffEuros>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont '+_diffEuros.toFixed(2)+' € de régularisation de salaire</td></tr>';
-  if(!recap.periodeAv&&parseFloat(recap.montantExo||0)>0) html+=ligneG('Exonération de charges (11,31%)', '+'+parseFloat(recap.montantExo).toFixed(2)+' €', false);
-  if(parseFloat(recap.indemCgOcc||0)>0) html+=ligneG('Indemnité congés contrat occasionnel', recap.indemCgOcc.toFixed(2)+' € (10%)', true, 'var(--m)');
-  if(parseFloat(recap.indemEntretienTotal)>0) html+=ligneG('Indem. entretien', recap.indemEntretienTotal+' €');
-  if(parseFloat(recap.indemRepasTotal)>0) html+=ligneG('Indem. repas', recap.indemRepasTotal+' €');
-  if(parseFloat(recap.indemKmTotal||0)>0) html+=ligneG('Indem. km', recap.indemKmTotal+' €');
-  if((recap.nbAbsEnfantTotal||0)>0) html+=ligneG('Absence maladie de l&rsquo;enfant', recap.nbAbsEnfantTotal+'/5 j', false, recap.nbAbsEnfantTotal>=5?'var(--al)':'');
-  
   // Régularisation congés 52 sem si applicable
   if(regul52&&regul52.diff>0){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
     html+=ligneG('R\u00E9gularisation cong\u00E9s (10\u00E8me)',regul52.diff.toFixed(2)+' \u20AC net',true,'var(--vt)');
   }
-  // Ligne total payé (toujours en bas de tout, sauf dans les encarts avant/après avenant où le total se fait au niveau du Cumul)
-  if(!recap.periodeAv){
-    const sNet=parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)+(recap.regul52Fiche?recap.regul52Fiche.diff:0)+(_hasRegul?_diffEuros:0);
-    const indemE=parseFloat(recap.indemEntretienTotal||0);
-    const indemR=parseFloat(recap.indemRepasTotal||0);
-    const indemK=parseFloat(recap.indemKmTotal||0);
-    const exo=parseFloat(recap.montantExo||0);
-    const indemOcc=parseFloat(recap.indemCgOcc||0);
-    const total=sNet+exo+indemE+indemR+indemK+indemOcc;
-    html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
-    html+=ligneG('Total payé avec indemnités', total.toFixed(2)+' €', true, 'var(--m)');
-  }
   return html;
 }
 
+// Encart "Déclaration Pajemploi" — mois simple, sans avenant (pour les mois avec avenant, cette même
+// structure est reproduite par buildRecapCumul, qui a son propre encart "Cumul / Déclaration Pajemploi")
+function buildRecapPajemploi(recap,c){
+  const ligneG=(label,val,gras,color,noBorder)=>'<tr style="'+(noBorder?'':'border-bottom:1px solid var(--mb)')+'"><td style="padding:7px 4px;color:var(--tx2);'+(gras?'font-weight:700':'')+'">'+(label||'')+'</td><td style="padding:7px 4px;font-weight:'+(gras?'700':'600')+';text-align:right;'+(color?'color:'+color:'')+'">'+(val||'')+'</td></tr>';
+  if(recap.isOcc) return ''; // occasionnel : pas de déclaration Pajemploi séparée
+  let html='';
+  const _hasRegul=recap.estPassage46vers52&&recap.periodeAv!=='apres'&&c&&c._regulDiffEuros>0;
+  const _diffEuros=_hasRegul?c._regulDiffEuros:0;
+  const _txNetRegul46=_hasRegul?(()=>{const [ay46,am46,ad46]=recap.dateAvenantPassage.split('-').map(Number);const vR=new Date(ay46,am46-1,ad46-1);return parseFloat(((getVersionActive(c,vR).txBrut||0)*getCoefNet()).toFixed(4));})():0;
+  const _hRegul46=(_hasRegul&&_txNetRegul46>0)?parseFloat((_diffEuros/_txNetRegul46).toFixed(2)):0;
+  const _hMoyJourRegul=recap.nbJoursMoisContrat>0?(recap.hMensu||0)/recap.nbJoursMoisContrat:(recap.hMensu||0)/20;
+  const _joursRegul=(_hasRegul&&_hMoyJourRegul>0)?parseFloat((_hRegul46/_hMoyJourRegul).toFixed(1)):0;
+  // Jours de congés payés (contrat 46 uniquement, congés payés en cours de contrat ce mois-ci)
+  if(parseFloat(recap.montantCongesPayesMois||0)>0) html+=ligneG('Jours de congés payés', recap.nbCongesPayesMois+' j');
+  // Jours d'activité
+  html+=ligneG('Jours d\'activité', (recap.nbJoursTrav+_joursRegul).toFixed(1)+' j', false, '', _hasRegul&&_joursRegul>0);
+  if(_hasRegul&&_joursRegul>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont '+_joursRegul.toFixed(1)+' j régularisés</td></tr>';
+  const _hMajE2=parseFloat(recap.hMensuMaj||0);
+  const _txNetE2=parseFloat(recap.txNet||0);
+  const _indemCongeMoisE2=parseFloat(recap.indemCongeMois||0);
+  const _hCongesPayesDecl=_txNetE2>0?_indemCongeMoisE2/_txNetE2:0;
+  const _hNormDecl=Math.max(0,(recap.hMensuNorm||recap.hMensu||0)-((recap.hAbsDeduit||0)-(recap.hAbsDeduitHS||0))+_hRegul46)+_hCongesPayesDecl;
+  html+=ligneG('Heures normales à déclarer', _hNormDecl.toFixed(2)+' h', true, '', (_hasRegul&&_hRegul46>0)||_hCongesPayesDecl>0);
+  if(_hasRegul&&_hRegul46>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont '+_hRegul46.toFixed(2)+' h régularisées</td></tr>';
+  if(_hCongesPayesDecl>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont '+_hCongesPayesDecl.toFixed(2)+' h de congés payés</td></tr>';
+  if(parseFloat(recap.hComp||0)>0||parseFloat(recap.hSup||0)>0||parseFloat(recap.hMensuMaj||0)>0) html+=ligneG('Taux horaire net', recap.txNet+' \u20AC', true);
+  const _hCompDecl=parseFloat(recap.hComp||0);
+  if(_hCompDecl>0) html+=ligneG('Heures complémentaires à déclarer', _hCompDecl.toFixed(2)+' h', true);
+  const _hAbsDeduitHS2=parseFloat(recap.hAbsDeduitHS||0);
+  const _hSupDecl=Math.max(0,_hMajE2-_hAbsDeduitHS2+parseFloat(recap.hSup||0));
+  if(_hSupDecl>0) html+=ligneG('Heures supp. à déclarer', _hSupDecl.toFixed(2)+' h', true);
+  const _regul52Diff=recap.regul52Fiche?parseFloat(recap.regul52Fiche.diff||0):0;
+  html+=ligneG('Salaire net', (parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)+_diffEuros+_regul52Diff).toFixed(2)+' €', true, 'var(--m)', _hasRegul&&_diffEuros>0);
+  if(_hasRegul&&_diffEuros>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--vt)">dont '+_diffEuros.toFixed(2)+' € de régularisation de salaire</td></tr>';
+  if(parseFloat(recap.indemCgOcc||0)>0) html+=ligneG('Indemnité congés contrat occasionnel', recap.indemCgOcc.toFixed(2)+' € (10%)', true, 'var(--m)');
+  if(parseFloat(recap.indemEntretienTotal)>0) html+=ligneG('Indem. entretien', recap.indemEntretienTotal+' €');
+  if(parseFloat(recap.indemRepasTotal)>0) html+=ligneG('Indem. repas', recap.indemRepasTotal+' €');
+  if(parseFloat(recap.indemKmTotal||0)>0) html+=ligneG('Indem. km', recap.indemKmTotal+' €');
+  if((recap.nbAbsEnfantTotal||0)>0) html+=ligneG('Absence maladie de l&rsquo;enfant', recap.nbAbsEnfantTotal+'/5 j', false, recap.nbAbsEnfantTotal>=5?'var(--al)':'');
+  // Total payé (avec exonération intégrée en sous-ligne, plus de ligne exonération séparée)
+  const sNet=parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)+(recap.regul52Fiche?recap.regul52Fiche.diff:0)+(_hasRegul?_diffEuros:0);
+  const indemE=parseFloat(recap.indemEntretienTotal||0);
+  const indemR=parseFloat(recap.indemRepasTotal||0);
+  const indemK=parseFloat(recap.indemKmTotal||0);
+  const exo=parseFloat(recap.montantExo||0);
+  const indemOcc=parseFloat(recap.indemCgOcc||0);
+  const total=sNet+exo+indemE+indemR+indemK+indemOcc;
+  html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
+  html+=ligneG('Total payé avec indemnités', total.toFixed(2)+' €', true, 'var(--m)');
+  if(exo>0) html+='<tr><td colspan="2" style="padding:2px 4px 6px;font-size:12px;color:var(--vt)">dont '+exo.toFixed(2)+' € d\'exonération de charges</td></tr>';
+  return html;
+}
 function buildRecapCumul(r1,r2,solde,c){
   const ligneG=(label,val,gras,color)=>'<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2);'+(gras?'font-weight:700':'')+'">'+(label||'')+'</td><td style="padding:7px 4px;font-weight:'+(gras?'700':'600')+';text-align:right;'+(color?'color:'+color:'')+'">'+(val||'')+'</td></tr>';
   // Régularisation (depuis r1 = partie avant avenant)
@@ -5430,48 +5447,28 @@ function buildRecapCumul(r1,r2,solde,c){
   const hasHCompC=(hBaseComp>0||hMajFerie>0||hMajRepos>0||hMaj1erMai>0);
   const hasMajC=(montantMajComp>0||montantMajSup>0||montantMajFerieNP>0||montantMajFeriePrevu2>0||montantMajRepos>0||montantMaj1erMai>0);
   let html='';
-  html+=ligneG('Jours travaillés', nbJoursTrav.toFixed(1)+' j');
+  const montantCongesPayesMoisC=parseFloat(r1.montantCongesPayesMois||0)+parseFloat(r2.montantCongesPayesMois||0);
+  const nbCongesPayesMoisC=parseFloat(r1.nbCongesPayesMois||0)+parseFloat(r2.nbCongesPayesMois||0);
+  if(montantCongesPayesMoisC>0) html+=ligneG('Jours de congés payés', nbCongesPayesMoisC+' j');
+  html+=ligneG('Jours d\'activité', nbJoursTrav.toFixed(1)+' j');
   html+=ligneG('Heures normales à déclarer', hNormales.toFixed(2)+' h', true);
+  if(hComp>0||hSup>0) html+=ligneG('Taux horaire net', (parseFloat(r1.txNet||r2.txNet||0)).toFixed(2)+' \u20AC', true);
   if(hComp>0) html+=ligneG('Heures complémentaires à déclarer', hComp.toFixed(2)+' h', true);
   if(hSup>0) html+=ligneG('Heures supp. à déclarer', hSup.toFixed(2)+' h', true);
-  if(hasHCompC||hasMajC){
-    html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:1px solid var(--mb)"></td></tr>';
-    html+='<tr><td colspan="2" style="padding:4px 4px 2px;font-weight:700;color:var(--m);font-size:12px">Heures complémentaires et majorées</td></tr>';
-    if(hBaseComp>0) html+=ligneG('Sur jours ouvrables', hBaseComp.toFixed(2)+' h — '+montantBaseComp.toFixed(2)+' €');
-    if(hMajFerie>0) html+=ligneG('Férié sur jour non prévu', hMajFerie.toFixed(2)+' h — '+montantBaseFerieNP.toFixed(2)+' €');
-    if(hMajRepos>0) html+=ligneG('Repos travaillé', hMajRepos.toFixed(2)+' h — '+montantBaseRepos.toFixed(2)+' €');
-    if(hMaj1erMai>0) html+=ligneG('1er mai travaillé', hMaj1erMai.toFixed(2)+' h — '+montantBase1erMai.toFixed(2)+' €');
-  }
-  if(hasMajC){
-    html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:1px solid var(--mb)"></td></tr>';
-    html+='<tr><td colspan="2" style="padding:4px 4px 2px;font-weight:700;color:var(--m);font-size:12px">Majorations</td></tr>';
-    const hCompC=parseFloat(r1.hComp||0)+parseFloat(r2.hComp||0);
-    const hSupC=parseFloat(r1.hSup||0)+parseFloat(r2.hSup||0);
-    if(hCompC>0) html+=ligneG('Majoration heures complémentaires', '<span style="font-weight:400;color:var(--tx3)">('+hCompC.toFixed(2)+' h)</span> '+(montantMajComp>0?'+'+montantMajComp.toFixed(2)+' €':'0.00 €'));
-    if(hSupC>0) html+=ligneG('Majoration heures supplémentaires', '<span style="font-weight:400;color:var(--tx3)">('+hSupC.toFixed(2)+' h)</span> '+(montantMajSup>0?'+'+montantMajSup.toFixed(2)+' €':'0.00 €'));
-    const totalMajFerieC=montantMajFeriePrevu2+montantMajFerieNP;
-    if(totalMajFerieC>0) html+=ligneG('Majoration férié', '+'+totalMajFerieC.toFixed(2)+' €');
-    if(montantMajRepos>0) html+=ligneG('Majoration repos travaillé', '+'+montantMajRepos.toFixed(2)+' €');
-    if(montantMaj1erMai>0) html+=ligneG('Majoration 1er mai', '+'+montantMaj1erMai.toFixed(2)+' €');
-  }
-  if(hTotalComp>0||hSup>0){
-    html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:1px solid var(--mb)"></td></tr>';
-  }
-
-  html+=ligneG('Salaire net à déclarer', salaireNet.toFixed(2)+' €', true, 'var(--m)');
+  html+=ligneG('Salaire net', salaireNet.toFixed(2)+' €', true, 'var(--m)');
   if(r1.regul52Fiche) html+=ligneG('Régularisation congés '+r1.regul52Fiche.anneeRef+'/'+(r1.regul52Fiche.anneeRef+1)+' (10ème)', parseFloat(r1.regul52Fiche.diff||0).toFixed(2)+' € net', true, 'var(--m)');
   if(r2.regul52Fiche) html+=ligneG('Régularisation congés '+r2.regul52Fiche.anneeRef+'/'+(r2.regul52Fiche.anneeRef+1)+' (10ème)', parseFloat(r2.regul52Fiche.diff||0).toFixed(2)+' € net', true, 'var(--m)');
-  if(montantExo>0) html+=ligneG('Exonération de charges (11,31%)', '+'+montantExo.toFixed(2)+' €', false);
   const indemOccC=parseFloat(r1.indemCgOcc||0)+parseFloat(r2.indemCgOcc||0);
   if(indemOccC>0) html+=ligneG('Indemnité congés contrat occasionnel', indemOccC.toFixed(2)+' € (10%)', true, 'var(--m)');
   if(indemE>0) html+=ligneG('Indem. entretien', indemE.toFixed(2)+' €');
   if(indemR>0) html+=ligneG('Indem. repas', indemR.toFixed(2)+' €');
   if(indemK>0) html+=ligneG('Indem. km', indemK.toFixed(2)+' €');
-  // Total payé avec indemnités (calculé une seule fois ici, au niveau du cumul du mois)
+  // Total payé avec indemnités (calculé une seule fois ici, au niveau du cumul du mois), exonération en sous-ligne
   {
     const totalC=salaireNet+montantExo+indemE+indemR+indemK+indemOccC;
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
     html+=ligneG('Total payé avec indemnités', totalC.toFixed(2)+' €', true, 'var(--m)');
+    if(montantExo>0) html+='<tr><td colspan="2" style="padding:2px 4px 6px;font-size:12px;color:var(--vt)">dont '+montantExo.toFixed(2)+' € d\'exonération de charges</td></tr>';
   }
   return html;
 }
@@ -7441,7 +7438,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const semKey=getSemISO(j.date);
     if(!hParSemaine[semKey]) hParSemaine[semKey]=0;
     if(!hReelParSemaine[semKey]) hReelParSemaine[semKey]=0;
-    if(j.heureDebReel&&j.heureFinReel&&(estStatutPrevu(j.statut)||j.statut==='travaille'||j.statut==='ferie'||!j.statut)){
+    if(j.heureDebReel&&j.heureFinReel&&(estStatutPrevu(j.statut)||j.statut==='travaille'||j.statut==='reprise'||j.statut==='ferie'||!j.statut)){
       const hReelJ=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
       const hPrevJ=j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:0;
       // Si le jour est payé sur la base du prévu (réel < prévu, pas de déduction), compter le prévu pour le seuil
@@ -8283,8 +8280,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       if(periodeAv==='avant'&&dateJ>=dateAvenantStr){statut='hors-contrat';j._horsContratAvenant=true;}
       if(periodeAv==='apres'&&dateJ<dateAvenantStr){statut='hors-contrat';j._horsContratAvenant=true;}
     }
-    const estPresent=estStatutPrevu(statut)||statut==='travaille'||statut==='abs-partielle'||statut==='abs-rem'||(!j.statut&&j.heureDebReel)||(statut==='travaille'&&!j.heureDebPrev);
-    if(statut==='travaille'&&getStatutPrevu(c,j)==='non-prevu'){
+    const estPresent=estStatutPrevu(statut)||statut==='travaille'||statut==='reprise'||statut==='abs-partielle'||statut==='abs-rem'||(!j.statut&&j.heureDebReel)||((statut==='travaille'||statut==='reprise')&&!j.heureDebPrev);
+    if((statut==='travaille'||statut==='reprise')&&getStatutPrevu(c,j)==='non-prevu'){
       joursEnPlus++;
     }
     // Fériés non prévus au contrat et repos travaillés : jours en plus
@@ -8321,7 +8318,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             true;
           if(jourTravailleHCAv) horsContratDeduit=true;
         }
-      } else if(j.heureDebPrev&&j.heureFinPrev&&!estStatutPrevu(statut)&&statut!=='travaille'&&!(j._horsContratAvenant&&periodeAv==='apres')){
+      } else if(j.heureDebPrev&&j.heureFinPrev&&!estStatutPrevu(statut)&&statut!=='travaille'&&statut!=='reprise'&&!(j._horsContratAvenant&&periodeAv==='apres')){
         horsContratDeduit=true;
       } else if(c.th==='plan'&&(c.planVar||c.planType==='min')){
         // Les jours hors-période (avenant) sont couverts par hAbsHorsPeriode → pas de double comptage
@@ -8416,7 +8413,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     }
     // Arrêt de travail : déduire si le jour est prévu OU si le jour est possible au contrat (semaine off)
     const statutPrevuPourArret=getStatutPrevu(c,j);
-    const estArretSurJourPrevu=statut==='arret'&&(estStatutPrevu(statutPrevuPourArret)||statutPrevuPourArret==='travaille');
+    const estArretSurJourPrevu=statut==='arret'&&(estStatutPrevu(statutPrevuPourArret)||statutPrevuPourArret==='travaille'||statutPrevuPourArret==='reprise');
     // Pour semaine off : arrêt déduit si le jour est possible au contrat
     const jourIdxArret=j.jourSemaine===0?6:j.jourSemaine-1;
     const estArretEnSemaineOff=statut==='arret'&&!estArretSurJourPrevu&&(()=>{
@@ -8467,7 +8464,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         // compter en heures complémentaires (compJour=0) ; le mécanisme hebdomadaire plus loin
         // (seuilSup, qui passe à 45h fixe dès qu'une semaine contient un jour "travaillé") se charge
         // de le comptabiliser en heures sup ponctuelles à sa place, sans double comptage.
-        if(j.statut==='travaille'){
+        if(j.statut==='travaille'||j.statut==='reprise'){
           const hJourTrav=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
           if(hVolContrat>45){
             compJour=0;
