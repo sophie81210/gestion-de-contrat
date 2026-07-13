@@ -3447,7 +3447,7 @@ function ouvrirFiche(contratId,key){
     const dateAv=new Date(ay,am-1,ad);
     const debutMois=new Date(parseInt(annee),mois,1);
     const finMois=new Date(parseInt(annee),mois+1,0);
-    return dateAv>debutMois&&dateAv<=finMois;
+    return dateAv>=debutMois&&dateAv<=finMois;
   });
 
   let recap, recap2, dateDebAv;
@@ -4807,7 +4807,7 @@ function enregistrerFiche(contratId,key){
     const dateAv=new Date(avy,avm-1,avd);
     const debutMois=new Date(ay,am-1,1);
     const finMois=new Date(ay,am,0);
-    return dateAv>debutMois&&dateAv<=finMois;
+    return dateAv>=debutMois&&dateAv<=finMois;
   });
   if(avenantDuMois){
     const dateDebAv=avenantDuMois.dateAvenant;
@@ -7263,7 +7263,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     if(!av.signe||!av.dateAvenant) return false;
     const [ay,am,ad]=av.dateAvenant.split('-').map(Number);
     const dateAv=new Date(ay,am-1,ad);
-    return dateAv>debutMois&&dateAv<=finMois;
+    return dateAv>=debutMois&&dateAv<=finMois;
   });
   // Détecter passage 46→52 (régularisation de salaire à payer)
   const estPassage46vers52=avenantDuMois&&avenantDuMois.tc==='52'&&
@@ -13697,6 +13697,13 @@ function ouvrirPassageCDI(cid){
     sv('f-maj-comp',av.majComp);sv('f-maj-sup',av.majSup);
     sv('f-nbsem',av.nbSem);sv('f-hmin',av.hMin);
     if(av.tc){const el=document.getElementById('ro-'+av.tc);if(el)selTC(el,av.tc);}
+    // Un contrat occasionnel peut passer en 46/52, mais pas l'inverse — masquer l'option occasionnel
+    // si le régime actif du contrat (avant cet avenant) n'est pas déjà occasionnel (décision du 15 mai)
+    {
+      const roOccWrap=document.getElementById('ro-occ');
+      const tcActifAvantAvenant=getVersionActive(c,new Date()).tc;
+      if(roOccWrap) roOccWrap.style.display=tcActifAvantAvenant==='occ'?'':'none';
+    }
     if(av.th){const el=document.getElementById('ro-'+av.th);if(el)selTH(el,av.th);}
     document.getElementById('sem-wrap').innerHTML='';S.nbSem=0;
     if(av.th==='sem'&&av.semTypes){
@@ -13846,6 +13853,7 @@ function signerAvenant(){
     }
   }
   if(joursReposIncoherent(av)) manquantsAv.push("des heures ou jours possibles sont indiqués sur le jour de repos hebdomadaire");
+  if(av.tc==='occ'&&getVersionActive(c,new Date()).tc!=='occ') manquantsAv.push("passage vers un contrat occasionnel impossible depuis un contrat 46 ou 52 semaines");
   {
     const jourReposISOAv=(av.reposHebdo||0)===0?7:(av.reposHebdo||0);
     const autreReposIncoherentAv=S.contrats.find(oc=>oc.id!==c.id&&oc.signe&&!estContratCloture(oc)&&(((oc.reposHebdo||0)===0?7:(oc.reposHebdo||0))!==jourReposISOAv));
@@ -13937,8 +13945,12 @@ function signerAvenant(){
       const agExiste=av.agendas&&av.agendas.some(ag=>ag.semaines&&Object.keys(ag.semaines).length>0);
       if(!agExiste){
         if(confirm('Avenant n°'+av.num+' signé ✓\n\nCet avenant nécessite un agenda. Souhaitez-vous le remplir maintenant ?')){
-          S.detTab='agenda';
+          S.detTab='contrat';
           goTo('det');
+          setTimeout(()=>{
+            const agWrapScroll=document.getElementById('agenda-wrap-'+cid);
+            if(agWrapScroll) agWrapScroll.scrollIntoView({behavior:'smooth',block:'start'});
+          },150);
           return;
         }
       } else {
