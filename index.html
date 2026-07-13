@@ -1211,6 +1211,13 @@ function goTo(p){
     if(!confirm('Des modifications du planning non enregistrées seront perdues. Continuer ?')) return;
     S.planningModifie=false;
   }
+  // Réinitialiser la simulation de rupture non confirmée si on quitte entièrement la fiche contrat
+  if(S.page==='det'&&p!=='det'&&S.detTab==='rupture'&&S.enCours){
+    const cRupG=S.contrats.find(x=>x.id==S.enCours);
+    if(cRupG&&cRupG.rupture&&!cRupG.rupture.confirmee&&(cRupG.rupture.motif||cRupG.rupture.dateSignif)){
+      cRupG.rupture={};
+    }
+  }
   S.page = p;
   // Si on quitte le formulaire, réinitialiser S.enEd (sauf si c'est modif qui navigue)
   if(p!=='form'&&p!=='det') S.enEd=null;
@@ -1656,6 +1663,13 @@ function switchDetTab(tab,id){
   if(S.planningModifie&&tab!=='planning'){
     if(!confirm('Des modifications du planning non enregistrées seront perdues. Continuer ?')) return;
     S.planningModifie=false;
+  }
+  // Réinitialiser la simulation de rupture non confirmée quand on quitte l'onglet sans enregistrer
+  if(S.detTab==='rupture'&&tab!=='rupture'){
+    const cRup=S.contrats.find(x=>x.id==id);
+    if(cRup&&cRup.rupture&&!cRup.rupture.confirmee&&(cRup.rupture.motif||cRup.rupture.dateSignif)){
+      cRup.rupture={};
+    }
   }
   S.detTab=tab;
   document.querySelectorAll('.det-tab').forEach(b=>b.classList.toggle('on',b.textContent===DET_LABELS[tab]));
@@ -6448,6 +6462,7 @@ function calcCongesContrat(c){
             const moyenneJourSemSem=nbSemAnnuelSem>0?totalJAnnuelSem/nbSemAnnuelSem:joursMaxSem;
             const jourExtraSem=Math.max(0,joursNormaux-joursMaxSem)+joursTravailleFSM;
             contributionNormale=(Math.min(joursNormaux,joursMaxSem)/joursMaxSem)+(moyenneJourSemSem>0?jourExtraSem/moyenneJourSemSem:0);
+            console.log('DEBUG acq sem nov',getSemISO(jours[0].date),'joursNormaux:',joursNormaux,'joursMaxSem:',joursMaxSem,'joursTravailleFSM:',joursTravailleFSM,'contributionNormale:',contributionNormale);
           } else {
             // Fixe/min : un seul rythme, la moyenne se confond avec joursMaxSem lui-même
             const jourExtraFM=Math.max(0,joursNormaux-joursMaxSem)+joursTravailleFSM;
@@ -11771,6 +11786,18 @@ function formaterSaisieDate(input){
   }
 }
 
+function reinitialiserSimulationRupture(cid){
+  const c=S.contrats.find(x=>x.id==cid);
+  if(!c) return;
+  if(c.rupture?.confirmee) return; // sécurité : ne jamais toucher une rupture confirmée
+  if(!confirm('Réinitialiser la simulation de rupture ? Les informations saisies (motif, date...) seront effacées.')) return;
+  c.rupture={};
+  c._regulDirty=true;
+  S.ruptureModifiee=false;
+  _contratsModifies.add(c.id);
+  saveToFirestore();
+  renderDetTab(cid,'rupture');
+}
 function rafraichirRupture(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c) return;
@@ -12246,6 +12273,7 @@ function renderRuptureCDD(c, cont){
     <div style="display:flex;gap:8px;margin-top:12px">
       ${(!rp.confirmee&&!estLectureSeuleEmployeur())?`<button class="btn bs" onclick="sauvegarderRupture(${cid})">💾 Enregistrer</button>`:''}
       ${(!rp.confirmee&&!estLectureSeuleEmployeur())?`<button class="btn bpurple" onclick="confirmerRupture(${cid})">✓ Confirmer la rupture</button>`:''}
+      ${(!rp.confirmee&&!estLectureSeuleEmployeur()&&(rp.motif||rp.dateSignif))?`<button class="btn bs" onclick="reinitialiserSimulationRupture(${cid})">↺ Réinitialiser</button>`:''}
     </div>`;
   // Bloquer la simulation si confirmée ou en mode lecture seule employeur, via pointer-events
   if(rp.confirmee||estLectureSeuleEmployeur()){
@@ -12646,6 +12674,7 @@ function renderRupture(c, cont){
     <div style="display:flex;gap:8px;margin-top:12px">
       ${estLectureSeuleEmployeur()?'':`<button class="btn bs" onclick="sauvegarderRupture(${cid})">💾 Enregistrer</button>`}
       ${(!rp.confirmee&&!estLectureSeuleEmployeur())?`<button class="btn bpurple" onclick="confirmerRupture(${cid})">✓ Confirmer la rupture</button>`:''}
+      ${(!rp.confirmee&&!estLectureSeuleEmployeur()&&(rp.motif||rp.dateSignif))?`<button class="btn bs" onclick="reinitialiserSimulationRupture(${cid})">↺ Réinitialiser</button>`:''}
     </div>`;
   // Bloquer la simulation si confirmée ou en mode lecture seule employeur
   if(rp.confirmee||estLectureSeuleEmployeur()){
