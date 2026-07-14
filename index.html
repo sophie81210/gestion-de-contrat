@@ -14536,8 +14536,15 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
     return periodes;
   }
 
-  // Pour une période, trouver le 1er jour prévu travaillé
-  function premierJourTravaille(c,debut,fin){
+  // Pour une période, trouver le 1er jour prévu travaillé.
+  // pourReprise=false : démarrage du décompte DANS la semaine posée. En 46, la semaine posée
+  //   est pointée congés sans volume (type réel inconnu) → plan var : union des volumes
+  //   (règle Sophie 14/07/2026 — doute « décompte /6 en 46 » noté, à trancher).
+  // pourReprise=true : recherche de la reprise APRÈS la pose → plan var : selon le volume
+  //   attribué à la semaine via l'agenda (même résolution que getHeuresPrevues, déjà utilisée
+  //   par dernierJourDecompte). Une semaine sans volume attribué (off ou pointée congés)
+  //   n'offre aucun jour de reprise possible.
+  function premierJourTravaille(c,debut,fin,pourReprise=false){
     const d=new Date(debut);
     const f=new Date(fin);
     while(d<=f){
@@ -14555,7 +14562,11 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
         else if(srcFerJ.th==='sem'&&srcFerJ.semTypes) estPrevuFerJ=srcFerJ.semTypes.some(st=>st.jours&&st.jours[jourIdxFerJ]?.d);
         else if(srcFerJ.th==='plan'){
           const ptJ=srcFerJ.planType||c.planType;
-          if(ptJ==='var') estPrevuFerJ=(srcFerJ.planVar||c.planVar||[]).some(v=>v.jours&&v.jours[jourIdxFerJ]);
+          if(ptJ==='var'){
+            // Même logique de contexte que la détection « jour possible » plus bas
+            if(pourReprise||c.tc==='52'||srcFerJ.tc==='52') estPrevuFerJ=!!getHeuresPrevues(c,d).planVar;
+            else estPrevuFerJ=(srcFerJ.planVar||c.planVar||[]).some(v=>v.jours&&v.jours[jourIdxFerJ]);
+          }
           else if(ptJ==='min') estPrevuFerJ=!!(srcFerJ.joursMin||c.joursMin||[])[jourIdxFerJ];
         }
         if(estPrevuFerJ) return dateStr; // férié sur jour prévu = reprise
@@ -14569,9 +14580,7 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
           const semKeyPT=semAnPT+'-S'+String(semNumPT).padStart(2,'0');
           const agendasPT=srcPTOff.agendas||c.agendas||[];
           const agPT=agendasPT.find(a=>d>=new Date(a.dateDebut)&&d<=new Date(a.dateFin));
-          console.log('DEBUG premierJourTravaille',dateStr,'semKeyPT:',semKeyPT,'agPT trouvé:',!!agPT,'type semaine:',agPT&&agPT.semaines?agPT.semaines[semKeyPT]:undefined);
           if(agPT&&agPT.semaines&&agPT.semaines[semKeyPT]==='off'){
-            console.log('DEBUG premierJourTravaille',dateStr,'-> semaine OFF, on saute');
             const jourSemPT=d.getDay()||7;
             d.setDate(d.getDate()+(8-jourSemPT));
             continue;
@@ -14582,11 +14591,22 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
           let jourPossible=false;
           const planTypePT=srcPT.planType||c.planType;
           if(planTypePT==='var'&&(srcPT.planVar||c.planVar)){
-            jourPossible=(srcPT.planVar||c.planVar).some(v=>v.jours&&v.jours[jourIdx]);
+            if(pourReprise||c.tc==='52'||srcPT.tc==='52'){
+              // Reprise (et contrats 52 dans tous les cas) : jour possible selon le volume
+              // attribué à la semaine via l'agenda — même résolution que getHeuresPrevues,
+              // déjà utilisée par dernierJourDecompte, ce qui garantit la cohérence entre
+              // les deux recherches de reprise. Semaine sans volume attribué (off ou
+              // pointée congés) : aucun jour possible, la recherche passe à la suite.
+              jourPossible=!!getHeuresPrevues(c,d).planVar;
+            } else {
+              // Démarrage du décompte dans une semaine posée en 46 : la semaine est pointée
+              // congés sans volume (type réel inconnu) → union des volumes du contrat
+              // (règle Sophie 14/07/2026 — doute « décompte /6 en 46 » noté, à trancher)
+              jourPossible=(srcPT.planVar||c.planVar).some(v=>v.jours&&v.jours[jourIdx]);
+            }
           } else if(planTypePT==='min'&&(srcPT.joursMin||c.joursMin)){
             jourPossible=(srcPT.joursMin||c.joursMin)[jourIdx];
           }
-          console.log('DEBUG premierJourTravaille',dateStr,'plan',planTypePT,'jourIdx:',jourIdx,'jourPossible:',jourPossible);
           if(jourPossible) return dateStr;
         } else if(srcPT.th==='sem'&&srcPT.semTypes){
           // Plan sem 52 : jour possible selon le type réel de la semaine dans l'agenda
@@ -14791,7 +14811,7 @@ if(tousNonPrevus){
         .filter(av=>av.signe&&av.dateAvenant>fin)
         .sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant))[0]?.dateAvenant;
       const debutRechercheReprise=avenantApresFinStr&&avenantApresFinStr>apresFinStr?avenantApresFinStr:apresFinStr;
-      const premierTravReprise=premierJourTravaille(c,debutRechercheReprise,limitePTStr);
+      const premierTravReprise=premierJourTravaille(c,debutRechercheReprise,limitePTStr,true);
      // Limiter dernierDecompte au jour avant le début de la prochaine période
       let dernierDecompte=dernierJourDecompte(c,fin,joursPoses,data.jours);
       const idxPeriode=periodes.findIndex(p=>p.debut===debut&&p.fin===fin);
