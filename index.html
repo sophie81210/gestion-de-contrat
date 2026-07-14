@@ -14536,13 +14536,34 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
     return periodes;
   }
 
+  // Type de semaine / volume pointé dans l'agenda pour la semaine d'une date donnée.
+  // Retourne l'objet semType (plan sem) ou volume (plan var), ou null si la semaine n'a
+  // pas de type connu (non pointée, off, ou pointage ne correspondant à aucun type/volume).
+  // Sert la règle Sophie confirmée le 14/07/2026 : « type pointé d'abord, union en secours ».
+  function typeSemainePointe(c,d){
+    const srcTSP=getVersionActive(c,d);
+    const dateStrTSP=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    const semKeyTSP=getSemAnnee(dateStrTSP)+'-S'+String(getSemISO(dateStrTSP)).padStart(2,'0');
+    const agendasTSP=srcTSP.agendas||c.agendas||[];
+    const agTSP=agendasTSP.find(a=>d>=new Date(a.dateDebut)&&d<=new Date(a.dateFin));
+    const typeTSP=agTSP&&agTSP.semaines&&agTSP.semaines[semKeyTSP];
+    if(!typeTSP||typeTSP==='off') return null;
+    if(srcTSP.th==='sem'&&srcTSP.semTypes) return srcTSP.semTypes.find(s=>s.nom===typeTSP)||null;
+    if(srcTSP.th==='plan'&&(srcTSP.planType||c.planType)==='var'&&(srcTSP.planVar||c.planVar)){
+      return (srcTSP.planVar||c.planVar).find((v,i)=>(v.nom||'Volume '+(i+1))===typeTSP)||null;
+    }
+    return null;
+  }
+
   // Pour une période, trouver le 1er jour prévu travaillé.
-  // pourReprise=false : démarrage du décompte DANS la semaine posée. En 46, la semaine posée
-  //   est pointée congés sans volume (type réel inconnu) → plan var : union des volumes
-  //   (règle Sophie 14/07/2026 — doute « décompte /6 en 46 » noté, à trancher).
-  // pourReprise=true : recherche de la reprise APRÈS la pose → plan var : selon le volume
-  //   attribué à la semaine via l'agenda (même résolution que getHeuresPrevues, déjà utilisée
-  //   par dernierJourDecompte). Une semaine sans volume attribué (off ou pointée congés)
+  // Règle Sophie confirmée 14/07/2026 : « type pointé d'abord, union en secours » — le
+  // type/volume pointé de la semaine fait foi dès qu'il est connu ; l'union ne sert
+  // qu'aux semaines sans type connu (pointées congés, jamais typées).
+  // pourReprise=false : démarrage du décompte DANS la semaine posée → plan sem/var 46 :
+  //   type/volume pointé d'abord, union en secours.
+  // pourReprise=true : recherche de la reprise APRÈS la pose → selon le type/volume pointé
+  //   uniquement (même résolution que getHeuresPrevues, déjà utilisée par
+  //   dernierJourDecompte) ; une semaine sans type/volume (off ou pointée congés)
   //   n'offre aucun jour de reprise possible.
   function premierJourTravaille(c,debut,fin,pourReprise=false){
     const d=new Date(debut);
@@ -14559,13 +14580,27 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
         const jourIdxFerJ=jourSem===0?6:jourSem-1;
         let estPrevuFerJ=false;
         if(srcFerJ.th==='fixe'&&srcFerJ.joursFixe) estPrevuFerJ=!!(srcFerJ.joursFixe[jourIdxFerJ]?.d);
-        else if(srcFerJ.th==='sem'&&srcFerJ.semTypes) estPrevuFerJ=srcFerJ.semTypes.some(st=>st.jours&&st.jours[jourIdxFerJ]?.d);
+        else if(srcFerJ.th==='sem'&&srcFerJ.semTypes){
+          // Même règle de contexte que la détection « jour possible » plus bas
+          if(pourReprise||c.tc==='52'||srcFerJ.tc==='52'){
+            const prevusFerS=getHeuresPrevues(c,d);
+            estPrevuFerJ=!!(prevusFerS.debut&&prevusFerS.debut!==null);
+          } else {
+            const stFerJ=typeSemainePointe(c,d);
+            estPrevuFerJ=stFerJ?!!(stFerJ.jours&&stFerJ.jours[jourIdxFerJ]&&stFerJ.jours[jourIdxFerJ].d)
+                               :srcFerJ.semTypes.some(st=>st.jours&&st.jours[jourIdxFerJ]?.d);
+          }
+        }
         else if(srcFerJ.th==='plan'){
           const ptJ=srcFerJ.planType||c.planType;
           if(ptJ==='var'){
             // Même logique de contexte que la détection « jour possible » plus bas
             if(pourReprise||c.tc==='52'||srcFerJ.tc==='52') estPrevuFerJ=!!getHeuresPrevues(c,d).planVar;
-            else estPrevuFerJ=(srcFerJ.planVar||c.planVar||[]).some(v=>v.jours&&v.jours[jourIdxFerJ]);
+            else {
+              const volFerJ=typeSemainePointe(c,d);
+              estPrevuFerJ=volFerJ?!!(volFerJ.jours&&volFerJ.jours[jourIdxFerJ])
+                                  :(srcFerJ.planVar||c.planVar||[]).some(v=>v.jours&&v.jours[jourIdxFerJ]);
+            }
           }
           else if(ptJ==='min') estPrevuFerJ=!!(srcFerJ.joursMin||c.joursMin||[])[jourIdxFerJ];
         }
@@ -14599,24 +14634,32 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
               // pointée congés) : aucun jour possible, la recherche passe à la suite.
               jourPossible=!!getHeuresPrevues(c,d).planVar;
             } else {
-              // Démarrage du décompte dans une semaine posée en 46 : la semaine est pointée
-              // congés sans volume (type réel inconnu) → union des volumes du contrat
-              // (règle Sophie 14/07/2026 — doute « décompte /6 en 46 » noté, à trancher)
-              jourPossible=(srcPT.planVar||c.planVar).some(v=>v.jours&&v.jours[jourIdx]);
+              // Démarrage du décompte en 46 : volume pointé d'abord, union des volumes en
+              // secours quand le type de la semaine est inconnu (semaines pointées congés,
+              // jamais typées) — règle Sophie confirmée 14/07/2026
+              const volPointe=typeSemainePointe(c,d);
+              jourPossible=volPointe?!!(volPointe.jours&&volPointe.jours[jourIdx])
+                                    :(srcPT.planVar||c.planVar).some(v=>v.jours&&v.jours[jourIdx]);
             }
           } else if(planTypePT==='min'&&(srcPT.joursMin||c.joursMin)){
             jourPossible=(srcPT.joursMin||c.joursMin)[jourIdx];
           }
           if(jourPossible) return dateStr;
         } else if(srcPT.th==='sem'&&srcPT.semTypes){
-          // Plan sem 52 : jour possible selon le type réel de la semaine dans l'agenda
-          // Plan sem 46 : jour possible si dans au moins un semType (semaines violettes sans type connu)
           let jourPossibleSem=false;
-          if(c.tc==='52'||srcPT.tc==='52'){
-            const prevusPT=getHeuresPrevues(srcPT,d);
+          if(pourReprise||c.tc==='52'||srcPT.tc==='52'){
+            // Reprise (et contrats 52) : selon le type pointé de la semaine dans l'agenda —
+            // même résolution que getHeuresPrevues/dernierJourDecompte. Une semaine sans
+            // type connu n'offre aucun jour possible.
+            const prevusPT=getHeuresPrevues(c,d);
             jourPossibleSem=!!(prevusPT.debut&&prevusPT.debut!==null);
           } else {
-            jourPossibleSem=srcPT.semTypes.some(st=>st.jours&&st.jours[jourIdx]&&st.jours[jourIdx].d);
+            // Démarrage du décompte en 46 : type pointé d'abord, union des semTypes en
+            // secours quand le type est inconnu (semaines pointées congés, jamais typées)
+            // — règle Sophie confirmée 14/07/2026
+            const stPointe=typeSemainePointe(c,d);
+            jourPossibleSem=stPointe?!!(stPointe.jours&&stPointe.jours[jourIdx]&&stPointe.jours[jourIdx].d)
+                                    :srcPT.semTypes.some(st=>st.jours&&st.jours[jourIdx]&&st.jours[jourIdx].d);
           }
           if(jourPossibleSem) return dateStr;
         } else {
