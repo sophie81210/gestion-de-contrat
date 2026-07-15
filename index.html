@@ -15329,9 +15329,34 @@ if(tousNonPrevus){
             if(!estJourPrevu&&estHorsPeriode){
               // Si après premierTravReprise → ne pas décompter
               if(premierTravReprise&&dateStr>=premierTravReprise){ cur.setDate(cur.getDate()+1);continue; }
-              // Jour non prévu hors période : décompte automatique
+              // Jour non prévu hors période : décompte automatique — MÊME test de quota que
+              // la branche jour-prévu juste en dessous (correctif Sophie 15/07/2026 : cette
+              // branche attribuait 'decompte-conges' de façon inconditionnelle, ignorant le
+              // quota réellement disponible — cause du « trou = acquis » post-pose)
               compteurTotal++;
-              if(!fiche.valide) jour.statut='decompte-conges';
+              if(!fiche.valide){
+                const debutMoisKeyHP=new Date(debut).getFullYear()+'-'+String(new Date(debut).getMonth()+1).padStart(2,'0');
+                const ficheDebutHP=c.fiches?.[debutMoisKeyHP];
+                let anticipeOkHP;
+                if(ficheDebutHP&&ficheDebutHP.anticipeActif!==undefined){
+                  anticipeOkHP=c.cgAnticipe==='oui'&&ficheDebutHP.anticipeActif!==false;
+                } else {
+                  const [dbYHP,dbMHP]=debutMoisKeyHP.split('-').map(Number);
+                  const moisAvDebKeyHP=dbMHP===1?(dbYHP-1)+'-12':dbYHP+'-'+String(dbMHP-1).padStart(2,'0');
+                  const ficheAvDebHP=c.fiches?.[moisAvDebKeyHP];
+                  anticipeOkHP=c.cgAnticipe==='oui'&&(ficheAvDebHP?.anticipeActif!==false);
+                }
+                const debutPoseDateHP=new Date(anneeAcqPose+1,4,1);
+                const estEnPeriodePoseHP=cur>=debutPoseDateHP;
+                if(window.DEBUG_CGAM)console.log('[CGAM]',dateStr,'| post-pose non prévu | compteur',compteurTotal,'/ quota',quotaAcquis,'/ anticipé total',quotaAnticipeTotal,'| enPériodePose',estEnPeriodePoseHP,'| anticipéOk',anticipeOkHP);
+                if(estEnPeriodePoseHP&&compteurTotal<=quotaAcquis){
+                  jour.statut='decompte-acq';
+                } else if(anticipeOkHP&&compteurTotal<=quotaAnticipeTotal){
+                  jour.statut='decompte-anticipe';
+                } else {
+                  jour.statut='decompte-conges';
+                }
+              }
             } else {
               // Jour prévu ou dans la période : pose normale
               compteurTotal++;
