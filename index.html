@@ -7274,6 +7274,65 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
   return hTheoriques; // en heures
 }
 
+// Valeur horaire d'un jour déduit « congé non acquis » ou « décompte au-delà du quota ».
+// UNIQUE source de vérité : utilisée par le moteur de déduction (calcRecapFiche) et par la
+// ligne « dont congés non acquis » du récap — règle Sophie 14/07/2026 : déduction uniquement
+// sur les jours prévus (type/volume pointé connu : heures réelles du jour, 0 s'il n'est pas
+// prévu ; type inconnu : jours de l'union seulement, moyenne hebdo ÷ jours union ; plan var
+// sans horaires saisis : volume ÷ jours possibles ; plan min : volume ÷ jours max si cochable).
+function getHJourCongesNonDeduit(c, dateStr, jourSemaine){
+  const dCND=new Date(dateStr);
+  const jsCND=jourSemaine!==undefined?jourSemaine:dCND.getDay();
+  const jourIdxConge=jsCND===0?6:jsCND-1;
+  const sourceConge=getVersionActive(c,dCND);
+  const nbSemConge=sourceConge.nbSem||52;
+  const hSemMoyConge=(sourceConge.hMensu||0)*12/nbSemConge;
+  if(sourceConge.th==='fixe'&&sourceConge.joursFixe){
+    const jfConge=sourceConge.joursFixe[jourIdxConge];
+    return jfConge&&jfConge.d&&jfConge.f?parseFloat(((toM(jfConge.f)-toM(jfConge.d))/60).toFixed(4)):0;
+  }
+  if(sourceConge.th==='sem'&&sourceConge.semTypes){
+    const agKeyConge=getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr));
+    const agendasConge=sourceConge.agendas||c.agendas||[];
+    const agConge=agendasConge.find(a=>new Date(a.dateDebut)<=dCND&&new Date(a.dateFin)>=dCND);
+    const typeSemConge=agConge&&agConge.semaines&&agConge.semaines[agKeyConge];
+    const stConge=typeSemConge&&typeSemConge!=='off'?sourceConge.semTypes.find(st=>st.nom===typeSemConge):null;
+    if(stConge){
+      const jjConge=stConge.jours&&stConge.jours[jourIdxConge];
+      return jjConge&&jjConge.d&&jjConge.f?parseFloat(((toM(jjConge.f)-toM(jjConge.d))/60).toFixed(4)):0;
+    }
+    const jourUnionConge=sourceConge.semTypes.some(st=>st.jours&&st.jours[jourIdxConge]&&st.jours[jourIdxConge].d);
+    const nbJoursUnionConge=Array.from({length:7},(_,idx)=>sourceConge.semTypes.some(st=>st.jours&&st.jours[idx]&&st.jours[idx].d)).filter(Boolean).length||1;
+    return jourUnionConge?parseFloat((hSemMoyConge/nbJoursUnionConge).toFixed(4)):0;
+  }
+  if(sourceConge.th==='plan'&&sourceConge.planType==='var'&&sourceConge.planVar){
+    const agKeyCongeV=getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr));
+    const agendasCongeV=sourceConge.agendas||c.agendas||[];
+    const agCongeV=agendasCongeV.find(a=>new Date(a.dateDebut)<=dCND&&new Date(a.dateFin)>=dCND);
+    const typeSemCongeV=agCongeV&&agCongeV.semaines&&agCongeV.semaines[agKeyCongeV];
+    const volConge=typeSemCongeV&&typeSemCongeV!=='off'?sourceConge.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemCongeV):null;
+    if(volConge){
+      const jjV=volConge.jours&&volConge.jours[jourIdxConge];
+      if(jjV&&jjV.d&&jjV.f) return parseFloat(((toM(jjV.f)-toM(jjV.d))/60).toFixed(4));
+      if(jjV){
+        const nbPossVolConge=(volConge.jours||[]).filter(Boolean).length||1;
+        return parseFloat(((volConge.h||0)/nbPossVolConge).toFixed(4));
+      }
+      return 0;
+    }
+    const joursUnionV=Array.from({length:7},(_,idx)=>sourceConge.planVar.some(v=>v.jours&&v.jours[idx]));
+    const nbJoursUnionV=joursUnionV.filter(Boolean).length||1;
+    return joursUnionV[jourIdxConge]?parseFloat((hSemMoyConge/nbJoursUnionV).toFixed(4)):0;
+  }
+  if(sourceConge.th==='plan'&&sourceConge.planType==='min'){
+    const joursMinConge=sourceConge.joursMin||c.joursMin;
+    const jMaxMinConge=sourceConge.jMaxMin||c.jMaxMin||4;
+    const hMinConge=sourceConge.hMin||c.hMin||0;
+    return (joursMinConge&&joursMinConge[jourIdxConge]&&jMaxMinConge>0)?parseFloat((hMinConge/jMaxMinConge).toFixed(4)):0;
+  }
+  return parseFloat((hSemMoyConge/6).toFixed(4));
+}
+
 function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAvenantStr,periodeAv,ficheComplete){
   // Filtrer les jours si une période est spécifiée
  if(dateDebPeriode||dateFinPeriode){
@@ -8627,66 +8686,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       let hAbsJour=0;
       let hPrev;
       if(estCongesNonDeduit){
-        // Congés non acquis sur 52 sem : heures réelles du jour précis selon le planning réel
-        const sourceConge=getVersionActive(c,new Date(j.date));
-        const nbSemConge=sourceConge.nbSem||52;
-        const hSemMoyConge=(sourceConge.hMensu||0)*12/nbSemConge;
-        const jourIdxConge=j.jourSemaine===0?6:j.jourSemaine-1;
-        if(sourceConge.th==='fixe'&&sourceConge.joursFixe){
-          // Plan fixe : heures du jour précis dans le planning fixe
-          const jfConge=sourceConge.joursFixe[jourIdxConge];
-          hPrev=jfConge&&jfConge.d&&jfConge.f?parseFloat(((toM(jfConge.f)-toM(jfConge.d))/60).toFixed(4)):0;
-        } else if(sourceConge.th==='sem'&&sourceConge.semTypes){
-          // Plan sem — règle Sophie 14/07/2026 : déduction uniquement sur les jours prévus.
-          // Type de semaine pointé connu : heures réelles du jour s'il est prévu, 0 sinon.
-          // Type inconnu (semaine pointée congés, jamais typée) : seuls les jours de
-          // l'union des types comptent, valorisés moyenne hebdo ÷ nb de jours de l'union.
-          const agKeyConge=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
-          const agendasConge=sourceConge.agendas||c.agendas||[];
-          const agConge=agendasConge.find(a=>new Date(a.dateDebut)<=new Date(j.date)&&new Date(a.dateFin)>=new Date(j.date));
-          const typeSemConge=agConge&&agConge.semaines&&agConge.semaines[agKeyConge];
-          const stConge=typeSemConge&&typeSemConge!=='off'?sourceConge.semTypes.find(st=>st.nom===typeSemConge):null;
-          if(stConge){
-            const jjConge=stConge.jours&&stConge.jours[jourIdxConge];
-            hPrev=jjConge&&jjConge.d&&jjConge.f?parseFloat(((toM(jjConge.f)-toM(jjConge.d))/60).toFixed(4)):0;
-          } else {
-            const jourUnionConge=sourceConge.semTypes.some(st=>st.jours&&st.jours[jourIdxConge]&&st.jours[jourIdxConge].d);
-            const nbJoursUnionConge=Array.from({length:7},(_,idx)=>sourceConge.semTypes.some(st=>st.jours&&st.jours[idx]&&st.jours[idx].d)).filter(Boolean).length||1;
-            hPrev=jourUnionConge?parseFloat((hSemMoyConge/nbJoursUnionConge).toFixed(4)):0;
-          }
-        } else if(sourceConge.th==='plan'&&sourceConge.planType==='var'&&sourceConge.planVar){
-          // Plan var — même règle : volume pointé connu → seuls les jours du volume comptent
-          // (heures précises du jour si saisies dans le volume, sinon heures du volume ÷ ses
-          // jours POSSIBLES, pour qu'une semaine entière somme exactement au volume et qu'une
-          // semaine à cheval soit au prorata des jours possibles présents — règle Sophie
-          // 14/07/2026) ; volume inconnu → jours de l'union, moyenne hebdo ÷ jours union.
-          const agKeyCongeV=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
-          const agendasCongeV=sourceConge.agendas||c.agendas||[];
-          const agCongeV=agendasCongeV.find(a=>new Date(a.dateDebut)<=new Date(j.date)&&new Date(a.dateFin)>=new Date(j.date));
-          const typeSemCongeV=agCongeV&&agCongeV.semaines&&agCongeV.semaines[agKeyCongeV];
-          const volConge=typeSemCongeV&&typeSemCongeV!=='off'?sourceConge.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemCongeV):null;
-          if(volConge){
-            const jjV=volConge.jours&&volConge.jours[jourIdxConge];
-            if(jjV&&jjV.d&&jjV.f) hPrev=parseFloat(((toM(jjV.f)-toM(jjV.d))/60).toFixed(4));
-            else if(jjV){
-              const nbPossVolConge=(volConge.jours||[]).filter(Boolean).length||1;
-              hPrev=parseFloat(((volConge.h||0)/nbPossVolConge).toFixed(4));
-            }
-            else hPrev=0;
-          } else {
-            const joursUnionV=Array.from({length:7},(_,idx)=>sourceConge.planVar.some(v=>v.jours&&v.jours[idx]));
-            const nbJoursUnionV=joursUnionV.filter(Boolean).length||1;
-            hPrev=joursUnionV[jourIdxConge]?parseFloat((hSemMoyConge/nbJoursUnionV).toFixed(4)):0;
-          }
-        } else if(sourceConge.th==='plan'&&sourceConge.planType==='min'){
-          // Plan min : volume hebdo / jours possibles, si jour cochable
-          const joursMinConge=sourceConge.joursMin||c.joursMin;
-          const jMaxMinConge=sourceConge.jMaxMin||c.jMaxMin||4;
-          const hMinConge=sourceConge.hMin||c.hMin||0;
-          hPrev=(joursMinConge&&joursMinConge[jourIdxConge]&&jMaxMinConge>0)?parseFloat((hMinConge/jMaxMinConge).toFixed(4)):0;
-        } else {
-          hPrev=parseFloat((hSemMoyConge/6).toFixed(4));
-        }
+        // Une seule source de vérité pour la valeur d'un jour « congé non acquis » ou
+        // « décompte au-delà du quota » : getHJourCongesNonDeduit, également utilisée par
+        // la ligne « dont congés non acquis » du récap — règle Sophie 14/07/2026.
+        hPrev=getHJourCongesNonDeduit(c,j.date,j.jourSemaine);
       } else if(j._horsContratAvenant){
         const srcJourAv=sourceActif; // toujours utiliser la version active de la période (avenant)
         if(srcJourAv.planType==='min'||srcJourAv.planType==='var'){
@@ -9246,13 +9249,15 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const hSemJ=getHSemPourJour(j.date);
         montantCongesPayesMois+=(hSemJ/6)*txNetVeille;
         nbCongesPayesMois++;
-      } else if(j.statut==='conges-non'){
-        // Congés non acquis : mensualisation / hTheoriques × (hSem/6)
-        if(hTheoriques>0){
-          const hSemJ=getHSemPourJour(j.date);
-          montantCongesNonAcquis+=(hMensu*txNet/hTheoriques)*(hSemJ/6);
+      } else if(j.statut==='conges-non'||j.statut==='decompte-conges'){
+        // Congés non acquis / décompte au-delà du quota : mêmes jours et mêmes heures que la
+        // déduction (getHJourCongesNonDeduit) — montant = mensu ÷ hThéoriques × heures du jour.
+        // Seuls les jours qui coûtent réellement (heures > 0) sont comptés dans le « (N j) ».
+        const hJourCND=getHJourCongesNonDeduit(c,j.date,j.jourSemaine);
+        if(hJourCND>0){
+          if(hTheoriques>0) montantCongesNonAcquis+=(hMensu*txNet/hTheoriques)*hJourCND;
+          nbCongesNonAcquis++;
         }
-        nbCongesNonAcquis++;
       }
     });
     montantCongesPayesMois=parseFloat(montantCongesPayesMois.toFixed(2));
