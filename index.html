@@ -7192,14 +7192,22 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
       const jourIdxTh=jj.jourSemaine===0?6:jj.jourSemaine-1;
       const statutJourTh=jj.statut||getStatutPrevu(sourceActif||c,jj);
 
-      // Jours décomptés congés sans volume : hSemMoy/6
-      if(!volTh&&['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe','reprise'].includes(statutJourTh)){
-        hTheoriques+=hSemMoyPV/nbJoursPossiblesSem;
-        return;
-      }
-      // Congés avec volume : hSemMoy/6 (même règle que sans volume)
-      if(volTh&&['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe','reprise'].includes(statutJourTh)){
-        hTheoriques+=hSemMoyPV/nbJoursPossiblesSem;
+      // Jours décomptés/congés : même valorisation que la déduction (règle Sophie 14/07/2026),
+      // pour que les deux côtés de la formule « mensu ÷ h théoriques × h d'absence » se
+      // correspondent. Volume pointé connu : heures précises du jour si saisies dans le
+      // volume, sinon volume ÷ jours possibles du volume ; jour hors volume → 0.
+      // Semaine sans volume : jours de l'union seulement, moyenne hebdo ÷ jours union.
+      if(['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe','reprise'].includes(statutJourTh)){
+        if(volTh){
+          const jjVTh=volTh.jours&&volTh.jours[jourIdxTh];
+          if(jjVTh&&jjVTh.d&&jjVTh.f) hTheoriques+=(toM(jjVTh.f)-toM(jjVTh.d))/60;
+          else if(jjVTh){
+            const nbPossVolTh=(volTh.jours||[]).filter(Boolean).length||1;
+            hTheoriques+=volTh.h/nbPossVolTh;
+          }
+        } else if(joursPossiblesSem[jourIdxTh]){
+          hTheoriques+=hSemMoyPV/nbJoursPossiblesSem;
+        }
         return;
       }
       // Jour férié : valeur selon getHJourFerie
@@ -7212,8 +7220,19 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
         if(!semaineCongésPV){
           const hF=getHJourFerie(c,sourceActif,jj.date,agendaMois,false);
           hTheoriques+=hF;
-        } else if(joursPossiblesSem[jourIdxTh]){
-          // Semaine de congés entière : le férié compte comme les autres jours décomptés de cette semaine
+        } else if(volTh&&volTh.jours&&volTh.jours[jourIdxTh]){
+          // Semaine de congés entière avec volume pointé : le férié compte comme les autres
+          // jours décomptés de cette semaine (heures du jour si saisies, sinon volume ÷ jours
+          // possibles du volume)
+          const jjFTh=volTh.jours[jourIdxTh];
+          if(jjFTh&&jjFTh.d&&jjFTh.f) hTheoriques+=(toM(jjFTh.f)-toM(jjFTh.d))/60;
+          else {
+            const nbPossVolThF=(volTh.jours||[]).filter(Boolean).length||1;
+            hTheoriques+=volTh.h/nbPossVolThF;
+          }
+        } else if(!volTh&&joursPossiblesSem[jourIdxTh]){
+          // Semaine de congés entière sans volume : le férié compte comme les autres jours
+          // décomptés (moyenne hebdo ÷ jours union)
           hTheoriques+=hSemMoyPV/nbJoursPossiblesSem;
         }
         return;
