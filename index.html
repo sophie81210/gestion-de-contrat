@@ -8618,30 +8618,42 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           const jfConge=sourceConge.joursFixe[jourIdxConge];
           hPrev=jfConge&&jfConge.d&&jfConge.f?parseFloat(((toM(jfConge.f)-toM(jfConge.d))/60).toFixed(4)):0;
         } else if(sourceConge.th==='sem'&&sourceConge.semTypes){
-          // Plan sem : utiliser les heures du jour précis dans le type de semaine pointé
+          // Plan sem — règle Sophie 14/07/2026 : déduction uniquement sur les jours prévus.
+          // Type de semaine pointé connu : heures réelles du jour s'il est prévu, 0 sinon.
+          // Type inconnu (semaine pointée congés, jamais typée) : seuls les jours de
+          // l'union des types comptent, valorisés moyenne hebdo ÷ nb de jours de l'union.
           const agKeyConge=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
           const agendasConge=sourceConge.agendas||c.agendas||[];
           const agConge=agendasConge.find(a=>new Date(a.dateDebut)<=new Date(j.date)&&new Date(a.dateFin)>=new Date(j.date));
           const typeSemConge=agConge&&agConge.semaines&&agConge.semaines[agKeyConge];
-          const stConge=sourceConge.semTypes.find(st=>st.nom===typeSemConge);
-          if(stConge&&stConge.jours&&stConge.jours[jourIdxConge]){
-            const jjConge=stConge.jours[jourIdxConge];
+          const stConge=typeSemConge&&typeSemConge!=='off'?sourceConge.semTypes.find(st=>st.nom===typeSemConge):null;
+          if(stConge){
+            const jjConge=stConge.jours&&stConge.jours[jourIdxConge];
             hPrev=jjConge&&jjConge.d&&jjConge.f?parseFloat(((toM(jjConge.f)-toM(jjConge.d))/60).toFixed(4)):0;
           } else {
-            hPrev=parseFloat((hSemMoyConge/6).toFixed(4)); // fallback si type de semaine inconnu
+            const jourUnionConge=sourceConge.semTypes.some(st=>st.jours&&st.jours[jourIdxConge]&&st.jours[jourIdxConge].d);
+            const nbJoursUnionConge=Array.from({length:7},(_,idx)=>sourceConge.semTypes.some(st=>st.jours&&st.jours[idx]&&st.jours[idx].d)).filter(Boolean).length||1;
+            hPrev=jourUnionConge?parseFloat((hSemMoyConge/nbJoursUnionConge).toFixed(4)):0;
           }
         } else if(sourceConge.th==='plan'&&sourceConge.planType==='var'&&sourceConge.planVar){
-          // Plan var : heures du jour précis dans le volume pointé
+          // Plan var — même règle : volume pointé connu → seuls les jours du volume comptent
+          // (heures précises du jour si saisies dans le volume, sinon heures du volume ÷ ses
+          // jours, comme la valeur du férié en semaine travaillée) ; volume inconnu → seuls
+          // les jours de l'union comptent, moyenne hebdo ÷ nb de jours de l'union.
           const agKeyCongeV=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
           const agendasCongeV=sourceConge.agendas||c.agendas||[];
           const agCongeV=agendasCongeV.find(a=>new Date(a.dateDebut)<=new Date(j.date)&&new Date(a.dateFin)>=new Date(j.date));
           const typeSemCongeV=agCongeV&&agCongeV.semaines&&agCongeV.semaines[agKeyCongeV];
-          const volConge=sourceConge.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemCongeV);
-          if(volConge&&volConge.jours&&volConge.jours[jourIdxConge]){
-            const jjV=volConge.jours[jourIdxConge];
-            hPrev=jjV&&jjV.d&&jjV.f?parseFloat(((toM(jjV.f)-toM(jjV.d))/60).toFixed(4)):0;
+          const volConge=typeSemCongeV&&typeSemCongeV!=='off'?sourceConge.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemCongeV):null;
+          if(volConge){
+            const jjV=volConge.jours&&volConge.jours[jourIdxConge];
+            if(jjV&&jjV.d&&jjV.f) hPrev=parseFloat(((toM(jjV.f)-toM(jjV.d))/60).toFixed(4));
+            else if(jjV) hPrev=(volConge.j||0)>0?parseFloat(((volConge.h||0)/volConge.j).toFixed(4)):0;
+            else hPrev=0;
           } else {
-            hPrev=parseFloat((hSemMoyConge/6).toFixed(4));
+            const joursUnionV=Array.from({length:7},(_,idx)=>sourceConge.planVar.some(v=>v.jours&&v.jours[idx]));
+            const nbJoursUnionV=joursUnionV.filter(Boolean).length||1;
+            hPrev=joursUnionV[jourIdxConge]?parseFloat((hSemMoyConge/nbJoursUnionV).toFixed(4)):0;
           }
         } else if(sourceConge.th==='plan'&&sourceConge.planType==='min'){
           // Plan min : volume hebdo / jours possibles, si jour cochable
