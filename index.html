@@ -3591,23 +3591,12 @@ function ouvrirFiche(contratId,key){
           if(hPrevAff2>0) hDeduit='−'+fmtH(Math.round(hPrevAff2*60));
         }
       }
-    } else if(statutActuel==='decompte-conges'&&!j.heureDebPrev&&(c.tc==='52'||getVersionActive(c,new Date(j.date)).tc==='52')){
-      // Décompte congés 52 sem plan sem : heures réelles du jour précis selon le type de semaine pointé dans l'agenda
-      const srcDC=getVersionActive(c,new Date(j.date));
-      const agKeyDC=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
-      const agDC=(srcDC.agendas||c.agendas||[]).find(a=>new Date(a.dateDebut)<=new Date(j.date)&&new Date(a.dateFin)>=new Date(j.date));
-      const typeDC=agDC?.semaines?.[agKeyDC];
-      const stDC=typeDC&&srcDC.semTypes?srcDC.semTypes.find(st=>st.nom===typeDC):null;
-      const jourIdxDC=j.jourSemaine===0?6:j.jourSemaine-1;
-      const jourDC=stDC?.jours?.[jourIdxDC];
-      if(jourDC&&jourDC.d&&jourDC.f){
-        const hPrevDC=(toM(jourDC.f)-toM(jourDC.d))/60;
-        if(hPrevDC>0) hDeduit='−'+fmtH(Math.round(hPrevDC*60));
-      }
-    } else if(statutActuel==='conges-non'&&j.heureDebPrev&&(c.tc==='52'||getVersionActive(c,new Date(j.date)).tc==='52')){
-      // 52 sem : conges-non avec heures prévues déjà connues → les utiliser directement
-      const hPrevCN52=toM(j.heureFinPrev)-toM(j.heureDebPrev);
-      if(hPrevCN52>0) hDeduit='−'+fmtH(hPrevCN52);
+    } else if(['conges-non','decompte-conges'].includes(statutActuel)&&(c.tc==='52'||getVersionActive(c,new Date(j.date)).tc==='52')){
+      // Congé non acquis / décompte au-delà du quota (52) : même valeur que le moteur de
+      // déduction — une seule source de vérité (getHJourCongesNonDeduit). La colonne H±
+      // affiche exactement ce qui sera déduit ; 0 h (jour non prévu) → rien d'affiché.
+      const hPrevCND=getHJourCongesNonDeduit(c,j.date,j.jourSemaine);
+      if(hPrevCND>0) hDeduit='−'+fmtH(Math.round(hPrevCND*60));
     } else if(['abs-non','abs-am','arret','conges-non','abs-enfant'].includes(statutActuel)&&j.heureDebPrev&&j.heureFinPrev){
       // En semaine off : utiliser hSemMoy/nbJoursPossibles au lieu des heures prévues
       const agKeyAff=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
@@ -13038,6 +13027,10 @@ function buildCgContratCalendrierAcq(c, anneeAcq){
       if(statsCgAntJ.includes(j.statut)&&j.date>=debutAntStr&&j.date<=finAntStr){
         joursParDate[j.date]={statut:j.statut,valide:fiche.valide};
       }
+      // Non acquis / décompte au-delà du quota : sur toute la période affichée (demande Sophie 15/07)
+      if(['conges-non','decompte-conges'].includes(j.statut)&&j.date>=debutAcqStr&&j.date<=finAcqStr){
+        joursParDate[j.date]={statut:j.statut,valide:fiche.valide};
+      }
     });
   });
 
@@ -13072,15 +13065,8 @@ function buildCgContratCalendrierAcq(c, anneeAcq){
     const annee=anneeAcq+Math.floor(totalMois/12);
     const dernierJour=new Date(annee,moisIdx+1,0).getDate();
     const nomMois=MOIS_NOMS[moisIdx]+' '+annee;
-
-    let hasDays=false;
-    for(let d=1;d<=dernierJour;d++){
-      const dateStr=annee+'-'+String(moisIdx+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
-      const j=joursParDate[dateStr];
-      if(j&&(statsCgAcq.includes(j.statut)||statsCgAnticipe.includes(j.statut))){hasDays=true;break;}
-
-    }
-    if(!hasDays) continue;
+    // Tous les mois de la période sont affichés (demande Sophie 15/07) — auparavant un mois
+    // ne contenant qu'un décompte post-pose ou des jours non acquis était masqué
 
     html+=`<div style="margin-bottom:8px">
       <div style="font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:4px">${nomMois}</div>
@@ -13119,6 +13105,9 @@ function buildCgContratCalendrierAcq(c, anneeAcq){
         } else if(statsCgAnticipe.includes(j.statut)){
           bg=j.valide?'#e8935a':'#f9e4d6';border='1px solid #e8935a';color=j.valide?'#fff':'#e8935a';fw='600';
           title=j.valide?'Anticipé validé':'Anticipé en cours';
+        } else if(['conges-non','decompte-conges'].includes(j.statut)){
+          bg=j.valide?'#c96a6a':'#f3dcdc';border='1px solid #c96a6a';color=j.valide?'#fff':'#c96a6a';fw='600';
+          title=(j.statut==='decompte-conges'?'Décompte au-delà du quota':'Congé non acquis')+(j.valide?' (validé)':' (en cours)');
         }
       }
 
@@ -13158,16 +13147,7 @@ function buildCgContratCalendrier(c, anneeAm){
     const annee=moisIdx<4?anneeAm+1:anneeAm;
     const dernierJour=new Date(annee,moisIdx+1,0).getDate();
     const nomMois=MOIS_NOMS[moisIdx]+' '+annee;
-
-    // Vérifier si ce mois a des jours pertinents
-    let hasDays=false;
-    for(let d=1;d<=dernierJour;d++){
-      const dateStr=annee+'-'+String(moisIdx+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
-      const j=joursParDate[dateStr];
-      if(j&&(statsCgAcq.includes(j.statut)||statsCgAnticipe.includes(j.statut))){hasDays=true;break;}
-
-    }
-    if(!hasDays) continue;
+    // Tous les mois de l'année de pose sont affichés (demande Sophie 15/07)
 
     html+=`<div style="margin-bottom:8px">
       <div style="font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:4px">${nomMois}</div>
@@ -13203,6 +13183,9 @@ function buildCgContratCalendrier(c, anneeAm){
         } else if(statsCgAnticipe.includes(j.statut)){
           bg=j.valide?'#e8935a':'#f9e4d6';border='1px solid #e8935a';color=j.valide?'#fff':'#e8935a';fw='600';
           title=j.valide?'Anticipé validé':'Anticipé en cours';
+        } else if(['conges-non','decompte-conges'].includes(j.statut)){
+          bg=j.valide?'#c96a6a':'#f3dcdc';border='1px solid #c96a6a';color=j.valide?'#fff':'#c96a6a';fw='600';
+          title=(j.statut==='decompte-conges'?'Décompte au-delà du quota':'Congé non acquis')+(j.valide?' (validé)':' (en cours)');
         }
       } else if(isOff){
         bg='#f5f5f5';color='#bbb';
