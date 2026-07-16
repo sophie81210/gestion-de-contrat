@@ -14987,34 +14987,36 @@ if(tousNonPrevus){
 
         Object.values(c.conges).forEach(cg=>{
           if(cg.anneeRef === anneeAcqPose){
-            // Anticipé déjà consommé sur CE cg (validé via cg.pris + provisoire non validé) —
-            // à retrancher dans les DEUX branches ci-dessous, terminée ou non, pour que les
-            // mêmes jours ne financent jamais deux fenêtres de pose différentes. Bug confirmé
-            // Sophie 15/07/2026 (Constance, 6 jours comptés 3 fois) : un premier correctif
-            // n'avait touché QUE la branche "terminée" ; Constance passait par l'autre branche
-            // (acqBrut, non terminée) qui n'avait ni restants ni cette déduction — d'où
-            // "aucun changement" malgré le premier correctif.
+            // Anticipé déjà consommé sur CE cg (validé ET provisoire), pendant SA PROPRE
+            // fenêtre d'acquisition (juin anneeRef→avril anneeRef+1) — jamais la consommation
+            // en ACQUIS normal (mai anneeRef+1→avril anneeRef+2), qui est déjà comptée par le
+            // scan des fiches validées un peu plus bas (compteurTotal, lignes ~15074-15084).
+            // Bug confirmé Sophie 15/07/2026, en 2 temps : (1) Constance, 6 jours comptés 3
+            // fois — 1er correctif via cg.restants ; (2) régression Jules (plan fixe 52) —
+            // cg.restants nette TOUTE consommation validée, y compris l'acquis normal de
+            // mai/juin, déjà retranché par le scan compteurTotal → double soustraction, quota
+            // divisé par 2. cg.restants abandonné ici, remplacé par un scan direct limité à
+            // l'anticipé, qui est la SEULE consommation que le scan compteurTotal ne voit
+            // jamais (elle a lieu dans une fenêtre de pose différente, antérieure).
             const debutAcqCgQA=cg.anneeRef+'-06-01';
             const finAcqCgQA=(cg.anneeRef+1)+'-04-30';
-            let anticipeProvisoireCgQA=0;
+            let anticipeValideCgQA=0,anticipeProvisoireCgQA=0;
             Object.values(c.fiches||{}).forEach(f=>{
-              if(f.valide) return;
               (f.jours||[]).forEach(j=>{
                 if(!j.date||j.date<debutAcqCgQA||j.date>finAcqCgQA) return;
-                if(j.statut==='conges-anticipe'||j.statut==='decompte-anticipe') anticipeProvisoireCgQA++;
+                if(j.statut==='conges-anticipe'||j.statut==='decompte-anticipe'){
+                  if(f.valide) anticipeValideCgQA++; else anticipeProvisoireCgQA++;
+                }
               });
             });
             if(cg.estTerminee){
-              // restants (calcCongesContrat) déduit déjà l'anticipé VALIDÉ ; on retranche en
-              // plus le provisoire (fiches non validées), jamais compté par restants.
-              const restantsCgQA=cg.restants!==undefined?cg.restants:(cg.acquis||0);
-              quotaAcquis += Math.max(0,restantsCgQA-anticipeProvisoireCgQA);
+              quotaAcquis += Math.max(0,(cg.acquis||0)-anticipeValideCgQA-anticipeProvisoireCgQA);
             } else {
               // Acquisition non terminée mais on est en période de pose → utiliser acqBrut,
-              // net de l'anticipé déjà pris (validé via .pris + provisoire) sur cette même année
+              // net de l'anticipé déjà pris (validé + provisoire) sur cette même année
               const debutPoseAcq=new Date(cg.anneeRef+1,4,1);
               if(debutDate>=debutPoseAcq){
-                quotaAcquis+=Math.max(0,Math.floor(cg.acqBrut||0)-(cg.pris||0)-anticipeProvisoireCgQA);
+                quotaAcquis+=Math.max(0,Math.floor(cg.acqBrut||0)-anticipeValideCgQA-anticipeProvisoireCgQA);
               }
             }
           } else if(cg.anneeRef === anneeAcqPose - 1 && cg.estTerminee){
@@ -15500,7 +15502,12 @@ if(tousNonPrevus){
           // moment de transmettre le compteur à la période suivante, qui repartait alors trop
           // bas et rejouait le même rang de quota (bug confirmé Sophie 15/07/2026)
           if(!j.date||j.date<debut||j.date>dernierDecompte) return;
-          const statsC=['conges-acq','conges-anticipe','conges-non','conges-6j','conges-6j-fin','decompte-acq','decompte-anticipe'];
+          // 'conges-non' retiré (15/07/2026) : le compteur ne doit jamais avancer pour un
+          // jour non-acquis (règle Sophie du jour), mais ce pont entre périodes le
+          // réincluait quand même, annulant discrètement l'effet du correctif appliqué dans
+          // la boucle elle-même — cause du "compteur départ 5" au lieu de 1 chez Constance
+          // (les 4 jours non-acquis de la pose de mai regonflaient le compteur de juillet)
+          const statsC=['conges-acq','conges-anticipe','conges-6j','conges-6j-fin','decompte-acq','decompte-anticipe'];
           if(statsC.includes(j.statut)) compteurCumulatif++;
           const statsSamediMaj=['conges-acq','conges-anticipe','conges-non','conges-6j','conges-6j-fin','decompte-acq','decompte-anticipe','decompte-conges'];
           if(new Date(j.date).getDay()===6&&statsSamediMaj.includes(j.statut)) nbSamedisCumulatif++;
