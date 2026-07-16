@@ -9810,8 +9810,8 @@ function getMaxJoursSemaineForm(){
   // Plan min : le rythme réel est le champ numérique jMaxMin, pas les jours "possibles" cochés
   const nMin=parseFloat(document.getElementById('f-jmax-min')?.value)||0;
   if(nMin>mx) mx=nMin;
-  // Plan sem : id="sem{n}-cb-{i}" — max par type (chaque semaine type est indépendante) ; pour sem,
-  // les jours cochés SONT le rythme réel (pas de champ jMax séparé, contrairement à var/min)
+  // Plan sem : id="sem{n}-cb-{i}" — pour la période d'essai, Sophie (15/07/2026) demande la
+  // MOYENNE des jours/semaine entre les types définis, pas le max de la semaine la plus longue
   const semParType={};
   document.querySelectorAll('[id^="sem"][id*="-cb-"]:checked').forEach(cb=>{
     const m=cb.id.match(/^sem(\d+)-cb-\d+$/);
@@ -9819,13 +9819,22 @@ function getMaxJoursSemaineForm(){
     const n=m[1];
     semParType[n]=(semParType[n]||0)+1;
   });
-  Object.values(semParType).forEach(n=>{if(n>mx) mx=n;});
-  // Plan var : le rythme réel est le champ numérique jMax de chaque volume (id="pv-j-{n}"), pas les
-  // jours "possibles" cochés — max parmi tous les volumes définis
+  const semValeurs=Object.values(semParType);
+  if(semValeurs.length>0){
+    const semMoy=semValeurs.reduce((a,b)=>a+b,0)/semValeurs.length;
+    if(semMoy>mx) mx=semMoy;
+  }
+  // Plan var : le rythme réel est le champ numérique jMax de chaque volume (id="pv-j-{n}") —
+  // même demande Sophie : moyenne des jMax entre volumes définis, pas le max
+  const varValeurs=[];
   document.querySelectorAll('[id^="pv-j-"]').forEach(el=>{
     const v=parseFloat(el.value)||0;
-    if(v>mx) mx=v;
+    if(v>0) varValeurs.push(v);
   });
+  if(varValeurs.length>0){
+    const varMoy=varValeurs.reduce((a,b)=>a+b,0)/varValeurs.length;
+    if(varMoy>mx) mx=varMoy;
+  }
   return mx;
 }
 function initJ(containerId,prefix){
@@ -14985,7 +14994,25 @@ if(tousNonPrevus){
               // Bug confirmé Sophie 15/07/2026 (Constance, 6 jours comptés 3 fois) : cette
               // branche prenait `acquis` alors qu'un mécanisme équivalent existait déjà plus
               // bas (ligne ~15026) mais réservé aux contrats 52 semaines — jamais généralisé.
-              quotaAcquis += (cg.restants!==undefined?cg.restants:(cg.acquis||0));
+              // MAIS restants (calcCongesContrat) ne compte que les fiches VALIDÉES — une pose
+              // anticipée encore provisoire (ex. décembre de Constance, non validé) ne le
+              // réduit donc jamais, et le double comptage revient tant qu'elle n'est pas
+              // validée. On retranche ICI, en plus, l'anticipé provisoire (non validé) déjà
+              // écrit sur cette même année de référence, pour que la simulation soit juste
+              // même avant validation — sans jamais toucher `cg.restants` lui-même (qui doit
+              // rester validated-only, c'est la valeur affichée/persistée).
+              const debutAcqCgQA=cg.anneeRef+'-06-01';
+              const finAcqCgQA=(cg.anneeRef+1)+'-04-30';
+              let anticipeProvisoireCgQA=0;
+              Object.values(c.fiches||{}).forEach(f=>{
+                if(f.valide) return;
+                (f.jours||[]).forEach(j=>{
+                  if(!j.date||j.date<debutAcqCgQA||j.date>finAcqCgQA) return;
+                  if(j.statut==='conges-anticipe'||j.statut==='decompte-anticipe') anticipeProvisoireCgQA++;
+                });
+              });
+              const restantsCgQA=cg.restants!==undefined?cg.restants:(cg.acquis||0);
+              quotaAcquis += Math.max(0,restantsCgQA-anticipeProvisoireCgQA);
             } else {
               // Acquisition non terminée mais on est en période de pose → utiliser acqBrut
               const debutPoseAcq=new Date(cg.anneeRef+1,4,1);
