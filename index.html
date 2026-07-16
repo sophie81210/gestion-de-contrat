@@ -12829,9 +12829,13 @@ function genOngletCongesContrat(c){
   }
 
   annees.reverse().forEach(anneeAcq=>{
-    // Ignorer les années sans données (avant le contrat)
+    // Ignorer les années sans données (avant le contrat) — l'existence de l'entrée suffit,
+    // ne PAS exiger acquis/anticipeTotal>0 : une année qui vient de démarrer (1 seul mois
+    // validé) a une entrée créée par calcCongesContrat mais des totaux encore à 0, et son
+    // bloc doit quand même s'afficher (bug confirmé Sophie 15/07/2026 : bloc invisible juste
+    // après validation de juin, jours partis s'afficher à tort sur l'année précédente)
     const cgAcq=c.conges&&c.conges[anneeAcq];
-    if(!cgAcq||(!cgAcq.acquis&&!cgAcq.anticipeTotal)) return;
+    if(!cgAcq) return;
     // Période d'acquisition : juin N → mai N+1
     const debutAcqStr=anneeAcq+'-06-01';
     const finAcqStr=(anneeAcq+2)+'-04-30';
@@ -14975,7 +14979,13 @@ if(tousNonPrevus){
         Object.values(c.conges).forEach(cg=>{
           if(cg.anneeRef === anneeAcqPose){
             if(cg.estTerminee){
-              quotaAcquis += (cg.acquis||0);
+              // Utiliser restants (net de ce qui a déjà été pris en anticipé pendant la
+              // fenêtre de pose précédente de cette même année, ex. décembre/janvier), jamais
+              // acquis brut — sinon les mêmes jours financent deux fenêtres de pose à la fois.
+              // Bug confirmé Sophie 15/07/2026 (Constance, 6 jours comptés 3 fois) : cette
+              // branche prenait `acquis` alors qu'un mécanisme équivalent existait déjà plus
+              // bas (ligne ~15026) mais réservé aux contrats 52 semaines — jamais généralisé.
+              quotaAcquis += (cg.restants!==undefined?cg.restants:(cg.acquis||0));
             } else {
               // Acquisition non terminée mais on est en période de pose → utiliser acqBrut
               const debutPoseAcq=new Date(cg.anneeRef+1,4,1);
