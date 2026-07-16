@@ -14987,36 +14987,35 @@ if(tousNonPrevus){
 
         Object.values(c.conges).forEach(cg=>{
           if(cg.anneeRef === anneeAcqPose){
-            if(cg.estTerminee){
-              // Utiliser restants (net de ce qui a déjà été pris en anticipé pendant la
-              // fenêtre de pose précédente de cette même année, ex. décembre/janvier), jamais
-              // acquis brut — sinon les mêmes jours financent deux fenêtres de pose à la fois.
-              // Bug confirmé Sophie 15/07/2026 (Constance, 6 jours comptés 3 fois) : cette
-              // branche prenait `acquis` alors qu'un mécanisme équivalent existait déjà plus
-              // bas (ligne ~15026) mais réservé aux contrats 52 semaines — jamais généralisé.
-              // MAIS restants (calcCongesContrat) ne compte que les fiches VALIDÉES — une pose
-              // anticipée encore provisoire (ex. décembre de Constance, non validé) ne le
-              // réduit donc jamais, et le double comptage revient tant qu'elle n'est pas
-              // validée. On retranche ICI, en plus, l'anticipé provisoire (non validé) déjà
-              // écrit sur cette même année de référence, pour que la simulation soit juste
-              // même avant validation — sans jamais toucher `cg.restants` lui-même (qui doit
-              // rester validated-only, c'est la valeur affichée/persistée).
-              const debutAcqCgQA=cg.anneeRef+'-06-01';
-              const finAcqCgQA=(cg.anneeRef+1)+'-04-30';
-              let anticipeProvisoireCgQA=0;
-              Object.values(c.fiches||{}).forEach(f=>{
-                if(f.valide) return;
-                (f.jours||[]).forEach(j=>{
-                  if(!j.date||j.date<debutAcqCgQA||j.date>finAcqCgQA) return;
-                  if(j.statut==='conges-anticipe'||j.statut==='decompte-anticipe') anticipeProvisoireCgQA++;
-                });
+            // Anticipé déjà consommé sur CE cg (validé via cg.pris + provisoire non validé) —
+            // à retrancher dans les DEUX branches ci-dessous, terminée ou non, pour que les
+            // mêmes jours ne financent jamais deux fenêtres de pose différentes. Bug confirmé
+            // Sophie 15/07/2026 (Constance, 6 jours comptés 3 fois) : un premier correctif
+            // n'avait touché QUE la branche "terminée" ; Constance passait par l'autre branche
+            // (acqBrut, non terminée) qui n'avait ni restants ni cette déduction — d'où
+            // "aucun changement" malgré le premier correctif.
+            const debutAcqCgQA=cg.anneeRef+'-06-01';
+            const finAcqCgQA=(cg.anneeRef+1)+'-04-30';
+            let anticipeProvisoireCgQA=0;
+            Object.values(c.fiches||{}).forEach(f=>{
+              if(f.valide) return;
+              (f.jours||[]).forEach(j=>{
+                if(!j.date||j.date<debutAcqCgQA||j.date>finAcqCgQA) return;
+                if(j.statut==='conges-anticipe'||j.statut==='decompte-anticipe') anticipeProvisoireCgQA++;
               });
+            });
+            if(cg.estTerminee){
+              // restants (calcCongesContrat) déduit déjà l'anticipé VALIDÉ ; on retranche en
+              // plus le provisoire (fiches non validées), jamais compté par restants.
               const restantsCgQA=cg.restants!==undefined?cg.restants:(cg.acquis||0);
               quotaAcquis += Math.max(0,restantsCgQA-anticipeProvisoireCgQA);
             } else {
-              // Acquisition non terminée mais on est en période de pose → utiliser acqBrut
+              // Acquisition non terminée mais on est en période de pose → utiliser acqBrut,
+              // net de l'anticipé déjà pris (validé via .pris + provisoire) sur cette même année
               const debutPoseAcq=new Date(cg.anneeRef+1,4,1);
-              if(debutDate>=debutPoseAcq) quotaAcquis+=Math.floor(cg.acqBrut||0);
+              if(debutDate>=debutPoseAcq){
+                quotaAcquis+=Math.max(0,Math.floor(cg.acqBrut||0)-(cg.pris||0)-anticipeProvisoireCgQA);
+              }
             }
           } else if(cg.anneeRef === anneeAcqPose - 1 && cg.estTerminee){
             // Année précédente immédiate : ajouter les restants (non perdus)
