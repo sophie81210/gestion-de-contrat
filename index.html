@@ -14290,22 +14290,26 @@ function buildCgAmDetail(anneeDebut,data){
       const jourSem=jourDate.getDay(); // 0=dim
       const jourIdx=jourSem===0?6:jourSem-1;
       const isReposH=jourSem===reposHebdo;
-      // Tous les fériés sont non cochables comme jour de congé dans le calendrier AM
+      // Fériés cochables (demande Sophie 14-15/07/2026) : contour jaune au lieu du fond jaune
+      // plein, pour rester identifiables comme fériés même une fois cochés dans une pose —
+      // supprime le "trou" qui coupait une pose en plusieurs périodes séparées autour d'un
+      // férié. La classification réelle du jour (reste férié / décompté) est décidée par
+      // majFichesCgAm selon les règles du cahier des charges — cocher ne change que l'agenda.
       const isFerNonTrav=isFerie(dateStr,{});
       const isPose=(data.jours[dateStr]==='pose');
-      // Couleur de fond — tous les fériés non travaillés sont jaunes
+      // Couleur de fond — un férié coché suit la couleur pose, un férié non coché reste blanc
       let bg='#fff',color='var(--tx)',cursor='pointer',border='1px solid #e0d8d0';
       if(isReposH){bg='#f0f0f0';color='var(--tx3)';cursor='not-allowed';}
-      if(isFerNonTrav&&!isPose){bg='#fff8e1';color='#854F0B';cursor='not-allowed';}
       if(isPose){bg=eclaircir('#9B7A94',0.15);color='#fff';border='none';}
+      if(isFerNonTrav){border=isPose?'2px solid #F2C24A':'2px solid #F2C24A';if(!isPose)color='#854F0B';}
       // Bordure pointillée verte si jour éligible pour poser des acquis restants
-      if(!isPose&&!isReposH&&jourEligibleBordure(dateStr)){
+      if(!isPose&&!isReposH&&!isFerNonTrav&&jourEligibleBordure(dateStr)){
         border='2px dashed var(--vt)';
       }
       // Verrouiller si fiche validée pour au moins un contrat actif
       const moisKey=dateStr.slice(0,7);
       const ficheValidee=S.contrats.some(ct=>ct.signe&&!ct.cloture&&ct.fiches?.[moisKey]?.valide);
-      const clickable=!isReposH&&!isFerNonTrav&&!ficheValidee;
+      const clickable=!isReposH&&!ficheValidee;
       if(ficheValidee&&!isReposH){cursor='not-allowed';}
       joursHtml+=`<div onclick="${clickable?`toggleCgAm(${anneeDebut},'${dateStr}')`:''}"
         title="${ficheValidee?'Feuille de présence validée — modification impossible':''}"
@@ -14338,8 +14342,6 @@ function buildCgAmDetail(anneeDebut,data){
     return false;
   });
   const ok=nb===joursMax&&(samediTravaille||nbSamedis===5);
-  const feriesDecochesMsg=S._cgAmFeriesDecoches>0?`<div style="background:#fff3cd;color:#856404;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:8px">⚠ ${S._cgAmFeriesDecoches} jour(s) férié(s) ont été décochés automatiquement car ils sont désormais acquis. Veuillez cocher des jours supplémentaires.</div>`:'';
-  S._cgAmFeriesDecoches=0;
   const alertHtml=ok?`<div style="background:var(--vtc);color:var(--vt);padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">✓ ${joursMax} jours posés dont 5 samedis — calendrier validé !</div>`:
     `<div style="font-size:15px;font-weight:600;color:var(--tx2);margin-bottom:10px">${nb}/${joursMax} jours cochés</div>`;
 
@@ -14362,7 +14364,7 @@ function buildCgAmDetail(anneeDebut,data){
     </div>
     <div class="card" id="cgam-cal-card-${anneeDebut}">
       <div class="ctitle" style="margin-bottom:4px">Calendrier des congés — 1er mai ${anneeDebut} au 30 avril ${anneeFin}</div>
-      ${feriesDecochesMsg}${alertHtml}
+      ${alertHtml}
       <div style="font-size:11px;color:var(--tx3);margin-bottom:10px">
         Cliquez sur les jours pour les cocher (vert).<br>
         <span style="background:#f0f0f0;padding:1px 4px;border-radius:3px">Gris</span> = jour de repos —
@@ -15252,16 +15254,32 @@ if(tousNonPrevus){
               cur.setDate(cur.getDate()+1);continue;
             }
             // Vérifier si entouré de jours acquis/anticipés
+            // Veille : lecture directe sûre — dans une marche chronologique, la veille est
+            // TOUJOURS déjà décidée (par cette même passe ou par une fiche validée figée).
             const veilleStr=new Date(cur);veilleStr.setDate(veilleStr.getDate()-1);
-            const lendStr=new Date(cur);lendStr.setDate(lendStr.getDate()+1);
             const veilleKey=veilleStr.getFullYear()+'-'+String(veilleStr.getMonth()+1).padStart(2,'0');
-            const lendKey=lendStr.getFullYear()+'-'+String(lendStr.getMonth()+1).padStart(2,'0');
             const veilleJour=c.fiches[veilleKey]?.jours.find(j=>j.date===veilleStr.getFullYear()+'-'+String(veilleStr.getMonth()+1).padStart(2,'0')+'-'+String(veilleStr.getDate()).padStart(2,'0'));
-            const lendJour=c.fiches[lendKey]?.jours.find(j=>j.date===lendStr.getFullYear()+'-'+String(lendStr.getMonth()+1).padStart(2,'0')+'-'+String(lendStr.getDate()).padStart(2,'0'));
-           const veilleAcquis=['conges-acq','conges-anticipe'].includes(veilleJour?.statut);
-            const lendAcquis=['conges-acq','conges-anticipe'].includes(lendJour?.statut);
+            const veilleAcquis=['conges-acq','conges-anticipe'].includes(veilleJour?.statut);
             const veilleConges=['conges-acq','conges-anticipe','conges-non'].includes(veilleJour?.statut);
-            const lendConges=['conges-acq','conges-anticipe','conges-non'].includes(lendJour?.statut);
+            // Lendemain : PROJECTION, jamais lecture d'un statut déjà écrit — ce jour n'a pas
+            // encore été traité dans cette passe chronologique, son statut stocké serait celui
+            // d'un calcul antérieur, potentiellement obsolète (bug confirmé 15/07/2026, cas
+            // Constance/9 juin). On projette ce qu'il adviendrait avec le solde courant.
+            // Un arrêt déclaré (donnée saisie par l'utilisatrice, jamais écrite par cette
+            // fonction) reste sûr à lire directement — Sophie 15/07 : on ne peut PAS prédire
+            // un arrêt pas encore déclaré, ce n'est pas une donnée calculable, c'est une limite
+            // acceptée (pas de mécanisme à construire pour ce cas).
+            const lendStr=new Date(cur);lendStr.setDate(lendStr.getDate()+1);
+            const lendDateStrFer=lendStr.getFullYear()+'-'+String(lendStr.getMonth()+1).padStart(2,'0')+'-'+String(lendStr.getDate()).padStart(2,'0');
+            const lendKey=lendStr.getFullYear()+'-'+String(lendStr.getMonth()+1).padStart(2,'0');
+            const lendJour=c.fiches[lendKey]?.jours.find(j=>j.date===lendDateStrFer);
+            const lendArret=['arret','abs-am'].includes(lendJour?.statut);
+            const srcLendFer=getVersionActive(c,lendStr);
+            const prevusLendFer=getHeuresPrevues(srcLendFer,lendStr);
+            const lendPrevuFer=!!(prevusLendFer.debut&&prevusLendFer.debut!=='prévu')||!!(prevusLendFer.planVar);
+            const lendDansFenetreFer=lendDateStrFer<=fin||(premierTravReprise&&lendDateStrFer<premierTravReprise);
+            const lendConges=lendPrevuFer&&lendDansFenetreFer&&!lendArret;
+            const lendAcquis=lendConges&&(compteurTotal+1<=quotaAcquis);
             if(veilleAcquis&&lendAcquis){
               // Reste férié (entouré de jours acquis)
               cur.setDate(cur.getDate()+1);continue;
@@ -15501,29 +15519,11 @@ if(tousNonPrevus){
   S.contrats.forEach((c,i)=>{if(c.fiches)S.contrats[i]=c;});
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
 
-  // Décocher les fériés cochés qui sont devenus acquis (non cochables)
-  const dataAM=S.congesAM[anneeDebut];
-  if(dataAM&&dataAM.jours){
-    const contratsActifsD=S.contrats.filter(c=>c.signe&&!estContratCloture(c));
-    let feriesDecoches=0;
-    Object.keys(dataAM.jours).forEach(dateStr=>{
-      if(dataAM.jours[dateStr]!=='pose') return;
-      const isFerNonTravD=contratsActifsD.length>0&&contratsActifsD.every(c=>{
-        if(!isFerie(dateStr,c)) return false;
-        const p=dateStr.split('-');const mmdd=p[1]+'-'+p[2];
-        return !(c.feriesTravailles||[]).includes(mmdd);
-      });
-      if(isFerNonTravD&&ferieCouvretParAcquis(dateStr,anneeDebut,dataAM)){
-        delete dataAM.jours[dateStr];
-        feriesDecoches++;
-      }
-    });
-    if(feriesDecoches>0){
-      S.congesAM[anneeDebut]=dataAM;
-      // Afficher le message d'invitation à recocher
-      S._cgAmFeriesDecoches=(S._cgAmFeriesDecoches||0)+feriesDecoches;
-    }
-  }
+  // Ancien mécanisme de décochage automatique des fériés retiré (15/07/2026) : les fériés
+  // sont désormais cochables sur le calendrier AM (contour jaune, cf. buildCgAmDetail) et leur
+  // classification réelle (reste férié / décompté) est décidée par la boucle ci-dessus via
+  // estFerie — décocher un férié correctement classé recréerait le trou qui coupait une pose
+  // en plusieurs périodes séparées (cause racine de plusieurs bugs de reprise).
 
   // Sauvegarder chaque contrat modifié individuellement
  if(sauvegarder&&window.FB_USER&&window.fbSaveData){
