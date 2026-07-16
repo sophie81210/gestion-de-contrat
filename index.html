@@ -3954,10 +3954,9 @@ function ouvrirFiche(contratId,key){
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
   S.ficheModifiee=true;
-  // Recalculer les statuts congés avec le nouveau choix (double appel pour corriger premierTrav=null)
+  // Recalculer les statuts congés avec le nouveau choix (convergence gérée en interne par majFichesCgAm)
   const anneeAmKey=getAnneeAmPourDate(key);
   majFichesCgAm(anneeAmKey);
-  majFichesCgAm(anneeAmKey,false);
   ouvrirFiche(contratId,key);
 }
 
@@ -5941,10 +5940,10 @@ function _validerFicheSuite(contratId,key,c){
   }
   // Recalculer les statuts congés AVANT validation (sinon, si c'est la dernière fiche d'un contrat avec rupture confirmée, le contrat serait déjà "clôturé" et exclu du recalcul)
   const anneeAm=getAnneeAmPourDate(key);
-  if(S.congesAM&&S.congesAM[anneeAm]){majFichesCgAm(anneeAm,false);majFichesCgAm(anneeAm,false);}
+  if(S.congesAM&&S.congesAM[anneeAm]) majFichesCgAm(anneeAm,false);
   // Recalculer aussi l'année AM suivante si le mois validé peut affecter des fiches suivantes
   const anneeAmSuivante=anneeAm+1;
-  if(S.congesAM&&S.congesAM[anneeAmSuivante]){majFichesCgAm(anneeAmSuivante,false);majFichesCgAm(anneeAmSuivante,false);}
+  if(S.congesAM&&S.congesAM[anneeAmSuivante]) majFichesCgAm(anneeAmSuivante,false);
   // Valider la fiche
   c.fiches[key].valide=true;c.fiches[key].complete=true;
   c._regulDirty=true; // invalider le cache régularisation
@@ -5981,9 +5980,9 @@ function _validerFicheSuite(contratId,key,c){
   }
   // Recalculer les statuts congés pour les mois suivants non validés
   const anneeAmVal=getAnneeAmPourDate(key);
-  majFichesCgAm(anneeAmVal, false);majFichesCgAm(anneeAmVal, false);
+  majFichesCgAm(anneeAmVal, false);
   const anneeAmValSuivante=getAnneeAmPourDate(key.split('-')[0]+'-'+(parseInt(key.split('-')[1])+1<13?String(parseInt(key.split('-')[1])+1).padStart(2,'0'):'01'));
-  if(anneeAmValSuivante!==anneeAmVal){majFichesCgAm(anneeAmValSuivante, false);majFichesCgAm(anneeAmValSuivante, false);}
+  if(anneeAmValSuivante!==anneeAmVal) majFichesCgAm(anneeAmValSuivante, false);
   toast('Feuille de '+MOIS[c.fiches[key].mois]+' validée !');
   // Avertissement 30 avril à la validation de janvier
   const [kvy,kvm]=key.split('-').map(Number);
@@ -6045,9 +6044,9 @@ function deverrouillerFiche(contratId,key){
   S.ficheModifiee=false;
   calcCongesContrat(c);
   const anneeAmDev=getAnneeAmPourDate(key);
-  if(S.congesAM&&S.congesAM[anneeAmDev]){majFichesCgAm(anneeAmDev,false);majFichesCgAm(anneeAmDev,false);}
+  if(S.congesAM&&S.congesAM[anneeAmDev]) majFichesCgAm(anneeAmDev,false);
   const anneeAmDevSuivante=anneeAmDev+1;
-  if(S.congesAM&&S.congesAM[anneeAmDevSuivante]){majFichesCgAm(anneeAmDevSuivante,false);majFichesCgAm(anneeAmDevSuivante,false);}
+  if(S.congesAM&&S.congesAM[anneeAmDevSuivante]) majFichesCgAm(anneeAmDevSuivante,false);
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
@@ -14169,8 +14168,10 @@ function buildCgAmDetail(anneeDebut,data){
   // Récupérer le repos hebdo depuis les contrats signés actifs
   const contratsActifs=S.contrats.filter(c=>c.signe&&!estContratCloture(c));
   const reposHebdo=contratsActifs[0]?.reposHebdo||0;
-  // Compter les jours cochés
-  const joursCoches=Object.keys(data.jours||{}).filter(k=>data.jours[k]==='pose');
+  // Compter les jours cochés — un férié coché (contour jaune) ne doit JAMAIS incrémenter ce
+  // total (demande Sophie 14-15/07/2026 : "sans les ajouter au compteur /30", le cochage d'un
+  // férié ne sert qu'à garantir la continuité de la période, pas à consommer un jour de pose)
+  const joursCoches=Object.keys(data.jours||{}).filter(k=>data.jours[k]==='pose'&&!isFerie(k,{}));
   const nb=joursCoches.length;
   const nbSamedisCoches=joursCoches.filter(d=>{
     const p=d.split('-');
@@ -14478,7 +14479,6 @@ function toggleCgAm(anneeDebut,dateStr){
   if(!S.congesAM) S.congesAM={};
   if(!S.congesAM[anneeDebut]) S.congesAM[anneeDebut]={enfants:0,jours:{}};
   const data=S.congesAM[anneeDebut];
-  const joursCoches=Object.keys(data.jours).filter(k=>data.jours[k]==='pose').length;
   if(data.jours[dateStr]==='pose'){
     delete data.jours[dateStr];
   } else {
@@ -14492,9 +14492,7 @@ function toggleCgAm(anneeDebut,dateStr){
   S.cgAmModifie=true;
   S._cgAmModifieDepuisOuverture=true;
   localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM));
-  majFichesCgAm(anneeDebut,false);
-  // Deuxième passage pour corriger les périodes dont premierTrav était null au 1er passage
-  majFichesCgAm(anneeDebut,false);
+  majFichesCgAm(anneeDebut,false); // convergence gérée en interne (cf. majFichesCgAm)
   ouvrirCgAm(anneeDebut);
 }
 
@@ -14523,7 +14521,19 @@ function calcSeuilAcquis(c, anneeDebut, premierJourPose){
   return Math.min(30, seuil);
 }
 
+// Point d'entrée public : exécute deux passes internes, comme le faisaient manuellement
+// 6 des 13 sites d'appel historiques (les 7 autres n'appelaient qu'une fois et étaient donc
+// probablement sous-convergés). Cause racine trouvée le 15/07/2026 : calcCongesContrat (tout
+// début de passe) LIT les statuts conges-acq/anticipe/decompte-acq/anticipe que cette même
+// fonction ÉCRIT plus loin — le quota dépend des statuts, qui dépendent du quota. Une passe
+// calcule le quota depuis des statuts d'avant ce calcul ; la deuxième relit les statuts frais
+// que la première vient d'écrire et converge. Centralisé ici pour que tous les appelants
+// n'aient plus qu'à appeler une seule fois.
 function majFichesCgAm(anneeDebut, sauvegarder=true){
+  majFichesCgAmPasse(anneeDebut,false);
+  majFichesCgAmPasse(anneeDebut,sauvegarder);
+}
+function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
   if(window.DEBUG_CGAM)console.log('[CGAM] === appel majFichesCgAm année',anneeDebut,'===');
   const data=S.congesAM[anneeDebut];
   if(!data)return;
