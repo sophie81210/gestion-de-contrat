@@ -15274,15 +15274,22 @@ if(tousNonPrevus){
           if(jour.statut==='reprise') break;
           if(jour.statut==='travaille') break;
 
-          compteurTotal++;
           if(!fiche.valide){
-            if(compteurTotal<=quotaAcquis){
+            // Le compteur n'avance QUE si le jour devient réellement acquis ou anticipé —
+            // jamais pour un jour qui finit non-acquis (règle Sophie 15/07/2026 : un jour
+            // "gâché" ne doit jamais grignoter le quota disponible pour une pose différente,
+            // plus tard dans la même année). D'où décider AVANT d'incrémenter, pas après.
+            if(compteurTotal+1<=quotaAcquis){
+              compteurTotal++;
               jour.statut='decompte-acq';
-            } else if(c.cgAnticipe==='oui'&&compteurTotal<=quotaAnticipeTotal){
+            } else if(c.cgAnticipe==='oui'&&compteurTotal+1<=quotaAnticipeTotal){
+              compteurTotal++;
               jour.statut='decompte-anticipe';
             } else {
-              jour.statut='decompte-conges'; // hors quota
+              jour.statut='decompte-conges'; // hors quota — ne consomme pas le compteur
             }
+          } else {
+            compteurTotal++; // fiche validée : incrément conservé tel quel (cf. bug #5, 14/07)
           }
           if(window.DEBUG_CGAM)console.log('[CGAM]',dateStr,'| post-pose | compteur',compteurTotal,'/ quota',quotaAcquis,'→',jour.statut,fiche.valide?'(fiche validée, statut conservé)':'');
           cur.setDate(cur.getDate()+1);continue;
@@ -15355,7 +15362,6 @@ if(tousNonPrevus){
               if(!fiche.valide) jour.statut=null;
               cur.setDate(cur.getDate()+1);continue;
             }
-            compteurTotal++;
             if(!fiche.valide){
               // Pour les mois à cheval : vérifier anticipeActif du mois précédent ou courant
               // On remonte jusqu'au premier mois de la période qui a un anticipeActif explicite
@@ -15379,15 +15385,21 @@ if(tousNonPrevus){
               // Avant mai N+1 (pendant l'acquisition) → toujours anticipé
               const debutPoseDate=new Date(anneeAcqPose+1,4,1); // 1er mai N+1
               const estEnPeriodePose=cur>=debutPoseDate;
-              if(estEnPeriodePose&&compteurTotal<=quotaAcquis){
+              // Le compteur n'avance que si le jour devient acquis ou anticipé — jamais pour
+              // un non-acquis (règle Sophie 15/07/2026, cf. branche post-pose plus haut)
+              if(estEnPeriodePose&&compteurTotal+1<=quotaAcquis){
+                compteurTotal++;
                 jour.statut='conges-acq';
-              } else if(anticipeOk&&compteurTotal<=quotaAnticipeTotal){
+              } else if(anticipeOk&&compteurTotal+1<=quotaAnticipeTotal){
+                compteurTotal++;
                 jour.statut='conges-anticipe';
               } else {
                 jour.statut='conges-non';
               }
               if(estSamedi) nbSamedisDecomptes++;
               if(window.DEBUG_CGAM)console.log('[CGAM]',dateStr,'| férié décompté | compteur',compteurTotal,'/ quota',quotaAcquis,'/ anticipé total',quotaAnticipeTotal,'→',jour.statut);
+            } else {
+              compteurTotal++; // fiche validée : incrément conservé tel quel
             }
           } else {
             // Jour ouvrable décompté
@@ -15404,8 +15416,9 @@ if(tousNonPrevus){
               // Jour non prévu hors période : décompte automatique — MÊME test de quota que
               // la branche jour-prévu juste en dessous (correctif Sophie 15/07/2026 : cette
               // branche attribuait 'decompte-conges' de façon inconditionnelle, ignorant le
-              // quota réellement disponible — cause du « trou = acquis » post-pose)
-              compteurTotal++;
+              // quota réellement disponible — cause du « trou = acquis » post-pose). Le
+              // compteur n'avance que si le jour devient acquis ou anticipé (2e correctif du
+              // même jour : jamais pour un non-acquis).
               if(!fiche.valide){
                 const debutMoisKeyHP=new Date(debut).getFullYear()+'-'+String(new Date(debut).getMonth()+1).padStart(2,'0');
                 const ficheDebutHP=c.fiches?.[debutMoisKeyHP];
@@ -15421,17 +15434,20 @@ if(tousNonPrevus){
                 const debutPoseDateHP=new Date(anneeAcqPose+1,4,1);
                 const estEnPeriodePoseHP=cur>=debutPoseDateHP;
                 if(window.DEBUG_CGAM)console.log('[CGAM]',dateStr,'| post-pose non prévu | compteur',compteurTotal,'/ quota',quotaAcquis,'/ anticipé total',quotaAnticipeTotal,'| enPériodePose',estEnPeriodePoseHP,'| anticipéOk',anticipeOkHP);
-                if(estEnPeriodePoseHP&&compteurTotal<=quotaAcquis){
+                if(estEnPeriodePoseHP&&compteurTotal+1<=quotaAcquis){
+                  compteurTotal++;
                   jour.statut='decompte-acq';
-                } else if(anticipeOkHP&&compteurTotal<=quotaAnticipeTotal){
+                } else if(anticipeOkHP&&compteurTotal+1<=quotaAnticipeTotal){
+                  compteurTotal++;
                   jour.statut='decompte-anticipe';
                 } else {
                   jour.statut='decompte-conges';
                 }
+              } else {
+                compteurTotal++; // fiche validée : incrément conservé tel quel
               }
             } else {
               // Jour prévu ou dans la période : pose normale
-              compteurTotal++;
               if(!fiche.valide){
                 const debutMoisKey2=new Date(debut).getFullYear()+'-'+String(new Date(debut).getMonth()+1).padStart(2,'0');
                 const ficheDebut2=c.fiches?.[debutMoisKey2];
@@ -15447,9 +15463,13 @@ if(tousNonPrevus){
                 const debutPoseDate2=new Date(anneeAcqPose+1,4,1);
                 const estEnPeriodePose2=cur>=debutPoseDate2;
                 if(window.DEBUG_CGAM)console.log('[CGAM]',dateStr,'| pose | compteur',compteurTotal,'/ quota',quotaAcquis,'/ anticipé total',quotaAnticipeTotal,'| enPériodePose',estEnPeriodePose2,'| anticipéOk',anticipeOk);
-                if(estEnPeriodePose2&&compteurTotal<=quotaAcquis){
+                // Le compteur n'avance que si le jour devient acquis ou anticipé — jamais pour
+                // un non-acquis ni pour une semaine off (règle Sophie 15/07/2026)
+                if(estEnPeriodePose2&&compteurTotal+1<=quotaAcquis){
+                  compteurTotal++;
                   jour.statut='conges-acq';
-                } else if(anticipeOk&&compteurTotal<=quotaAnticipeTotal){
+                } else if(anticipeOk&&compteurTotal+1<=quotaAnticipeTotal){
+                  compteurTotal++;
                   jour.statut='conges-anticipe';
                 } else {
                   // Semaine off : ne pas décompter (absence employeur)
@@ -15462,6 +15482,8 @@ if(tousNonPrevus){
                 }
                 if(estSamedi) nbSamedisDecomptes++;
                 if(window.DEBUG_CGAM)console.log('[CGAM]',dateStr,'| pose → statut',jour.statut);
+              } else {
+                compteurTotal++; // fiche validée : incrément conservé tel quel
               }
             }
           }
