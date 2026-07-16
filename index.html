@@ -1137,36 +1137,52 @@ async function saveToFirestoreSync(){
 }
 
 let _saveTimer=null;
+let _saveEnCours=false; // écriture Firestore en cours (fetch envoyée, réponse pas encore reçue)
 const _contratsModifies=new Set(); // IDs des contrats modifiés depuis la dernière sauvegarde
+async function _flushSaveFirestore(){
+  if(!window.FB_USER||!window.fbSaveData) return;
+  _saveEnCours=true;
+  try{
+    const contratsCompresses=getContratsCompresses();
+    // Ne sauvegarder que les contrats modifiés (ou tous si aucun tracké)
+    const contratsClean=_contratsModifies.size>0
+      ? contratsCompresses.filter(c=>_contratsModifies.has(c.id))
+      : contratsCompresses;
+    _contratsModifies.clear();
+    const dataClean=JSON.parse(JSON.stringify({
+      contrats:contratsClean, // seulement les modifiés
+      params:S.params||{},
+      congesAM:S.congesAM||{}
+    }));
+    await window.fbSaveData(window.FB_USER.uid, dataClean);
+  }catch(e){
+    console.error('Save Firebase:',e);
+    toast('\u26A0 Sauvegarde Firebase \u00E9chou\u00E9e \u2014 v\u00E9rifiez votre connexion');
+  }finally{
+    _saveEnCours=false;
+  }
+}
 async function saveToFirestore(){
   if(!window.FB_USER||!window.fbSaveData) return;
   // Sauvegarder immédiatement dans localStorage
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
   // Debounce : attendre 2s d'inactivité avant d'écrire sur Firestore
   if(_saveTimer)clearTimeout(_saveTimer);
-  _saveTimer=setTimeout(async()=>{
-    try{
-      // Filtrer les fiches futures non validées pour réduire la taille des données
-      const now=new Date();
-      const moisActuel=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-      const contratsCompresses=getContratsCompresses();
-      // Ne sauvegarder que les contrats modifiés (ou tous si aucun tracké)
-      const contratsClean=_contratsModifies.size>0
-        ? contratsCompresses.filter(c=>_contratsModifies.has(c.id))
-        : contratsCompresses;
-      _contratsModifies.clear();
-      const dataClean=JSON.parse(JSON.stringify({
-        contrats:contratsClean, // seulement les modifiés
-        params:S.params||{},
-        congesAM:S.congesAM||{}
-      }));
-      await window.fbSaveData(window.FB_USER.uid, dataClean);
-    }catch(e){
-      console.error('Save Firebase:',e);
-      toast('\u26A0 Sauvegarde Firebase \u00E9chou\u00E9e \u2014 v\u00E9rifiez votre connexion');
-    }
-  },2000);
+  _saveTimer=setTimeout(()=>{_saveTimer=null;_flushSaveFirestore();},2000);
 }
+// Fermeture de l'onglet pendant qu'une sauvegarde est en attente ou en cours (15/07/2026) :
+// sans ceci, une écriture encore dans le délai de 2s n'était jamais envoyée du tout — perte
+// silencieuse, écrasée par la version distante au prochain chargement. On force l'envoi
+// immédiat dès que l'onglet commence à se fermer, et on avertit l'utilisateur tant qu'une
+// écriture est en cours, pour laisser le temps au navigateur de la terminer avant de partir
+// vraiment (un flush asynchrone seul n'est pas garanti de finir à temps ; l'avertissement,
+// qui met la fermeture en pause le temps que l'utilisateur confirme, augmente les chances
+// réelles que l'écriture aboutisse).
+window.addEventListener('beforeunload',function(e){
+  if(_saveTimer){clearTimeout(_saveTimer);_saveTimer=null;_flushSaveFirestore();}
+  if(_saveEnCours){e.preventDefault();e.returnValue='';return '';}
+});
+
          
 async function loadFromFirestore(){
   if(!window.FB_USER||!window.fbLoadData) return;
