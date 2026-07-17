@@ -15077,10 +15077,12 @@ if(tousNonPrevus){
       // (anticipés posés pendant l'acquisition + acquis posés pendant la pose)
       // anneeAcqPose défini plus haut dans le bloc quotaAcquis
       // compteurTotal = jours posés pour cette année d'acquisition :
-      // - anticipés posés pendant l'acquisition (juin N → mai N+1)
       // - acquis posés pendant la pose (mai N+1 → avril N+2)
-      const debutAcqCpt=anneeAcqPose+'-06-01'; // début acquisition
-      const finAcqCpt=(anneeAcqPose+1)+'-04-30'; // fin acquisition (avant pose)
+      // (le volet "anticipés posés pendant l'acquisition" a été retiré le 17/07/2026 : il
+      // double-comptait exactement ce que le calcul de quotaAcquis retranche déjà via son
+      // propre scan de l'anticipé validé sur la même fenêtre juin N→avril N+1 — confirmé par
+      // trace chiffrée chez Constance : quotaAcquis=2 (11-9, correct) mais compteur départ=9
+      // à cause de ce doublon, laissant 0 place réelle disponible pour mai)
       const debutPoseCpt=(anneeAcqPose+1)+'-05-01'; // début pose
       const finPoseCpt=(anneeAcqPose+2)+'-04-30'; // fin pose
       // Partir du cumulatif des périodes précédentes + fiches validées
@@ -15089,9 +15091,7 @@ if(tousNonPrevus){
         if(!fiche.valide) return; // fiches validées uniquement (les non-validées sont comptées via cumulatif)
         (fiche.jours||[]).forEach(j=>{
           if(!j.date) return;
-          const estAnticipe=['conges-anticipe','decompte-anticipe'].includes(j.statut);
           const estAcquis=['conges-acq','decompte-acq'].includes(j.statut);
-          if(estAnticipe&&j.date>=debutAcqCpt&&j.date<=finAcqCpt) compteurTotal++;
           if(estAcquis&&j.date>=debutPoseCpt&&j.date<=finPoseCpt) compteurTotal++;
         });
       });
@@ -15396,7 +15396,22 @@ if(tousNonPrevus){
             const lendArret=['arret','abs-am'].includes(lendJour?.statut);
             const srcLendFer=getVersionActive(c,lendStr);
             const prevusLendFer=getHeuresPrevues(srcLendFer,lendStr);
-            const lendPrevuFer=!!(prevusLendFer.debut&&prevusLendFer.debut!=='prévu')||!!(prevusLendFer.planVar);
+            let lendPrevuFer=!!(prevusLendFer.debut&&prevusLendFer.debut!=='prévu')||!!(prevusLendFer.planVar);
+            // Repli sur l'union des volumes/types si la semaine n'est pas pointée — même règle
+            // que "type pointé d'abord, union en secours" déjà appliquée à premierJourTravaille
+            // ce matin, jamais étendue à getHeuresPrevues (utilisée largement ailleurs pour les
+            // heures/la paie, où l'absence de repli est probablement voulue — donc pas touchée
+            // ici, juste complétée localement). Bug confirmé Sophie 17/07/2026 : un jour "jour
+            // possible" au sens de l'union (semaine non pointée) était traité comme "non prévu"
+            // par cette vérification, faussant la protection du férié qui le précède.
+            if(!lendPrevuFer){
+              const lendJourIdxUnion=lendStr.getDay()===0?6:lendStr.getDay()-1;
+              if(srcLendFer.th==='sem'&&srcLendFer.semTypes){
+                lendPrevuFer=srcLendFer.semTypes.some(st=>st.jours&&st.jours[lendJourIdxUnion]&&st.jours[lendJourIdxUnion].d);
+              } else if(srcLendFer.th==='plan'&&srcLendFer.planType==='var'&&srcLendFer.planVar){
+                lendPrevuFer=srcLendFer.planVar.some(v=>v.jours&&v.jours[lendJourIdxUnion]);
+              }
+            }
             const lendDansFenetreFer=lendDateStrFer<=fin||(premierTravReprise&&lendDateStrFer<premierTravReprise);
             const lendConges=lendPrevuFer&&lendDansFenetreFer&&!lendArret;
             // Le lendemain projeté doit être reconnu "acquis-équivalent" s'il deviendrait soit
