@@ -15277,6 +15277,19 @@ if(tousNonPrevus){
           if(jour.statut==='travaille') break;
 
           if(!fiche.valide){
+            // anticipeOk : réglage du contrat ET case mensuelle anticipeActif (précision
+            // Sophie 15/07/2026) — même logique que les autres branches
+            const debutMoisKeyPP=new Date(debut).getFullYear()+'-'+String(new Date(debut).getMonth()+1).padStart(2,'0');
+            const ficheDebutPP=c.fiches?.[debutMoisKeyPP];
+            let anticipeOkPP=c.cgAnticipe==='oui';
+            if(ficheDebutPP&&ficheDebutPP.anticipeActif!==undefined){
+              anticipeOkPP=c.cgAnticipe==='oui'&&ficheDebutPP.anticipeActif!==false;
+            } else {
+              const [dbYPP,dbMPP]=debutMoisKeyPP.split('-').map(Number);
+              const moisAvDebKeyPP=dbMPP===1?(dbYPP-1)+'-12':dbYPP+'-'+String(dbMPP-1).padStart(2,'0');
+              const ficheAvDebPP=c.fiches?.[moisAvDebKeyPP];
+              if(ficheAvDebPP?.anticipeActif!==undefined) anticipeOkPP=c.cgAnticipe==='oui'&&ficheAvDebPP.anticipeActif!==false;
+            }
             // Le compteur n'avance QUE si le jour devient réellement acquis ou anticipé —
             // jamais pour un jour qui finit non-acquis (règle Sophie 15/07/2026 : un jour
             // "gâché" ne doit jamais grignoter le quota disponible pour une pose différente,
@@ -15284,7 +15297,7 @@ if(tousNonPrevus){
             if(compteurTotal+1<=quotaAcquis){
               compteurTotal++;
               jour.statut='decompte-acq';
-            } else if(c.cgAnticipe==='oui'&&compteurTotal+1<=quotaAnticipeTotal){
+            } else if(anticipeOkPP&&compteurTotal+1<=quotaAnticipeTotal){
               compteurTotal++;
               jour.statut='decompte-anticipe';
             } else {
@@ -15307,6 +15320,21 @@ if(tousNonPrevus){
             cur.setDate(cur.getDate()+1);continue;
           }
           if(estFerie){
+            // Un férié qui tombe EXACTEMENT là où la recherche de reprise post-pose a abouti
+            // agit comme la reprise elle-même — "il y aurait eu reprise si pas férié" (règle
+            // Sophie 15/07/2026 soir, cas Constance/9 juin 2025). Uniquement si le jour est
+            // prévu (sinon aucune incidence de toute façon, traité par la suite du code comme
+            // n'importe quel jour férié non prévu). Décompte stoppé net : jamais "Congés",
+            // jamais de consommation de quota — juste "Férié". Vérifié tôt, avant la logique
+            // "entouré de congés acquis" plus bas, qui ne s'applique pas à ce cas précis.
+            if(premierTravReprise&&dateStr===premierTravReprise){
+              const srcFerReprise=getVersionActive(c,cur);
+              const prevusFerReprise=getHeuresPrevues(srcFerReprise,cur);
+              const estJourPrevuFerReprise=!!(prevusFerReprise.debut&&prevusFerReprise.debut!=='prévu')||!!(prevusFerReprise.planVar);
+              if(estJourPrevuFerReprise){
+                cur.setDate(cur.getDate()+1);continue;
+              }
+            }
             // Priorité : voisin arret ou abs-am → ferie-non, non décompté
             const svPrev=getStatutVoisinBoucle(dateStr,-1);
             const svNext=getStatutVoisinBoucle(dateStr,1);
@@ -15342,9 +15370,33 @@ if(tousNonPrevus){
             const lendPrevuFer=!!(prevusLendFer.debut&&prevusLendFer.debut!=='prévu')||!!(prevusLendFer.planVar);
             const lendDansFenetreFer=lendDateStrFer<=fin||(premierTravReprise&&lendDateStrFer<premierTravReprise);
             const lendConges=lendPrevuFer&&lendDansFenetreFer&&!lendArret;
-            const lendAcquis=lendConges&&(compteurTotal+1<=quotaAcquis);
+            // Le lendemain projeté doit être reconnu "acquis-équivalent" s'il deviendrait soit
+            // acquis SOIT anticipé — pas seulement acquis. Bug confirmé Sophie 15/07/2026 (cas
+            // 1er janvier de Constance) : cette projection, construite le matin même pour un
+            // autre cas, ne testait que quotaAcquis, jamais quotaAnticipeTotal — un férié dans
+            // une séquence purement anticipée (quotaAcquis=0) échouait donc toujours ce test,
+            // même quand le lendemain réel allait légitimement devenir anticipé.
+            const debutPoseDateFerLend=new Date(anneeAcqPose+1,4,1);
+            const estEnPeriodePoseFerLend=lendStr>=debutPoseDateFerLend;
+            // anticipeOk : le réglage du contrat NE SUFFIT PAS — il faut EN PLUS que la case
+            // mensuelle de la feuille de présence (anticipeActif, cochée par défaut) soit
+            // active pour le mois de la pose — précision Sophie 15/07/2026. Même logique que
+            // les autres branches (pose normale, post-pose) : chercher d'abord le mois de
+            // début de la période, sinon le mois précédent.
+            const debutMoisKeyFerLend=new Date(debut).getFullYear()+'-'+String(new Date(debut).getMonth()+1).padStart(2,'0');
+            const ficheDebutFerLend=c.fiches?.[debutMoisKeyFerLend];
+            let anticipeOkFerLend=c.cgAnticipe==='oui';
+            if(ficheDebutFerLend&&ficheDebutFerLend.anticipeActif!==undefined){
+              anticipeOkFerLend=c.cgAnticipe==='oui'&&ficheDebutFerLend.anticipeActif!==false;
+            } else {
+              const [dbYFerLend,dbMFerLend]=debutMoisKeyFerLend.split('-').map(Number);
+              const moisAvDebKeyFerLend=dbMFerLend===1?(dbYFerLend-1)+'-12':dbYFerLend+'-'+String(dbMFerLend-1).padStart(2,'0');
+              const ficheAvDebFerLend=c.fiches?.[moisAvDebKeyFerLend];
+              if(ficheAvDebFerLend?.anticipeActif!==undefined) anticipeOkFerLend=c.cgAnticipe==='oui'&&ficheAvDebFerLend.anticipeActif!==false;
+            }
+            const lendAcquis=lendConges&&((estEnPeriodePoseFerLend&&compteurTotal+1<=quotaAcquis)||(anticipeOkFerLend&&compteurTotal+1<=quotaAnticipeTotal));
             if(veilleAcquis&&lendAcquis){
-              // Reste férié (entouré de jours acquis)
+              // Reste férié (entouré de jours acquis ou anticipés)
               cur.setDate(cur.getDate()+1);continue;
             }
             if(!veilleConges&&!lendConges){
@@ -15355,7 +15407,12 @@ if(tousNonPrevus){
               // Veille = congé acquis (pas conges-non) mais lendemain = non congé → reste férié (pas de pont)
               cur.setDate(cur.getDate()+1);continue;
             }
-            // Sinon décompté comme congé (acquis ou non)
+            // Sinon décompté congés non acquis — un férié n'est JAMAIS lui-même acquis ni
+            // anticipé (règle Sophie 15/07/2026 : "le férié est férié, pas congés acquis ni
+            // anticipé, jamais, il est congés non acquis uniquement quand le jour qui le
+            // précède ou qui le suit est non acquis") — donc jamais d'incrément de compteur
+            // non plus ici, quelle que soit sa position (cf. règle du 1er janvier : s'il reste
+            // une place, elle doit passer au jour réel suivant, jamais au férié)
             // Sauf si semaine off : ne pas décompter
             const agKeyOffP=getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr));
             const srcOffP=getVersionActive(c,cur);
@@ -15365,39 +15422,7 @@ if(tousNonPrevus){
               cur.setDate(cur.getDate()+1);continue;
             }
             if(!fiche.valide){
-              // Pour les mois à cheval : vérifier anticipeActif du mois précédent ou courant
-              // On remonte jusqu'au premier mois de la période qui a un anticipeActif explicite
-              const [mkY,mkM]=moisKey.split('-').map(Number);
-              let anticipeOkVal=c.cgAnticipe==='oui'; // défaut
-              // Chercher le mois de début de la pose (debut de la période courante)
-              const debutMoisKey=new Date(debut).getFullYear()+'-'+String(new Date(debut).getMonth()+1).padStart(2,'0');
-              const ficheDebut=c.fiches?.[debutMoisKey];
-              if(ficheDebut&&ficheDebut.anticipeActif!==undefined){
-                anticipeOkVal=c.cgAnticipe==='oui'&&ficheDebut.anticipeActif!==false;
-              } else {
-                // Chercher le mois précédent le début de la pose
-                const [dbY,dbM]=debutMoisKey.split('-').map(Number);
-                const moisAvDebKey=dbM===1?(dbY-1)+'-12':dbY+'-'+String(dbM-1).padStart(2,'0');
-                const ficheAvDeb=c.fiches?.[moisAvDebKey];
-                if(ficheAvDeb?.anticipeActif!==undefined) anticipeOkVal=c.cgAnticipe==='oui'&&ficheAvDeb.anticipeActif!==false;
-              }
-              const anticipeOk=anticipeOkVal;
-              const estMaiJ=cur.getMonth()===4;
-              // Un jour est "acquis" uniquement pendant la période de pose (>=mai anneeAcqPose+1)
-              // Avant mai N+1 (pendant l'acquisition) → toujours anticipé
-              const debutPoseDate=new Date(anneeAcqPose+1,4,1); // 1er mai N+1
-              const estEnPeriodePose=cur>=debutPoseDate;
-              // Le compteur n'avance que si le jour devient acquis ou anticipé — jamais pour
-              // un non-acquis (règle Sophie 15/07/2026, cf. branche post-pose plus haut)
-              if(estEnPeriodePose&&compteurTotal+1<=quotaAcquis){
-                compteurTotal++;
-                jour.statut='conges-acq';
-              } else if(anticipeOk&&compteurTotal+1<=quotaAnticipeTotal){
-                compteurTotal++;
-                jour.statut='conges-anticipe';
-              } else {
-                jour.statut='conges-non';
-              }
+              jour.statut='conges-non';
               if(estSamedi) nbSamedisDecomptes++;
               if(window.DEBUG_CGAM)console.log('[CGAM]',dateStr,'| férié décompté | compteur',compteurTotal,'/ quota',quotaAcquis,'/ anticipé total',quotaAnticipeTotal,'→',jour.statut);
             } else {
