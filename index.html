@@ -4145,12 +4145,32 @@ function getInfosJourPlanning(c, dateStr){
   const agendas=src.agendas||c.agendas||[];
   const agenda=agendas.find(a=>new Date(a.dateDebut)<=d&&new Date(a.dateFin)>=d);
   const typeSem=agenda&&agenda.semaines&&agenda.semaines[agKey];
-  const horsContrat=!agenda&&(d<new Date(c.dateDeb)||(c.dateFin&&d>new Date(c.dateFin)));
-  const agendaManquant=!agenda&&!horsContrat; // dans le contrat, mais aucun type assigné pour cette semaine
-  const semaineOff=typeSem==='off';
+  // Plan fixe : aucun agenda/type de semaine n'a de sens, un seul motif hebdomadaire fixe pour
+  // toute la durée du contrat — jamais "agenda non renseigné" pour ce type.
+  const estFixePlanning=src.th==='fixe';
+  const horsContrat=!estFixePlanning&&!agenda&&(d<new Date(c.dateDeb)||(c.dateFin&&d>new Date(c.dateFin)));
+  const agendaManquant=!estFixePlanning&&!agenda&&!horsContrat; // dans le contrat, mais aucun type assigné pour cette semaine
+  const semaineOff=!estFixePlanning&&typeSem==='off';
   let jourPossible=false, jMax=0, volIdx=-1, volH=0, planVarSrc=[];
   let semaineCongesAM=false; // type assigné mais ne correspond à aucun volume du contrat = semaine violette
-  if(src.planType==='min'){
+  if(estFixePlanning){
+    const jf=src.joursFixe&&src.joursFixe[jourIdx];
+    jourPossible=!!(jf&&jf.d);
+    jMax=(src.joursFixe||[]).filter(j=>j&&j.d).length||1;
+    volIdx=0;
+    volH=0; // fixe : pas de "volume" nommé, les heures viennent directement de joursFixe
+  } else if(src.th==='sem'){
+    const semTypesSrc=src.semTypes||[];
+    const viSem=(typeSem&&typeSem!=='off')?semTypesSrc.findIndex((st,i)=>(st.nom||'Semaine '+(i+1))===typeSem):-1;
+    if(typeSem&&typeSem!=='off'&&viSem<0) semaineCongesAM=true; // nom présent mais ne matche aucun type = semaine violette
+    if(viSem>=0){
+      const jf=semTypesSrc[viSem].jours&&semTypesSrc[viSem].jours[jourIdx];
+      jourPossible=!!(jf&&jf.d);
+      jMax=(semTypesSrc[viSem].jours||[]).filter(j=>j&&j.d).length||1;
+      volIdx=viSem;
+      volH=0; // sem : heures directement dans le type, pas un volume h unique
+    }
+  } else if(src.planType==='min'){
     jourPossible=!!(src.joursMin&&src.joursMin[jourIdx])&&typeSem&&typeSem!=='off';
     jMax=src.jMaxMin||1;
     volIdx=0;
@@ -4170,7 +4190,11 @@ function getInfosJourPlanning(c, dateStr){
   // Repos hebdomadaire : jour jamais possible dans aucun des volumes/config du contrat (structurel), à distinguer d'un jour
   // simplement non prévu dans le type de semaine assigné cette semaine-là
   let jamaisPossible=true;
-  if(src.planType==='min'){
+  if(estFixePlanning){
+    jamaisPossible=!(src.joursFixe&&src.joursFixe[jourIdx]&&src.joursFixe[jourIdx].d);
+  } else if(src.th==='sem'){
+    jamaisPossible=!(src.semTypes||[]).some(st=>st.jours&&st.jours[jourIdx]&&st.jours[jourIdx].d);
+  } else if(src.planType==='min'){
     jamaisPossible=!(src.joursMin&&src.joursMin[jourIdx]);
   } else if(src.planType==='var'){
     jamaisPossible=!planVarSrc.some(v=>v.jours&&v.jours[jourIdx]);
@@ -4374,6 +4398,9 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
   }).join('');
 
   const idMois='pln-mois-'+c.id+'-'+moisKeyTile;
+  const srcTileModif=getVersionActive(c, new Date(annee,moisIdx,1));
+  const estFixeOuSemTile=srcTileModif.th==='fixe'||srcTileModif.th==='sem';
+  const modifMoisChecked=(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeyTile])?'checked':'';
   return `<div id="pln-tile-${c.id}-${moisKeyTile}" style="border:1px solid var(--mb);border-radius:8px;margin-bottom:10px;overflow:hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#fff;cursor:pointer" onclick="togglePlanningMois('${idMois}','pln-container-${c.id}')">
       <div style="display:flex;align-items:center;gap:8px">
@@ -4382,6 +4409,13 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       </div>
       <span style="font-size:20px;color:var(--tx3)" id="${idMois}-arrow">${ouvert?'⌄':'›'}</span>
     </div>
+    ${estFixeOuSemTile&&!moisVerrouille?`<div style="padding:6px 14px;background:var(--mp);border-top:1px solid var(--mb);border-bottom:1px solid var(--mb);display:flex;align-items:center;justify-content:space-between;gap:10px" onclick="event.stopPropagation()">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px">
+        <input type="checkbox" ${modifMoisChecked} onchange="toggleModifPlanningAutorisees(${c.id},'${moisKeyTile}',this.checked)">
+        <span>Modifications autorisées</span>
+      </label>
+      <span id="modif-autorisees-total-${c.id}-${moisKeyTile}" style="font-size:11px;color:var(--tx2);white-space:nowrap"></span>
+    </div>`:''}
     <div id="${idMois}" style="display:${ouvert?'block':'none'};padding:12px;background:#fff">
       ${semainesHtml}
       ${!moisVerrouille?`<button id="${idMois}-btn-save" onclick="enregistrerPlanningMois(${c.id},'${moisKeyTile}')"
@@ -4454,20 +4488,12 @@ function renderPlanning(c, cont){
     cur.setMonth(cur.getMonth()+1);
   }
   const containerId='pln-container-'+c.id;
-  const modifAutoriseesChecked=c.modifPlanningAutorisees?'checked':'';
   const srcPlnIntro=getVersionActive(c);
   const estPlanMinVarPln=srcPlnIntro.th==='plan'&&(srcPlnIntro.planType==='min'||srcPlnIntro.planType==='var');
   cont.innerHTML=`
     ${estPlanMinVarPln?`<div style="padding:6px 2px 12px;font-size:12px;color:var(--tx2)">
       Enregistrez votre planning tout en respectant les termes du contrat, vous pourrez ajouter des jours et heures complémentaires / supplémentaires depuis les feuilles de présence
     </div>`:''}
-    <div class="card" style="padding:10px 14px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:10px">
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
-        <input type="checkbox" id="modif-autorisees-${c.id}" ${modifAutoriseesChecked} onchange="toggleModifPlanningAutorisees(${c.id},this.checked)">
-        <span>Modifications autorisées <span style="color:var(--tx2);font-weight:normal">(répartition libre des jours/heures dans la limite du volume mensuel prévu, avec accord des parties et délai de prévenance)</span></span>
-      </label>
-      <span id="modif-autorisees-total-${c.id}" style="font-size:12px;color:var(--tx2);white-space:nowrap"></span>
-    </div>
     <div id="${containerId}">
       ${mois.length?mois.slice().reverse().map(m=>renderPlanningMoisTile(c, m.annee, m.moisIdx, false)).join(''):'<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">Aucun mois à planifier pour l\'instant.</div></div>'}
     </div>
@@ -4477,21 +4503,20 @@ function renderPlanning(c, cont){
   `;
 }
 
-function toggleModifPlanningAutorisees(contratId, checked){
+function toggleModifPlanningAutorisees(contratId, moisKey, checked){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c) return;
-  c.modifPlanningAutorisees=!!checked;
+  if(!c.modifPlanningAutoriseesMois) c.modifPlanningAutoriseesMois={};
+  c.modifPlanningAutoriseesMois[moisKey]=!!checked;
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
-  // Bug confirmé Sophie 18/07/2026 : un appel fbSaveData direct et immédiat (comme je l'avais
-  // fait) ne survit pas à une actualisation rapide, la sauvegarde vers le serveur n'ayant pas
-  // le temps d'aboutir. Utiliser le mécanisme établi (localStorage immédiat + Firestore débouncé
-  // 2s + filet de sécurité à la fermeture de l'onglet), comme le reste de l'app.
+  // Sauvegarde via le mécanisme établi (localStorage immédiat + Firestore débouncé 2s + filet
+  // de sécurité à la fermeture de l'onglet), comme le reste de l'app.
   _contratsModifies.add(contratId);
   saveToFirestore();
-  // Étape 1 seulement : la case se pose et se sauvegarde. Le changement de comportement du
-  // formulaire (préremplissage fixe/sem, plafond mensuel, etc.) vient dans les étapes suivantes
-  // — pour l'instant on se contente de redessiner l'onglet pour refléter l'état de la case.
+  // Décocher n'efface JAMAIS automatiquement une modification déjà faite sur ce mois — ça
+  // empêche seulement toute NOUVELLE modification. Seul le bouton réinitialiser du mois revient
+  // en arrière explicitement (confirmé par Sophie 18/07/2026).
   renderDetTab(contratId,'planning');
 }
 
