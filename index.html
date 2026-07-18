@@ -14164,7 +14164,10 @@ function renderCgAm(){
   catch(e){ console.error('getAnneesRefAM err:',e); listEl.innerHTML='<div style="color:red;padding:20px">Erreur AM: '+e.message+'</div>'; return; }
   const btns=annees.map(a=>{
     const data=S.congesAM[a.debut]||{};
-    const jCoch=Object.keys(data.jours||{}).filter(k=>data.jours[k]==='pose').length;
+    // Même correctif que le compteur du détail d'une année (15/07) : un férié coché ne doit
+    // jamais compter dans le total "/30 jours cochés" — bug signalé par Sophie 18/07/2026 sur
+    // cet autre compteur, séparé, qu'on avait manqué la première fois
+    const jCoch=Object.keys(data.jours||{}).filter(k=>data.jours[k]==='pose'&&!isFerie(k,{})).length;
     return `<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:${a.future?"#d9ccd6":"#fff"};border-radius:var(--rs);border:1px solid var(--mb);margin-bottom:8px;cursor:pointer" onclick="ouvrirCgAm(${a.debut})">
       <div>
         <div style="font-weight:700;font-size:15px;color:var(--m)">${a.label}</div>
@@ -14686,6 +14689,25 @@ function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
       const estFeriePTJ=isFerie(dateStr,c);
       // Un férié sur un jour prévu stoppe le décompte (compte comme reprise)
       if(jourSem!==reposH&&estFeriePTJ){
+        // Sauter les semaines off (absence employeur) pour contrats 46 sem — même protection
+        // que la branche non-fériée juste en dessous, qui l'avait déjà. Bug confirmé Sophie
+        // 18/07/2026 : cette branche fériée n'avait jamais cette vérification, un férié dans
+        // une semaine off tombait dans le repli "union des types" (qui ignore le statut off),
+        // se faisait reconnaître à tort comme "prévu" et donc comme point de reprise/début de
+        // pose — alors qu'une semaine off ne rend jamais aucun jour possible.
+        if(c.tc!=='52'){
+          const srcFerOff=getVersionActive(c,d);
+          const semNumFerOff=getSemISO(dateStr);
+          const semAnFerOff=getSemAnnee(dateStr);
+          const semKeyFerOff=semAnFerOff+'-S'+String(semNumFerOff).padStart(2,'0');
+          const agendasFerOff=srcFerOff.agendas||c.agendas||[];
+          const agFerOff=agendasFerOff.find(a=>d>=new Date(a.dateDebut)&&d<=new Date(a.dateFin));
+          if(agFerOff&&agFerOff.semaines&&agFerOff.semaines[semKeyFerOff]==='off'){
+            const jourSemFerOff=d.getDay()||7;
+            d.setDate(d.getDate()+(8-jourSemFerOff));
+            continue;
+          }
+        }
         const srcFerJ=getVersionActive(c,d);
         const jourIdxFerJ=jourSem===0?6:jourSem-1;
         let estPrevuFerJ=false;
