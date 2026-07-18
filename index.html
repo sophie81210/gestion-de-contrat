@@ -2812,6 +2812,12 @@ function getHeuresPrevues(c, date, sourceForce){
 
   // ── Semaines types ──
   if(source.th === 'sem' && source.semTypes){
+    // Planning modifié (fixe/sem généralisé, 18/07/2026) : une modification enregistrée dans
+    // c.planning pour ce jour prévaut sur le motif de semaine type — sans ça, tout ce que
+    // l'utilisateur saisit dans le nouveau planning n'a aucun effet sur le calcul réel.
+    const pdSem=c.planning&&c.planning[dateStr];
+    if(pdSem&&pdSem.coche&&pdSem.d&&pdSem.f) return {debut:pdSem.d, fin:pdSem.f};
+    if(pdSem&&pdSem.coche&&(!pdSem.d||!pdSem.f)) return {debut:null, fin:null}; // coché mais heures pas encore saisies
     // Si semaine pointée dans l'agenda, utiliser sa semaine type — sinon rien (pas de repli arbitraire
     // sur le 1er type : rien ne justifie de deviner un type non pointé, notamment en tout début de
     // contrat où il n'y a ni "avant" ni "après" pour un vrai secours)
@@ -2826,6 +2832,10 @@ function getHeuresPrevues(c, date, sourceForce){
 
  // ── Horaires fixes ──
   if(source.th === 'fixe' && source.joursFixe){
+    // Même raccordement que sem ci-dessus, pour la même raison.
+    const pdFixe=c.planning&&c.planning[dateStr];
+    if(pdFixe&&pdFixe.coche&&pdFixe.d&&pdFixe.f) return {debut:pdFixe.d, fin:pdFixe.f, isOff: isAbsenceEmployeur(agenda, semKey)};
+    if(pdFixe&&pdFixe.coche&&(!pdFixe.d||!pdFixe.f)) return {debut:null, fin:null, isOff: isAbsenceEmployeur(agenda, semKey)};
     // Semaine 'off' : retourner les heures normales du contrat (pour calcul déduction)
     const j = source.joursFixe[jourIdx];
     if(j && j.d && j.f) return {debut: j.d, fin: j.f, isOff: isAbsenceEmployeur(agenda, semKey)};
@@ -4248,6 +4258,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
 
   let totalMoisMin=0;
   let totalJoursMoisFS=0;
+  let totalMoisMinFS=0;
   const semainesHtml=semaines.map((sem,si)=>{
     const semKeyDom=annee+'-'+moisIdx+'-'+si;
     const infosSemaine=sem.jours.map(j=>getInfosJourPlanning(c, j.date));
@@ -4295,7 +4306,15 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       const planData=(c.planning&&c.planning[j.date])||{};
       const dejaCoche=!!planData.coche;
       if(dejaCoche&&planData.d&&planData.f){ totalSemMin+=toM(planData.f)-toM(planData.d); }
-      if(dejaCoche&&estFixeOuSemTile) totalJoursMoisFS++;
+      // Total du mois (à côté de "Modifications autorisées") : compte le prévu par défaut,
+      // pas seulement ce qui a été explicitement modifié — demande Sophie 18/07/2026. Un férié
+      // ne compte que s'il a été explicitement débloqué (travaillé), jamais par défaut.
+      if(estFixeOuSemTile&&!estCongeAM){
+        if(dejaCoche&&planData.d&&planData.f){ totalMoisMinFS+=toM(planData.f)-toM(planData.d); totalJoursMoisFS++; }
+        else if(!dejaCoche&&infos.jourPossible&&!infos.ferieChome&&infos.jPrevueDeb&&infos.jPrevueFin){
+          totalMoisMinFS+=toM(infos.jPrevueFin)-toM(infos.jPrevueDeb); totalJoursMoisFS++;
+        }
+      }
       const borderAv=(dateDebAvP&&j.date===dateDebAvP)?'border-top:3px solid var(--m);':'';
       const quotaAtteint=jMaxSem>0&&totalCocheSem>=jMaxSem;
       const casesVerrouillee=!dejaCoche&&quotaAtteint&&!moisVerrouille;
@@ -4369,20 +4388,19 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
         contenu=`<span style="color:var(--tx3);font-size:12px">Hors contrat</span>`;
       } else if(infos.agendaManquant){
         contenu=`<span style="color:var(--tx3);font-size:12px">Agenda non renseigné</span>`;
-      } else if(estFixeOuSemTile&&modifMoisActive&&!infos.ferieChome){
-        // Fixe/sem, modifications autorisées ce mois : la case ne fait que DÉBLOQUER la
+      } else if(estFixeOuSemTile&&modifMoisActive){
+        // Fixe/sem, modifications autorisées ce mois : le cadenas ne fait que DÉBLOQUER la
         // modification du jour — jamais l'ajouter comme pour min/var (précision Sophie
-        // 18/07/2026, "j'ai oublié de préciser"). Jour prévu → champs préremplis avec les
-        // heures du contrat, verrouillés tant que non coché. Jour non prévu (y compris un
-        // samedi structurellement jamais prévu) → champs vides, verrouillés tant que non
-        // coché — la distinction jamaisPossible/non-prévu-cette-semaine ne s'applique plus ici,
-        // toute la souplesse mensuelle rend n'importe quel jour ordinaire modifiable.
+        // 18/07/2026). Inclut désormais les fériés (18/07, suite retour Sophie — plus de
+        // branche séparée pour eux). Jour prévu → champs préremplis avec les heures du
+        // contrat, verrouillés tant que fermé. Jour non prévu (samedi inclus, férié inclus)
+        // → champs vides, verrouillés tant que fermé.
         const valDebFS=dejaCoche?(planData.d||''):(infos.jPrevueDeb||'');
         const valFinFS=dejaCoche?(planData.f||''):(infos.jPrevueFin||'');
         const idFS='pln-fs-'+c.id+'-'+j.date;
         contenu=`<div style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tx2)">
-          <input type="checkbox" id="${idFS}-chk" ${dejaCoche?'checked':''} ${moisVerrouille?'disabled':''}
-            onchange="toggleModifJourFixeSem(${c.id},'${j.date}','${semKeyDom}',this.checked)">
+          <span id="${idFS}-chk" title="${dejaCoche?'Verrouiller':'Déverrouiller pour modifier'}" ${moisVerrouille?'':`onclick="toggleModifJourFixeSem(${c.id},'${j.date}','${semKeyDom}',${dejaCoche?'false':'true'})"`}
+            style="cursor:${moisVerrouille?'default':'pointer'};font-size:14px;line-height:1;flex-shrink:0">${dejaCoche?'🔓':'🔒'}</span>
           <span>de</span>
           <input type="time" id="${idFS}-deb" class="pln-deb" value="${valDebFS}" ${(moisVerrouille||!dejaCoche)?'disabled':''}
             style="width:78px;padding:3px 4px;border:1px solid var(--mb);border-radius:3px;font-size:12px;background:#fff;color:var(--tx)"
@@ -4391,7 +4409,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
           <input type="time" id="${idFS}-fin" class="pln-fin" value="${valFinFS}" ${(moisVerrouille||!dejaCoche)?'disabled':''}
             style="width:78px;padding:3px 4px;border:1px solid var(--mb);border-radius:3px;font-size:12px;background:#fff;color:var(--tx)"
             onchange="majPlanningJour(${c.id},'${j.date}','f',this.value,'${semKeyDom}')">
-          ${!infos.jourPossible?'<span style="color:var(--tx3)">(non prévu)</span>':''}
+          ${infos.ferieChome?'<span style="color:var(--tx3)">(férié)</span>':''}
           ${dejaCoche&&!moisVerrouille?`<span title="Réinitialiser ce jour" onclick="toggleModifJourFixeSem(${c.id},'${j.date}','${semKeyDom}',false)"
             style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;border:1.5px solid var(--m);color:var(--m);cursor:pointer;font-size:11px;line-height:1;flex-shrink:0">↺</span>`:''}
         </div>`;
@@ -4452,7 +4470,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
           <input type="checkbox" ${modifMoisChecked} onchange="toggleModifPlanningAutorisees(${c.id},'${moisKeyTile}',this.checked)">
           <span>Modifications autorisées</span>
         </label>
-        <span id="modif-autorisees-total-${c.id}-${moisKeyTile}" style="font-size:11px;color:var(--tx2);white-space:nowrap">${totalJoursMoisFS}j — ${fmtH(totalMoisMin)}</span>
+        <span id="modif-autorisees-total-${c.id}-${moisKeyTile}" style="font-size:11px;color:var(--tx2);white-space:nowrap">${totalJoursMoisFS}j — ${fmtH(totalMoisMinFS)}</span>
       </div>`:''}
       ${semainesHtml}
       ${!moisVerrouille?`<button id="${idMois}-btn-save" onclick="enregistrerPlanningMois(${c.id},'${moisKeyTile}')"
