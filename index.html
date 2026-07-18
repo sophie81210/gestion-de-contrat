@@ -10285,15 +10285,19 @@ function renderAgendas(c){
       +' → '+dFin.toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
 
     const semaines=getSemsAgenda(ag,c);
-    // Pour plan sem et plan var : pas de semaines congés bloquées (pointage libre)
-    // Pour les autres types : calculer semsCongesSet (5 semaines les plus chargées)
+    // Règle confirmée Sophie 18/07/2026 : seuls les contrats 52 semaines doivent TOUJOURS être
+    // pointés, violette ou pas (ils n'ont jamais de semaine "entièrement congé" auto-exemptée,
+    // contrairement aux 46 semaines). Le critère est le nombre de semaines du contrat (tc),
+    // jamais le type de plan (sem/var) — l'ancienne exception sem/var semblait être un reliquat
+    // d'une décision antérieure jamais nettoyé, cause du bug de pointage périmé (semaine
+    // repointée pendant qu'elle était violette, jamais effacé, ressurgissant plus tard).
     const agSource2=(()=>{
       // Chercher la vraie source dans S.contrats pour avoir semTypes et autres propriétés
       const cReal=S.contrats.find(x=>x.id==c.id)||c;
       const r=trouverAgenda(cReal,ag.id);
       return r?r.source:c;
     })();
-    const estPlanSemOuVar52=(agSource2.tc==='52')&&((agSource2.th==='plan'&&(agSource2.planType==='var'||agSource2.planType==='sem'))||(agSource2.th==='sem'));
+    const est52TjrsPointe=agSource2.tc==='52';
     // Semaines congés : calcul global depuis le calendrier AM (identique pour tous les agendas)
     // Utiliser la période du calendrier AM (mai N → avril N+1) qui couvre l'agenda
     // Utiliser la date du mois affiché (agendaMois si disponible, sinon date actuelle)
@@ -10303,7 +10307,7 @@ function renderAgendas(c){
     const anneeAmDebut=agDebut.getMonth()>=4?agDebut.getFullYear():agDebut.getFullYear()-1;
     const anneeAmFin=agFin.getMonth()>=4?agFin.getFullYear():agFin.getFullYear()-1;
     let semsCongesSet=null;
-    if(!estPlanSemOuVar52){
+    if(!est52TjrsPointe){
       // Map année AM → Set de semaines violettes
       semsCongesSet=new Map();
       for(let am=anneeAmDebut;am<=anneeAmFin;am++){
@@ -10858,9 +10862,11 @@ function peindreAgenda(key,cid,agid){
   // Le calendrier AM non rempli n'est plus bloquant — juste un avertissement dans le bandeau orange
   // de l'agenda (getAgendaWarnings). On s'assure quand même que le conteneur de l'année existe.
   getAnneesAmManquantes(ag);
-  // Bloquer si semaine congés (colorée violet) — sauf pour plan sem et plan var
-  const estPSV=(source.th==='sem')||(source.th==='plan'&&source.planType==='var');
-  if(!estPSV){
+  // Bloquer le pointage si semaine congés (colorée violet) — SAUF pour les contrats 52
+  // semaines, qui doivent toujours être pointés (règle confirmée Sophie 18/07/2026 : le
+  // critère est le nombre de semaines du contrat, jamais le type de plan sem/var)
+  const est52TjrsPointeToggle=source.tc==='52';
+  if(!est52TjrsPointeToggle){
     const semsCongesCheck=window._semsCongesSet&&window._semsCongesSet[agid];
     // key = clé agenda (ex: '2025-S32'), extraire semNum et lundi
     const keyParts=key.split('-S');
@@ -14521,6 +14527,26 @@ function toggleCgAm(anneeDebut,dateStr){
   S.cgAmModifie=true;
   S._cgAmModifieDepuisOuverture=true;
   localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM));
+  // Si la semaine du jour coché/décoché vient de devenir violette (entièrement congé), effacer
+  // tout pointage existant pour cette semaine sur tous les contrats — sinon il reste caché et
+  // peut ressurgir périmé plus tard si la semaine redevient partielle (bug confirmé Sophie
+  // 18/07/2026 : un ancien pointage "semaine off" d'un test précédent était réapparu sans
+  // avertissement). Un pointage effacé alors qu'il n'est plus utile ne peut rien casser.
+  const semNumToggle=getSemISO(dateStr);
+  const semAnneeToggle=getSemAnnee(dateStr);
+  const semKeyToggle=getKeyAgenda(semNumToggle,semAnneeToggle);
+  const semsViolettesToggle=getSemsCongesGlobal(anneeDebut+'-05-01',(anneeDebut+1)+'-04-30');
+  if(semsViolettesToggle&&semsViolettesToggle.has&&semsViolettesToggle.has(semNumToggle)){
+    S.contrats.forEach(ct=>{
+      const tousSourcesToggle=[ct,...(ct.avenants||[])];
+      tousSourcesToggle.forEach(src=>{
+        (src.agendas||[]).forEach(ag=>{
+          if(ag.semaines&&ag.semaines[semKeyToggle]!==undefined) delete ag.semaines[semKeyToggle];
+        });
+      });
+    });
+    invaliderSemsCongesGlobal();
+  }
   majFichesCgAm(anneeDebut,false); // convergence gérée en interne (cf. majFichesCgAm)
   ouvrirCgAm(anneeDebut);
 }
