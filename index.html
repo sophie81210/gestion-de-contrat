@@ -4205,13 +4205,25 @@ function getInfosJourPlanning(c, dateStr){
   const mmddF=dateStr.slice(5);
   const feriesTravSrc=src.feriesTravailles||c.feriesTravailles||[];
   const ferieChome=estFerie&&!feriesTravSrc.includes(mmddF);
-  return {jourPossible, jMax, volIdx, volH, typeSem, aucunType, horsContrat, agendaManquant, semaineOff, semaineCongesAM, jamaisPossible, couleur, estFerie, ferieChome};
+  // Heures prévues (fixe/sem) pour préremplir les champs — undefined si min/var (pas de notion
+  // d'heures "au jour" fixe, ou jour non prévu)
+  let jPrevueDeb, jPrevueFin;
+  if(estFixePlanning&&src.joursFixe&&src.joursFixe[jourIdx]){
+    jPrevueDeb=src.joursFixe[jourIdx].d; jPrevueFin=src.joursFixe[jourIdx].f;
+  } else if(src.th==='sem'&&volIdx>=0&&src.semTypes&&src.semTypes[volIdx]&&src.semTypes[volIdx].jours&&src.semTypes[volIdx].jours[jourIdx]){
+    jPrevueDeb=src.semTypes[volIdx].jours[jourIdx].d; jPrevueFin=src.semTypes[volIdx].jours[jourIdx].f;
+  }
+  return {jourPossible, jMax, volIdx, volH, typeSem, aucunType, horsContrat, agendaManquant, semaineOff, semaineCongesAM, jamaisPossible, couleur, estFerie, ferieChome, jPrevueDeb, jPrevueFin};
 }
 
 function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
   const moisKeyTile=annee+'-'+String(moisIdx+1).padStart(2,'0');
   const ficheTile=c.fiches&&c.fiches[moisKeyTile];
   const moisVerrouille=!!(ficheTile&&ficheTile.valide)||estLectureSeuleEmployeur();
+  const srcTileModif=getVersionActive(c, new Date(annee,moisIdx,1));
+  const estFixeOuSemTile=srcTileModif.th==='fixe'||srcTileModif.th==='sem';
+  const modifMoisActive=estFixeOuSemTile&&!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeyTile]);
+  const modifMoisChecked=modifMoisActive?'checked':'';
   const nbJours=new Date(annee, moisIdx+1, 0).getDate();
   const jours=[];
   for(let d=1; d<=nbJours; d++){
@@ -4235,6 +4247,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
   const JOURS_ABR_P=['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
 
   let totalMoisMin=0;
+  let totalJoursMoisFS=0;
   const semainesHtml=semaines.map((sem,si)=>{
     const semKeyDom=annee+'-'+moisIdx+'-'+si;
     const infosSemaine=sem.jours.map(j=>getInfosJourPlanning(c, j.date));
@@ -4282,6 +4295,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       const planData=(c.planning&&c.planning[j.date])||{};
       const dejaCoche=!!planData.coche;
       if(dejaCoche&&planData.d&&planData.f){ totalSemMin+=toM(planData.f)-toM(planData.d); }
+      if(dejaCoche&&estFixeOuSemTile) totalJoursMoisFS++;
       const borderAv=(dateDebAvP&&j.date===dateDebAvP)?'border-top:3px solid var(--m);':'';
       const quotaAtteint=jMaxSem>0&&totalCocheSem>=jMaxSem;
       const casesVerrouillee=!dejaCoche&&quotaAtteint&&!moisVerrouille;
@@ -4355,6 +4369,32 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
         contenu=`<span style="color:var(--tx3);font-size:12px">Hors contrat</span>`;
       } else if(infos.agendaManquant){
         contenu=`<span style="color:var(--tx3);font-size:12px">Agenda non renseigné</span>`;
+      } else if(estFixeOuSemTile&&modifMoisActive&&!infos.ferieChome){
+        // Fixe/sem, modifications autorisées ce mois : la case ne fait que DÉBLOQUER la
+        // modification du jour — jamais l'ajouter comme pour min/var (précision Sophie
+        // 18/07/2026, "j'ai oublié de préciser"). Jour prévu → champs préremplis avec les
+        // heures du contrat, verrouillés tant que non coché. Jour non prévu (y compris un
+        // samedi structurellement jamais prévu) → champs vides, verrouillés tant que non
+        // coché — la distinction jamaisPossible/non-prévu-cette-semaine ne s'applique plus ici,
+        // toute la souplesse mensuelle rend n'importe quel jour ordinaire modifiable.
+        const valDebFS=dejaCoche?(planData.d||''):(infos.jPrevueDeb||'');
+        const valFinFS=dejaCoche?(planData.f||''):(infos.jPrevueFin||'');
+        const idFS='pln-fs-'+c.id+'-'+j.date;
+        contenu=`<div style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tx2)">
+          <input type="checkbox" id="${idFS}-chk" ${dejaCoche?'checked':''} ${moisVerrouille?'disabled':''}
+            onchange="toggleModifJourFixeSem(${c.id},'${j.date}','${semKeyDom}',this.checked)">
+          <span>de</span>
+          <input type="time" id="${idFS}-deb" class="pln-deb" value="${valDebFS}" ${(moisVerrouille||!dejaCoche)?'disabled':''}
+            style="width:78px;padding:3px 4px;border:1px solid var(--mb);border-radius:3px;font-size:12px;background:#fff;color:var(--tx)"
+            onchange="majPlanningJour(${c.id},'${j.date}','d',this.value,'${semKeyDom}')">
+          <span>à</span>
+          <input type="time" id="${idFS}-fin" class="pln-fin" value="${valFinFS}" ${(moisVerrouille||!dejaCoche)?'disabled':''}
+            style="width:78px;padding:3px 4px;border:1px solid var(--mb);border-radius:3px;font-size:12px;background:#fff;color:var(--tx)"
+            onchange="majPlanningJour(${c.id},'${j.date}','f',this.value,'${semKeyDom}')">
+          ${!infos.jourPossible?'<span style="color:var(--tx3)">(non prévu)</span>':''}
+          ${dejaCoche&&!moisVerrouille?`<span title="Réinitialiser ce jour" onclick="toggleModifJourFixeSem(${c.id},'${j.date}','${semKeyDom}',false)"
+            style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;border:1.5px solid var(--m);color:var(--m);cursor:pointer;font-size:11px;line-height:1;flex-shrink:0">↺</span>`:''}
+        </div>`;
       } else if(!infos.jourPossible&&!infos.ferieChome){
         contenu=`<span style="color:var(--tx3);font-size:12px">${infos.jamaisPossible?'Repos hebdomadaire':'Jour non prévu au contrat'}</span>`;
       } else if(infos.ferieChome){
@@ -4398,9 +4438,6 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
   }).join('');
 
   const idMois='pln-mois-'+c.id+'-'+moisKeyTile;
-  const srcTileModif=getVersionActive(c, new Date(annee,moisIdx,1));
-  const estFixeOuSemTile=srcTileModif.th==='fixe'||srcTileModif.th==='sem';
-  const modifMoisChecked=(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeyTile])?'checked':'';
   return `<div id="pln-tile-${c.id}-${moisKeyTile}" style="border:1px solid var(--mb);border-radius:8px;margin-bottom:10px;overflow:hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#fff;cursor:pointer" onclick="togglePlanningMois('${idMois}','pln-container-${c.id}')">
       <div style="display:flex;align-items:center;gap:8px">
@@ -4415,7 +4452,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
           <input type="checkbox" ${modifMoisChecked} onchange="toggleModifPlanningAutorisees(${c.id},'${moisKeyTile}',this.checked)">
           <span>Modifications autorisées</span>
         </label>
-        <span id="modif-autorisees-total-${c.id}-${moisKeyTile}" style="font-size:11px;color:var(--tx2);white-space:nowrap"></span>
+        <span id="modif-autorisees-total-${c.id}-${moisKeyTile}" style="font-size:11px;color:var(--tx2);white-space:nowrap">${totalJoursMoisFS}j — ${fmtH(totalMoisMin)}</span>
       </div>`:''}
       ${semainesHtml}
       ${!moisVerrouille?`<button id="${idMois}-btn-save" onclick="enregistrerPlanningMois(${c.id},'${moisKeyTile}')"
@@ -4697,6 +4734,28 @@ function enregistrerPlanningMois(contratId, moisKey){
   const autreMoisModifie=[...document.querySelectorAll('[id$="-btn-save"]')].some(b=>b!==btn&&b.textContent.includes('*'));
   if(!autreMoisModifie) S.planningModifie=false;
   toast('Planning enregistré');
+}
+
+function toggleModifJourFixeSem(contratId, dateStr, semKeyDom, checked){
+  const c=S.contrats.find(x=>x.id==contratId);
+  if(!c) return;
+  const moisKeyJ=dateStr.slice(0,7);
+  const ficheJ=c.fiches&&c.fiches[moisKeyJ];
+  if((ficheJ&&ficheJ.valide)||estLectureSeuleEmployeur()){ refreshPlanningTile(contratId, moisKeyJ); return; }
+  if(!c.planning) c.planning={};
+  if(checked){
+    const infosFS=getInfosJourPlanning(c,dateStr);
+    // Cocher ne fait que débloquer la modification — prérempli avec le prévu du contrat comme
+    // point de départ si le jour est prévu, vide sinon (précision Sophie 18/07/2026).
+    c.planning[dateStr]={coche:true, d:infosFS.jourPossible?(infosFS.jPrevueDeb||''):'', f:infosFS.jourPossible?(infosFS.jPrevueFin||''):''};
+  } else {
+    // Décocher revient à l'état prévu au contrat — efface toute modification saisie
+    delete c.planning[dateStr];
+  }
+  const cidx=S.contrats.findIndex(x=>x.id==contratId);
+  if(cidx!==-1) S.contrats[cidx]=c;
+  marquerPlanningNonEnregistre(contratId, moisKeyJ);
+  refreshPlanningTile(contratId, moisKeyJ);
 }
 
 function toggleJourPlanning(contratId, dateStr, checked, semKeyDom, estFerie){
