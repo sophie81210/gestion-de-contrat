@@ -1706,9 +1706,7 @@ function renderDet(id){
   if(!c){goTo('cont');return;}
   document.getElementById('hdr-title').textContent=c.nom||'Fiche';
   const pg=document.getElementById('pg-det');
-  const cvNav=getVersionActive(c);
-  const estPlanMinVarNav=cvNav.th==='plan'&&(cvNav.planType==='min'||cvNav.planType==='var');
-  const tabsHtml=DET_TABS.filter(t=>!(t==='regularisation'&&(c.tc==='52'||c.tc==='occ'))&&!(t==='planning'&&!estPlanMinVarNav)).map(t=>`<button class="det-tab ${t===S.detTab?'on':''}" onclick="switchDetTab('${t}',${id})">${DET_LABELS[t]}</button>`).join('');
+  const tabsHtml=DET_TABS.filter(t=>!(t==='regularisation'&&(c.tc==='52'||c.tc==='occ'))).map(t=>`<button class="det-tab ${t===S.detTab?'on':''}" onclick="switchDetTab('${t}',${id})">${DET_LABELS[t]}</button>`).join('');
   pg.innerHTML=`<div class="det-tabs">${tabsHtml}</div><div id="det-content"></div>`;
   // Si onglet régularisation non disponible pour 52 sem, basculer
   if(S.detTab==='regularisation'&&c.tc==='52') S.detTab='presence';
@@ -4457,10 +4455,12 @@ function renderPlanning(c, cont){
   }
   const containerId='pln-container-'+c.id;
   const modifAutoriseesChecked=c.modifPlanningAutorisees?'checked':'';
+  const srcPlnIntro=getVersionActive(c);
+  const estPlanMinVarPln=srcPlnIntro.th==='plan'&&(srcPlnIntro.planType==='min'||srcPlnIntro.planType==='var');
   cont.innerHTML=`
-    <div style="padding:6px 2px 12px;font-size:12px;color:var(--tx2)">
+    ${estPlanMinVarPln?`<div style="padding:6px 2px 12px;font-size:12px;color:var(--tx2)">
       Enregistrez votre planning tout en respectant les termes du contrat, vous pourrez ajouter des jours et heures complémentaires / supplémentaires depuis les feuilles de présence
-    </div>
+    </div>`:''}
     <div class="card" style="padding:10px 14px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:10px">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
         <input type="checkbox" id="modif-autorisees-${c.id}" ${modifAutoriseesChecked} onchange="toggleModifPlanningAutorisees(${c.id},this.checked)">
@@ -4483,11 +4483,12 @@ function toggleModifPlanningAutorisees(contratId, checked){
   c.modifPlanningAutorisees=!!checked;
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
-  if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
-      .catch(e=>console.error('Save modifPlanningAutorisees:',e));
-  }
+  // Bug confirmé Sophie 18/07/2026 : un appel fbSaveData direct et immédiat (comme je l'avais
+  // fait) ne survit pas à une actualisation rapide, la sauvegarde vers le serveur n'ayant pas
+  // le temps d'aboutir. Utiliser le mécanisme établi (localStorage immédiat + Firestore débouncé
+  // 2s + filet de sécurité à la fermeture de l'onglet), comme le reste de l'app.
+  _contratsModifies.add(contratId);
+  saveToFirestore();
   // Étape 1 seulement : la case se pose et se sauvegarde. Le changement de comportement du
   // formulaire (préremplissage fixe/sem, plafond mensuel, etc.) vient dans les étapes suivantes
   // — pour l'instant on se contente de redessiner l'onglet pour refléter l'état de la case.
