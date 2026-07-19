@@ -4596,9 +4596,11 @@ function toggleModifPlanningAutorisees(contratId, moisKey, checked){
   // Décocher n'efface JAMAIS automatiquement une modification déjà faite sur ce mois — ça
   // empêche seulement toute NOUVELLE modification. Seul le bouton réinitialiser du mois revient
   // en arrière explicitement (confirmé par Sophie 18/07/2026).
-  // Pas de redessin complet ici (bug confirmé Sophie : ça refermait tous les mois) — l'état de
-  // la case elle-même persiste nativement ; un redessin complet reviendra à l'étape où le
-  // formulaire doit réellement changer d'apparence selon cette case (préremplissage, etc.).
+  // Rafraîchissement CIBLÉ de cette seule tuile (pas un redessin complet, qui refermerait tous
+  // les mois — même bug déjà corrigé une fois sur le cadenas par jour). Nécessaire maintenant
+  // que l'étape 3 fait dépendre l'affichage du formulaire de cet état — bug confirmé Sophie
+  // 18/07/2026 : la case n'avait aucun effet visible avant de changer d'onglet et revenir.
+  refreshPlanningTile(contratId, moisKey);
 }
 
 function majPlanningJour(contratId, dateStr, champ, val, semKeyDom){
@@ -4736,6 +4738,34 @@ function enregistrerPlanningMois(contratId, moisKey){
     });
     if(totalSemaine>volH+0.01){
       erreurs.push(`Semaine ${getSemISO(dateStr)} : ${fmtH(totalSemaine*60)} prévues pour un volume de ${fmtH(volH*60)} — limitez le nombre d'heures par semaine à celui prévu au contrat, les heures complémentaires seront à ajouter sur la feuille de présence`);
+    }
+  }
+  // Étape 2 (18/07/2026) : plafond mensuel jours ET heures pour fixe/sem — une vraie
+  // compensation (déplacer des heures) doit rester dans l'enveloppe du mois ; un excédent NET
+  // non compensé doit être refusé ici, pas payé silencieusement. Comparaison : total RÉEL
+  // (planning modifié) vs total BASELINE (motif du contrat seul, sans aucune modification —
+  // `getInfosJourPlanning` ignore toujours `c.planning`, donc calcule ce baseline naturellement).
+  const srcMoisFS=getVersionActive(c,new Date(ay,am-1,1));
+  if(srcMoisFS.th==='fixe'||srcMoisFS.th==='sem'){
+    let joursBaseline=0, minBaseline=0, joursReel=0, minReel=0;
+    for(let d2=1; d2<=finMoisDate.getDate(); d2++){
+      const dateStr2=ay+'-'+String(am).padStart(2,'0')+'-'+String(d2).padStart(2,'0');
+      const infos2=getInfosJourPlanning(c,dateStr2);
+      if(infos2.aucunType||infos2.ferieChome) continue; // congé/off/férié : jamais compté dans le plafond
+      if(infos2.jourPossible&&infos2.jPrevueDeb&&infos2.jPrevueFin){
+        joursBaseline++; minBaseline+=toM(infos2.jPrevueFin)-toM(infos2.jPrevueDeb);
+      }
+      const pd2=c.planning&&c.planning[dateStr2];
+      if(pd2&&pd2.coche&&pd2.d&&pd2.f){
+        joursReel++; minReel+=toM(pd2.f)-toM(pd2.d);
+      } else if(!(pd2&&pd2.coche)&&infos2.jourPossible&&infos2.jPrevueDeb&&infos2.jPrevueFin){
+        joursReel++; minReel+=toM(infos2.jPrevueFin)-toM(infos2.jPrevueDeb);
+      }
+    }
+    if(joursReel>joursBaseline){
+      erreurs.push(`Ce mois compte ${joursReel} jours modifiés pour ${joursBaseline} prévus au contrat — le nombre de jours ne peut pas dépasser celui prévu, même compensé en heures`);
+    } else if(minReel>minBaseline+0.5){
+      erreurs.push(`Ce mois totalise ${fmtH(minReel)} pour ${fmtH(minBaseline)} prévues au contrat — l'excédent non compensé ailleurs dans le mois sera à ajouter sur la feuille de présence, pas dans le planning`);
     }
   }
   if(erreurs.length){
