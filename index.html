@@ -4394,7 +4394,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
         contenu=`<span style="color:var(--tx3);font-size:12px">Hors contrat</span>`;
       } else if(infos.agendaManquant){
         contenu=`<span style="color:var(--tx3);font-size:12px">Agenda non renseigné</span>`;
-      } else if(estFixeOuSemTile){
+      } else if(estFixeOuSemTile||(estVarTile&&modifMoisActive&&infos.ferieChome)){
         // Fixe/sem : cette branche s'applique TOUJOURS pour ces types, que la case du mois
         // soit cochée ou non — bug confirmé Sophie 18/07/2026 (captures d'écran, Jules/Albane) :
         // avant ce correctif, quand la case n'était pas cochée, ces jours retombaient dans
@@ -4668,6 +4668,7 @@ function enregistrerPlanningMois(contratId, moisKey){
   const [ay,am]=moisKey.split('-').map(Number);
   const finMoisDate=new Date(ay,am,0);
   const erreurs=[];
+  const avertissementsInfo=[];
   const semainesVues=new Set();
   for(let d=1; d<=finMoisDate.getDate(); d++){
     const dCur=new Date(ay,am-1,d);
@@ -4750,6 +4751,12 @@ function enregistrerPlanningMois(contratId, moisKey){
     });
     if(totalSemaine>volH+0.01){
       erreurs.push(`Semaine ${getSemISO(dateStr)} : ${fmtH(totalSemaine*60)} prévues pour un volume de ${fmtH(volH*60)} — limitez le nombre d'heures par semaine à celui prévu au contrat, les heures complémentaires seront à ajouter sur la feuille de présence`);
+    } else if((lundiSem.getMonth()!==am-1||lundiSem.getFullYear()!==ay)||(dimSem.getMonth()!==am-1||dimSem.getFullYear()!==ay)){
+      // Semaine à cheval sur deux mois (min/var) : pas de blocage — le budget de la semaine est
+      // partagé entre les deux mois (premier arrivé, premier servi), volontairement pas de
+      // prorata pour ne pas figer de liberté (précision Sophie 18/07/2026). Juste un
+      // avertissement informatif pour éviter les mauvaises surprises au mois suivant.
+      avertissementsInfo.push(`Semaine ${getSemISO(dateStr)} à cheval sur deux mois : ${fmtH(totalSemaine*60)} utilisées sur les ${fmtH(volH*60)} prévues de la semaine — le reste sera à partager avec l'autre mois`);
     }
   }
   // Étape 2 (18/07/2026) : plafond mensuel jours ET heures pour fixe/sem — une vraie
@@ -4819,6 +4826,9 @@ function enregistrerPlanningMois(contratId, moisKey){
     return;
   }
   if(c.id) _contratsModifies.add(c.id);
+  if(avertissementsInfo.length){
+    alerte('Enregistré. À savoir :<br><br>'+avertissementsInfo.join('<br>'));
+  }
   // Réinitialiser le réel (feuille de présence) des jours dont le prévu (planning) vient de changer —
   // pour éviter qu'un écart (heures complémentaires...) apparaisse silencieusement sans que
   // l'utilisateur comprenne qu'il vient d'une modification du planning, pas d'une saisie volontaire.
