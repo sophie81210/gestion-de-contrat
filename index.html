@@ -2815,7 +2815,7 @@ function getHeuresPrevues(c, date, sourceForce){
     // Planning modifié (fixe/sem généralisé, 18/07/2026) : une modification enregistrée dans
     // c.planning pour ce jour prévaut sur le motif de semaine type — sans ça, tout ce que
     // l'utilisateur saisit dans le nouveau planning n'a aucun effet sur le calcul réel.
-    const pdSem=c.planning&&c.planning[dateStr];
+    const pdSem=(c._planningSauvegarde||c.planning)&&(c._planningSauvegarde||c.planning)[dateStr];
     if(pdSem&&pdSem.coche&&pdSem.d&&pdSem.f) return {debut:pdSem.d, fin:pdSem.f};
     if(pdSem&&pdSem.coche&&(!pdSem.d||!pdSem.f)) return {debut:null, fin:null}; // coché mais heures pas encore saisies
     // Si semaine pointée dans l'agenda, utiliser sa semaine type — sinon rien (pas de repli arbitraire
@@ -2833,7 +2833,7 @@ function getHeuresPrevues(c, date, sourceForce){
  // ── Horaires fixes ──
   if(source.th === 'fixe' && source.joursFixe){
     // Même raccordement que sem ci-dessus, pour la même raison.
-    const pdFixe=c.planning&&c.planning[dateStr];
+    const pdFixe=(c._planningSauvegarde||c.planning)&&(c._planningSauvegarde||c.planning)[dateStr];
     if(pdFixe&&pdFixe.coche&&pdFixe.d&&pdFixe.f) return {debut:pdFixe.d, fin:pdFixe.f, isOff: isAbsenceEmployeur(agenda, semKey)};
     if(pdFixe&&pdFixe.coche&&(!pdFixe.d||!pdFixe.f)) return {debut:null, fin:null, isOff: isAbsenceEmployeur(agenda, semKey)};
     // Semaine 'off' : retourner les heures normales du contrat (pour calcul déduction)
@@ -4394,7 +4394,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
         contenu=`<span style="color:var(--tx3);font-size:12px">Hors contrat</span>`;
       } else if(infos.agendaManquant){
         contenu=`<span style="color:var(--tx3);font-size:12px">Agenda non renseigné</span>`;
-      } else if(estFixeOuSemTile||(estVarTile&&modifMoisActive&&infos.ferieChome)){
+      } else if(estFixeOuSemTile){
         // Fixe/sem : cette branche s'applique TOUJOURS pour ces types, que la case du mois
         // soit cochée ou non — bug confirmé Sophie 18/07/2026 (captures d'écran, Jules/Albane) :
         // avant ce correctif, quand la case n'était pas cochée, ces jours retombaient dans
@@ -4816,13 +4816,13 @@ function enregistrerPlanningMois(contratId, moisKey){
     }
   }
   if(erreurs.length){
-    // Annuler réellement les modifications en mémoire, pas seulement bloquer le bouton —
-    // sinon la feuille de présence, qui lit c.planning directement, applique quand même le
-    // changement refusé sans jamais savoir qu'il a été rejeté (bug confirmé Sophie 18/07/2026 :
-    // un jour en trop refusé à l'enregistrement apparaissait quand même sur la feuille).
-    c.planning=JSON.parse(JSON.stringify(c._planningSauvegarde||{}));
-    refreshPlanningTile(contratId, moisKey);
-    alerte('Impossible d\u2019enregistrer :<br><br>'+erreurs.join('<br>')+'<br><br>Les modifications de ce mois ont été annulées.');
+    // Ne PLUS effacer les modifications en cours (bug confirmé Sophie 18/07/2026 : après un
+    // long remplissage pour tester un dépassement, tout était perdu, obligeant à tout
+    // recommencer). La vraie source du problème (la feuille qui lisait un changement refusé)
+    // est corrigée à la racine dans getHeuresPrevues, qui lit maintenant l'état SAUVEGARDÉ
+    // (_planningSauvegarde), jamais les modifications en cours tant qu'elles ne sont pas
+    // validées — donc rien n'a besoin d'être effacé ici pour protéger la feuille.
+    alerte('Impossible d\u2019enregistrer :<br><br>'+erreurs.join('<br>')+'<br><br>Vos modifications restent affichées mais ne sont pas encore enregistrées — corrigez puis réessayez.');
     return;
   }
   if(c.id) _contratsModifies.add(c.id);
@@ -4852,6 +4852,10 @@ function enregistrerPlanningMois(contratId, moisKey){
     if(jourR&&(jourR.heureDebReel||jourR.heureFinReel)){
       jourR.heureDebReel=null;
       jourR.heureFinReel=null;
+      // Le statut (ex. "travaillé") doit aussi être réinitialisé, pas seulement les heures —
+      // bug confirmé Sophie 18/07/2026 : un jour marqué "travaillé" restait ainsi même après
+      // que le prévu ait changé et que ses heures réelles aient été effacées.
+      if(jourR.statut) jourR.statut=null;
     }
   }
   c._planningSauvegarde=JSON.parse(JSON.stringify(c.planning||{}));
