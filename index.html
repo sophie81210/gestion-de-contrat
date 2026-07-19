@@ -4232,7 +4232,9 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
   const moisVerrouille=!!(ficheTile&&ficheTile.valide)||estLectureSeuleEmployeur();
   const srcTileModif=getVersionActive(c, new Date(annee,moisIdx,1));
   const estFixeOuSemTile=srcTileModif.th==='fixe'||srcTileModif.th==='sem';
-  const modifMoisActive=estFixeOuSemTile&&!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeyTile]);
+  const estVarTile=srcTileModif.th==='plan'&&srcTileModif.planType==='var';
+  const estCaseModifTile=estFixeOuSemTile||estVarTile;
+  const modifMoisActive=estCaseModifTile&&!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeyTile]);
   const modifMoisChecked=modifMoisActive?'checked':'';
   const nbJours=new Date(annee, moisIdx+1, 0).getDate();
   const jours=[];
@@ -4441,7 +4443,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
             style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;border:1.5px solid var(--m);color:var(--m);cursor:pointer;font-size:11px;line-height:1;flex-shrink:0">↺</span>`:''}
         </div>`;
         }
-      } else if(!infos.jourPossible&&!infos.ferieChome){
+      } else if(!infos.jourPossible&&!infos.ferieChome&&!(estVarTile&&modifMoisActive)){
         contenu=`<span style="color:var(--tx3);font-size:12px">${infos.jamaisPossible?'Repos hebdomadaire':'Jour non prévu au contrat'}</span>`;
       } else if(infos.ferieChome){
         contenu=`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);cursor:${(moisVerrouille||casesVerrouillee)?'default':'pointer'}">
@@ -4493,7 +4495,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       <span style="font-size:20px;color:var(--tx3)" id="${idMois}-arrow">${ouvert?'⌄':'›'}</span>
     </div>
     <div id="${idMois}" style="display:${ouvert?'block':'none'};padding:12px;background:#fff">
-      ${estFixeOuSemTile&&!moisVerrouille?`<div style="padding:6px 10px;margin-bottom:10px;background:var(--mp);border-radius:var(--rs);display:flex;align-items:center;justify-content:space-between;gap:10px">
+      ${estCaseModifTile&&!moisVerrouille?`<div style="padding:6px 10px;margin-bottom:10px;background:var(--mp);border-radius:var(--rs);display:flex;align-items:center;justify-content:space-between;gap:10px">
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px">
           <input type="checkbox" ${modifMoisChecked} onchange="toggleModifPlanningAutorisees(${c.id},'${moisKeyTile}',this.checked)">
           <span>Modifications autorisées</span>
@@ -4682,6 +4684,10 @@ function enregistrerPlanningMois(contratId, moisKey){
     semainesVues.add(semKeyISO);
     const source=getVersionActive(c,dCur);
     if(!(source.th==='plan'&&(source.planType==='min'||source.planType==='var'))) continue;
+    // Modifications autorisées ce mois (var uniquement) : plus de blocage hebdomadaire, le
+    // plafond mensuel prend le relais plus bas — précision Sophie 18/07/2026.
+    const moisKeySemV=dateStr.slice(0,7);
+    if(source.planType==='var'&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeySemV]) continue;
     const agendas=source.agendas||c.agendas||[];
     const ag=agendas.find(a=>parseDateLoc(a.dateDebut)<=dCur&&parseDateLoc(a.dateFin)>=dCur);
     const agKey=getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr));
@@ -4769,9 +4775,37 @@ function enregistrerPlanningMois(contratId, moisKey){
       }
     }
     if(joursReel>joursBaseline){
-      erreurs.push(`Ce mois compte ${joursReel} jours modifiés pour ${joursBaseline} prévus au contrat — le nombre de jours ne peut pas dépasser celui prévu, même compensé en heures`);
+      erreurs.push(`Ce mois compte ${joursReel} jours pour ${joursBaseline} prévus au contrat — le nombre de jours ne peut pas dépasser celui prévu`);
     } else if(minReel>minBaseline+0.5){
       erreurs.push(`Ce mois totalise ${fmtH(minReel)} pour ${fmtH(minBaseline)} prévues au contrat — l'excédent sera à ajouter sur la feuille de présence, pas dans le planning`);
+    }
+  }
+  // Var, modifications autorisées ce mois : même principe, plafond mensuel jours+heures au
+  // lieu du plafond hebdomadaire habituel de var — précision Sophie 18/07/2026.
+  if(srcMoisFS.th==='plan'&&srcMoisFS.planType==='var'&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey]){
+    let joursBaseV=0, minBaseV=0, joursReelV=0, minReelV=0;
+    const semainesVuesV=new Set();
+    for(let d3=1; d3<=finMoisDate.getDate(); d3++){
+      const dateStr3=ay+'-'+String(am).padStart(2,'0')+'-'+String(d3).padStart(2,'0');
+      const dCur3=new Date(ay,am-1,d3);
+      const srcJ3=getVersionActive(c,dCur3);
+      const agendas3=srcJ3.agendas||c.agendas||[];
+      const ag3=agendas3.find(a=>parseDateLoc(a.dateDebut)<=dCur3&&parseDateLoc(a.dateFin)>=dCur3);
+      const agKey3=getKeyAgenda(getSemISO(dateStr3),getSemAnnee(dateStr3));
+      const typeSem3=ag3&&ag3.semaines&&ag3.semaines[agKey3];
+      const semKeyISO3=getSemISO(dateStr3)+'-'+getSemAnnee(dateStr3);
+      if(typeSem3&&typeSem3!=='off'&&!semainesVuesV.has(semKeyISO3)){
+        semainesVuesV.add(semKeyISO3);
+        const vol3=(srcJ3.planVar||[]).find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem3);
+        if(vol3){ joursBaseV+=(vol3.j||1); minBaseV+=(vol3.h||0)*60; }
+      }
+      const pd3=c.planning&&c.planning[dateStr3];
+      if(pd3&&pd3.coche&&pd3.d&&pd3.f){ joursReelV++; minReelV+=toM(pd3.f)-toM(pd3.d); }
+    }
+    if(joursReelV>joursBaseV){
+      erreurs.push(`Ce mois compte ${joursReelV} jours pour ${joursBaseV} prévus au contrat — le nombre de jours ne peut pas dépasser celui prévu`);
+    } else if(minReelV>minBaseV+30){
+      erreurs.push(`Ce mois totalise ${fmtH(minReelV)} pour ${fmtH(minBaseV)} prévues au contrat — l'excédent sera à ajouter sur la feuille de présence, pas dans le planning`);
     }
   }
   if(erreurs.length){
