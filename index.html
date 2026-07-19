@@ -4284,7 +4284,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       </div>`;
     }
 
-    let jMaxSem=0, volHSem=0, totalSemMin=0, couleurSem=null;
+    let jMaxSem=0, volHSem=0, totalSemMin=0, totalSemMinFS=0, couleurSem=null;
     // Total de jours cochés sur la semaine ISO complète (jours normaux + fériés cochés comme travaillés),
     // y compris les jours d'un autre mois partageant la même semaine (semaine à cheval) — pour que
     // l'affichage soit cohérent avec le verrouillage réel appliqué par toggleJourPlanning
@@ -4306,12 +4306,16 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       const planData=(c.planning&&c.planning[j.date])||{};
       const dejaCoche=!!planData.coche;
       if(dejaCoche&&planData.d&&planData.f){ totalSemMin+=toM(planData.f)-toM(planData.d); }
+      if(estFixeOuSemTile&&!estCongeAM){
+        if(dejaCoche&&planData.d&&planData.f) totalSemMinFS+=toM(planData.f)-toM(planData.d);
+        else if(!dejaCoche&&infos.jourPossible&&infos.jPrevueDeb&&infos.jPrevueFin) totalSemMinFS+=toM(infos.jPrevueFin)-toM(infos.jPrevueDeb);
+      }
       // Total du mois (à côté de "Modifications autorisées") : compte le prévu par défaut,
       // pas seulement ce qui a été explicitement modifié — demande Sophie 18/07/2026. Un férié
       // ne compte que s'il a été explicitement débloqué (travaillé), jamais par défaut.
       if(estFixeOuSemTile&&!estCongeAM){
         if(dejaCoche&&planData.d&&planData.f){ totalMoisMinFS+=toM(planData.f)-toM(planData.d); totalJoursMoisFS++; }
-        else if(!dejaCoche&&infos.jourPossible&&!infos.ferieChome&&infos.jPrevueDeb&&infos.jPrevueFin){
+        else if(!dejaCoche&&infos.jourPossible&&infos.jPrevueDeb&&infos.jPrevueFin){
           totalMoisMinFS+=toM(infos.jPrevueFin)-toM(infos.jPrevueDeb); totalJoursMoisFS++;
         }
       }
@@ -4473,7 +4477,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       style="border:1px solid ${brdSem};border-radius:var(--rs);margin-bottom:8px;overflow:hidden">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:${bgSem};font-size:11px;font-weight:600;color:var(--tx2)">
         <span>Semaine ${getSemISO(sem.jours[0].date)}${jMaxSem?' — maximum '+jMaxSem+' jours':''}${volHSem?' — '+volHSem+'h max':''}</span>
-        <span>Total : <span class="pln-total">${fmtH(totalSemMin)}</span></span>
+        <span>Total : <span class="pln-total">${fmtH(estFixeOuSemTile?totalSemMinFS:totalSemMin)}</span></span>
       </div>
       ${joursHtml}
     </div>`;
@@ -4620,27 +4624,29 @@ function majPlanningJour(contratId, dateStr, champ, val, semKeyDom){
   if(cidx!==-1) S.contrats[cidx]=c;
   marquerPlanningNonEnregistre(contratId, moisKeyJ);
   // Mise à jour ciblée des totaux uniquement (pas de re-rendu des champs, pour ne pas casser la tabulation)
+  // Lire directement la valeur affichée des champs (déjà correcte, prévu ou modifié, verrouillé
+  // ou non) plutôt que ne compter que les jours "coché" — corrige le total qui n'incluait pas
+  // le prévu par défaut, ni ne soustrayait un jour supprimé (bug confirmé Sophie 18/07/2026).
   const semDiv=document.querySelector(`.pln-sem[data-semkey="${semKeyDom}"][data-contrat="${contratId}"]`);
   if(semDiv){
-    let totalSemMin=0;
-    semDiv.querySelectorAll('.pln-jour[data-date]').forEach(jd=>{
-      const pd=(c.planning||{})[jd.dataset.date]||{};
-      if(pd.coche&&pd.d&&pd.f) totalSemMin+=toM(pd.f)-toM(pd.d);
+    let totalSemMinLive=0;
+    semDiv.querySelectorAll('.pln-deb').forEach(debEl=>{
+      const finEl=debEl.closest('div').querySelector('.pln-fin');
+      if(debEl.value&&finEl&&finEl.value) totalSemMinLive+=toM(finEl.value)-toM(debEl.value);
     });
     const totSemSpan=semDiv.querySelector('.pln-total');
-    if(totSemSpan) totSemSpan.textContent=fmtH(totalSemMin);
+    if(totSemSpan) totSemSpan.textContent=fmtH(totalSemMinLive);
   }
   const moisKeyTile2=moisKeyJ;
-  const idMois2='pln-mois-'+contratId+'-'+moisKeyTile2;
   const tileEl2=document.getElementById('pln-tile-'+contratId+'-'+moisKeyTile2);
-  const totMoisSpan=document.getElementById(idMois2+'-total');
+  const totMoisSpan=document.getElementById('modif-autorisees-total-'+contratId+'-'+moisKeyTile2);
   if(tileEl2&&totMoisSpan){
-    let totalMoisMin=0;
-    tileEl2.querySelectorAll('.pln-jour[data-date]').forEach(jd=>{
-      const pd=(c.planning||{})[jd.dataset.date]||{};
-      if(pd.coche&&pd.d&&pd.f) totalMoisMin+=toM(pd.f)-toM(pd.d);
+    let totalMoisMinLive=0, joursMoisLive=0;
+    tileEl2.querySelectorAll('.pln-deb').forEach(debEl=>{
+      const finEl=debEl.closest('div').querySelector('.pln-fin');
+      if(debEl.value&&finEl&&finEl.value){ totalMoisMinLive+=toM(finEl.value)-toM(debEl.value); joursMoisLive++; }
     });
-    totMoisSpan.textContent=fmtH(totalMoisMin);
+    totMoisSpan.textContent=joursMoisLive+'j — '+fmtH(totalMoisMinLive);
   }
 }
 
@@ -4751,7 +4757,7 @@ function enregistrerPlanningMois(contratId, moisKey){
     for(let d2=1; d2<=finMoisDate.getDate(); d2++){
       const dateStr2=ay+'-'+String(am).padStart(2,'0')+'-'+String(d2).padStart(2,'0');
       const infos2=getInfosJourPlanning(c,dateStr2);
-      if(infos2.aucunType||infos2.ferieChome) continue; // congé/off/férié : jamais compté dans le plafond
+      if(infos2.aucunType) continue; // congé/off : jamais compté dans le plafond (un férié, lui, compte — payé normalement même chômé)
       if(infos2.jourPossible&&infos2.jPrevueDeb&&infos2.jPrevueFin){
         joursBaseline++; minBaseline+=toM(infos2.jPrevueFin)-toM(infos2.jPrevueDeb);
       }
@@ -4765,7 +4771,7 @@ function enregistrerPlanningMois(contratId, moisKey){
     if(joursReel>joursBaseline){
       erreurs.push(`Ce mois compte ${joursReel} jours modifiés pour ${joursBaseline} prévus au contrat — le nombre de jours ne peut pas dépasser celui prévu, même compensé en heures`);
     } else if(minReel>minBaseline+0.5){
-      erreurs.push(`Ce mois totalise ${fmtH(minReel)} pour ${fmtH(minBaseline)} prévues au contrat — l'excédent non compensé ailleurs dans le mois sera à ajouter sur la feuille de présence, pas dans le planning`);
+      erreurs.push(`Ce mois totalise ${fmtH(minReel)} pour ${fmtH(minBaseline)} prévues au contrat — l'excédent sera à ajouter sur la feuille de présence, pas dans le planning`);
     }
   }
   if(erreurs.length){
