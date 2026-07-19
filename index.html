@@ -3386,7 +3386,11 @@ function ouvrirFiche(contratId,key){
       } else if(planJourOF&&planJourOF.d&&planJourOF.f&&!statutFigeOF){
         j.heureDebPrev=planJourOF.d;
         j.heureFinPrev=planJourOF.f;
-        if(!j.statut||j.statut==='non-prevu') j.statut='prevu';
+        // Un férié garde toujours son identité "Férié" — jamais requalifié "prévu" simplement
+        // parce que le planning lui donne des heures. C'est l'utilisateur qui le passe
+        // explicitement en "travaillé" s'il le souhaite (précision Sophie 18/07/2026) ; la
+        // comparaison prévu/réel utilise quand même heureDebPrev/heureFinPrev ci-dessus.
+        if((!j.statut||j.statut==='non-prevu')&&!isFerie(j.date,c)) j.statut='prevu';
       } else if(!statutFigeOF&&(!planJourOF||!planJourOF.d||!planJourOF.f)){
         // Plus de donnée planning pour ce jour (effacée, ou jamais saisie) : ne pas garder d'anciennes
         // heures prévues fantômes, ni un statut 'prevu' qui ne correspond plus à rien
@@ -4315,9 +4319,12 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       // Total du mois (à côté de "Modifications autorisées") : compte le prévu par défaut,
       // pas seulement ce qui a été explicitement modifié — demande Sophie 18/07/2026. Un férié
       // ne compte que s'il a été explicitement débloqué (travaillé), jamais par défaut.
-      if(estFixeOuSemTile&&!estCongeAM){
+      // Étendu à var (18/07 suite) : total du mois affichait 0 pour var, jamais construit —
+      // seule la branche "coché avec heures" s'applique (var n'a pas de jPrevueDeb/Fin comme
+      // fixe/sem, mais un férié coché a déjà ses heures auto-calculées par l'app).
+      if((estFixeOuSemTile||estVarTile)&&!estCongeAM){
         if(dejaCoche&&planData.d&&planData.f){ totalMoisMinFS+=toM(planData.f)-toM(planData.d); totalJoursMoisFS++; }
-        else if(!dejaCoche&&infos.jourPossible&&infos.jPrevueDeb&&infos.jPrevueFin){
+        else if(estFixeOuSemTile&&!dejaCoche&&infos.jourPossible&&infos.jPrevueDeb&&infos.jPrevueFin){
           totalMoisMinFS+=toM(infos.jPrevueFin)-toM(infos.jPrevueDeb); totalJoursMoisFS++;
         }
       }
@@ -4685,10 +4692,6 @@ function enregistrerPlanningMois(contratId, moisKey){
     semainesVues.add(semKeyISO);
     const source=getVersionActive(c,dCur);
     if(!(source.th==='plan'&&(source.planType==='min'||source.planType==='var'))) continue;
-    // Modifications autorisées ce mois (var uniquement) : plus de blocage hebdomadaire, le
-    // plafond mensuel prend le relais plus bas — précision Sophie 18/07/2026.
-    const moisKeySemV=dateStr.slice(0,7);
-    if(source.planType==='var'&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeySemV]) continue;
     const agendas=source.agendas||c.agendas||[];
     const ag=agendas.find(a=>parseDateLoc(a.dateDebut)<=dCur&&parseDateLoc(a.dateFin)>=dCur);
     const agKey=getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr));
@@ -4765,8 +4768,9 @@ function enregistrerPlanningMois(contratId, moisKey){
   // (planning modifié) vs total BASELINE (motif du contrat seul, sans aucune modification —
   // `getInfosJourPlanning` ignore toujours `c.planning`, donc calcule ce baseline naturellement).
   const srcMoisFS=getVersionActive(c,new Date(ay,am-1,1));
+  let joursBaseline=0, minBaseline=0, joursReel=0, minReel=0;
+  let joursBaseV=0, minBaseV=0, joursReelV=0, minReelV=0;
   if(srcMoisFS.th==='fixe'||srcMoisFS.th==='sem'){
-    let joursBaseline=0, minBaseline=0, joursReel=0, minReel=0;
     for(let d2=1; d2<=finMoisDate.getDate(); d2++){
       const dateStr2=ay+'-'+String(am).padStart(2,'0')+'-'+String(d2).padStart(2,'0');
       const infos2=getInfosJourPlanning(c,dateStr2);
@@ -4790,7 +4794,6 @@ function enregistrerPlanningMois(contratId, moisKey){
   // Var, modifications autorisées ce mois : même principe, plafond mensuel jours+heures au
   // lieu du plafond hebdomadaire habituel de var — précision Sophie 18/07/2026.
   if(srcMoisFS.th==='plan'&&srcMoisFS.planType==='var'&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey]){
-    let joursBaseV=0, minBaseV=0, joursReelV=0, minReelV=0;
     const semainesVuesV=new Set();
     for(let d3=1; d3<=finMoisDate.getDate(); d3++){
       const dateStr3=ay+'-'+String(am).padStart(2,'0')+'-'+String(d3).padStart(2,'0');
@@ -4822,10 +4825,16 @@ function enregistrerPlanningMois(contratId, moisKey){
     // est corrigée à la racine dans getHeuresPrevues, qui lit maintenant l'état SAUVEGARDÉ
     // (_planningSauvegarde), jamais les modifications en cours tant qu'elles ne sont pas
     // validées — donc rien n'a besoin d'être effacé ici pour protéger la feuille.
-    alerte('Impossible d\u2019enregistrer :<br><br>'+erreurs.join('<br>')+'<br><br>Vos modifications restent affichées mais ne sont pas encore enregistrées — corrigez puis réessayez.');
+    alerte('Impossible d\u2019enregistrer :<br><br>'+erreurs.join('<br>')+'<br><br>Vos modifications ne sont pas encore enregistrées — corrigez puis réessayez.');
     return;
   }
   if(c.id) _contratsModifies.add(c.id);
+  // Message systématique à chaque enregistrement (demande Sophie 18/07/2026), en plus de
+  // l'avertissement semaine-à-cheval s'il y en a un.
+  const jB=joursBaseline||joursBaseV, mB=minBaseline||minBaseV, jR=joursReel||joursReelV, mR=minReel||minReelV;
+  if(jB>0||mB>0){
+    avertissementsInfo.unshift(`Vous avez prévu ${jR}j — ${fmtH(mR)} sur les ${jB}j — ${fmtH(mB)} possibles ce mois-ci`);
+  }
   if(avertissementsInfo.length){
     alerte('Enregistré. À savoir :<br><br>'+avertissementsInfo.join('<br>'));
   }
@@ -4849,12 +4858,16 @@ function enregistrerPlanningMois(contratId, moisKey){
     const ficheR=c.fiches&&c.fiches[dateStrR.slice(0,7)];
     if(!ficheR||ficheR.valide) continue;
     const jourR=(ficheR.jours||[]).find(jj=>jj.date===dateStrR);
-    if(jourR&&(jourR.heureDebReel||jourR.heureFinReel)){
-      jourR.heureDebReel=null;
-      jourR.heureFinReel=null;
-      // Le statut (ex. "travaillé") doit aussi être réinitialisé, pas seulement les heures —
-      // bug confirmé Sophie 18/07/2026 : un jour marqué "travaillé" restait ainsi même après
-      // que le prévu ait changé et que ses heures réelles aient été effacées.
+    if(jourR){
+      if(jourR.heureDebReel||jourR.heureFinReel){
+        jourR.heureDebReel=null;
+        jourR.heureFinReel=null;
+      }
+      // Le statut (ex. "travaillé"/"prévu") doit aussi être réinitialisé dès que le prévu
+      // change, MÊME sans heures réelles déjà saisies — bug confirmé Sophie 18/07/2026 : un
+      // jour retiré du planning restait affiché "prévu" sans heures, jusqu'à réinitialisation
+      // manuelle. Le premier correctif (limité aux jours avec heures réelles) était trop
+      // étroit.
       if(jourR.statut) jourR.statut=null;
     }
   }
