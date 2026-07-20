@@ -4744,6 +4744,32 @@ function enregistrerPlanningMois(contratId, moisKey){
       const hAbsHorsContratSem=joursHorsContrat*(hSemMoy/nbJoursPossiblesUnion);
       volH=Math.max(0,volH-hAbsHorsContratSem);
     }
+    // Semaine à cheval sur un MOIS CALENDAIRE (différent du cas contrat/avenant ci-dessus) :
+    // prorata au même principe que les heures théoriques (hebdo × joursPossiblesCeMois/joursPossiblesSemaine)
+    // — décision Sophie 18/07/2026 : le risque qu'une semaine entière soit consommée sur un seul
+    // mois avant une rupture (jamais rattrapé pour un contrat 52, qui n'a pas de régularisation)
+    // rend la liberté totale trop dangereuse ; le budget partagé "premier arrivé" est abandonné
+    // au profit d'un vrai prorata, comme le fait déjà le calcul des heures théoriques.
+    const semACheval=(lundiSem.getMonth()!==am-1||lundiSem.getFullYear()!==ay)||(dimSem.getMonth()!==am-1||dimSem.getFullYear()!==ay);
+    let volHCeMois=volH, totalSemaineCeMois=0;
+    if(semACheval){
+      const nbJoursPossiblesSemaineM=joursPattern.filter(Boolean).length||1;
+      let nbJoursPossiblesCeMoisM=0;
+      for(let dd3=0;dd3<7;dd3++){
+        const jd3=new Date(lundiSem); jd3.setDate(lundiSem.getDate()+dd3);
+        if(joursPattern[dd3]&&jd3.getMonth()===am-1&&jd3.getFullYear()===ay) nbJoursPossiblesCeMoisM++;
+      }
+      volHCeMois=volH*(nbJoursPossiblesCeMoisM/nbJoursPossiblesSemaineM);
+      Object.keys(c.planning).forEach(dt=>{
+        if((getSemISO(dt)+'-'+getSemAnnee(dt))!==semKeyISO) return;
+        const [dty,dtm]=dt.split('-').map(Number);
+        if(!(dtm===am&&dty===ay)) return; // seulement les jours de CE mois
+        const pd2=c.planning[dt];
+        if(!pd2||!pd2.coche) return;
+        if(pd2.d&&pd2.f) totalSemaineCeMois+=(toM(pd2.f)-toM(pd2.d))/60;
+        else totalSemaineCeMois+=volH/jMaxVol;
+      });
+    }
     let totalSemaine=0;
     Object.keys(c.planning).forEach(dt=>{
       if((getSemISO(dt)+'-'+getSemAnnee(dt))!==semKeyISO) return;
@@ -4753,14 +4779,12 @@ function enregistrerPlanningMois(contratId, moisKey){
       else totalSemaine+=volH/jMaxVol; // férié coché (pas de champs d'heures) : compte pour volume/jMax
     });
     const modifActiveSemV=source.planType==='var'&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey];
-    if(totalSemaine>volH+0.01&&!modifActiveSemV){
+    if(semACheval){
+      if(totalSemaineCeMois>volHCeMois+0.01){
+        erreurs.push(`Semaine ${getSemISO(dateStr)} à cheval sur deux mois : ${fmtH(totalSemaineCeMois*60)} prévues pour ${fmtH(volHCeMois*60)} possibles dans ce mois (prorata du volume hebdomadaire selon les jours de la semaine qui tombent dans ce mois)`);
+      }
+    } else if(totalSemaine>volH+0.01&&!modifActiveSemV){
       erreurs.push(`Semaine ${getSemISO(dateStr)} : ${fmtH(totalSemaine*60)} prévues pour un volume de ${fmtH(volH*60)} — limitez le nombre d'heures par semaine à celui prévu au contrat, les heures complémentaires seront à ajouter sur la feuille de présence`);
-    } else if((lundiSem.getMonth()!==am-1||lundiSem.getFullYear()!==ay)||(dimSem.getMonth()!==am-1||dimSem.getFullYear()!==ay)){
-      // Semaine à cheval sur deux mois (min/var) : pas de blocage — le budget de la semaine est
-      // partagé entre les deux mois (premier arrivé, premier servi), volontairement pas de
-      // prorata pour ne pas figer de liberté (précision Sophie 18/07/2026). Juste un
-      // avertissement informatif pour éviter les mauvaises surprises au mois suivant.
-      avertissementsInfo.push(`Semaine ${getSemISO(dateStr)} à cheval sur deux mois : ${fmtH(totalSemaine*60)} utilisées sur les ${fmtH(volH*60)} prévues de la semaine — le reste sera à partager avec l'autre mois`);
     }
   }
   // Étape 2 (18/07/2026) : plafond mensuel jours ET heures pour fixe/sem — une vraie
