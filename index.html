@@ -4753,19 +4753,22 @@ function enregistrerPlanningMois(contratId, moisKey){
     const semACheval=(lundiSem.getMonth()!==am-1||lundiSem.getFullYear()!==ay)||(dimSem.getMonth()!==am-1||dimSem.getFullYear()!==ay);
     let volHCeMois=volH, totalSemaineCeMois=0;
     if(semACheval){
-      const nbJoursPossiblesSemaineM=joursPattern.filter(Boolean).length||1;
-      let nbJoursPossiblesCeMoisM=0;
-      for(let dd3=0;dd3<7;dd3++){
-        const jd3=new Date(lundiSem); jd3.setDate(lundiSem.getDate()+dd3);
-        if(joursPattern[dd3]&&jd3.getMonth()===am-1&&jd3.getFullYear()===ay) nbJoursPossiblesCeMoisM++;
+      let heuresAutreMois6=0;
+      for(let dd6=0;dd6<7;dd6++){
+        const jd6=new Date(lundiSem); jd6.setDate(lundiSem.getDate()+dd6);
+        if(jd6.getMonth()===am-1&&jd6.getFullYear()===ay) continue; // jour de CE mois, pas l'autre
+        const ds6=jd6.getFullYear()+'-'+String(jd6.getMonth()+1).padStart(2,'0')+'-'+String(jd6.getDate()).padStart(2,'0');
+        const pd6=c.planning&&c.planning[ds6];
+        // Un jour non possible rempli est un vrai supplément, jamais soustrait du volume normal.
+        if(pd6&&pd6.coche&&getInfosJourPlanning(c,ds6).jourPossible) heuresAutreMois6+=(pd6.d&&pd6.f)?(toM(pd6.f)-toM(pd6.d))/60:volH/jMaxVol;
       }
-      volHCeMois=volH*(nbJoursPossiblesCeMoisM/nbJoursPossiblesSemaineM);
+      volHCeMois=Math.max(0,volH-heuresAutreMois6);
       Object.keys(c.planning).forEach(dt=>{
         if((getSemISO(dt)+'-'+getSemAnnee(dt))!==semKeyISO) return;
         const [dty,dtm]=dt.split('-').map(Number);
         if(!(dtm===am&&dty===ay)) return; // seulement les jours de CE mois
         const pd2=c.planning[dt];
-        if(!pd2||!pd2.coche) return;
+        if(!pd2||!pd2.coche||!getInfosJourPlanning(c,dt).jourPossible) return;
         if(pd2.d&&pd2.f) totalSemaineCeMois+=(toM(pd2.f)-toM(pd2.d))/60;
         else totalSemaineCeMois+=volH/jMaxVol;
       });
@@ -4774,7 +4777,7 @@ function enregistrerPlanningMois(contratId, moisKey){
     Object.keys(c.planning).forEach(dt=>{
       if((getSemISO(dt)+'-'+getSemAnnee(dt))!==semKeyISO) return;
       const pd2=c.planning[dt];
-      if(!pd2||!pd2.coche) return;
+      if(!pd2||!pd2.coche||!getInfosJourPlanning(c,dt).jourPossible) return;
       if(pd2.d&&pd2.f) totalSemaine+=(toM(pd2.f)-toM(pd2.d))/60;
       else totalSemaine+=volH/jMaxVol; // férié coché (pas de champs d'heures) : compte pour volume/jMax
     });
@@ -4832,10 +4835,48 @@ function enregistrerPlanningMois(contratId, moisKey){
       if(typeSem3&&typeSem3!=='off'&&!semainesVuesV.has(semKeyISO3)){
         semainesVuesV.add(semKeyISO3);
         const vol3=(srcJ3.planVar||[]).find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem3);
-        if(vol3){ joursBaseV+=(vol3.j||1); minBaseV+=(vol3.h||0)*60; }
+        if(vol3){
+          // Semaine à cheval sur le mois : prorater comme les heures théoriques, même principe
+          // que le contrôle dédié plus haut — sinon une semaine partiellement dans ce mois
+          // compte son jMax/volume COMPLET au lieu de sa seule portion (bug confirmé Sophie
+          // 18/07/2026 par un test chiffré précis).
+          const lundiSem3=new Date(dCur3); lundiSem3.setDate(dCur3.getDate()-(dCur3.getDay()||7)+1);
+          let joursDansCeMois3=0, joursPossiblesSemaine3=0;
+          for(let dd4=0;dd4<7;dd4++){
+            const jd4=new Date(lundiSem3); jd4.setDate(lundiSem3.getDate()+dd4);
+            if(vol3.jours&&vol3.jours[dd4]){
+              joursPossiblesSemaine3++;
+              if(jd4.getMonth()===am-1&&jd4.getFullYear()===ay) joursDansCeMois3++;
+            }
+          }
+          // jMax et le volume d'heures sont TOUS DEUX des plafonds PARTAGÉS pour la semaine
+          // entière, pas des budgets séparés par mois — corrigé après que Sophie a montré
+          // l'incohérence entre un prorata figé du motif (1/5=8h) pour les heures et jMax (le
+          // vrai plafond exploitable) pour les jours. Les deux utilisent maintenant la même
+          // logique : retirer ce qui est RÉELLEMENT déjà utilisé dans l'AUTRE portion (autre
+          // mois) de cette même semaine, plutôt qu'une fraction figée à l'avance — si l'autre
+          // mois n'a rien utilisé, ce mois récupère la totalité, rien n'est jamais perdu.
+          let joursDejaCochesAutreMois=0, heuresDejaUtiliseesAutreMois=0;
+          for(let dd5=0;dd5<7;dd5++){
+            const jd5=new Date(lundiSem3); jd5.setDate(lundiSem3.getDate()+dd5);
+            if(jd5.getMonth()===am-1&&jd5.getFullYear()===ay) continue; // jour de CE mois, pas l'autre
+            const ds5=jd5.getFullYear()+'-'+String(jd5.getMonth()+1).padStart(2,'0')+'-'+String(jd5.getDate()).padStart(2,'0');
+            const pd5=c.planning&&c.planning[ds5];
+            // Un jour non possible rempli (grâce aux modifications autorisées) est un vrai
+            // supplément, jamais soustrait du volume normal — précision Sophie 18/07/2026.
+            if(pd5&&pd5.coche&&getInfosJourPlanning(c,ds5).jourPossible){
+              joursDejaCochesAutreMois++;
+              heuresDejaUtiliseesAutreMois+=(pd5.d&&pd5.f)?(toM(pd5.f)-toM(pd5.d))/60:(vol3.h||0)/(vol3.j||1);
+            }
+          }
+          const jMaxRestant3=Math.max(0,(vol3.j||1)-joursDejaCochesAutreMois);
+          const volHRestant3=Math.max(0,(vol3.h||0)-heuresDejaUtiliseesAutreMois);
+          joursBaseV+=Math.min(joursDansCeMois3,jMaxRestant3);
+          minBaseV+=volHRestant3*60;
+        }
       }
       const pd3=c.planning&&c.planning[dateStr3];
-      if(pd3&&pd3.coche&&pd3.d&&pd3.f){ joursReelV++; minReelV+=toM(pd3.f)-toM(pd3.d); }
+      if(pd3&&pd3.coche&&pd3.d&&pd3.f&&getInfosJourPlanning(c,dateStr3).jourPossible){ joursReelV++; minReelV+=toM(pd3.f)-toM(pd3.d); }
     }
     if(joursReelV>joursBaseV){
       erreurs.push(`Ce mois compte ${joursReelV} jours pour ${joursBaseV} prévus au contrat — le nombre de jours ne peut pas dépasser celui prévu`);
