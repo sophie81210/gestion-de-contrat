@@ -4844,10 +4844,25 @@ function enregistrerPlanningMois(contratId, moisKey){
           // compte son jMax/volume COMPLET au lieu de sa seule portion (bug confirmé Sophie
           // 18/07/2026 par un test chiffré précis).
           const lundiSem3=new Date(dCur3); lundiSem3.setDate(dCur3.getDate()-(dCur3.getDay()||7)+1);
-          let joursDansCeMois3=0, joursPossiblesSemaine3=0;
+          // Conscience de dateDeb/dateFin (correctif 21/07/2026) : jMax réduit sur le motif PROPRE à cette
+          // semaine, le volume d'heures réduit au taux MOYEN (motif union / moyenne annuelle) — même
+          // formule que calcHTheoriquesPlanVar pour ce même cas, pour rester aligné avec la paie.
+          const dateDebC3=c.dateDeb;
+          const dateFinC3=getDateFinContrat(c);
+          const planVarAnnuel3=srcJ3.planVar||c.planVar||[];
+          const totHAnnuel3=planVarAnnuel3.reduce((t,v)=>t+(v.h||0)*(v.s||0),0);
+          const totSAnnuel3=planVarAnnuel3.reduce((t,v)=>t+(v.s||0),0);
+          const hSemMoy3=totSAnnuel3>0?totHAnnuel3/totSAnnuel3:0;
+          const joursPossiblesUnion3=Array.from({length:7},(_,idx)=>planVarAnnuel3.some(v=>v.jours&&v.jours[idx]));
+          const nbJoursPossiblesUnion3=joursPossiblesUnion3.filter(Boolean).length||1;
+          let joursDansCeMois3=0, joursPossiblesSemaine3=0, joursHCPropres3=0, joursHCUnion3=0;
           for(let dd4=0;dd4<7;dd4++){
             const jd4=new Date(lundiSem3); jd4.setDate(lundiSem3.getDate()+dd4);
+            const jd4Str=jd4.getFullYear()+'-'+String(jd4.getMonth()+1).padStart(2,'0')+'-'+String(jd4.getDate()).padStart(2,'0');
+            const horsContrat4=(dateDebC3&&jd4Str<dateDebC3)||(dateFinC3&&jd4>dateFinC3);
+            if(horsContrat4&&joursPossiblesUnion3[dd4]) joursHCUnion3++;
             if(vol3.jours&&vol3.jours[dd4]){
+              if(horsContrat4){ joursHCPropres3++; continue; }
               joursPossiblesSemaine3++;
               if(jd4.getMonth()===am-1&&jd4.getFullYear()===ay) joursDansCeMois3++;
             }
@@ -4872,8 +4887,10 @@ function enregistrerPlanningMois(contratId, moisKey){
               heuresDejaUtiliseesAutreMois+=(pd5.d&&pd5.f)?(toM(pd5.f)-toM(pd5.d))/60:(vol3.h||0)/(vol3.j||1);
             }
           }
-          const jMaxRestant3=Math.max(0,(vol3.j||1)-joursDejaCochesAutreMois);
-          const volHRestant3=Math.max(0,(vol3.h||0)-heuresDejaUtiliseesAutreMois);
+          const jMaxSemaine3=Math.max(0,(vol3.j||1)-joursHCPropres3);
+          const volHSemaine3=Math.max(0,(vol3.h||0)-joursHCUnion3*(hSemMoy3/nbJoursPossiblesUnion3));
+          const jMaxRestant3=Math.max(0,jMaxSemaine3-joursDejaCochesAutreMois);
+          const volHRestant3=Math.max(0,volHSemaine3-heuresDejaUtiliseesAutreMois);
           joursBaseV+=Math.min(joursDansCeMois3,jMaxRestant3);
           minBaseV+=volHRestant3*60;
         }
