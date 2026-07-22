@@ -3407,6 +3407,18 @@ function ouvrirFiche(contratId,key){
       }
     }
     j.planVarPrevu=!!(prevus.planVar);
+    // Modifications autorisées (22/07/2026) : un jour du motif normal, explicitement décoché ce
+    // mois, ne doit plus se comporter comme "structurellement prévu" — sinon getStatutPrevu (ligne
+    // "!heureDebPrev&&!heureFinPrev&&!planVarPrevu") retombe sur "prevu" via ce seul signal,
+    // malgré heureDebPrev/heureFinPrev déjà correctement vidés juste au-dessus. Bug confirmé
+    // Sophie 22/07/2026 : un jour du motif décoché restait affiché "Prévu" sans heures. Repos et
+    // fériés ne sont jamais concernés : leurs propres vérifications, dans getStatutPrevu,
+    // s'exécutent avant celle-ci et ne la consultent jamais.
+    if(isPlanMinVarFiche&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[j.date.slice(0,7)]){
+      const planningRefPVP=c._planningSauvegarde!==undefined?c._planningSauvegarde:c.planning;
+      const planJourPVP=(planningRefPVP||{})[j.date];
+      if(!planJourPVP||!planJourPVP.d||!planJourPVP.f) j.planVarPrevu=false;
+    }
     // Pour plan min/var : semaines off → pas de 'non-prevu' forcé, garder null pour rester cohérent avec la migration
     if(isPlanMinVarFiche&&j.statut==='non-prevu'&&j._jourPossible!==false){
       const semNum=getSemISO(j.date);
@@ -3720,7 +3732,15 @@ function ouvrirFiche(contratId,key){
       }
     }
     {
-      const statutPrevuJ=getStatutPrevu(c,j);
+      // Modifications autorisées (22/07/2026) : un jour de repos ayant reçu des heures (ex.
+      // dimanche travaillé) est déjà correctement affiché "prévu" via j.statut — mais
+      // getStatutPrevu, lui, répond toujours "repos" en premier, sans jamais regarder si des
+      // heures ont été confirmées. Sans cet ajustement local, ni la coche verte ni la détection
+      // de "statut forcé" ne reconnaissent ce jour comme prévu. Bug confirmé Sophie 22/07/2026 :
+      // coche verte absente sur un dimanche pourtant "Prévu". Le calcul structurel de
+      // getStatutPrevu n'est pas modifié — seul l'usage local ici est ajusté.
+      const statutPrevuBrut=getStatutPrevu(c,j);
+      const statutPrevuJ=(statutPrevuBrut==='repos'&&j.heureDebPrev&&j.heureFinPrev&&['prevu','travaille','abs-partielle'].includes(j.statut))?j.statut:statutPrevuBrut;
       const peutAvoirHeures=['prevu','travaille','abs-partielle'].includes(statutPrevuJ);
       // Coche verte : seulement si jour prévu sans modification (pas de statut forcé, pas d'heures réelles, pas de congé, pas hors-contrat)
       const statutForcé=j.statut&&j.statut!==statutPrevuJ;
@@ -4904,7 +4924,9 @@ function enregistrerPlanningMois(contratId, moisKey){
       hSupMoisV+=Math.max(0,totSem6-45);
     }
     if(excedentMinV>1||hSupMoisV>0.001){
-      complSupInfoV=`, dont ${fmtH(Math.round(excedentMinV))} complémentaires (au-delà du volume mensuel)`+(hSupMoisV>0.001?` et ${fmtH(Math.round(hSupMoisV*60))} supplémentaires (au-delà de 45h/semaine)`:'');
+      // 22/07/2026 : un seul montant — les Yh supplémentaires (>45h/sem) sont déjà COMPRISES dans
+      // les Xh d'excédent, pas un ajout distinct (le texte précédent laissait croire à une somme X+Y).
+      complSupInfoV=`, dont ${fmtH(Math.round(excedentMinV))} heures complémentaires / supplémentaires`;
     }
   }
   if(erreurs.length){
@@ -4922,7 +4944,9 @@ function enregistrerPlanningMois(contratId, moisKey){
   // l'avertissement semaine-à-cheval s'il y en a un.
   const jB=joursBaseline||joursBaseV, mB=minBaseline||minBaseV, jR=joursReel||joursReelV, mR=minReel||minReelV;
   if(jB>0||mB>0){
-    avertissementsInfo.unshift(`Vous avez prévu ${jR}j — ${fmtH(mR)} sur les ${jB}j — ${fmtH(mB)} possibles ce mois-ci${complSupInfoV}`);
+    // 22/07/2026 : le « sur les Xj — Yh possibles » est retiré — Sophie craint qu'il incite à
+    // consommer jusqu'à ce plafond, alors qu'il inclut la fin de semaine du mois suivant.
+    avertissementsInfo.unshift(`Vous avez prévu ${jR}j — ${fmtH(mR)} ce mois-ci${complSupInfoV}`);
   }
   if(avertissementsInfo.length){
     alerte('Enregistré. À savoir :<br><br>'+avertissementsInfo.join('<br>'));
