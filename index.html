@@ -3854,6 +3854,7 @@ function ouvrirFiche(contratId,key){
     ${fiche.valide?'<span style="color:var(--vt);font-size:13px;font-weight:600">✓ Validée</span>':''}
     ${(!fiche.valide&&!estLectureSeuleEmployeur())?`<button class="btn bs bsm" style="margin-left:auto" onclick="enregistrerFiche(${contratId},'${key}')">💾</button>`:''}
     </div>
+    ${planningNonEnregistrePourMois(c,key)?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">⚠ Le planning de ce mois a des modifications non enregistrées — retournez sur l'onglet Planning et cliquez sur 💾 Enregistrer avant de continuer, sinon cette feuille ne reflète pas vos derniers changements.</div>`:''}
     <div style="width:100%;overflow:hidden">
       <table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed">
         <colgroup>
@@ -4679,6 +4680,24 @@ function majPlanningJour(contratId, dateStr, champ, val, semKeyDom){
 }
 
 // Marque le mois comme ayant des changements non enregistrés (affiche/active le bouton Enregistrer)
+function planningNonEnregistrePourMois(c, moisKey){
+  // Détecte si le planning du mois a des modifications non encore enregistrées via le bouton
+  // 💾 Enregistrer du planning — comparaison c.planning (vivant) vs c._planningSauvegarde (dernier
+  // enregistrement réel). Ajouté 22/07/2026 pour un rappel fiable à l'ouverture de la feuille de
+  // présence : l'astérisque du bouton n'est jamais recréé lors d'un rafraîchissement de tuile
+  // déclenché depuis un autre mois (semaine à cheval), donc pas fiable comme seul indicateur.
+  if(!c.planning||c._planningSauvegarde===undefined) return false;
+  const [ay,am]=moisKey.split('-').map(Number);
+  const dernierJour=new Date(ay,am,0).getDate();
+  for(let d=1; d<=dernierJour; d++){
+    const ds=ay+'-'+String(am).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+    const v=c.planning[ds], s=c._planningSauvegarde[ds];
+    const vStr=v?(v.coche?'1|'+(v.d||'')+'|'+(v.f||''):'0'):'';
+    const sStr=s?(s.coche?'1|'+(s.d||'')+'|'+(s.f||''):'0'):'';
+    if(vStr!==sStr) return true;
+  }
+  return false;
+}
 function marquerPlanningNonEnregistre(contratId, moisKey){
   S.planningModifie=true;
   const idMois='pln-mois-'+contratId+'-'+moisKey;
@@ -4777,6 +4796,13 @@ function enregistrerPlanningMois(contratId, moisKey){
       for(let dd6=0;dd6<7;dd6++){
         const jd6=new Date(lundiSem); jd6.setDate(lundiSem.getDate()+dd6);
         if(jd6.getMonth()===am-1&&jd6.getFullYear()===ay) continue; // jour de CE mois, pas l'autre
+        // Priorité au début de semaine (décision Sophie 22/07/2026) : ne jamais soustraire un jour
+        // d'un mois CHRONOLOGIQUEMENT POSTÉRIEUR à celui qu'on traite — sinon le mois le plus ancien
+        // dépendrait de l'ORDRE d'enregistrement des deux mois plutôt que de leur ordre calendaire
+        // ("premier arrivé, premier servi"). Seul le mois le plus ancien des deux peut réduire le
+        // budget du plus récent (jamais l'inverse) : un mois déjà validé reste ainsi définitivement
+        // protégé contre toute modification ultérieure du mois suivant.
+        if(jd6.getFullYear()*12+jd6.getMonth()>ay*12+(am-1)) continue; // jour d'un mois plus tardif : ignoré
         const ds6=jd6.getFullYear()+'-'+String(jd6.getMonth()+1).padStart(2,'0')+'-'+String(jd6.getDate()).padStart(2,'0');
         const pd6=c.planning&&c.planning[ds6];
         // Un jour non possible rempli est un vrai supplément, jamais soustrait du volume normal.
@@ -5256,6 +5282,10 @@ function calcEnveloppeMoisVar(c,ay,am){
           for(let dd5=0;dd5<7;dd5++){
             const jd5=new Date(lundiSem3); jd5.setDate(lundiSem3.getDate()+dd5);
             if(jd5.getMonth()===am-1&&jd5.getFullYear()===ay) continue; // jour de CE mois, pas l'autre
+            // Priorité au début de semaine (décision Sophie 22/07/2026) : même principe que dans le
+            // contrôle hebdomadaire — ne jamais soustraire un jour d'un mois plus tardif que celui
+            // traité, pour que le mois le plus ancien ne dépende jamais de l'ordre d'enregistrement.
+            if(jd5.getFullYear()*12+jd5.getMonth()>ay*12+(am-1)) continue; // jour d'un mois plus tardif : ignoré
             const ds5=jd5.getFullYear()+'-'+String(jd5.getMonth()+1).padStart(2,'0')+'-'+String(jd5.getDate()).padStart(2,'0');
             const pd5=c.planning&&c.planning[ds5];
             // Un jour non possible rempli (grâce aux modifications autorisées) est un vrai
