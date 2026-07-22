@@ -4695,6 +4695,7 @@ function enregistrerPlanningMois(contratId, moisKey){
   const finMoisDate=new Date(ay,am,0);
   const erreurs=[];
   const avertissementsInfo=[];
+  let complSupInfoV=''; // modèle libre : détail compl/supp du mois (var)
   const semainesVues=new Set();
   for(let d=1; d<=finMoisDate.getDate(); d++){
     const dCur=new Date(ay,am-1,d);
@@ -4802,7 +4803,7 @@ function enregistrerPlanningMois(contratId, moisKey){
     });
     const modifActiveSemV=source.planType==='var'&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey];
     if(semACheval){
-      if(totalSemaineCeMois>volHCeMois+0.01){
+      if(totalSemaineCeMois>volHCeMois+0.01&&!modifActiveSemV){ // modèle libre 22/07 : var+case → plus de refus
         erreurs.push(`Semaine ${getSemISO(dateStr)} à cheval sur deux mois : ${fmtH(totalSemaineCeMois*60)} prévues pour ${fmtH(volHCeMois*60)} possibles dans ce mois (prorata du volume hebdomadaire selon les jours de la semaine qui tombent dans ce mois)`);
       }
     } else if(totalSemaine>volH+0.01&&!modifActiveSemV){
@@ -4841,76 +4842,11 @@ function enregistrerPlanningMois(contratId, moisKey){
   // Var, modifications autorisées ce mois : même principe, plafond mensuel jours+heures au
   // lieu du plafond hebdomadaire habituel de var — précision Sophie 18/07/2026.
   if(srcMoisFS.th==='plan'&&srcMoisFS.planType==='var'&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey]){
-    const semainesVuesV=new Set();
+    // Enveloppe calculée par la fonction PARTAGÉE avec la paie — extraction 22/07/2026, à l'identique.
+    const envMoisV=calcEnveloppeMoisVar(c,ay,am);
+    joursBaseV=envMoisV.jours; minBaseV=envMoisV.minutes;
     for(let d3=1; d3<=finMoisDate.getDate(); d3++){
       const dateStr3=ay+'-'+String(am).padStart(2,'0')+'-'+String(d3).padStart(2,'0');
-      const dCur3=new Date(ay,am-1,d3);
-      const srcJ3=getVersionActive(c,dCur3);
-      const agendas3=srcJ3.agendas||c.agendas||[];
-      const ag3=agendas3.find(a=>parseDateLoc(a.dateDebut)<=dCur3&&parseDateLoc(a.dateFin)>=dCur3);
-      const agKey3=getKeyAgenda(getSemISO(dateStr3),getSemAnnee(dateStr3));
-      const typeSem3=ag3&&ag3.semaines&&ag3.semaines[agKey3];
-      const semKeyISO3=getSemISO(dateStr3)+'-'+getSemAnnee(dateStr3);
-      if(typeSem3&&typeSem3!=='off'&&!semainesVuesV.has(semKeyISO3)){
-        semainesVuesV.add(semKeyISO3);
-        const vol3=(srcJ3.planVar||[]).find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem3);
-        if(vol3){
-          // Semaine à cheval sur le mois : prorater comme les heures théoriques, même principe
-          // que le contrôle dédié plus haut — sinon une semaine partiellement dans ce mois
-          // compte son jMax/volume COMPLET au lieu de sa seule portion (bug confirmé Sophie
-          // 18/07/2026 par un test chiffré précis).
-          const lundiSem3=new Date(dCur3); lundiSem3.setDate(dCur3.getDate()-(dCur3.getDay()||7)+1);
-          // Conscience de dateDeb/dateFin (correctif 21/07/2026) : jMax réduit sur le motif PROPRE à cette
-          // semaine, le volume d'heures réduit au taux MOYEN (motif union / moyenne annuelle) — même
-          // formule que calcHTheoriquesPlanVar pour ce même cas, pour rester aligné avec la paie.
-          const dateDebC3=c.dateDeb;
-          const dateFinC3=getDateFinContrat(c);
-          const planVarAnnuel3=srcJ3.planVar||c.planVar||[];
-          const totHAnnuel3=planVarAnnuel3.reduce((t,v)=>t+(v.h||0)*(v.s||0),0);
-          const totSAnnuel3=planVarAnnuel3.reduce((t,v)=>t+(v.s||0),0);
-          const hSemMoy3=totSAnnuel3>0?totHAnnuel3/totSAnnuel3:0;
-          const joursPossiblesUnion3=Array.from({length:7},(_,idx)=>planVarAnnuel3.some(v=>v.jours&&v.jours[idx]));
-          const nbJoursPossiblesUnion3=joursPossiblesUnion3.filter(Boolean).length||1;
-          let joursDansCeMois3=0, joursPossiblesSemaine3=0, joursHCPropres3=0, joursHCUnion3=0;
-          for(let dd4=0;dd4<7;dd4++){
-            const jd4=new Date(lundiSem3); jd4.setDate(lundiSem3.getDate()+dd4);
-            const jd4Str=jd4.getFullYear()+'-'+String(jd4.getMonth()+1).padStart(2,'0')+'-'+String(jd4.getDate()).padStart(2,'0');
-            const horsContrat4=(dateDebC3&&jd4Str<dateDebC3)||(dateFinC3&&jd4>dateFinC3);
-            if(horsContrat4&&joursPossiblesUnion3[dd4]) joursHCUnion3++;
-            if(vol3.jours&&vol3.jours[dd4]){
-              if(horsContrat4){ joursHCPropres3++; continue; }
-              joursPossiblesSemaine3++;
-              if(jd4.getMonth()===am-1&&jd4.getFullYear()===ay) joursDansCeMois3++;
-            }
-          }
-          // jMax et le volume d'heures sont TOUS DEUX des plafonds PARTAGÉS pour la semaine
-          // entière, pas des budgets séparés par mois — corrigé après que Sophie a montré
-          // l'incohérence entre un prorata figé du motif (1/5=8h) pour les heures et jMax (le
-          // vrai plafond exploitable) pour les jours. Les deux utilisent maintenant la même
-          // logique : retirer ce qui est RÉELLEMENT déjà utilisé dans l'AUTRE portion (autre
-          // mois) de cette même semaine, plutôt qu'une fraction figée à l'avance — si l'autre
-          // mois n'a rien utilisé, ce mois récupère la totalité, rien n'est jamais perdu.
-          let joursDejaCochesAutreMois=0, heuresDejaUtiliseesAutreMois=0;
-          for(let dd5=0;dd5<7;dd5++){
-            const jd5=new Date(lundiSem3); jd5.setDate(lundiSem3.getDate()+dd5);
-            if(jd5.getMonth()===am-1&&jd5.getFullYear()===ay) continue; // jour de CE mois, pas l'autre
-            const ds5=jd5.getFullYear()+'-'+String(jd5.getMonth()+1).padStart(2,'0')+'-'+String(jd5.getDate()).padStart(2,'0');
-            const pd5=c.planning&&c.planning[ds5];
-            // Un jour non possible rempli (grâce aux modifications autorisées) est un vrai
-            // supplément, jamais soustrait du volume normal — précision Sophie 18/07/2026.
-            if(pd5&&pd5.coche&&jourComptePlanning(c,ds5,getInfosJourPlanning(c,ds5))){
-              joursDejaCochesAutreMois++;
-              heuresDejaUtiliseesAutreMois+=(pd5.d&&pd5.f)?(toM(pd5.f)-toM(pd5.d))/60:(vol3.h||0)/(vol3.j||1);
-            }
-          }
-          const jMaxSemaine3=Math.max(0,(vol3.j||1)-joursHCPropres3);
-          const volHSemaine3=Math.max(0,(vol3.h||0)-joursHCUnion3*(hSemMoy3/nbJoursPossiblesUnion3));
-          const jMaxRestant3=Math.max(0,jMaxSemaine3-joursDejaCochesAutreMois);
-          const volHRestant3=Math.max(0,volHSemaine3-heuresDejaUtiliseesAutreMois);
-          joursBaseV+=Math.min(joursDansCeMois3,jMaxRestant3);
-          minBaseV+=volHRestant3*60;
-        }
-      }
       const pd3=c.planning&&c.planning[dateStr3];
       const infosReel3=pd3&&pd3.coche?getInfosJourPlanning(c,dateStr3):null;
       if(infosReel3&&jourComptePlanning(c,dateStr3,infosReel3)){
@@ -4921,10 +4857,28 @@ function enregistrerPlanningMois(contratId, moisKey){
         minReelV+=(pd3.d&&pd3.f)?(toM(pd3.f)-toM(pd3.d)):((infosReel3.volH||0)/(infosReel3.jMax||1))*60;
       }
     }
-    if(joursReelV>joursBaseV){
-      erreurs.push(`Ce mois compte ${joursReelV} jours pour ${joursBaseV} prévus au contrat — le nombre de jours ne peut pas dépasser celui prévu`);
-    } else if(minReelV>minBaseV+30){
-      erreurs.push(`Ce mois totalise ${fmtH(minReelV)} pour ${fmtH(minBaseV)} prévues au contrat — l'excédent sera à ajouter sur la feuille de présence, pas dans le planning`);
+    // MODÈLE LIBRE (décision Sophie 22/07/2026) : plus aucun refus var — l'enveloppe informe, la
+    // paie arbitre. Complémentaires = excédent de l'ENVELOPPE MENSUELLE ; supplémentaires =
+    // tranches hebdo au-delà de 45h, semaine rattachée au mois de son DERNIER jour (règle art. 109).
+    const excedentMinV=Math.max(0,minReelV-minBaseV);
+    let hSupMoisV=0;
+    for(let d6=1; d6<=finMoisDate.getDate(); d6++){
+      const dim6=new Date(ay,am-1,d6);
+      if(dim6.getDay()!==0) continue; // ancre = le dimanche (dernier jour) de chaque semaine du mois
+      let totSem6=0;
+      for(let dd6=6; dd6>=0; dd6--){
+        const j6=new Date(dim6); j6.setDate(dim6.getDate()-dd6);
+        const ds6=j6.getFullYear()+'-'+String(j6.getMonth()+1).padStart(2,'0')+'-'+String(j6.getDate()).padStart(2,'0');
+        const pd6b=c.planning&&c.planning[ds6];
+        if(!pd6b||!pd6b.coche) continue;
+        const infos6b=getInfosJourPlanning(c,ds6);
+        if(!jourComptePlanning(c,ds6,infos6b)) continue;
+        totSem6+=(pd6b.d&&pd6b.f)?(toM(pd6b.f)-toM(pd6b.d))/60:(infos6b.volH||0)/(infos6b.jMax||1);
+      }
+      hSupMoisV+=Math.max(0,totSem6-45);
+    }
+    if(excedentMinV>1||hSupMoisV>0.001){
+      complSupInfoV=`, dont ${fmtH(Math.round(excedentMinV))} complémentaires (au-delà du volume mensuel)`+(hSupMoisV>0.001?` et ${fmtH(Math.round(hSupMoisV*60))} supplémentaires (au-delà de 45h/semaine)`:'');
     }
   }
   if(erreurs.length){
@@ -4942,7 +4896,7 @@ function enregistrerPlanningMois(contratId, moisKey){
   // l'avertissement semaine-à-cheval s'il y en a un.
   const jB=joursBaseline||joursBaseV, mB=minBaseline||minBaseV, jR=joursReel||joursReelV, mR=minReel||minReelV;
   if(jB>0||mB>0){
-    avertissementsInfo.unshift(`Vous avez prévu ${jR}j — ${fmtH(mR)} sur les ${jB}j — ${fmtH(mB)} possibles ce mois-ci`);
+    avertissementsInfo.unshift(`Vous avez prévu ${jR}j — ${fmtH(mR)} sur les ${jB}j — ${fmtH(mB)} possibles ce mois-ci${complSupInfoV}`);
   }
   if(avertissementsInfo.length){
     alerte('Enregistré. À savoir :<br><br>'+avertissementsInfo.join('<br>'));
@@ -5241,6 +5195,87 @@ function enregistrerFiche(contratId,key){
   }
 }
 
+
+// Enveloppe mensuelle d'un mois var (jours + heures « possibles », pot commun des semaines à
+// cheval compris) — extraite d'enregistrerPlanningMois le 22/07/2026 pour être PARTAGÉE entre le
+// contrôle d'enregistrement et la paie (calcRecapFiche, modèle libre) : une seule source de vérité,
+// le contrôle ne peut plus diverger de ce que la paie reconnaît (point clé Sophie 21/07/2026).
+function calcEnveloppeMoisVar(c,ay,am){
+  const finMoisDate=new Date(ay,am,0);
+  let joursBaseV=0, minBaseV=0;
+  const semainesVuesV=new Set();
+  for(let d3=1; d3<=finMoisDate.getDate(); d3++){
+      const dateStr3=ay+'-'+String(am).padStart(2,'0')+'-'+String(d3).padStart(2,'0');
+      const dCur3=new Date(ay,am-1,d3);
+      const srcJ3=getVersionActive(c,dCur3);
+      const agendas3=srcJ3.agendas||c.agendas||[];
+      const ag3=agendas3.find(a=>parseDateLoc(a.dateDebut)<=dCur3&&parseDateLoc(a.dateFin)>=dCur3);
+      const agKey3=getKeyAgenda(getSemISO(dateStr3),getSemAnnee(dateStr3));
+      const typeSem3=ag3&&ag3.semaines&&ag3.semaines[agKey3];
+      const semKeyISO3=getSemISO(dateStr3)+'-'+getSemAnnee(dateStr3);
+      if(typeSem3&&typeSem3!=='off'&&!semainesVuesV.has(semKeyISO3)){
+        semainesVuesV.add(semKeyISO3);
+        const vol3=(srcJ3.planVar||[]).find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem3);
+        if(vol3){
+          // Semaine à cheval sur le mois : prorater comme les heures théoriques, même principe
+          // que le contrôle dédié plus haut — sinon une semaine partiellement dans ce mois
+          // compte son jMax/volume COMPLET au lieu de sa seule portion (bug confirmé Sophie
+          // 18/07/2026 par un test chiffré précis).
+          const lundiSem3=new Date(dCur3); lundiSem3.setDate(dCur3.getDate()-(dCur3.getDay()||7)+1);
+          // Conscience de dateDeb/dateFin (correctif 21/07/2026) : jMax réduit sur le motif PROPRE à cette
+          // semaine, le volume d'heures réduit au taux MOYEN (motif union / moyenne annuelle) — même
+          // formule que calcHTheoriquesPlanVar pour ce même cas, pour rester aligné avec la paie.
+          const dateDebC3=c.dateDeb;
+          const dateFinC3=getDateFinContrat(c);
+          const planVarAnnuel3=srcJ3.planVar||c.planVar||[];
+          const totHAnnuel3=planVarAnnuel3.reduce((t,v)=>t+(v.h||0)*(v.s||0),0);
+          const totSAnnuel3=planVarAnnuel3.reduce((t,v)=>t+(v.s||0),0);
+          const hSemMoy3=totSAnnuel3>0?totHAnnuel3/totSAnnuel3:0;
+          const joursPossiblesUnion3=Array.from({length:7},(_,idx)=>planVarAnnuel3.some(v=>v.jours&&v.jours[idx]));
+          const nbJoursPossiblesUnion3=joursPossiblesUnion3.filter(Boolean).length||1;
+          let joursDansCeMois3=0, joursPossiblesSemaine3=0, joursHCPropres3=0, joursHCUnion3=0;
+          for(let dd4=0;dd4<7;dd4++){
+            const jd4=new Date(lundiSem3); jd4.setDate(lundiSem3.getDate()+dd4);
+            const jd4Str=jd4.getFullYear()+'-'+String(jd4.getMonth()+1).padStart(2,'0')+'-'+String(jd4.getDate()).padStart(2,'0');
+            const horsContrat4=(dateDebC3&&jd4Str<dateDebC3)||(dateFinC3&&jd4>dateFinC3);
+            if(horsContrat4&&joursPossiblesUnion3[dd4]) joursHCUnion3++;
+            if(vol3.jours&&vol3.jours[dd4]){
+              if(horsContrat4){ joursHCPropres3++; continue; }
+              joursPossiblesSemaine3++;
+              if(jd4.getMonth()===am-1&&jd4.getFullYear()===ay) joursDansCeMois3++;
+            }
+          }
+          // jMax et le volume d'heures sont TOUS DEUX des plafonds PARTAGÉS pour la semaine
+          // entière, pas des budgets séparés par mois — corrigé après que Sophie a montré
+          // l'incohérence entre un prorata figé du motif (1/5=8h) pour les heures et jMax (le
+          // vrai plafond exploitable) pour les jours. Les deux utilisent maintenant la même
+          // logique : retirer ce qui est RÉELLEMENT déjà utilisé dans l'AUTRE portion (autre
+          // mois) de cette même semaine, plutôt qu'une fraction figée à l'avance — si l'autre
+          // mois n'a rien utilisé, ce mois récupère la totalité, rien n'est jamais perdu.
+          let joursDejaCochesAutreMois=0, heuresDejaUtiliseesAutreMois=0;
+          for(let dd5=0;dd5<7;dd5++){
+            const jd5=new Date(lundiSem3); jd5.setDate(lundiSem3.getDate()+dd5);
+            if(jd5.getMonth()===am-1&&jd5.getFullYear()===ay) continue; // jour de CE mois, pas l'autre
+            const ds5=jd5.getFullYear()+'-'+String(jd5.getMonth()+1).padStart(2,'0')+'-'+String(jd5.getDate()).padStart(2,'0');
+            const pd5=c.planning&&c.planning[ds5];
+            // Un jour non possible rempli (grâce aux modifications autorisées) est un vrai
+            // supplément, jamais soustrait du volume normal — précision Sophie 18/07/2026.
+            if(pd5&&pd5.coche&&jourComptePlanning(c,ds5,getInfosJourPlanning(c,ds5))){
+              joursDejaCochesAutreMois++;
+              heuresDejaUtiliseesAutreMois+=(pd5.d&&pd5.f)?(toM(pd5.f)-toM(pd5.d))/60:(vol3.h||0)/(vol3.j||1);
+            }
+          }
+          const jMaxSemaine3=Math.max(0,(vol3.j||1)-joursHCPropres3);
+          const volHSemaine3=Math.max(0,(vol3.h||0)-joursHCUnion3*(hSemMoy3/nbJoursPossiblesUnion3));
+          const jMaxRestant3=Math.max(0,jMaxSemaine3-joursDejaCochesAutreMois);
+          const volHRestant3=Math.max(0,volHSemaine3-heuresDejaUtiliseesAutreMois);
+          joursBaseV+=Math.min(joursDansCeMois3,jMaxRestant3);
+          minBaseV+=volHRestant3*60;
+        }
+      }
+    }
+  return {jours:joursBaseV, minutes:minBaseV, heures:minBaseV/60};
+}
 
 function getDateFinContrat(c){
   // Une simulation de rupture ENREGISTRÉE MAIS PAS CONFIRMÉE ne doit jamais être traitée comme
@@ -9407,9 +9442,26 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   nbJoursTrav=parseFloat((nbJoursMoisContrat+joursEnPlus-joursEnMoins).toFixed(1));
 
   // ── Heures complémentaires et supplémentaires normales ──
-  const hBaseComp=hComp+hSup; // heures en plus via compJour + heures sup ponctuelles ("sur jours ouvrables")
+  // MODÈLE LIBRE (décision Sophie 22/07/2026) : var + « Modifications autorisées » du mois → les
+  // complémentaires naissent de l'ENVELOPPE MENSUELLE (excédent du mois entier), plus de la semaine ;
+  // transferts neutres dans l'enveloppe ; hSup (>45h/sem) reste hebdomadaire et, dans l'enveloppe,
+  // ne porte que sa majoration (base couverte par la mensualisation). Pas appliqué sur les encarts
+  // avant/après avenant (période partielle : l'enveloppe est mensuelle par nature).
+  const moisKeyRecap=fiche.jours&&fiche.jours.length?fiche.jours[0].date.slice(0,7):'';
+  const estEnvMensuelle=!dateDebPeriode&&!dateFinPeriode&&c.th==='plan'&&c.planType==='var'&&!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeyRecap]);
+  let excedentEnv=0;
+  if(estEnvMensuelle){
+    const [ayEnv,amEnv]=moisKeyRecap.split('-').map(Number);
+    const envMoisPaie=calcEnveloppeMoisVar(c,ayEnv,amEnv);
+    let reelMoisPaie=0;
+    Object.keys(hParSemaine).forEach(skEnv=>{ reelMoisPaie+=Math.max(0,(hParSemaine[skEnv]||0)-(hParSemainePrecMois[skEnv]||0)); });
+    excedentEnv=Math.max(0,reelMoisPaie-envMoisPaie.heures);
+    hCompMaj=Math.max(0,excedentEnv-hSup);
+    hComp=hCompMaj;
+  }
+  const hBaseComp=estEnvMensuelle?excedentEnv:(hComp+hSup); // heures en plus ("sur jours ouvrables")
   // Montants base (heures × txNet, sans majoration)
-  const montantBaseComp=parseFloat((hComp*txNet+hSup*(1+majSup)*txNet).toFixed(2)); // base sur jours ouvrables (HC + HS avec majoration)
+  const montantBaseComp=parseFloat((estEnvMensuelle?(excedentEnv*txNet):(hComp*txNet+hSup*(1+majSup)*txNet)).toFixed(2)); // base sur jours ouvrables
   const montantBaseSup=0; // déjà inclus dans montantBaseComp
   const montantBaseFerieNP=parseFloat((hMajFerie*txNet).toFixed(2));
   const montantBaseRepos=parseFloat((hMajRepos*txNet).toFixed(2));
@@ -9422,7 +9474,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const hCompVersHSTotal=Object.values(window._hCompVersHS||{}).reduce((t,v)=>t+v,0);
   const montantMajSupBrut=parseFloat((hSup*majSup*txNet).toFixed(2));
   const montantMajCompDejaPayee=parseFloat((hCompVersHSTotal*majCompPct*txNet).toFixed(2));
-  const montantMajSup=parseFloat(Math.max(0,montantMajSupBrut-montantMajCompDejaPayee).toFixed(2));
+  const montantMajSup=parseFloat((estEnvMensuelle?(hSup*majSup*txNet):Math.max(0,montantMajSupBrut-montantMajCompDejaPayee)).toFixed(2));
   const montantMajFerieNP=parseFloat((hMajFerie*majFeriePct*txNet).toFixed(2));
   const montantMajFeriePrevu2=parseFloat((hMajFeriePrevu*majFeriePct*txNet).toFixed(2));
   const montantMajRepos=parseFloat((hMajRepos*majReposPct*txNet).toFixed(2));
