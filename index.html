@@ -4230,6 +4230,21 @@ function getInfosJourPlanning(c, dateStr){
   return {jourPossible, jMax, volIdx, volH, typeSem, aucunType, horsContrat, agendaManquant, semaineOff, semaineCongesAM, jamaisPossible, couleur, estFerie, ferieChome, jPrevueDeb, jPrevueFin};
 }
 
+function jourComptePlanning(c, dateStr, infos){
+  // Porte « jour possible » conditionnelle (décision Sophie 21/07/2026) : quand la case
+  // « Modifications autorisées » du mois DU JOUR est cochée, tout jour coché d'une semaine
+  // TRAVAILLÉE (type correspondant à un volume) compte dans les totaux et plafonds, prévu au
+  // motif ou non (dimanches inclus) — c'est le but de la modification autorisée. Semaines
+  // employeur/off, congés, types orphelins et jours hors contrat restent exclus. Var
+  // uniquement pour l'instant ; case décochée = comportement historique (supplément hors
+  // totaux, à ajouter sur la feuille de présence).
+  if(infos.jourPossible) return true;
+  const srcJC=getVersionActive(c, parseDateLoc(dateStr));
+  if(!(srcJC.th==='plan'&&srcJC.planType==='var')) return false;
+  if(!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[dateStr.slice(0,7)])) return false;
+  return infos.volIdx>=0&&!infos.aucunType;
+}
+
 function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
   const moisKeyTile=annee+'-'+String(moisIdx+1).padStart(2,'0');
   const ficheTile=c.fiches&&c.fiches[moisKeyTile];
@@ -4311,7 +4326,8 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       const estCongeAM=isJourCongeAM(j.date);
       const planData=(c.planning&&c.planning[j.date])||{};
       const dejaCoche=!!planData.coche;
-      if(dejaCoche&&infos.jourPossible!==false){ totalSemMin+=(planData.d&&planData.f)?(toM(planData.f)-toM(planData.d)):((infos.volH||0)/(infos.jMax||1))*60; }
+      const jourCompteT=jourComptePlanning(c,j.date,infos);
+      if(dejaCoche&&(infos.jourPossible!==false||jourCompteT)){ totalSemMin+=(planData.d&&planData.f)?(toM(planData.f)-toM(planData.d)):((infos.volH||0)/(infos.jMax||1))*60; }
       if(estFixeOuSemTile&&!estCongeAM){
         if(dejaCoche&&planData.d&&planData.f) totalSemMinFS+=toM(planData.f)-toM(planData.d);
         else if(!dejaCoche&&infos.jourPossible&&infos.jPrevueDeb&&infos.jPrevueFin) totalSemMinFS+=toM(infos.jPrevueFin)-toM(infos.jPrevueDeb);
@@ -4322,8 +4338,8 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       // Étendu à var (18/07 suite) : total du mois affichait 0 pour var, jamais construit —
       // seule la branche "coché avec heures" s'applique (var n'a pas de jPrevueDeb/Fin comme
       // fixe/sem, mais un férié coché a déjà ses heures auto-calculées par l'app).
-      if((estFixeOuSemTile||estVarTile)&&!estCongeAM&&(!estVarTile||infos.jourPossible)){
-        if(dejaCoche&&infos.jourPossible!==false){
+      if((estFixeOuSemTile||estVarTile)&&!estCongeAM&&(!estVarTile||infos.jourPossible||jourCompteT)){
+        if(dejaCoche&&(infos.jourPossible!==false||jourCompteT)){
           totalMoisMinFS+=(planData.d&&planData.f)?(toM(planData.f)-toM(planData.d)):((infos.volH||0)/(infos.jMax||1))*60;
           totalJoursMoisFS++;
         }
@@ -4488,7 +4504,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
     return `<div class="pln-sem" data-semkey="${semKeyDom}" data-contrat="${c.id}" data-jmax="${jMaxSem}"
       style="border:1px solid ${brdSem};border-radius:var(--rs);margin-bottom:8px;overflow:hidden">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:${bgSem};font-size:11px;font-weight:600;color:var(--tx2)">
-        <span>Semaine ${getSemISO(sem.jours[0].date)}${jMaxSem?' — maximum '+jMaxSem+' jours':''}${volHSem?' — '+volHSem+'h max':''}</span>
+        <span>Semaine ${getSemISO(sem.jours[0].date)}${(estVarTile&&modifMoisActive)?'':(jMaxSem?' — maximum '+jMaxSem+' jours':'')+(volHSem?' — '+volHSem+'h max':'')}</span>
         <span>Total : <span class="pln-total">${fmtH(estFixeOuSemTile?totalSemMinFS:totalSemMin)}</span></span>
       </div>
       ${joursHtml}
@@ -4763,7 +4779,7 @@ function enregistrerPlanningMois(contratId, moisKey){
         const ds6=jd6.getFullYear()+'-'+String(jd6.getMonth()+1).padStart(2,'0')+'-'+String(jd6.getDate()).padStart(2,'0');
         const pd6=c.planning&&c.planning[ds6];
         // Un jour non possible rempli est un vrai supplément, jamais soustrait du volume normal.
-        if(pd6&&pd6.coche&&getInfosJourPlanning(c,ds6).jourPossible) heuresAutreMois6+=(pd6.d&&pd6.f)?(toM(pd6.f)-toM(pd6.d))/60:volH/jMaxVol;
+        if(pd6&&pd6.coche&&jourComptePlanning(c,ds6,getInfosJourPlanning(c,ds6))) heuresAutreMois6+=(pd6.d&&pd6.f)?(toM(pd6.f)-toM(pd6.d))/60:volH/jMaxVol;
       }
       volHCeMois=Math.max(0,volH-heuresAutreMois6);
       Object.keys(c.planning).forEach(dt=>{
@@ -4771,7 +4787,7 @@ function enregistrerPlanningMois(contratId, moisKey){
         const [dty,dtm]=dt.split('-').map(Number);
         if(!(dtm===am&&dty===ay)) return; // seulement les jours de CE mois
         const pd2=c.planning[dt];
-        if(!pd2||!pd2.coche||!getInfosJourPlanning(c,dt).jourPossible) return;
+        if(!pd2||!pd2.coche||!jourComptePlanning(c,dt,getInfosJourPlanning(c,dt))) return;
         if(pd2.d&&pd2.f) totalSemaineCeMois+=(toM(pd2.f)-toM(pd2.d))/60;
         else totalSemaineCeMois+=volH/jMaxVol;
       });
@@ -4780,7 +4796,7 @@ function enregistrerPlanningMois(contratId, moisKey){
     Object.keys(c.planning).forEach(dt=>{
       if((getSemISO(dt)+'-'+getSemAnnee(dt))!==semKeyISO) return;
       const pd2=c.planning[dt];
-      if(!pd2||!pd2.coche||!getInfosJourPlanning(c,dt).jourPossible) return;
+      if(!pd2||!pd2.coche||!jourComptePlanning(c,dt,getInfosJourPlanning(c,dt))) return;
       if(pd2.d&&pd2.f) totalSemaine+=(toM(pd2.f)-toM(pd2.d))/60;
       else totalSemaine+=volH/jMaxVol; // férié coché (pas de champs d'heures) : compte pour volume/jMax
     });
@@ -4882,7 +4898,7 @@ function enregistrerPlanningMois(contratId, moisKey){
             const pd5=c.planning&&c.planning[ds5];
             // Un jour non possible rempli (grâce aux modifications autorisées) est un vrai
             // supplément, jamais soustrait du volume normal — précision Sophie 18/07/2026.
-            if(pd5&&pd5.coche&&getInfosJourPlanning(c,ds5).jourPossible){
+            if(pd5&&pd5.coche&&jourComptePlanning(c,ds5,getInfosJourPlanning(c,ds5))){
               joursDejaCochesAutreMois++;
               heuresDejaUtiliseesAutreMois+=(pd5.d&&pd5.f)?(toM(pd5.f)-toM(pd5.d))/60:(vol3.h||0)/(vol3.j||1);
             }
@@ -4897,9 +4913,12 @@ function enregistrerPlanningMois(contratId, moisKey){
       }
       const pd3=c.planning&&c.planning[dateStr3];
       const infosReel3=pd3&&pd3.coche?getInfosJourPlanning(c,dateStr3):null;
-      if(infosReel3&&infosReel3.jourPossible){
+      if(infosReel3&&jourComptePlanning(c,dateStr3,infosReel3)){
         joursReelV++;
-        minReelV+=(pd3.d&&pd3.f)?(toM(pd3.f)-toM(pd3.d)):(infosReel3.volH||0)/(infosReel3.jMax||1);
+        // ×60 : le repli (volH/jMax) est en HEURES, le total en MINUTES — 3e occurrence du même
+        // oubli (les deux totaux d'affichage corrigés le 20/07), corrigée le 21/07/2026 : c'était
+        // la source des écarts de 8/18 min observés avec des fériés cochés sans horaires.
+        minReelV+=(pd3.d&&pd3.f)?(toM(pd3.f)-toM(pd3.d)):((infosReel3.volH||0)/(infosReel3.jMax||1))*60;
       }
     }
     if(joursReelV>joursBaseV){
