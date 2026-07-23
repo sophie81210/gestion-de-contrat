@@ -16337,6 +16337,34 @@ if(tousNonPrevus){
           }
         }
         if(jour.statut) return;
+        // La pose doit avoir déjà commencé AVANT ce férié pour que l'encadrement s'applique —
+        // sinon un férié simplement avant une pose (jamais coché, la pose n'a pas encore
+        // commencé à cette date) hérite à tort du statut du jour qui suit, alors que ce jour
+        // suivant peut être le tout premier jour de SA propre période de pose, sans lien avec
+        // le férié. Bug confirmé Sophie 23/07/2026 (Méline contrat fixe 46, plansem46hs sem 46) :
+        // le vendredi prévu démarre légitimement le décompte (1er jour prévu de la pose) et
+        // devient à raison congés non acquis, mais le jeudi férié qui précède — jamais coché,
+        // la pose n'ayant pas commencé avant lui — se retrouvait décompté par ricochet. Ici on
+        // remonte au jour non-repos précédent : s'il n'est ni coché ('pose') ni déjà en statut
+        // congés (pose antérieure encore active), la pose n'a pas commencé avant ce férié, qui
+        // reste donc simplement "Férié" (règle "férié avant une pose : acquis").
+        {
+          const dPoseAvantFer=new Date(jour.date.split('-')[0],parseInt(jour.date.split('-')[1])-1,parseInt(jour.date.split('-')[2]));
+          let poseDejaCommenceeAvantFer=false;
+          for(let iPAF=1;iPAF<=7;iPAF++){
+            dPoseAvantFer.setDate(dPoseAvantFer.getDate()-1);
+            if(dPoseAvantFer.getDay()===(c.reposHebdo||0)) continue;
+            const dsPAF=dPoseAvantFer.getFullYear()+'-'+String(dPoseAvantFer.getMonth()+1).padStart(2,'0')+'-'+String(dPoseAvantFer.getDate()).padStart(2,'0');
+            if(data.jours[dsPAF]==='pose'){poseDejaCommenceeAvantFer=true;}
+            else{
+              const jPAF=c.fiches[dsPAF.slice(0,7)]?.jours.find(x=>x.date===dsPAF);
+              const stPAF=jPAF?.statut;
+              if(['conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges'].includes(stPAF)) poseDejaCommenceeAvantFer=true;
+            }
+            break;
+          }
+          if(!poseDejaCommenceeAvantFer) return;
+        }
         // Chercher le jour ouvrable prévu avant et après
         const statutsDeduit=['conges-non','arret'];
         const statutsRemuneres=['prevu','travaille','abs-partielle','abs-rem','conges-acq','conges-anticipe','ferie','abs-enfant'];
