@@ -3372,7 +3372,14 @@ function ouvrirFiche(contratId,key){
         const planningRefOF3=c._planningSauvegarde!==undefined?c._planningSauvegarde:c.planning;
         const planJourOF3=(planningRefOF3||{})[j.date];
         const statutFigeOF3=['travaille','conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat','arret','abs-non','abs-am','abs-enfant','ferie-non'].includes(j.statut);
-        if(!planJourOF3&&!isFerie(j.date,c)&&!getInfosJourPlanning(c,j.date).jourPossible&&(j.heureDebPrev||j.heureDebReel||(j.statut&&j.statut!=='non-prevu'))){
+        // Statuts congé/absence : ne doivent JAMAIS être remis à "non prévu" par ce mécanisme, qui ne
+        // vise que le "jour ajouté en plus" (ci-dessous). Bug confirmé Sophie 23/07/2026 : cette
+        // branche ne distinguait pas un statut "travaillé" (le cas visé) d'un jour de congé tombant
+        // sur un jour hors motif — pourtant fréquent (ex. samedi d'une semaine de congé complète pour
+        // un contrat qui ne travaille jamais le samedi) — et effaçait ces congés à chaque ouverture de
+        // la feuille, sans que rien ne les "raccorde" au nouveau planning.
+        const statutCongeAbsFigeOF3=['conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat','arret','abs-non','abs-am','abs-enfant','ferie-non'].includes(j.statut);
+        if(!planJourOF3&&!isFerie(j.date,c)&&!getInfosJourPlanning(c,j.date).jourPossible&&!statutCongeAbsFigeOF3&&(j.heureDebPrev||j.heureDebReel||(j.statut&&j.statut!=='non-prevu'))){
           // Jour ajouté en plus (jamais possible structurellement) dont l'entrée du planning a été
           // entièrement retirée : plus aucune raison d'exister, tout s'annule — y compris le réel
           // et un statut "travaillé" habituellement figé, sinon l'ajout retiré laisse une trace
@@ -4511,6 +4518,13 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
             // présumé être un repos structurel.
             contenu=`<span style="color:var(--tx3);font-size:12px">Jour non prévu au contrat</span>`;
           }
+        } else if(infos.ferieChome){
+        // Tout jour férié chômé (fixe/sem), prévu au contrat ou non : jamais cochable via la case
+        // à cocher, figé au même titre qu'un repos hebdomadaire l'est pour var/min — décision
+        // Sophie 23/07/2026, étendue aux fériés sur jour prévu le même jour. Pour enregistrer du
+        // travail ce jour-là, passer directement le menu déroulant de la feuille sur "Travaillé"
+        // (déclenche la majoration férié dédiée), jamais via modifications autorisées.
+        contenu=`<span style="color:var(--tx3);font-size:12px">Férié</span>`;
         } else {
         // Modifications autorisées ce mois (23/07/2026, remplacement du cadenas par une case à
         // cocher — décision Sophie) : un jour normalement prévu apparaît coché par défaut, avec
