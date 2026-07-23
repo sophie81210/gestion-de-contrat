@@ -4261,7 +4261,7 @@ function jourComptePlanning(c, dateStr, infos){
   // totaux, à ajouter sur la feuille de présence).
   if(infos.jourPossible) return true;
   const srcJC=getVersionActive(c, parseDateLoc(dateStr));
-  if(!(srcJC.th==='plan'&&srcJC.planType==='var')) return false;
+  if(!((srcJC.th==='plan'&&srcJC.planType==='var')||srcJC.th==='fixe'||srcJC.th==='sem')) return false;
   if(!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[dateStr.slice(0,7)])) return false;
   return infos.volIdx>=0&&!infos.aucunType;
 }
@@ -4869,24 +4869,32 @@ function enregistrerPlanningMois(contratId, moisKey){
   let joursBaseline=0, minBaseline=0, joursReel=0, minReel=0;
   let joursBaseV=0, minBaseV=0, joursReelV=0, minReelV=0;
   if(srcMoisFS.th==='fixe'||srcMoisFS.th==='sem'){
+    const envMoisFS=calcEnveloppeMoisFixeSem(c,ay,am);
+    joursBaseline=envMoisFS.jours; minBaseline=envMoisFS.minutes;
     for(let d2=1; d2<=finMoisDate.getDate(); d2++){
       const dateStr2=ay+'-'+String(am).padStart(2,'0')+'-'+String(d2).padStart(2,'0');
       const infos2=getInfosJourPlanning(c,dateStr2);
-      if(infos2.aucunType) continue; // congé/off : jamais compté dans le plafond (un férié, lui, compte — payé normalement même chômé)
-      if(infos2.jourPossible&&infos2.jPrevueDeb&&infos2.jPrevueFin){
-        joursBaseline++; minBaseline+=toM(infos2.jPrevueFin)-toM(infos2.jPrevueDeb);
-      }
+      if(infos2.aucunType) continue; // congé/off : jamais compté (un férié, lui, compte — payé normalement même chômé)
       const pd2=c.planning&&c.planning[dateStr2];
-      if(pd2&&pd2.coche&&pd2.d&&pd2.f){
+      if(pd2&&pd2.coche&&pd2.d&&pd2.f&&jourComptePlanning(c,dateStr2,infos2)){
         joursReel++; minReel+=toM(pd2.f)-toM(pd2.d);
       } else if(!(pd2&&pd2.coche)&&infos2.jourPossible&&infos2.jPrevueDeb&&infos2.jPrevueFin){
         joursReel++; minReel+=toM(infos2.jPrevueFin)-toM(infos2.jPrevueDeb);
       }
     }
-    if(joursReel>joursBaseline){
-      erreurs.push(`Ce mois compte ${joursReel} jours pour ${joursBaseline} prévus au contrat — le nombre de jours ne peut pas dépasser celui prévu`);
-    } else if(minReel>minBaseline+0.5){
-      erreurs.push(`Ce mois totalise ${fmtH(minReel)} pour ${fmtH(minBaseline)} prévues au contrat — l'excédent sera à ajouter sur la feuille de présence, pas dans le planning`);
+    const modifActiveFS=c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey];
+    if(!modifActiveFS){
+      if(joursReel>joursBaseline){
+        erreurs.push(`Ce mois compte ${joursReel} jours pour ${joursBaseline} prévus au contrat — le nombre de jours ne peut pas dépasser celui prévu`);
+      } else if(minReel>minBaseline+0.5){
+        erreurs.push(`Ce mois totalise ${fmtH(minReel)} pour ${fmtH(minBaseline)} prévues au contrat — l'excédent sera à ajouter sur la feuille de présence, pas dans le planning`);
+      }
+    } else {
+      // MODÈLE LIBRE étendu à fixe/sem (23/07/2026, décision Sophie) : comme var, plus aucun
+      // refus quand modifications autorisées est cochée — l'enveloppe informe, la paie arbitre
+      // (calcRecapFiche, même fonction calcEnveloppeMoisFixeSem partagée).
+      const excedentFS=Math.max(0,minReel-minBaseline);
+      if(excedentFS>1) complSupInfoV=`, dont ${fmtH(Math.round(excedentFS))} heures complémentaires`;
     }
   }
   // Var, modifications autorisées ce mois : même principe, plafond mensuel jours+heures au
@@ -5333,6 +5341,26 @@ function calcEnveloppeMoisVar(c,ay,am){
       }
     }
   return {jours:joursBaseV, minutes:minBaseV, heures:minBaseV/60};
+}
+
+function calcEnveloppeMoisFixeSem(c,ay,am){
+  // Enveloppe mensuelle fixe/sem (23/07/2026, extension du modèle var — décision Sophie) :
+  // contrairement à var, chaque jour a ses propres heures explicites (joursFixe, ou
+  // semTypes[type].jours pour sem) plutôt qu'un volume hebdomadaire à répartir — donc pas
+  // besoin de la logique de semaine à cheval de calcEnveloppeMoisVar : on additionne
+  // simplement, jour par jour, les heures normalement prévues pour les jours du mois demandé.
+  // Source unique de vérité partagée entre l'enregistrement du planning et la paie, comme var.
+  const finMois4=new Date(ay,am,0);
+  let jours4=0, minutes4=0;
+  for(let d4=1; d4<=finMois4.getDate(); d4++){
+    const dateStr4=ay+'-'+String(am).padStart(2,'0')+'-'+String(d4).padStart(2,'0');
+    const infos4=getInfosJourPlanning(c,dateStr4);
+    if(infos4.aucunType) continue;
+    if(infos4.jourPossible&&infos4.jPrevueDeb&&infos4.jPrevueFin){
+      jours4++; minutes4+=toM(infos4.jPrevueFin)-toM(infos4.jPrevueDeb);
+    }
+  }
+  return {jours:jours4, minutes:minutes4, heures:minutes4/60};
 }
 
 function getDateFinContrat(c){
@@ -9506,14 +9534,32 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // ne porte que sa majoration (base couverte par la mensualisation). Pas appliqué sur les encarts
   // avant/après avenant (période partielle : l'enveloppe est mensuelle par nature).
   const moisKeyRecap=fiche.jours&&fiche.jours.length?fiche.jours[0].date.slice(0,7):'';
-  const estEnvMensuelle=!dateDebPeriode&&!dateFinPeriode&&c.th==='plan'&&c.planType==='var'&&!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeyRecap]);
+  const estEnvMensuelleV=c.th==='plan'&&c.planType==='var';
+  const estEnvMensuelleFS=c.th==='fixe'||c.th==='sem';
+  const estEnvMensuelle=!dateDebPeriode&&!dateFinPeriode&&(estEnvMensuelleV||estEnvMensuelleFS)&&!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeyRecap]);
   let excedentEnv=0;
   if(estEnvMensuelle){
     const [ayEnv,amEnv]=moisKeyRecap.split('-').map(Number);
-    const envMoisPaie=calcEnveloppeMoisVar(c,ayEnv,amEnv);
-    let reelMoisPaie=0;
-    Object.keys(hParSemaine).forEach(skEnv=>{ reelMoisPaie+=Math.max(0,(hParSemaine[skEnv]||0)-(hParSemainePrecMois[skEnv]||0)); });
-    excedentEnv=Math.max(0,reelMoisPaie-envMoisPaie.heures);
+    let reelMoisPaie=0, envHeuresPaie=0;
+    if(estEnvMensuelleV){
+      const envMoisPaie=calcEnveloppeMoisVar(c,ayEnv,amEnv);
+      envHeuresPaie=envMoisPaie.heures;
+      Object.keys(hParSemaine).forEach(skEnv=>{ reelMoisPaie+=Math.max(0,(hParSemaine[skEnv]||0)-(hParSemainePrecMois[skEnv]||0)); });
+    } else {
+      // fixe/sem (23/07/2026, extension du modèle libre — décision Sophie) : chaque jour a ses
+      // heures propres, pas de semaine à répartir entre deux mois — total réel = somme directe
+      // des heures réellement travaillées ce mois (jamais le max avec le prévu, pour qu'un jour
+      // travaillé en moins libère bien de la marge dans l'enveloppe, symétrique à un jour en plus).
+      const envMoisFS=calcEnveloppeMoisFixeSem(c,ayEnv,amEnv);
+      envHeuresPaie=envMoisFS.heures;
+      fiche.jours.forEach(jFS=>{
+        const stFS=jFS.statut||getStatutPrevu(c,jFS);
+        if((stFS==='prevu'||stFS==='travaille'||stFS==='reprise')&&jFS.heureDebReel&&jFS.heureFinReel){
+          reelMoisPaie+=(toM(jFS.heureFinReel)-toM(jFS.heureDebReel))/60;
+        }
+      });
+    }
+    excedentEnv=Math.max(0,reelMoisPaie-envHeuresPaie);
     hCompMaj=Math.max(0,excedentEnv-hSup);
     hComp=hCompMaj;
   }
