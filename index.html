@@ -3420,7 +3420,14 @@ function ouvrirFiche(contratId,key){
     if(isPlanMinVarFiche){
       const planningRefPVP=c._planningSauvegarde!==undefined?c._planningSauvegarde:c.planning;
       const planJourPVP=(planningRefPVP||{})[j.date];
-      if(!planJourPVP||!planJourPVP.d||!planJourPVP.f) j.planVarPrevu=false;
+      // Ne s'applique que si la semaine a été concrètement touchée sur le planning (au moins une
+      // entrée, coché ou non) — sinon un contrat qui n'utilise jamais l'onglet Planning perdrait sa
+      // garantie de volume (confirmé Sophie 23/07/2026 : planning vierge = volume garanti, aucune
+      // déduction, semaine comptée 1 pour les congés — comportement d'avant l'introduction du
+      // planning, à préserver intégralement quand la semaine n'a jamais été touchée).
+      const semKeyPVP=getSemISO(j.date)+'-'+getSemAnnee(j.date);
+      const semaineToucheePVP=Object.keys(planningRefPVP||{}).some(dt=>(getSemISO(dt)+'-'+getSemAnnee(dt))===semKeyPVP);
+      if(semaineToucheePVP&&(!planJourPVP||!planJourPVP.d||!planJourPVP.f)) j.planVarPrevu=false;
     }
     // Pour plan min/var : semaines off → pas de 'non-prevu' forcé, garder null pour rester cohérent avec la migration
     if(isPlanMinVarFiche&&j.statut==='non-prevu'&&j._jourPossible!==false){
@@ -4184,11 +4191,15 @@ function getInfosJourPlanning(c, dateStr){
   const agenda=agendas.find(a=>new Date(a.dateDebut)<=d&&new Date(a.dateFin)>=d);
   const typeSem=agenda&&agenda.semaines&&agenda.semaines[agKey];
   // Plan fixe : aucun agenda/type de semaine n'a de sens, un seul motif hebdomadaire fixe pour
-  // toute la durée du contrat — jamais "agenda non renseigné" pour ce type.
+  // toute la durée du contrat — jamais "agenda non renseigné" pour ce type. Plan min 52 sem :
+  // même principe (23/07/2026, précision Sophie) — un seul motif toute l'année, pas d'agenda du
+  // tout (contrairement à min 46, qui pointe les semaines non travaillées comme sem/var).
   const estFixePlanning=src.th==='fixe';
-  const horsContrat=!estFixePlanning&&!agenda&&(d<new Date(c.dateDeb)||(c.dateFin&&d>new Date(c.dateFin)));
-  const agendaManquant=!estFixePlanning&&!agenda&&!horsContrat; // dans le contrat, mais aucun type assigné pour cette semaine
-  const semaineOff=!estFixePlanning&&typeSem==='off';
+  const estMin52Planning=src.planType==='min'&&(src.tc||c.tc)==='52';
+  const contournerAgenda=estFixePlanning||estMin52Planning;
+  const horsContrat=!contournerAgenda&&!agenda&&(d<new Date(c.dateDeb)||(c.dateFin&&d>new Date(c.dateFin)));
+  const agendaManquant=!contournerAgenda&&!agenda&&!horsContrat; // dans le contrat, mais aucun type assigné pour cette semaine
+  const semaineOff=!contournerAgenda&&typeSem==='off';
   let jourPossible=false, jMax=0, volIdx=-1, volH=0, planVarSrc=[];
   let semaineCongesAM=false; // type assigné mais ne correspond à aucun volume du contrat = semaine violette
   if(estFixePlanning){
@@ -4209,11 +4220,10 @@ function getInfosJourPlanning(c, dateStr){
       volH=0; // sem : heures directement dans le type, pas un volume h unique
     }
   } else if(src.planType==='min'){
-    jourPossible=!!(src.joursMin&&src.joursMin[jourIdx])&&typeSem&&typeSem!=='off';
+    jourPossible=!!(src.joursMin&&src.joursMin[jourIdx])&&(estMin52Planning||(typeSem&&typeSem!=='off'));
     jMax=src.jMaxMin||1;
     volIdx=0;
     volH=src.hMin||0;
-    if(typeSem&&typeSem!=='off') semaineCongesAM=false; // plan min : un seul type, pas de notion de volume nommé
   } else if(src.planType==='var'){
     planVarSrc=src.planVar||[];
     const vi=(typeSem&&typeSem!=='off')?planVarSrc.findIndex((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):-1;
@@ -4264,7 +4274,7 @@ function jourComptePlanning(c, dateStr, infos){
   // totaux, à ajouter sur la feuille de présence).
   if(infos.jourPossible) return true;
   const srcJC=getVersionActive(c, parseDateLoc(dateStr));
-  if(!((srcJC.th==='plan'&&srcJC.planType==='var')||srcJC.th==='fixe'||srcJC.th==='sem')) return false;
+  if(!((srcJC.th==='plan'&&(srcJC.planType==='var'||srcJC.planType==='min'))||srcJC.th==='fixe'||srcJC.th==='sem')) return false;
   if(!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[dateStr.slice(0,7)])) return false;
   return infos.volIdx>=0&&!infos.aucunType;
 }
@@ -4275,7 +4285,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
   const moisVerrouille=!!(ficheTile&&ficheTile.valide)||estLectureSeuleEmployeur();
   const srcTileModif=getVersionActive(c, new Date(annee,moisIdx,1));
   const estFixeOuSemTile=srcTileModif.th==='fixe'||srcTileModif.th==='sem';
-  const estVarTile=srcTileModif.th==='plan'&&srcTileModif.planType==='var';
+  const estVarTile=srcTileModif.th==='plan'&&(srcTileModif.planType==='var'||srcTileModif.planType==='min');
   const estCaseModifTile=estFixeOuSemTile||estVarTile;
   const modifMoisActive=estCaseModifTile&&!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeyTile]);
   const modifMoisChecked=modifMoisActive?'checked':'';
@@ -4469,28 +4479,29 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
             contenu=`<span style="color:var(--tx3);font-size:12px">Jour non prévu au contrat</span>`;
           }
         } else {
-        // Modifications autorisées ce mois : le cadenas ne fait que DÉBLOQUER la modification
-        // du jour — jamais l'ajouter comme pour min/var (précision Sophie 18/07/2026). Inclut
-        // les fériés (18/07). Jour prévu → champs préremplis avec les heures du contrat,
-        // verrouillés tant que fermé. Jour non prévu (samedi inclus, férié inclus) → champs
-        // vides, verrouillés tant que fermé.
-        const valDebFS=dejaCoche?(planData.d||''):(infos.jPrevueDeb||'');
-        const valFinFS=dejaCoche?(planData.f||''):(infos.jPrevueFin||'');
+        // Modifications autorisées ce mois (23/07/2026, remplacement du cadenas par une case à
+        // cocher — décision Sophie) : un jour normalement prévu apparaît coché par défaut, avec
+        // les heures du contrat déjà remplies, tant qu'il n'a pas été explicitement décoché — pas
+        // besoin de déverrouiller pour confirmer l'évidence. Un jour non prévu (ajouté en plus)
+        // démarre décoché. planData absent = jamais touché → valeur par défaut = infos.jourPossible ;
+        // sinon la case suit l'entrée explicite (y compris un décoché explicite, distinct de
+        // "jamais touché").
+        const estCocheFS=planData.coche===undefined?!!infos.jourPossible:!!planData.coche;
+        const valDebFS=planData.d?planData.d:(estCocheFS?(infos.jPrevueDeb||''):'');
+        const valFinFS=planData.f?planData.f:(estCocheFS?(infos.jPrevueFin||''):'');
         const idFS='pln-fs-'+c.id+'-'+j.date;
         contenu=`<div style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tx2)">
-          <span id="${idFS}-chk" title="${dejaCoche?'Verrouiller':'Déverrouiller pour modifier'}" ${moisVerrouille?'':`onclick="toggleModifJourFixeSem(${c.id},'${j.date}','${semKeyDom}',${dejaCoche?'false':'true'})"`}
-            style="cursor:${moisVerrouille?'default':'pointer'};font-size:14px;line-height:1;flex-shrink:0">${dejaCoche?'🔓':'🔒'}</span>
+          <input type="checkbox" ${estCocheFS?'checked':''} ${moisVerrouille?'disabled':''}
+            onchange="toggleJourFixeSem(${c.id},'${j.date}',this.checked,'${semKeyDom}')">
           <span>de</span>
-          <input type="time" id="${idFS}-deb" class="pln-deb" value="${valDebFS}" ${(moisVerrouille||!dejaCoche)?'disabled':''}
+          <input type="time" id="${idFS}-deb" class="pln-deb" value="${valDebFS}" ${(moisVerrouille||!estCocheFS)?'disabled':''}
             style="width:78px;padding:3px 4px;border:1px solid var(--mb);border-radius:3px;font-size:12px;background:#fff;color:var(--tx)"
             onchange="majPlanningJour(${c.id},'${j.date}','d',this.value,'${semKeyDom}')">
           <span>à</span>
-          <input type="time" id="${idFS}-fin" class="pln-fin" value="${valFinFS}" ${(moisVerrouille||!dejaCoche)?'disabled':''}
+          <input type="time" id="${idFS}-fin" class="pln-fin" value="${valFinFS}" ${(moisVerrouille||!estCocheFS)?'disabled':''}
             style="width:78px;padding:3px 4px;border:1px solid var(--mb);border-radius:3px;font-size:12px;background:#fff;color:var(--tx)"
             onchange="majPlanningJour(${c.id},'${j.date}','f',this.value,'${semKeyDom}')">
           ${infos.ferieChome?'<span style="color:var(--tx3)">(férié)</span>':''}
-          ${dejaCoche&&!moisVerrouille?`<span title="Réinitialiser ce jour" onclick="toggleModifJourFixeSem(${c.id},'${j.date}','${semKeyDom}',false)"
-            style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;border:1.5px solid var(--m);color:var(--m);cursor:pointer;font-size:11px;line-height:1;flex-shrink:0">↺</span>`:''}
         </div>`;
         }
       } else if(!infos.jourPossible&&!infos.ferieChome&&(infos.jamaisPossible||!(estVarTile&&modifMoisActive))){
@@ -4670,7 +4681,13 @@ function majPlanningJour(contratId, dateStr, champ, val, semKeyDom){
   const ficheJ=c.fiches&&c.fiches[moisKeyJ];
   if((ficheJ&&ficheJ.valide)||estLectureSeuleEmployeur()) return; // mois validé ou accès employeur lecture seule
   if(!c.planning) c.planning={};
-  if(!c.planning[dateStr]||!c.planning[dateStr].coche) return; // jour non coché : rien à modifier
+  if(!c.planning[dateStr]){
+    // Jour coché par défaut (fixe/sem, sans entrée réelle) : la première modification d'horaire
+    // confirme le jour comme réellement coché (23/07/2026, remplacement du cadenas).
+    c.planning[dateStr]={coche:true};
+  } else if(!c.planning[dateStr].coche){
+    return; // décoché explicitement : rien à modifier tant qu'il n'est pas recoché
+  }
   // Aucune validation bloquante ici (heure de fin après début, volume de la semaine...) : tout se
   // vérifie au moment d'enregistrer le mois (bouton Enregistrer), pour ne jamais interrompre la saisie
   // en cours — un blocage en direct pouvait corrompre la frappe sur le champ heure du navigateur
@@ -4900,9 +4917,9 @@ function enregistrerPlanningMois(contratId, moisKey){
       if(excedentFS>1) complSupInfoV=`, dont ${fmtH(Math.round(excedentFS))} heures complémentaires`;
     }
   }
-  // Var, modifications autorisées ce mois : même principe, plafond mensuel jours+heures au
-  // lieu du plafond hebdomadaire habituel de var — précision Sophie 18/07/2026.
-  if(srcMoisFS.th==='plan'&&srcMoisFS.planType==='var'&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey]){
+  // Var et min, modifications autorisées ce mois : même principe, plafond mensuel jours+heures au
+  // lieu du plafond hebdomadaire habituel — précision Sophie 18/07/2026, étendu à min le 23/07/2026.
+  if(srcMoisFS.th==='plan'&&(srcMoisFS.planType==='var'||srcMoisFS.planType==='min')&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey]){
     // Enveloppe calculée par la fonction PARTAGÉE avec la paie — extraction 22/07/2026, à l'identique.
     const envMoisV=calcEnveloppeMoisVar(c,ay,am);
     joursBaseV=envMoisV.jours; minBaseV=envMoisV.minutes;
@@ -5009,20 +5026,26 @@ function enregistrerPlanningMois(contratId, moisKey){
   toast('Planning enregistré');
 }
 
-function toggleModifJourFixeSem(contratId, dateStr, semKeyDom, checked){
+function toggleJourFixeSem(contratId, dateStr, checked, semKeyDom){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c) return;
   const moisKeyJ=dateStr.slice(0,7);
   const ficheJ=c.fiches&&c.fiches[moisKeyJ];
   if((ficheJ&&ficheJ.valide)||estLectureSeuleEmployeur()){ refreshPlanningTile(contratId, moisKeyJ); return; }
   if(!c.planning) c.planning={};
+  const infosFS=getInfosJourPlanning(c,dateStr);
   if(checked){
-    const infosFS=getInfosJourPlanning(c,dateStr);
-    // Cocher ne fait que débloquer la modification — prérempli avec le prévu du contrat comme
-    // point de départ si le jour est prévu, vide sinon (précision Sophie 18/07/2026).
+    // Cocher préremplit avec le prévu du contrat si le jour est normalement prévu, vide sinon
+    // (jour ajouté en plus, à saisir).
     c.planning[dateStr]={coche:true, d:infosFS.jourPossible?(infosFS.jPrevueDeb||''):'', f:infosFS.jourPossible?(infosFS.jPrevueFin||''):''};
+  } else if(infosFS.jourPossible){
+    // Jour normalement prévu, explicitement décoché (23/07/2026, remplacement du cadenas —
+    // décision Sophie) : garder une marque explicite plutôt que supprimer, sinon le jour
+    // réapparaîtrait coché par défaut au prochain affichage (case cochée par défaut sur les
+    // jours prévus, pour éviter d'avoir à confirmer l'évidence un par un).
+    c.planning[dateStr]={coche:false};
   } else {
-    // Décocher revient à l'état prévu au contrat — efface toute modification saisie
+    // Jour ajouté en plus, retiré : rien à conserver.
     delete c.planning[dateStr];
   }
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
@@ -5273,14 +5296,19 @@ function calcEnveloppeMoisVar(c,ay,am){
       const dateStr3=ay+'-'+String(am).padStart(2,'0')+'-'+String(d3).padStart(2,'0');
       const dCur3=new Date(ay,am-1,d3);
       const srcJ3=getVersionActive(c,dCur3);
+      const estMinPlan3=srcJ3.planType==='min';
+      const estMin52_3=estMinPlan3&&(srcJ3.tc||c.tc)==='52';
       const agendas3=srcJ3.agendas||c.agendas||[];
       const ag3=agendas3.find(a=>parseDateLoc(a.dateDebut)<=dCur3&&parseDateLoc(a.dateFin)>=dCur3);
       const agKey3=getKeyAgenda(getSemISO(dateStr3),getSemAnnee(dateStr3));
       const typeSem3=ag3&&ag3.semaines&&ag3.semaines[agKey3];
       const semKeyISO3=getSemISO(dateStr3)+'-'+getSemAnnee(dateStr3);
-      if(typeSem3&&typeSem3!=='off'&&!semainesVuesV.has(semKeyISO3)){
+      // Min 52 sem : un seul motif toute l'année, pas d'agenda (précision Sophie 23/07/2026,
+      // même principe que fixe) — semaine toujours active, jamais besoin de pointer un type.
+      const semaineActive3=estMin52_3||(typeSem3&&typeSem3!=='off');
+      if(semaineActive3&&!semainesVuesV.has(semKeyISO3)){
         semainesVuesV.add(semKeyISO3);
-        const vol3=(srcJ3.planVar||[]).find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem3);
+        const vol3=estMinPlan3?{h:srcJ3.hMin||0,j:srcJ3.jMaxMin||1,jours:srcJ3.joursMin||[]}:(srcJ3.planVar||[]).find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem3);
         if(vol3){
           // Semaine à cheval sur le mois : prorater comme les heures théoriques, même principe
           // que le contrôle dédié plus haut — sinon une semaine partiellement dans ce mois
@@ -5290,11 +5318,12 @@ function calcEnveloppeMoisVar(c,ay,am){
           // Conscience de dateDeb/dateFin (correctif 21/07/2026) : jMax réduit sur le motif PROPRE à cette
           // semaine, le volume d'heures réduit au taux MOYEN (motif union / moyenne annuelle) — même
           // formule que calcHTheoriquesPlanVar pour ce même cas, pour rester aligné avec la paie.
+          // Min : un seul motif constant, pas de moyenne pondérée entre plusieurs volumes nommés.
           const dateDebC3=c.dateDeb;
           const dateFinC3=getDateFinContrat(c);
-          const planVarAnnuel3=srcJ3.planVar||c.planVar||[];
-          const totHAnnuel3=planVarAnnuel3.reduce((t,v)=>t+(v.h||0)*(v.s||0),0);
-          const totSAnnuel3=planVarAnnuel3.reduce((t,v)=>t+(v.s||0),0);
+          const planVarAnnuel3=estMinPlan3?[vol3]:(srcJ3.planVar||c.planVar||[]);
+          const totHAnnuel3=planVarAnnuel3.reduce((t,v)=>t+(v.h||0)*(v.s||1),0);
+          const totSAnnuel3=estMinPlan3?1:planVarAnnuel3.reduce((t,v)=>t+(v.s||0),0);
           const hSemMoy3=totSAnnuel3>0?totHAnnuel3/totSAnnuel3:0;
           const joursPossiblesUnion3=Array.from({length:7},(_,idx)=>planVarAnnuel3.some(v=>v.jours&&v.jours[idx]));
           const nbJoursPossiblesUnion3=joursPossiblesUnion3.filter(Boolean).length||1;
@@ -9537,7 +9566,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // ne porte que sa majoration (base couverte par la mensualisation). Pas appliqué sur les encarts
   // avant/après avenant (période partielle : l'enveloppe est mensuelle par nature).
   const moisKeyRecap=fiche.jours&&fiche.jours.length?fiche.jours[0].date.slice(0,7):'';
-  const estEnvMensuelleV=c.th==='plan'&&c.planType==='var';
+  const estEnvMensuelleV=c.th==='plan'&&(c.planType==='var'||c.planType==='min');
   const estEnvMensuelleFS=c.th==='fixe'||c.th==='sem';
   const estEnvMensuelle=!dateDebPeriode&&!dateFinPeriode&&(estEnvMensuelleV||estEnvMensuelleFS)&&!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeyRecap]);
   let excedentEnv=0;
