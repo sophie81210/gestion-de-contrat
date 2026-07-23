@@ -3372,7 +3372,17 @@ function ouvrirFiche(contratId,key){
         const planningRefOF3=c._planningSauvegarde!==undefined?c._planningSauvegarde:c.planning;
         const planJourOF3=(planningRefOF3||{})[j.date];
         const statutFigeOF3=['travaille','conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat','arret','abs-non','abs-am','abs-enfant','ferie-non'].includes(j.statut);
-        if(planJourOF3&&planJourOF3.d&&planJourOF3.f&&!statutFigeOF3){
+        if(!planJourOF3&&!isFerie(j.date,c)&&!getInfosJourPlanning(c,j.date).jourPossible&&(j.heureDebPrev||j.heureDebReel||(j.statut&&j.statut!=='non-prevu'))){
+          // Jour ajouté en plus (jamais possible structurellement) dont l'entrée du planning a été
+          // entièrement retirée : plus aucune raison d'exister, tout s'annule — y compris le réel
+          // et un statut "travaillé" habituellement figé, sinon l'ajout retiré laisse une trace
+          // périmée (bug confirmé Sophie 23/07/2026 : "+10h00" fantôme affiché sur le jour retiré).
+          j.heureDebPrev=null;
+          j.heureFinPrev=null;
+          j.heureDebReel=null;
+          j.heureFinReel=null;
+          j.statut='non-prevu';
+        } else if(planJourOF3&&planJourOF3.d&&planJourOF3.f&&!statutFigeOF3){
           j.heureDebPrev=planJourOF3.d;
           j.heureFinPrev=planJourOF3.f;
           if((!j.statut||j.statut==='non-prevu')&&!isFerie(j.date,c)) j.statut='prevu';
@@ -4937,7 +4947,7 @@ function enregistrerPlanningMois(contratId, moisKey){
       // refus quand modifications autorisées est cochée — l'enveloppe informe, la paie arbitre
       // (calcRecapFiche, même fonction calcEnveloppeMoisFixeSem partagée).
       const excedentFS=Math.max(0,minReel-minBaseline);
-      if(excedentFS>1) complSupInfoV=`, dont ${fmtH(Math.round(excedentFS))} heures complémentaires`;
+      if(excedentFS>1) complSupInfoV=`, dont ${fmtH(Math.round(excedentFS))} heures complémentaires / supplémentaires`;
     }
   }
   // Var et min, modifications autorisées ce mois : même principe, plafond mensuel jours+heures au
@@ -8416,7 +8426,14 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         hTheoriques+=getHJourCgTh(j.date);
       }
     } else if(j.heureDebPrev&&j.heureFinPrev&&!(c.th==='plan'&&(c.planType==='min'||c.planType==='var'))&&!(sourceActif.th==='plan'&&(sourceActif.planType==='min'||sourceActif.planType==='var'))&&!((sourceActif.th==='sem'||c.th==='sem')&&(sourceActif.tc!=='52'||c.tc!=='52'))){
-      hTheoriques+=toM(j.heureFinPrev)-toM(j.heureDebPrev);
+      // Heures théoriques protégées du contrat, jamais gonflées par un jour ajouté en plus via
+      // modifications autorisées, ni par un jour normal aux heures modifiées (bug confirmé Sophie
+      // 23/07/2026) : utiliser l'horaire STRUCTUREL du contrat pour ce jour (getInfosJourPlanning),
+      // jamais heureDebPrev/heureFinPrev qui peut désormais refléter une entrée du planning.
+      const infosThFS=getInfosJourPlanning(c,j.date);
+      if(infosThFS.jourPossible&&infosThFS.jPrevueDeb&&infosThFS.jPrevueFin){
+        hTheoriques+=toM(infosThFS.jPrevueFin)-toM(infosThFS.jPrevueDeb);
+      }
     } else if(!j.heureDebPrev&&!j.heureFinPrev){
       // Semaine 'off' : tous types de contrats
       const semKeyTh=getSemISO(j.date);
