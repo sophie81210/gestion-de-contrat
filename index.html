@@ -3363,8 +3363,27 @@ function ouvrirFiche(contratId,key){
         j.heureDebPrev=null;
         j.heureFinPrev=null;
       } else {
-        j.heureDebPrev=prevus.debut==='prévu'?null:prevus.debut;
-        j.heureFinPrev=prevus.fin;
+        // Planning (23/07/2026, extension du modèle libre — bug confirmé Sophie : cocher un jour
+        // sur le planning n'avait ici aucun effet, la branche ne lisait jamais c.planning, seulement
+        // le motif structurel du contrat). Une entrée du planning, quand elle existe, prévaut
+        // toujours (jour ajouté en plus, ou jour normal explicitement modifié/décoché) ; sinon le
+        // motif normal du contrat reste la référence par défaut — garantie du planning : un jour
+        // prévu jamais touché sur le planning compte comme prévu tel quel, comme avant le planning.
+        const planningRefOF3=c._planningSauvegarde!==undefined?c._planningSauvegarde:c.planning;
+        const planJourOF3=(planningRefOF3||{})[j.date];
+        const statutFigeOF3=['travaille','conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat','arret','abs-non','abs-am','abs-enfant','ferie-non'].includes(j.statut);
+        if(planJourOF3&&planJourOF3.d&&planJourOF3.f&&!statutFigeOF3){
+          j.heureDebPrev=planJourOF3.d;
+          j.heureFinPrev=planJourOF3.f;
+          if((!j.statut||j.statut==='non-prevu')&&!isFerie(j.date,c)) j.statut='prevu';
+        } else if(planJourOF3&&planJourOF3.coche===false&&!statutFigeOF3){
+          j.heureDebPrev=null;
+          j.heureFinPrev=null;
+          if(j.statut==='prevu') j.statut='non-prevu';
+        } else if(!statutFigeOF3){
+          j.heureDebPrev=prevus.debut==='prévu'?null:prevus.debut;
+          j.heureFinPrev=prevus.fin;
+        }
       }
     } else {
       // Planning : copier les heures prévues saisies dans l'onglet Planning, sans toucher aux jours
@@ -9580,14 +9599,21 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     } else {
       // fixe/sem (23/07/2026, extension du modèle libre — décision Sophie) : chaque jour a ses
       // heures propres, pas de semaine à répartir entre deux mois — total réel = somme directe
-      // des heures réellement travaillées ce mois (jamais le max avec le prévu, pour qu'un jour
-      // travaillé en moins libère bien de la marge dans l'enveloppe, symétrique à un jour en plus).
+      // des heures réellement travaillées ce mois (jamais le max avec le prévu quand le réel EST
+      // saisi, pour qu'un jour travaillé en moins libère bien de la marge dans l'enveloppe,
+      // symétrique à un jour en plus). Mais un jour prévu SANS réel saisi du tout (bug confirmé
+      // Sophie 23/07/2026 : cocher un jour sur le planning ne renseigne que le prévu, jamais le
+      // réel — un jour ajouté restait donc payé zéro) compte comme travaillé tel que prévu, même
+      // garantie que pour le reste du mois hors modifications autorisées.
       const envMoisFS=calcEnveloppeMoisFixeSem(c,ayEnv,amEnv);
       envHeuresPaie=envMoisFS.heures;
       fiche.jours.forEach(jFS=>{
         const stFS=jFS.statut||getStatutPrevu(c,jFS);
-        if((stFS==='prevu'||stFS==='travaille'||stFS==='reprise')&&jFS.heureDebReel&&jFS.heureFinReel){
+        if(stFS!=='prevu'&&stFS!=='travaille'&&stFS!=='reprise'&&stFS!=='ferie') return;
+        if(jFS.heureDebReel&&jFS.heureFinReel){
           reelMoisPaie+=(toM(jFS.heureFinReel)-toM(jFS.heureDebReel))/60;
+        } else if(jFS.heureDebPrev&&jFS.heureFinPrev){
+          reelMoisPaie+=(toM(jFS.heureFinPrev)-toM(jFS.heureDebPrev))/60;
         }
       });
     }
