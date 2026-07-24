@@ -4883,6 +4883,26 @@ function enregistrerPlanningMois(contratId, moisKey){
     const semACheval=(lundiSem.getMonth()!==am-1||lundiSem.getFullYear()!==ay)||(dimSem.getMonth()!==am-1||dimSem.getFullYear()!==ay);
     let volHCeMois=volH, totalSemaineCeMois=0;
     if(semACheval){
+      // Ce mois est-il celui du DÉBUT de la semaine à cheval (elle continue sur un mois plus
+      // tardif) ? Si oui, plafond fixe sur les jours qualifiants de sa portion — même règle et
+      // même raison que dans calcEnveloppeMoisVar (le calcul réel utilisé pour la paie), pour
+      // que ce message d'avertissement reste cohérent avec lui. Décision Sophie 23/07/2026.
+      let joursApresCeMoisEnr=0, joursQualifiantsFinDeMoisEnr=0;
+      const moisKeyEnrV=ay+'-'+String(am).padStart(2,'0');
+      const modifActiveFinMoisEnr=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeyEnrV]);
+      for(let dd7=0;dd7<7;dd7++){
+        const jd7=new Date(lundiSem); jd7.setDate(lundiSem.getDate()+dd7);
+        const estMoisCourantEnr=jd7.getMonth()===am-1&&jd7.getFullYear()===ay;
+        const estMoisPlusTardifEnr=jd7.getFullYear()*12+jd7.getMonth()>ay*12+(am-1);
+        if(joursPattern[dd7]&&estMoisPlusTardifEnr) joursApresCeMoisEnr++;
+        if(estMoisCourantEnr&&jd7.getDay()!==(c.reposHebdo||0)){
+          if(joursPattern[dd7]||modifActiveFinMoisEnr) joursQualifiantsFinDeMoisEnr++;
+        }
+      }
+      if(joursApresCeMoisEnr>0){
+        const jMaxFinDeMoisEnr=Math.min(jMaxVol,joursQualifiantsFinDeMoisEnr);
+        volHCeMois=jMaxFinDeMoisEnr*(volH/jMaxVol);
+      } else {
       let heuresAutreMois6=0;
       for(let dd6=0;dd6<7;dd6++){
         const jd6=new Date(lundiSem); jd6.setDate(lundiSem.getDate()+dd6);
@@ -4900,6 +4920,7 @@ function enregistrerPlanningMois(contratId, moisKey){
         if(pd6&&pd6.coche&&jourComptePlanning(c,ds6,getInfosJourPlanning(c,ds6))) heuresAutreMois6+=(pd6.d&&pd6.f)?(toM(pd6.f)-toM(pd6.d))/60:volH/jMaxVol;
       }
       volHCeMois=Math.max(0,volH-heuresAutreMois6);
+      }
       Object.keys(c.planning).forEach(dt=>{
         if((getSemISO(dt)+'-'+getSemAnnee(dt))!==semKeyISO) return;
         const [dty,dtm]=dt.split('-').map(Number);
@@ -5375,15 +5396,30 @@ function calcEnveloppeMoisVar(c,ay,am){
           const joursPossiblesUnion3=Array.from({length:7},(_,idx)=>planVarAnnuel3.some(v=>v.jours&&v.jours[idx]));
           const nbJoursPossiblesUnion3=joursPossiblesUnion3.filter(Boolean).length||1;
           let joursDansCeMois3=0, joursPossiblesSemaine3=0, joursHCPropres3=0, joursHCUnion3=0;
+          // Plafond de fin de mois pour une semaine à cheval (décision Sophie 23/07/2026, 2e
+          // session du jour) : jours qualifiants dans la portion du mois du DÉBUT de semaine —
+          // jours du motif, ou tout jour calendaire si les modifications sont autorisées ce
+          // mois-là (repos jamais qualifiant). Sert à plafonner ce mois plus bas, au lieu de le
+          // laisser réclamer jusqu'à la semaine entière (risque déjà noté le 18/07 : une semaine
+          // entière concentrée sur un seul mois avant une rupture, jamais rattrapée en 52).
+          let joursApresCeMoisV=0, joursQualifiantsFinDeMoisV=0;
+          const moisKeyEnvV=ay+'-'+String(am).padStart(2,'0');
+          const modifActiveEnvV=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeyEnvV]);
           for(let dd4=0;dd4<7;dd4++){
             const jd4=new Date(lundiSem3); jd4.setDate(lundiSem3.getDate()+dd4);
             const jd4Str=jd4.getFullYear()+'-'+String(jd4.getMonth()+1).padStart(2,'0')+'-'+String(jd4.getDate()).padStart(2,'0');
             const horsContrat4=(dateDebC3&&jd4Str<dateDebC3)||(dateFinC3&&jd4>dateFinC3);
             if(horsContrat4&&joursPossiblesUnion3[dd4]) joursHCUnion3++;
+            const estMoisCourantV=jd4.getMonth()===am-1&&jd4.getFullYear()===ay;
+            const estMoisPlusTardifV=jd4.getFullYear()*12+jd4.getMonth()>ay*12+(am-1);
             if(vol3.jours&&vol3.jours[dd4]){
               if(horsContrat4){ joursHCPropres3++; continue; }
               joursPossiblesSemaine3++;
-              if(jd4.getMonth()===am-1&&jd4.getFullYear()===ay) joursDansCeMois3++;
+              if(estMoisCourantV) joursDansCeMois3++;
+              if(estMoisPlusTardifV) joursApresCeMoisV++;
+            }
+            if(estMoisCourantV&&!horsContrat4&&jd4.getDay()!==(c.reposHebdo||0)){
+              if((vol3.jours&&vol3.jours[dd4])||modifActiveEnvV) joursQualifiantsFinDeMoisV++;
             }
           }
           // jMax et le volume d'heures sont TOUS DEUX des plafonds PARTAGÉS pour la semaine
@@ -5412,9 +5448,21 @@ function calcEnveloppeMoisVar(c,ay,am){
           }
           const jMaxSemaine3=Math.max(0,(vol3.j||1)-joursHCPropres3);
           const volHSemaine3=Math.max(0,(vol3.h||0)-joursHCUnion3*(hSemMoy3/nbJoursPossiblesUnion3));
-          const jMaxRestant3=Math.max(0,jMaxSemaine3-joursDejaCochesAutreMois);
-          const volHRestant3=Math.max(0,volHSemaine3-heuresDejaUtiliseesAutreMois);
-          joursBaseV+=Math.min(joursDansCeMois3,jMaxRestant3);
+          let jMaxRestant3, volHRestant3;
+          if(joursApresCeMoisV>0){
+            // Ce mois est celui du DÉBUT de la semaine à cheval (elle continue sur un mois plus
+            // tardif) : plafond fixe basé sur les jours qualifiants de sa portion, plutôt que le
+            // budget partagé "premier arrivé" ci-dessous (réservé désormais au mois de FIN de
+            // semaine, qui reçoit toujours le reste après ce plafond).
+            const jMaxFinDeMoisV=Math.min(jMaxSemaine3,joursQualifiantsFinDeMoisV);
+            jMaxRestant3=jMaxFinDeMoisV;
+            volHRestant3=jMaxSemaine3>0?jMaxFinDeMoisV*(volHSemaine3/jMaxSemaine3):0;
+            joursBaseV+=jMaxRestant3;
+          } else {
+            jMaxRestant3=Math.max(0,jMaxSemaine3-joursDejaCochesAutreMois);
+            volHRestant3=Math.max(0,volHSemaine3-heuresDejaUtiliseesAutreMois);
+            joursBaseV+=Math.min(joursDansCeMois3,jMaxRestant3);
+          }
           minBaseV+=volHRestant3*60;
         }
       }
