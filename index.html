@@ -4301,7 +4301,7 @@ function getInfosJourPlanning(c, dateStr){
   } else if(src.th==='sem'&&volIdx>=0&&src.semTypes&&src.semTypes[volIdx]&&src.semTypes[volIdx].jours&&src.semTypes[volIdx].jours[jourIdx]){
     jPrevueDeb=src.semTypes[volIdx].jours[jourIdx].d; jPrevueFin=src.semTypes[volIdx].jours[jourIdx].f;
   }
-  return {jourPossible, jMax, volIdx, volH, typeSem, aucunType, horsContrat, agendaManquant, semaineOff, semaineCongesAM, jamaisPossible, couleur, estFerie, ferieChome, jPrevueDeb, jPrevueFin};
+  return {jourPossible, jMax, volIdx, volH, typeSem, aucunType, horsContrat, agendaManquant, semaineOff, semaineCongesAM, jamaisPossible, couleur, estFerie, ferieChome, jPrevueDeb, jPrevueFin, estReposHebdo:d.getDay()===(src.reposHebdo||c.reposHebdo||0)};
 }
 
 function jourComptePlanning(c, dateStr, infos){
@@ -4480,7 +4480,11 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
           });
         }
       }
-      const estSaisissable=(infos.jourPossible||(infos.ferieChome&&!ferieDansConges)||(estCongeAM&&estSemCongesPartiellePln))&&(!estCongeAM||estSemCongesPartiellePln)&&!moisVerrouille&&!casesVerrouillee;
+      // Un férié dans le type pointé cette semaine reste toujours cochable (comportement voulu,
+      // vérifié le 23/07/2026). Un férié hors du type pointé n'est cochable que si la modification
+      // est autorisée ce mois-là — bug confirmé Sophie 23/07/2026 : il était jusqu'ici toujours
+      // cochable, même sans modification autorisée, dès qu'il n'appartenait à aucun type pointé.
+      const estSaisissable=(infos.jourPossible||(infos.ferieChome&&!ferieDansConges&&(infos.jourPossible||modifMoisActive))||(estCongeAM&&estSemCongesPartiellePln))&&(!estCongeAM||estSemCongesPartiellePln)&&!moisVerrouille&&!casesVerrouillee;
       let contenu;
       if(estCongeAM&&estSemCongesPartiellePln){
         contenu=`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);cursor:${(moisVerrouille||casesVerrouillee)?'default':'pointer'}">
@@ -4551,15 +4555,23 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
           ${infos.ferieChome?'<span style="color:var(--tx3)">(férié)</span>':''}
         </div>`;
         }
-      } else if(!infos.jourPossible&&!infos.ferieChome&&(infos.jamaisPossible||!(estVarTile&&modifMoisActive))){
+      } else if(!infos.jourPossible&&!infos.ferieChome&&(infos.estReposHebdo||!(estVarTile&&modifMoisActive))){
         // Jour de repos hebdomadaire (22/07/2026, décision Sophie) : jamais cochable, même en
         // modifications autorisées — contrairement à un jour simplement hors motif, qui reste
         // ajoutable en supplément. La dérogation "estVarTile&&modifMoisActive" ne s'applique donc
-        // plus quand infos.jamaisPossible est vrai.
-        contenu=`<span style="color:var(--tx3);font-size:12px">${infos.jamaisPossible?'Repos hebdomadaire':'Jour non prévu au contrat'}</span>`;
+        // plus quand infos.estReposHebdo est vrai. Bug confirmé Sophie 23/07/2026 : le code
+        // utilisait jamaisPossible (aucun type du contrat ne couvre ce jour) comme indicateur du
+        // repos hebdomadaire — faux dès que plusieurs types, ensemble, ne couvrent pas tous les
+        // jours travaillables (un jour hors de TOUS les types n'est pas forcément LE jour de
+        // repos officiel). estReposHebdo compare directement au jour déclaré sur le contrat.
+        contenu=`<span style="color:var(--tx3);font-size:12px">${infos.estReposHebdo?'Repos hebdomadaire':'Jour non prévu au contrat'}</span>`;
       } else if(infos.ferieChome){
-        contenu=`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);cursor:${(moisVerrouille||casesVerrouillee)?'default':'pointer'}">
-          <input type="checkbox" ${dejaCoche?'checked':''} ${(moisVerrouille||casesVerrouillee)?'disabled':''}
+        // Désactivée hors du type pointé cette semaine, sauf si la modification est autorisée ce
+        // mois-là — bug confirmé Sophie 23/07/2026 : cette case restait toujours activable, même
+        // hors du type pointé et sans modification autorisée.
+        const ferieDisabled=moisVerrouille||casesVerrouillee||(!infos.jourPossible&&!modifMoisActive);
+        contenu=`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);cursor:${ferieDisabled?'default':'pointer'}">
+          <input type="checkbox" ${dejaCoche?'checked':''} ${ferieDisabled?'disabled':''}
             onchange="toggleJourPlanning(${c.id},'${j.date}',this.checked,'${semKeyDom}',true)">
           <span>Férié (sur jour prévu)</span>
         </label>`;
@@ -7816,6 +7828,69 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
       hTheoriques+=quotaDispoPV;
       semJoursCpt[semKey]=volTh.j||1; // semaine considérée complète, plus rien à ajouter par jour
       return;
+    }
+
+    // Semaine à cheval entre deux mois ORDINAIRES (aucun lien avec un début/fin de contrat ou
+    // d'avenant, déjà traité ci-dessus) — décision Sophie 23/07/2026 (2e session du jour). Sans
+    // ce traitement, chaque mois comptait indépendamment jusqu'à jours max sans savoir ce que
+    // l'autre mois avait déjà compté (double comptage confirmé par simulation : 50h pour une
+    // semaine de 40h). Règle : le mois du DÉBUT de semaine reçoit le plus grand de (a) le nombre
+    // de jours du motif réellement cochés dans sa portion, et (b) un plancher garanti = jours max
+    // moins le nombre de jours du motif possibles dans la portion du mois SUIVANT (toujours basé
+    // sur les jours possibles du contrat, jamais sur ce qui est réellement coché ni sur les
+    // modifications autorisées) — ce plancher évite d'attendre que la saisie soit complète pour
+    // garantir le total. Le mois de FIN de semaine reçoit toujours le reste (jours max moins ce
+    // que le mois précédent reçoit), recalculé ici à l'identique puisque ce mois n'a pas
+    // directement accès au résultat du mois précédent.
+    if(volTh&&joursHCDeCetteSem===0){
+      const jourSemDateEx=new Date(dateEx).getDay();
+      const lundiSemTh=new Date(dateEx);
+      lundiSemTh.setDate(lundiSemTh.getDate()-(jourSemDateEx===0?6:jourSemDateEx-1));
+      const dimancheSemTh=new Date(lundiSemTh); dimancheSemTh.setDate(lundiSemTh.getDate()+6);
+      const debutMoisTh=new Date(fiche.annee,fiche.mois,1);
+      const finMoisTh=new Date(fiche.annee,fiche.mois+1,0);
+      const estMoisDebutSemTh=dimancheSemTh>finMoisTh;
+      const estMoisFinSemTh=lundiSemTh<debutMoisTh;
+      if(estMoisDebutSemTh||estMoisFinSemTh){
+        const jMaxTh=volTh.j||1;
+        const compterJoursCochesPortion=(d1,d2)=>{
+          let n=0; const cur=new Date(d1);
+          while(cur<=d2){
+            const dsTh=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
+            const idxTh=cur.getDay()===0?6:cur.getDay()-1;
+            if(volTh.jours&&volTh.jours[idxTh]&&c.planning&&c.planning[dsTh]&&c.planning[dsTh].coche) n++;
+            cur.setDate(cur.getDate()+1);
+          }
+          return n;
+        };
+        const compterJoursPossiblesPortion=(d1,d2)=>{
+          let n=0; const cur=new Date(d1);
+          while(cur<=d2){
+            const idxTh=cur.getDay()===0?6:cur.getDay()-1;
+            if(volTh.jours&&volTh.jours[idxTh]) n++;
+            cur.setDate(cur.getDate()+1);
+          }
+          return n;
+        };
+        let joursCeMoisTh;
+        if(estMoisDebutSemTh){
+          const debutPortionSuivanteTh=new Date(finMoisTh); debutPortionSuivanteTh.setDate(debutPortionSuivanteTh.getDate()+1);
+          const joursPossiblesSuivantTh=compterJoursPossiblesPortion(debutPortionSuivanteTh,dimancheSemTh);
+          const plancherTh=Math.max(0,jMaxTh-joursPossiblesSuivantTh);
+          const joursCochesTh=compterJoursCochesPortion(lundiSemTh,finMoisTh);
+          joursCeMoisTh=Math.min(jMaxTh,Math.max(joursCochesTh,plancherTh));
+        } else {
+          const finMoisPrecTh=new Date(debutMoisTh); finMoisPrecTh.setDate(finMoisPrecTh.getDate()-1);
+          const joursPossiblesSuivantTh=compterJoursPossiblesPortion(debutMoisTh,dimancheSemTh);
+          const plancherTh=Math.max(0,jMaxTh-joursPossiblesSuivantTh);
+          const joursCochesTh=compterJoursCochesPortion(lundiSemTh,finMoisPrecTh);
+          const joursMoisAnterieurTh=Math.min(jMaxTh,Math.max(joursCochesTh,plancherTh));
+          joursCeMoisTh=jMaxTh-joursMoisAnterieurTh;
+        }
+        hTheoriques+=joursCeMoisTh*(volTh.h/jMaxTh);
+        semJoursCpt[semKey]=volTh.j||1;
+        return;
+      }
     }
 
     joursDesSem.forEach(jj=>{
