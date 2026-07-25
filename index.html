@@ -7817,32 +7817,20 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
     const volTh=typeSemTh?planVarTh.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemTh):null;
     if(!semJoursCpt[semKey]) semJoursCpt[semKey]=0;
 
-    // Semaine à cheval sur le début de contrat/avenant (certains jours hors contrat cette semaine) :
-    // plan var ne connaît pas le planning précis de la portion hors contrat (contrairement à plan sem),
-    // donc on donne directement le quota disponible (volume moins la moyenne pondérée des jours hors
-    // contrat), jamais le prévu exact du ou des jours restants — sinon double comptage avec la moyenne
-    // hors contrat calculée séparément plus bas
-    const joursHCDeCetteSem=volTh?joursDesSem.filter(jj=>joursHCExclus&&joursHCExclus.has(jj.date)&&joursPossiblesSem[jj.jourSemaine===0?6:jj.jourSemaine-1]).length:0;
-    if(volTh&&joursHCDeCetteSem>0){
-      const quotaDispoPV=Math.max(0,volTh.h-joursHCDeCetteSem*(hSemMoyPV/nbJoursPossiblesSem));
-      hTheoriques+=quotaDispoPV;
-      semJoursCpt[semKey]=volTh.j||1; // semaine considérée complète, plus rien à ajouter par jour
-      return;
-    }
-
-    // Semaine à cheval entre deux mois ORDINAIRES (aucun lien avec un début/fin de contrat ou
-    // d'avenant, déjà traité ci-dessus) — décision Sophie 23/07/2026 (2e session du jour). Sans
-    // ce traitement, chaque mois comptait indépendamment jusqu'à jours max sans savoir ce que
-    // l'autre mois avait déjà compté (double comptage confirmé par simulation : 50h pour une
-    // semaine de 40h). Règle : le mois du DÉBUT de semaine reçoit le plus grand de (a) le nombre
-    // de jours du motif réellement cochés dans sa portion, et (b) un plancher garanti = jours max
-    // moins le nombre de jours du motif possibles dans la portion du mois SUIVANT (toujours basé
-    // sur les jours possibles du contrat, jamais sur ce qui est réellement coché ni sur les
-    // modifications autorisées) — ce plancher évite d'attendre que la saisie soit complète pour
-    // garantir le total. Le mois de FIN de semaine reçoit toujours le reste (jours max moins ce
-    // que le mois précédent reçoit), recalculé ici à l'identique puisque ce mois n'a pas
-    // directement accès au résultat du mois précédent.
-    if(volTh&&joursHCDeCetteSem===0){
+    // Semaine à cheval entre deux mois calendaires — décision Sophie 23/07/2026 (précisée en
+    // session). Prioritaire sur le bloc hors-contrat ci-dessous dès que la semaine touche
+    // vraiment deux mois. Règle : le mois du DÉBUT de semaine reçoit le plus grand de (a) le
+    // nombre de jours du motif réellement cochés dans sa portion, et (b) un plancher garanti =
+    // jours max moins le nombre de jours du motif possibles dans la portion du mois SUIVANT — ce
+    // partage reste TOUJOURS purement structurel (jours possibles du contrat), jamais conscient
+    // d'une rupture ni des modifications autorisées : la rupture ne change PAS ce partage entre
+    // les deux mois (précision Sophie). Le mois de FIN de semaine reçoit le reste du volume EN
+    // HEURES (jours max moins ce que le mois précédent reçoit, valorisés à volume/jours max),
+    // moins la part des jours hors contrat de sa propre portion — ceux-ci restent calculés avec
+    // la même formule que partout ailleurs pour un jour hors contrat (moyenne hebdo/jours union),
+    // ajoutée séparément par la boucle jour par jour plus bas, jamais par ce bloc-ci.
+    let estSemACheval2Mois=false;
+    if(volTh){
       const jourSemDateEx=new Date(dateEx).getDay();
       const lundiSemTh=new Date(dateEx);
       lundiSemTh.setDate(lundiSemTh.getDate()-(jourSemDateEx===0?6:jourSemDateEx-1));
@@ -7851,7 +7839,8 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
       const finMoisTh=new Date(fiche.annee,fiche.mois+1,0);
       const estMoisDebutSemTh=dimancheSemTh>finMoisTh;
       const estMoisFinSemTh=lundiSemTh<debutMoisTh;
-      if(estMoisDebutSemTh||estMoisFinSemTh){
+      estSemACheval2Mois=estMoisDebutSemTh||estMoisFinSemTh;
+      if(estSemACheval2Mois){
         const jMaxTh=volTh.j||1;
         const compterJoursCochesPortion=(d1,d2)=>{
           let n=0; const cur=new Date(d1);
@@ -7872,25 +7861,39 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
           }
           return n;
         };
-        let joursCeMoisTh;
         if(estMoisDebutSemTh){
           const debutPortionSuivanteTh=new Date(finMoisTh); debutPortionSuivanteTh.setDate(debutPortionSuivanteTh.getDate()+1);
           const joursPossiblesSuivantTh=compterJoursPossiblesPortion(debutPortionSuivanteTh,dimancheSemTh);
           const plancherTh=Math.max(0,jMaxTh-joursPossiblesSuivantTh);
           const joursCochesTh=compterJoursCochesPortion(lundiSemTh,finMoisTh);
-          joursCeMoisTh=Math.min(jMaxTh,Math.max(joursCochesTh,plancherTh));
+          const joursCeMoisTh=Math.min(jMaxTh,Math.max(joursCochesTh,plancherTh));
+          hTheoriques+=joursCeMoisTh*(volTh.h/jMaxTh);
         } else {
           const finMoisPrecTh=new Date(debutMoisTh); finMoisPrecTh.setDate(finMoisPrecTh.getDate()-1);
           const joursPossiblesSuivantTh=compterJoursPossiblesPortion(debutMoisTh,dimancheSemTh);
           const plancherTh=Math.max(0,jMaxTh-joursPossiblesSuivantTh);
           const joursCochesTh=compterJoursCochesPortion(lundiSemTh,finMoisPrecTh);
           const joursMoisAnterieurTh=Math.min(jMaxTh,Math.max(joursCochesTh,plancherTh));
-          joursCeMoisTh=jMaxTh-joursMoisAnterieurTh;
+          const joursHCCeMoisTh=joursDesSem.filter(jj=>joursHCExclus&&joursHCExclus.has(jj.date)&&joursPossiblesSem[jj.jourSemaine===0?6:jj.jourSemaine-1]).length;
+          const partHorsContratCeMoisTh=joursHCCeMoisTh*(hSemMoyPV/nbJoursPossiblesSem);
+          hTheoriques+=Math.max(0,volTh.h-joursMoisAnterieurTh*(volTh.h/jMaxTh)-partHorsContratCeMoisTh);
         }
-        hTheoriques+=joursCeMoisTh*(volTh.h/jMaxTh);
         semJoursCpt[semKey]=volTh.j||1;
         return;
       }
+    }
+
+    // Semaine à cheval sur le début de contrat/avenant, SANS chevauchement de mois calendaires
+    // (déjà traité ci-dessus) — plan var ne connaît pas le planning précis de la portion hors
+    // contrat (contrairement à plan sem), donc on donne directement le quota disponible (volume
+    // moins la moyenne pondérée des jours hors contrat), jamais le prévu exact du ou des jours
+    // restants — sinon double comptage avec la moyenne hors contrat calculée séparément plus bas
+    const joursHCDeCetteSem=volTh?joursDesSem.filter(jj=>joursHCExclus&&joursHCExclus.has(jj.date)&&joursPossiblesSem[jj.jourSemaine===0?6:jj.jourSemaine-1]).length:0;
+    if(volTh&&joursHCDeCetteSem>0){
+      const quotaDispoPV=Math.max(0,volTh.h-joursHCDeCetteSem*(hSemMoyPV/nbJoursPossiblesSem));
+      hTheoriques+=quotaDispoPV;
+      semJoursCpt[semKey]=volTh.j||1; // semaine considérée complète, plus rien à ajouter par jour
+      return;
     }
 
     joursDesSem.forEach(jj=>{
@@ -7971,6 +7974,7 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
   // complet de la semaine (moyenne hors contrat + reste en contrat = volume).
   fiche.jours.forEach(jj=>{
     if(!joursHCExclus||!joursHCExclus.has(jj.date)) return;
+    if(semTheoriquesVues.has(getSemAnnee(jj.date)+'-S'+String(getSemISO(jj.date)).padStart(2,'0'))) return; // déjà comptée en entier par la semaine à cheval ci-dessus
     const idx=jj.jourSemaine===0?6:jj.jourSemaine-1;
     if(joursPossiblesSem[idx]){
       hTheoriques+=hSemMoyPV/nbJoursPossiblesSem;
@@ -8562,13 +8566,18 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       if(!estPlanSem46){
         hTheoriques+=getHJourCgTh(j.date);
       }
-    } else if(j.heureDebPrev&&j.heureFinPrev&&!(c.th==='plan'&&(c.planType==='min'||c.planType==='var'))&&!(sourceActif.th==='plan'&&(sourceActif.planType==='min'||sourceActif.planType==='var'))&&!((sourceActif.th==='sem'||c.th==='sem')&&(sourceActif.tc!=='52'||c.tc!=='52'))){
+    } else if(!(c.th==='plan'&&(c.planType==='min'||c.planType==='var'))&&!(sourceActif.th==='plan'&&(sourceActif.planType==='min'||sourceActif.planType==='var'))&&!((sourceActif.th==='sem'||c.th==='sem')&&(sourceActif.tc!=='52'||c.tc!=='52'))&&getInfosJourPlanning(c,j.date).jourPossible){
       // Heures théoriques protégées du contrat, jamais gonflées par un jour ajouté en plus via
       // modifications autorisées, ni par un jour normal aux heures modifiées (bug confirmé Sophie
       // 23/07/2026) : utiliser l'horaire STRUCTUREL du contrat pour ce jour (getInfosJourPlanning),
       // jamais heureDebPrev/heureFinPrev qui peut désormais refléter une entrée du planning.
+      // La condition d'entrée elle-même ne doit pas non plus dépendre de heureDebPrev/heureFinPrev
+      // (bug confirmé Sophie 23/07/2026, fixe 52) : un jour décoché les vide tous les deux, ce qui
+      // faisait retomber à tort ce jour dans la branche "semaine off" juste en dessous — qui ne
+      // compte rien pour un jour hors semaine off — au lieu de garder ses heures théoriques
+      // normales. La condition se base désormais uniquement sur le structurel (jourPossible).
       const infosThFS=getInfosJourPlanning(c,j.date);
-      if(infosThFS.jourPossible&&infosThFS.jPrevueDeb&&infosThFS.jPrevueFin){
+      if(infosThFS.jPrevueDeb&&infosThFS.jPrevueFin){
         hTheoriques+=toM(infosThFS.jPrevueFin)-toM(infosThFS.jPrevueDeb);
       }
     } else if(!j.heureDebPrev&&!j.heureFinPrev){
