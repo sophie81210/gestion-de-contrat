@@ -6845,13 +6845,19 @@ function calcCongesContrat(c){
       const jours=sem.jours;
       if(!jours.length) return;
 
-      // La semaine est-elle terminée ? (dernier jour de la semaine < aujourd'hui)
-      const [semNum,semAn]=semKey.split('-');
-      // Trouver le dernier jour de cette semaine ISO (dimanche)
-      const premierLundi=getDateFromSemISO(parseInt(semNum),parseInt(semAn));
-      const dernierDimanche=new Date(premierLundi);
-      dernierDimanche.setDate(dernierDimanche.getDate()+6);
-      const semTerminee=dernierDimanche<now;
+      // La semaine est-elle terminée ? Basé sur le dernier jour RÉELLEMENT recueilli pour cette
+      // semaine (donc forcément déjà dans un mois validé, puisque seuls les mois validés
+      // alimentent "jours" plus haut) — pas sur la fin calendaire théorique de la semaine
+      // entière. Décision Sophie 23/07/2026 : une portion de semaine en fin de mois (ex. lundi-
+      // mardi d'une semaine qui continue le mois suivant) doit compter dès que SON mois est
+      // validé, sans attendre que l'autre portion (mois suivant, pas forcément validé) rejoigne
+      // le calendrier. Vérifié par simulation : ne change rien pour une semaine normale, ni pour
+      // la semaine réellement en cours aujourd'hui (ses jours ne sont pas encore dans le passé).
+      const dernierJourRecueilli=jours.reduce((max,j)=>{
+        const d=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
+        return d>max?d:max;
+      },new Date(0));
+      const semTerminee=dernierJourRecueilli<now;
 
       // Compter les absences non rémunérées
     const absNonRem=jours.filter(j=>j.statut==='abs-non'||j.statut==='abs-am'||j.statut==='ferie-non').length;
@@ -7064,6 +7070,13 @@ function calcCongesContrat(c){
             } else if(statutJ==='non-prevu'&&j.heureDebReel){
               // Jour non prévu travaillé : compte toujours en plus
               joursTravailleFSM++;
+            } else if(statutJ==='non-prevu'&&!j.heureDebReel&&getInfosJourPlanning(c,j.date).jourPossible){
+              // Jour normalement prévu au contrat mais décoché sur le planning (modifications
+              // autorisées) : l'acquisition reste basée sur le contrat, jamais sur l'état de la
+              // case à cocher (décision Sophie 23/07/2026, même principe que les heures
+              // théoriques déjà protégées). Un jour simplement décoché, sans absence déclarée,
+              // compte donc toujours comme jour normal — décocher n'est pas une absence.
+              joursNormaux++;
             } else if(['conges-acq','conges-anticipe'].includes(statutJ)){
               // Compte seulement si le jour est prévu/possible au contrat (sinon jour non prévu = ne compte pas)
               const [jcy,jcm,jcd]=j.date.split('-').map(Number);
