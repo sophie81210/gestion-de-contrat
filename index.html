@@ -4717,20 +4717,34 @@ function toggleModifPlanningAutorisees(contratId, moisKey, checked){
   if(!c) return;
   if(!c.modifPlanningAutoriseesMois) c.modifPlanningAutoriseesMois={};
   c.modifPlanningAutoriseesMois[moisKey]=!!checked;
+  // Décocher réinitialise les jours non prévus au contrat de ce mois (décision Sophie
+  // 23/07/2026) : un jour hors motif coché grâce aux modifications autorisées n'a plus lieu
+  // d'être une fois celles-ci désactivées — sinon il reste une donnée fantôme, invisible à
+  // l'écran (le jour redevient "Non prévu au contrat"), mais qui continue de consommer un jour
+  // du quota max de la semaine (bug confirmé Sophie 23/07/2026, captures d'écran à l'appui).
+  if(!checked&&c.planning){
+    const [anneeModif,moisModif]=moisKey.split('-').map(Number);
+    const dernierJourModif=new Date(anneeModif,moisModif,0).getDate();
+    for(let jModif=1;jModif<=dernierJourModif;jModif++){
+      const dsModif=anneeModif+'-'+String(moisModif).padStart(2,'0')+'-'+String(jModif).padStart(2,'0');
+      const pdModif=c.planning[dsModif];
+      if(pdModif&&pdModif.coche&&!getInfosJourPlanning(c,dsModif).jourPossible){
+        delete c.planning[dsModif];
+      }
+    }
+  }
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
   // Sauvegarde via le mécanisme établi (localStorage immédiat + Firestore débouncé 2s + filet
   // de sécurité à la fermeture de l'onglet), comme le reste de l'app.
   _contratsModifies.add(contratId);
   saveToFirestore();
-  // Décocher n'efface JAMAIS automatiquement une modification déjà faite sur ce mois — ça
-  // empêche seulement toute NOUVELLE modification. Seul le bouton réinitialiser du mois revient
-  // en arrière explicitement (confirmé par Sophie 18/07/2026).
   // Rafraîchissement CIBLÉ de cette seule tuile (pas un redessin complet, qui refermerait tous
   // les mois — même bug déjà corrigé une fois sur le cadenas par jour). Nécessaire maintenant
   // que l'étape 3 fait dépendre l'affichage du formulaire de cet état — bug confirmé Sophie
   // 18/07/2026 : la case n'avait aucun effet visible avant de changer d'onglet et revenir.
   refreshPlanningTile(contratId, moisKey);
+  if(S.enCours==contratId&&S.detTab==='presence') ouvrirFicheAvecRestauration(contratId, moisKey);
 }
 
 function majPlanningJour(contratId, dateStr, champ, val, semKeyDom){
