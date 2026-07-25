@@ -5132,6 +5132,11 @@ function toggleJourFixeSem(contratId, dateStr, checked, semKeyDom){
   if(cidx!==-1) S.contrats[cidx]=c;
   marquerPlanningNonEnregistre(contratId, moisKeyJ);
   refreshPlanningTile(contratId, moisKeyJ);
+  // Rafraîchir aussi la feuille de présence et son récapitulatif (heures théoriques notamment) si
+  // c'est bien elle qui est actuellement affichée (même contrat, onglet présence) — sinon ils
+  // restent figés sur l'ancien état jusqu'à une réouverture complète de la page (bug confirmé
+  // Sophie 23/07/2026 : affichage et heures théoriques faux jusqu'au rafraîchissement).
+  if(S.enCours==contratId&&S.detTab==='presence') ouvrirFicheAvecRestauration(contratId, moisKeyJ);
 }
 
 function toggleJourPlanning(contratId, dateStr, checked, semKeyDom, estFerie){
@@ -5175,6 +5180,13 @@ function toggleJourPlanning(contratId, dateStr, checked, semKeyDom, estFerie){
   const moisSuivJ=am0===12?(ay0+1)+'-01':ay0+'-'+String(am0+1).padStart(2,'0');
   refreshPlanningTile(contratId, moisPrecJ);
   refreshPlanningTile(contratId, moisSuivJ);
+  // Rafraîchir aussi la feuille de présence et son récapitulatif (heures théoriques notamment) si
+  // c'est bien elle qui est actuellement affichée (même contrat, onglet présence) — sinon ils
+  // restent figés sur l'ancien état jusqu'à une réouverture complète de la page (bug confirmé
+  // Sophie 23/07/2026). On ne touche pas ici aux mois voisins : la feuille utilise un conteneur
+  // unique partagé entre tous les mois, la rafraîchir pour un autre mois que celui affiché
+  // écraserait la vue en cours au lieu de la corriger.
+  if(S.enCours==contratId&&S.detTab==='presence') ouvrirFicheAvecRestauration(contratId, moisKeyJ);
 }
 
 function refreshPlanningTile(contratId, moisKey){
@@ -7890,8 +7902,45 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
     // restants — sinon double comptage avec la moyenne hors contrat calculée séparément plus bas
     const joursHCDeCetteSem=volTh?joursDesSem.filter(jj=>joursHCExclus&&joursHCExclus.has(jj.date)&&joursPossiblesSem[jj.jourSemaine===0?6:jj.jourSemaine-1]).length:0;
     if(volTh&&joursHCDeCetteSem>0){
-      const quotaDispoPV=Math.max(0,volTh.h-joursHCDeCetteSem*(hSemMoyPV/nbJoursPossiblesSem));
-      hTheoriques+=quotaDispoPV;
+      const jourSemDateHC=new Date(dateEx).getDay();
+      const lundiSemHC=new Date(dateEx);
+      lundiSemHC.setDate(lundiSemHC.getDate()-(jourSemDateHC===0?6:jourSemDateHC-1));
+      const dimancheSemHC=new Date(lundiSemHC); dimancheSemHC.setDate(lundiSemHC.getDate()+6);
+      const debutContratHC=c.dateDeb?new Date(c.dateDeb):null;
+      const finContratHC=getDateFinContrat(c);
+      const estDebutContratDansSem=debutContratHC&&debutContratHC>=lundiSemHC&&debutContratHC<=dimancheSemHC;
+      const estFinContratDansSem=finContratHC&&finContratHC>=lundiSemHC&&finContratHC<=dimancheSemHC;
+      if(estDebutContratDansSem||estFinContratDansSem){
+        // Déduction au plus favorable pour l'ass mat (décision Sophie 23/07/2026) : ne déduire que
+        // le nombre de jours max qui n'auraient structurellement pas pu être travaillés du bon
+        // côté de la semaine (jours du motif, jamais la saisie réelle) — pas un jour par jour
+        // hors contrat au calendrier. Exemple Sophie : 4 jours max, 5 possibles mardi-samedi,
+        // début (ou fin) de contrat le jeudi → 3 jours max possibles du bon côté → 1 seul jour
+        // déduit, pas 3. Marquer la semaine comme traitée pour éviter le double comptage avec la
+        // boucle "hors contrat jour par jour" plus bas (qui reste utile pour les autres cas).
+        const jMaxHC=volTh.j||1;
+        const compterJoursPossiblesHC=(d1,d2)=>{
+          let n=0; const cur=new Date(d1);
+          while(cur<=d2){
+            const idxHC=cur.getDay()===0?6:cur.getDay()-1;
+            if(volTh.jours&&volTh.jours[idxHC]) n++;
+            cur.setDate(cur.getDate()+1);
+          }
+          return n;
+        };
+        const joursPossiblesBonCoteHC=estDebutContratDansSem?compterJoursPossiblesHC(debutContratHC,dimancheSemHC):compterJoursPossiblesHC(lundiSemHC,finContratHC);
+        const joursADeduireHC=Math.max(0,jMaxHC-joursPossiblesBonCoteHC);
+        hTheoriques+=Math.max(0,volTh.h-joursADeduireHC*(volTh.h/jMaxHC));
+        semTheoriquesVues.add(semKey);
+      } else {
+        // Autre cas hors contrat (ex. agenda manquant) : plan var ne connaît pas le planning
+        // précis de la portion hors contrat (contrairement à plan sem), donc on donne directement
+        // le quota disponible (volume moins la moyenne pondérée des jours hors contrat), jamais
+        // le prévu exact du ou des jours restants — sinon double comptage avec la moyenne hors
+        // contrat calculée séparément plus bas.
+        const quotaDispoPV=Math.max(0,volTh.h-joursHCDeCetteSem*(hSemMoyPV/nbJoursPossiblesSem));
+        hTheoriques+=quotaDispoPV;
+      }
       semJoursCpt[semKey]=volTh.j||1; // semaine considérée complète, plus rien à ajouter par jour
       return;
     }
