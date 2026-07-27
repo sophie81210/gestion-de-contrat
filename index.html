@@ -4536,30 +4536,24 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
         // (déclenche la majoration férié dédiée), jamais via modifications autorisées.
         contenu=`<span style="color:var(--tx3);font-size:12px">Férié</span>`;
         } else {
-        // Modifications autorisées ce mois (23/07/2026, remplacement du cadenas par une case à
-        // cocher — décision Sophie) : un jour normalement prévu apparaît coché par défaut, avec
-        // les heures du contrat déjà remplies, tant qu'il n'a pas été explicitement décoché — pas
-        // besoin de déverrouiller pour confirmer l'évidence. Un jour non prévu (ajouté en plus)
-        // démarre décoché. planData absent = jamais touché → valeur par défaut = infos.jourPossible ;
-        // sinon la case suit l'entrée explicite (y compris un décoché explicite, distinct de
-        // "jamais touché").
+        // Modifications autorisées ce mois (27/07/2026, remplacement de la case à cocher/heures
+        // libres par un échange de jour — décision Sophie, pour garantir l'équilibre du planning
+        // par construction). Un jour qui porte des heures (prévu non touché, ou déjà receveur d'un
+        // échange précédent) affiche ses heures et un bouton pour les déplacer ailleurs dans le
+        // mois ; le jour d'origine, une fois vidé par un échange, redevient un jour "Non prévu"
+        // ordinaire, sans bouton (rien à déplacer depuis là). planData absent = jamais touché →
+        // valeur par défaut = infos.jourPossible ; sinon l'état suit l'entrée explicite.
         const estCocheFS=planData.coche===undefined?!!infos.jourPossible:!!planData.coche;
-        const valDebFS=planData.d?planData.d:(estCocheFS?(infos.jPrevueDeb||''):'');
-        const valFinFS=planData.f?planData.f:(estCocheFS?(infos.jPrevueFin||''):'');
-        const idFS='pln-fs-'+c.id+'-'+j.date;
-        contenu=`<div style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tx2)">
-          <input type="checkbox" ${estCocheFS?'checked':''} ${moisVerrouille?'disabled':''}
-            onchange="toggleJourFixeSem(${c.id},'${j.date}',this.checked,'${semKeyDom}')">
-          <span>de</span>
-          <input type="time" id="${idFS}-deb" class="pln-deb" value="${valDebFS}" ${(moisVerrouille||!estCocheFS)?'disabled':''}
-            style="width:78px;padding:3px 4px;border:1px solid var(--mb);border-radius:3px;font-size:12px;background:#fff;color:var(--tx)"
-            onchange="majPlanningJour(${c.id},'${j.date}','d',this.value,'${semKeyDom}')">
-          <span>à</span>
-          <input type="time" id="${idFS}-fin" class="pln-fin" value="${valFinFS}" ${(moisVerrouille||!estCocheFS)?'disabled':''}
-            style="width:78px;padding:3px 4px;border:1px solid var(--mb);border-radius:3px;font-size:12px;background:#fff;color:var(--tx)"
-            onchange="majPlanningJour(${c.id},'${j.date}','f',this.value,'${semKeyDom}')">
-          ${infos.ferieChome?'<span style="color:var(--tx3)">(férié)</span>':''}
-        </div>`;
+        if(estCocheFS){
+          const valDebFS=planData.d?planData.d:(infos.jPrevueDeb||'');
+          const valFinFS=planData.f?planData.f:(infos.jPrevueFin||'');
+          contenu=`<div style="display:flex;gap:8px;align-items:center;font-size:12px;color:var(--tx)">
+            <span>${valDebFS} – ${valFinFS}</span>
+            ${moisVerrouille?'':`<button class="btn bs" style="padding:2px 8px;font-size:11px" onclick="ouvrirEchangeJourFS(${c.id},'${j.date}','${semKeyDom}')">Échanger</button>`}
+          </div>`;
+        } else {
+          contenu=`<span style="color:var(--tx3);font-size:12px">Non prévu</span>`;
+        }
         }
       } else if(!infos.jourPossible&&!infos.ferieChome&&(infos.estReposHebdo||!(estVarTile&&modifMoisActive))){
         // Jour de repos hebdomadaire (22/07/2026, décision Sophie) : jamais cochable, même en
@@ -5170,6 +5164,104 @@ function toggleJourFixeSem(contratId, dateStr, checked, semKeyDom){
   if(S.enCours==contratId&&S.detTab==='presence') ouvrirFicheAvecRestauration(contratId, moisKeyJ);
 }
 
+// 27/07/2026 (décision Sophie) : fixe/sem passe de case à cocher + heures libres à un échange de
+// jour obligatoire — un jour décoché doit toujours être compensé par un jour coché qui reprend
+// exactement les mêmes heures (jamais réparties, jamais raccourcies), pour garantir l'équilibre du
+// planning par construction plutôt que de le vérifier après coup. Objectif de Sophie : éviter les
+// deux chemins actuels (réduire au planning vs déclarer une absence partielle sur la feuille) qui
+// donnaient des résultats différents pour un même cas ; et simplifier l'acquisition de congés, qui
+// peut désormais compter chaque jour normalement, sans traitement spécial pour un jour décoché.
+function joursMoisPourEchange(c, dateOrigine){
+  const [oy,om]=dateOrigine.split('-').map(Number);
+  const finMoisE=new Date(oy,om,0).getDate();
+  const jours=[];
+  for(let d=1; d<=finMoisE; d++){
+    const dateStr=oy+'-'+String(om).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+    if(dateStr===dateOrigine){ jours.push({date:dateStr, dispo:false, motif:'jour d\u2019origine'}); continue; }
+    const infos=getInfosJourPlanning(c,dateStr);
+    const planData=(c.planning&&c.planning[dateStr])||{};
+    const estOccupe=planData.coche===undefined?!!infos.jourPossible:!!planData.coche;
+    let dispo=true, motif='';
+    if(estOccupe){ dispo=false; motif='déjà pris'; }
+    else if(infos.estReposHebdo){ dispo=false; motif='repos hebdomadaire'; }
+    else if(infos.ferieChome){ dispo=false; motif='férié'; }
+    else if(infos.aucunType){ dispo=false; motif='hors contrat'; }
+    else if(isJourCongeAM(dateStr)){ dispo=false; motif='congés'; }
+    jours.push({date:dateStr, dispo, motif});
+  }
+  return jours;
+}
+
+function ouvrirEchangeJourFS(contratId, dateOrigine, semKeyDom){
+  const c=S.contrats.find(x=>x.id==contratId);
+  if(!c) return;
+  const moisKeyE=dateOrigine.slice(0,7);
+  const ficheE=c.fiches&&c.fiches[moisKeyE];
+  if((ficheE&&ficheE.valide)||estLectureSeuleEmployeur()) return;
+  const jours=joursMoisPourEchange(c,dateOrigine);
+  const [oy,om]=dateOrigine.split('-').map(Number);
+  const nomMoisE=new Date(oy,om-1,1).toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
+  const decalageDebut=(new Date(oy,om-1,1).getDay()+6)%7; // lundi en première colonne
+  let grille='';
+  for(let i=0;i<decalageDebut;i++) grille+='<div></div>';
+  jours.forEach(j=>{
+    const num=parseInt(j.date.slice(-2));
+    if(j.dispo){
+      grille+=`<button class="btn bs" style="padding:6px 0;font-size:13px" onclick="executerEchangeJourFS(${contratId},'${dateOrigine}','${j.date}','${semKeyDom}')">${num}</button>`;
+    } else {
+      grille+=`<div style="padding:6px 0;font-size:13px;text-align:center;color:var(--tx3)" title="${j.motif}">${num}</div>`;
+    }
+  });
+  const m=document.createElement('div');m.className='modal-wrap';
+  m.innerHTML=`<div class="modal"><h3>Déplacer ce jour</h3><p style="font-size:13px;color:var(--tx2)">Choisir le jour de ${nomMoisE} qui reprendra les mêmes heures.</p>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin:12px 0">${grille}</div>
+    <div class="modal-btns"><button class="btn bs" onclick="this.closest('.modal-wrap').remove()">Annuler</button></div></div>`;
+  document.body.appendChild(m);
+}
+
+function executerEchangeJourFS(contratId, dateOrigine, dateDestination, semKeyDom){
+  const c=S.contrats.find(x=>x.id==contratId);
+  if(!c) return;
+  const moisKeyE=dateOrigine.slice(0,7);
+  const ficheE=c.fiches&&c.fiches[moisKeyE];
+  document.querySelectorAll('.modal-wrap').forEach(x=>x.remove());
+  if((ficheE&&ficheE.valide)||estLectureSeuleEmployeur()) return;
+  if(!c.planning) c.planning={};
+  const infosOrig=getInfosJourPlanning(c,dateOrigine);
+  const planOrig=c.planning[dateOrigine]||{};
+  const heureDOrig=planOrig.d?planOrig.d:(infosOrig.jourPossible?(infosOrig.jPrevueDeb||''):'');
+  const heureFOrig=planOrig.f?planOrig.f:(infosOrig.jourPossible?(infosOrig.jPrevueFin||''):'');
+  // Vider l'origine — même logique que la décoche normale (toggleJourFixeSem) : un jour
+  // normalement prévu garde une marque explicite décochée, un jour ajouté en plus est retiré.
+  if(infosOrig.jourPossible){ c.planning[dateOrigine]={coche:false}; }
+  else { delete c.planning[dateOrigine]; }
+  // La destination reprend exactement les mêmes heures — jamais réparties, jamais raccourcies.
+  c.planning[dateDestination]={coche:true, d:heureDOrig, f:heureFOrig};
+  // Synchroniser directement la feuille de présence du mois si elle existe déjà, pour que
+  // l'échange soit neutre pour les heures complémentaires dès maintenant — sans dépendre d'une
+  // réouverture de l'onglet Présence (même principe que la resynchronisation d'ouvrirFiche, mais
+  // appliqué tout de suite pour les deux jours concernés par CET échange précis).
+  const ficheSyncE=c.fiches&&c.fiches[moisKeyE];
+  if(ficheSyncE&&!ficheSyncE.valide){
+    const jOrigF=(ficheSyncE.jours||[]).find(jj=>jj.date===dateOrigine);
+    if(jOrigF){
+      jOrigF.heureDebPrev=null; jOrigF.heureFinPrev=null;
+      jOrigF.heureDebReel=null; jOrigF.heureFinReel=null;
+      jOrigF.statut='non-prevu';
+    }
+    const jDestF=(ficheSyncE.jours||[]).find(jj=>jj.date===dateDestination);
+    if(jDestF){
+      jDestF.heureDebPrev=heureDOrig||null; jDestF.heureFinPrev=heureFOrig||null;
+      jDestF.statut='prevu';
+    }
+  }
+  const cidx=S.contrats.findIndex(x=>x.id==contratId);
+  if(cidx!==-1) S.contrats[cidx]=c;
+  marquerPlanningNonEnregistre(contratId, moisKeyE);
+  refreshPlanningTile(contratId, moisKeyE);
+  if(S.enCours==contratId&&S.detTab==='presence') ouvrirFicheAvecRestauration(contratId, moisKeyE);
+}
+
 function toggleJourPlanning(contratId, dateStr, checked, semKeyDom, estFerie){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c) return;
@@ -5190,6 +5282,26 @@ function toggleJourPlanning(contratId, dateStr, checked, semKeyDom, estFerie){
       });
       if(totalCoche>=infos.jMax){
         toast('Nombre de jours maximum atteint pour cette semaine, vous pourrez ajouter un jour complémentaire sur la feuille de présence');
+        refreshPlanningTile(contratId, moisKeyJ);
+        return;
+      }
+    } else if(modifActiveJ&&(c.th==='plan'&&(c.planType==='var'||c.planType==='min'))){
+      // 27/07/2026 (décision Sophie) : modifications autorisées ne supprime plus tout contrôle pour
+      // var/min — le nombre de jours cochés du mois est désormais plafonné au jours max du mois
+      // (calcEnveloppeMoisVar, qui gère déjà la semaine à cheval en fin de mois, logique inchangée),
+      // sans imposer de minimum (le plancher existant reste). Dépasser en heures un jour déjà coché
+      // reste possible et payé en complémentaire, comme aujourd'hui — seul le NOMBRE de jours est
+      // borné, jamais les heures.
+      const [ayJ,amJ]=moisKeyJ.split('-').map(Number);
+      const jMaxMoisJ=calcEnveloppeMoisVar(c,ayJ,amJ).jours;
+      let totalCocheMois=0;
+      Object.keys(c.planning).forEach(dt=>{
+        if(dt===dateStr) return;
+        if(dt.slice(0,7)!==moisKeyJ) return;
+        if(c.planning[dt]&&c.planning[dt].coche) totalCocheMois++;
+      });
+      if(jMaxMoisJ>0&&totalCocheMois>=jMaxMoisJ){
+        toast('Nombre de jours maximum atteint pour ce mois, vous pourrez ajouter des heures en plus sur un jour déjà prévu, via la feuille de présence');
         refreshPlanningTile(contratId, moisKeyJ);
         return;
       }
@@ -7092,6 +7204,8 @@ function calcCongesContrat(c){
             const statutJ=j.statut||getStatutPrevu(c,j);
             const cocheCgMin=!!(c.planning&&c.planning[j.date]&&c.planning[j.date].coche);
             const gateMinOk=!(c.th==='plan'&&c.planType==='min')||semaineCompleteCgMin||cocheCgMin;
+            const [jpy,jpm,jpd]=j.date.split('-').map(Number);
+            const sourceCgProt=getVersionActive(c,new Date(jpy,jpm-1,jpd));
             if(['travaille','reprise'].includes(statutJ)){
               // Toujours en plus du motif normal, compte via la moyenne, jamais plafonné (11 juillet)
               joursTravailleFSM++;
@@ -7100,12 +7214,17 @@ function calcCongesContrat(c){
             } else if(statutJ==='non-prevu'&&j.heureDebReel){
               // Jour non prévu travaillé : compte toujours en plus
               joursTravailleFSM++;
-            } else if(statutJ==='non-prevu'&&!j.heureDebReel&&getInfosJourPlanning(c,j.date).jourPossible){
-              // Jour normalement prévu au contrat mais décoché sur le planning (modifications
-              // autorisées) : l'acquisition reste basée sur le contrat, jamais sur l'état de la
-              // case à cocher (décision Sophie 23/07/2026, même principe que les heures
-              // théoriques déjà protégées). Un jour simplement décoché, sans absence déclarée,
-              // compte donc toujours comme jour normal — décocher n'est pas une absence.
+            } else if(statutJ==='non-prevu'&&!j.heureDebReel&&getInfosJourPlanning(c,j.date).jourPossible&&!(sourceCgProt.th==='fixe'||sourceCgProt.th==='sem')){
+              // Jour normalement prévu au contrat mais décoché sur le planning. Pour min (et les
+              // autres types partageant ce bloc) : l'acquisition reste basée sur le contrat, jamais
+              // sur l'état de la case à cocher (décision Sophie 23/07/2026) — un jour simplement
+              // décoché, sans absence déclarée, compte donc toujours comme jour normal.
+              // Fixe/sem (27/07/2026, décision Sophie) : EXCLU de cette protection depuis l'échange
+              // de jour obligatoire (calendrier) — un jour décoché fixe/sem a toujours et uniquement
+              // été vidé par un échange vers un autre jour, qui porte déjà ses heures ; le protéger
+              // ici en plus doublerait le crédit. Un jour décoché fixe/sem ne compte donc simplement
+              // plus rien (comme repos/non-prévu/hors-contrat), le jour de destination portant seul
+              // le crédit via la branche "travaillé" plus haut.
               joursNormaux++;
             } else if(['conges-acq','conges-anticipe'].includes(statutJ)){
               // Compte seulement si le jour est prévu/possible au contrat (sinon jour non prévu = ne compte pas)
