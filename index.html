@@ -5525,13 +5525,19 @@ function calcEnveloppeMoisVar(c,ay,am){
   return {jours:joursBaseV, minutes:minBaseV, heures:minBaseV/60};
 }
 
-function calcEnveloppeMoisFixeSem(c,ay,am){
+function calcEnveloppeMoisFixeSem(c,ay,am,ficheRef){
   // Enveloppe mensuelle fixe/sem (23/07/2026, extension du modèle var — décision Sophie) :
   // contrairement à var, chaque jour a ses propres heures explicites (joursFixe, ou
   // semTypes[type].jours pour sem) plutôt qu'un volume hebdomadaire à répartir — donc pas
   // besoin de la logique de semaine à cheval de calcEnveloppeMoisVar : on additionne
   // simplement, jour par jour, les heures normalement prévues pour les jours du mois demandé.
   // Source unique de vérité partagée entre l'enregistrement du planning et la paie, comme var.
+  // ficheRef (27/07/2026, correctif Sophie — congés/absences non comptés dans l'enveloppe) :
+  // optionnel. Sans lui (appel depuis le planning), comportement inchangé. Fourni (appel depuis
+  // calcRecapFiche, la paie), un jour normalement prévu mais posé en congés/absence sur la
+  // feuille de présence de ce mois est exclu de l'enveloppe — même liste de statuts que celle qui
+  // exclut déjà ce jour du RÉEL juste plus bas (prévu/travaillé/reprise/férié seuls comptent) —
+  // pour comparer des heures réellement disponibles ce mois-ci, pas l'horaire théorique complet.
   const finMois4=new Date(ay,am,0);
   let jours4=0, minutes4=0;
   for(let d4=1; d4<=finMois4.getDate(); d4++){
@@ -5539,6 +5545,13 @@ function calcEnveloppeMoisFixeSem(c,ay,am){
     const infos4=getInfosJourPlanning(c,dateStr4);
     if(infos4.aucunType) continue;
     if(infos4.jourPossible&&infos4.jPrevueDeb&&infos4.jPrevueFin){
+      if(ficheRef){
+        const jourFiche4=(ficheRef.jours||[]).find(jj=>jj.date===dateStr4);
+        if(jourFiche4){
+          const stFiche4=jourFiche4.statut||getStatutPrevu(c,jourFiche4);
+          if(stFiche4!=='prevu'&&stFiche4!=='travaille'&&stFiche4!=='reprise'&&stFiche4!=='ferie') continue;
+        }
+      }
       jours4++; minutes4+=toM(infos4.jPrevueFin)-toM(infos4.jPrevueDeb);
     }
   }
@@ -9858,7 +9871,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       // Sophie 23/07/2026 : cocher un jour sur le planning ne renseigne que le prévu, jamais le
       // réel — un jour ajouté restait donc payé zéro) compte comme travaillé tel que prévu, même
       // garantie que pour le reste du mois hors modifications autorisées.
-      const envMoisFS=calcEnveloppeMoisFixeSem(c,ayEnv,amEnv);
+      const envMoisFS=calcEnveloppeMoisFixeSem(c,ayEnv,amEnv,fiche);
       envHeuresPaie=envMoisFS.heures;
       fiche.jours.forEach(jFS=>{
         const stFS=jFS.statut||getStatutPrevu(c,jFS);
