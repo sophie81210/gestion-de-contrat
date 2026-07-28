@@ -4552,13 +4552,12 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
             ${moisVerrouille?'':`<button class="btn bs" style="padding:2px 8px;font-size:11px" onclick="ouvrirEchangeJourFS(${c.id},'${j.date}','${semKeyDom}')">Échanger</button>`}
           </div>`;
         } else {
-          // 27/07/2026 : un jour structurellement normal (jourPossible) mais resté décoché — état
-          // hérité de l'ancien système case à cocher (avant le passage à l'échange obligatoire), ou
-          // tout cas isolé où un jour se retrouverait vidé sans qu'un échange l'ait occupé ailleurs.
-          // Sans lien pour le récupérer, ce jour resterait bloqué "Non prévu" indéfiniment, sans
-          // aucun moyen de le ramener via la nouvelle interface (pas de bouton sur un jour vide).
-          contenu=`<span style="color:var(--tx3);font-size:12px">Non prévu</span>`
-            +(infos.jourPossible&&!moisVerrouille?` <button class="btn bs" style="padding:1px 6px;font-size:10px" onclick="reintegrerJourFS(${c.id},'${j.date}','${semKeyDom}')" title="Remet ce jour à son horaire habituel du contrat">Réintégrer</button>`:'');
+          // 27/07/2026 (retiré à la demande de Sophie — créait des doublons) : ce lien proposait
+          // de rétablir un jour normalement prévu resté décoché, mais sans savoir si ses heures
+          // avaient déjà été déplacées ailleurs via un échange — les deux jours se retrouvaient
+          // alors occupés en même temps. La case modifications autorisées décochée puis recochée
+          // suffit à nettoyer un état hérité de l'ancien système, sans ce risque.
+          contenu=`<span style="color:var(--tx3);font-size:12px">Non prévu</span>`;
         }
         }
       } else if(!infos.jourPossible&&!infos.ferieChome&&(infos.estReposHebdo||!(estVarTile&&modifMoisActive))){
@@ -5021,11 +5020,14 @@ function enregistrerPlanningMois(contratId, moisKey){
         erreurs.push(`Ce mois totalise ${fmtH(minReel)} pour ${fmtH(minBaseline)} prévues au contrat — l'excédent sera à ajouter sur la feuille de présence, pas dans le planning`);
       }
     } else {
-      // MODÈLE LIBRE étendu à fixe/sem (23/07/2026, décision Sophie) : comme var, plus aucun
-      // refus quand modifications autorisées est cochée — l'enveloppe informe, la paie arbitre
-      // (calcRecapFiche, même fonction calcEnveloppeMoisFixeSem partagée).
-      const excedentFS=Math.max(0,minReel-minBaseline);
-      if(excedentFS>1) complSupInfoV=`, dont ${fmtH(Math.round(excedentFS))} heures complémentaires / supplémentaires`;
+      // 27/07/2026 (décision Sophie, suite au passage à l'échange de jour obligatoire) : le
+      // planning fixe/sem ne peut plus générer de dépassement à lui seul — un échange déplace
+      // toujours exactement les mêmes heures, donc toujours neutre par construction. Seule la
+      // feuille de présence peut désormais produire des heures complémentaires (changements de
+      // dernière minute). Message retiré : en plus d'être devenu sans objet, le calcul ci-dessus
+      // comptait à tort un jour d'origine vidé par un échange (la condition ne distingue pas
+      // "jamais touché" de "explicitement décoché"), ce qui aurait affiché un faux dépassement
+      // égal aux heures déplacées à chaque échange.
     }
   }
   // Var et min, modifications autorisées ce mois : même principe, plafond mensuel jours+heures au
@@ -10269,7 +10271,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       return hSemMoy52;
     };
     fiche.jours.forEach(j=>{
-      if(j.statut==='conges-acq'||j.statut==='conges-anticipe'){
+      if(j.statut==='conges-acq'||j.statut==='conges-anticipe'||j.statut==='decompte-acq'||j.statut==='decompte-anticipe'){
+        // decompte-acq/decompte-anticipe (27/07/2026, correctif Sophie) : jours qui poursuivent
+        // une pose déjà commencée (le premier jour seul porte le statut conges-acq/anticipe,
+        // les suivants portent decompte-acq/anticipe) — mêmes jours payés, même calcul, sinon
+        // seul le premier jour de chaque pose était compté ici.
         // Taux du mois précédant la pose
         const dateVeille=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
         dateVeille.setDate(dateVeille.getDate()-1);
