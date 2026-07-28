@@ -438,7 +438,6 @@ input[type=time].fi{width:auto;min-width:92px}
       <label style="display:flex;flex-direction:column;align-items:center;gap:3px;font-size:11px;color:var(--tx2);cursor:pointer"><input type="checkbox" id="plan-min-jour-6" style="width:14px;height:14px;accent-color:var(--m)">Dim</label>
     </div>
   </div>
-  <div class="ibox">Si ces heures ne sont pas entièrement effectuées, elles seront perdues. Les heures effectuées au-delà seront rémunérées en heures complémentaires ou supplémentaires en fin de mois.</div>
 </div>
 <div class="cond" id="cond-plan-var">
   <div class="fg" style="margin-top:10px;margin-bottom:6px">
@@ -460,9 +459,9 @@ input[type=time].fi{width:auto;min-width:92px}
       <div class="fg"><label class="fl">Jours mensualis&eacute;s moyens</label><div class="rrow"><div class="rbox" id="r-jours-mois-aff">&mdash;</div><span class="rf" id="r-jours-mois-f"></span></div></div>
       <hr style="border:none;border-top:1px solid var(--mb);margin:11px 0">
       <div class="fg"><label class="fl">Taux horaire brut (&euro;)</label><input class="fi fi-sm" type="number" id="f-txbrut" step="0.01" oninput="calcSal()"></div>
-      <div class="fg"><label class="fl">Taux horaire net</label><div class="rrow"><div class="rbox" id="r-txnet">&mdash;</div><span class="rf">&times; 0,7811975</span></div></div>
+      <div class="fg"><label class="fl">Taux horaire net</label><div class="rrow"><div class="rbox" id="r-txnet">&mdash;</div><span class="rf" id="r-txnet-coef">&times; 0,7811975</span></div></div>
       <div class="fg"><label class="fl">Mensualisation brute</label><div class="rrow"><div class="rbox" id="r-mb">&mdash;</div><span class="rf" id="r-mb-f"></span></div></div>
-      <div class="fg"><label class="fl">Mensualisation nette</label><div class="rrow"><div class="rbox" id="r-mn">&mdash;</div><span class="rf">&times; 0,7811975</span></div></div>
+      <div class="fg"><label class="fl">Mensualisation nette</label><div class="rrow"><div class="rbox" id="r-mn">&mdash;</div><span class="rf" id="r-mn-coef">&times; 0,7811975</span></div></div>
       <hr style="border:none;border-top:1px solid var(--mb);margin:11px 0">
       <div class="fg"><label class="fl">Majoration heures compl&eacute;mentaires <small>(%) (facultatif)</small></label><div style="display:flex;align-items:center;gap:8px"><input class="fi fi-sm" type="number" id="f-maj-comp" step="0.1" min="0" placeholder="min. 0%" style="width:95px" oninput="if(this.value===''){this.style.borderColor='var(--al)';this.title='Champ obligatoire'}else{this.style.borderColor='';this.title=''}"><span style="font-size:13px;color:var(--tx2)">%</span></div></div>
       <div class="fg" style="margin-bottom:0"><label class="fl">Majoration heures suppl&eacute;mentaires <small>(% &mdash; min 10%)</small></label><div style="display:flex;align-items:center;gap:8px"><input class="fi fi-sm" type="number" id="f-maj-sup" step="0.1" min="10" placeholder="min. 10%" style="width:95px" oninput="if(parseFloat(this.value)<10){this.style.borderColor='var(--al)';this.title='Minimum légal : 10%'}else{this.style.borderColor='';this.title=''}"><span style="font-size:13px;color:var(--tx2)">%</span></div></div>
@@ -760,11 +759,17 @@ const S={
 
          function getParamAt(type, dateStr){
   const liste=(S.params&&S.params[type])||PARAMS_DEFAUT[type]||[];
-  let result=liste[0];
-  for(const p of liste){
-    if(p.debut<=dateStr) result=p;
-    else break;
-  } 
+  // 27/07/2026 (correctif Sophie) : recherche indépendante de l'ordre de la liste — l'ancienne
+  // version supposait la liste déjà triée par date et s'arrêtait au premier écart, donnant un
+  // résultat faux (souvent la toute première entrée du tableau, peu importe sa date) dès que
+  // l'ordre n'était pas parfait, par exemple juste après l'ajout d'une entrée plus ancienne dans
+  // les paramètres admin sans re-tri. Cherche maintenant, parmi toutes les entrées dont le début
+  // ne dépasse pas la date demandée, celle dont le début est le plus proche (le plus récent).
+  let result=null;
+  liste.forEach(p=>{
+    if(p.debut<=dateStr&&(!result||p.debut>result.debut)) result=p;
+  });
+  if(!result&&liste.length) result=liste.reduce((a,b)=>a.debut<b.debut?a:b);
                   return result||{};
 }
          // Clé séparée pour l'état des cloches
@@ -1875,7 +1880,17 @@ function buildFicheContenu(source, c){
     })()],
     ['Congés anticipés',source.cgAnticipe==='oui'?'Oui':'Non'],
     ['Paiement congés',{juin:'En juin',principale:'Prise principale',chaque:'Chaque prise'}[source.dateCg]||'—'],
-    ['Indem. entretien',source.indemType==='legal'?'Légale':source.indemType==='nego'?'Négociée — '+(source.indemMontant||'?')+'€/'+(source.indemPer||'?'):'—'],
+    ['Indem. entretien',source.indemType==='legal'?'Légale':source.indemType==='nego'?(()=>{
+      // 27/07/2026 (décision Sophie) : montant négocié modifiable directement ici (cadenas), pour
+      // le remonter sans avenant quand le légal le dépasse — n'affecte que les fiches pas encore
+      // validées (calculées à la volée avec la valeur courante), jamais celles déjà validées
+      // (figées à leur montant du moment). Modifie toujours le contrat de base (c), jamais un
+      // avenant affiché en historique.
+      const idU='indem-nego-'+c.id;
+      return `<span id="${idU}-aff">${source.indemMontant||'?'}€/${source.indemPer||'?'}</span>
+        <input id="${idU}-inp" type="number" step="0.001" value="${source.indemMontant||''}" style="display:none;width:70px;padding:2px 4px;border:1px solid var(--mb);border-radius:3px;font-size:12px" onchange="modifierIndemNego(${c.id},this.value)">
+        <button class="btn bs" style="padding:1px 6px;font-size:10px;margin-left:4px" onclick="document.getElementById('${idU}-aff').style.display='none';document.getElementById('${idU}-inp').style.display='inline-block';document.getElementById('${idU}-inp').focus();this.style.display='none'" title="Modifier sans avenant (fiches pas encore validées seulement)">🔒 modifier</button>`;
+    })():'—'],
     ['Indem. repas',repasStr],
     ['Indem. km',source.km?(source.km+' €/km'):'—'],
     ['Jours fériés travaillés',feriesHtml],
@@ -1936,7 +1951,20 @@ function buildFicheContenu(source, c){
     </div>`:''}
     ${noteCDIHtml}
     ${cddBoutonsHtml}`;
-}       
+}
+
+function modifierIndemNego(contratId, val){
+  const c=S.contrats.find(x=>x.id==contratId);
+  if(!c||estLectureSeuleEmployeur()) return;
+  const montant=parseFloat(val);
+  if(isNaN(montant)||montant<0) return;
+  c.indemMontant=montant;
+  const cidx=S.contrats.findIndex(x=>x.id==contratId);
+  if(cidx!==-1) S.contrats[cidx]=c;
+  _contratsModifies.add(contratId);
+  saveToFirestore();
+  if(S.enCours==contratId) renderDetTab(contratId, S.detTab||'contrat');
+}
 function renderDetTab(id,tab){
   const c=S.contrats.find(x=>x.id==id);
   if(!c)return;
@@ -3263,6 +3291,24 @@ function ouvrirFiche(contratId,key){
   }
   if(!c.fiches[key])return;
   const fiche=c.fiches[key];
+  // 27/07/2026 (décision Sophie) : indemnité d'entretien négociée passée sous le légal au moins un
+  // jour ce mois — alerter seulement au premier mois où ça arrive (pas à chaque ouverture), et
+  // seulement si le mois précédent était validé (sinon rien à comparer, pas de vraie transition).
+  if(c.indemType==='nego'&&c.indemMontant){
+    const recapIndemAlerte=calcRecapFiche(c,fiche);
+    if(recapIndemAlerte.indemNegoJoursBascule>0){
+      const [ayIndem,amIndem]=key.split('-').map(Number);
+      const dPrecIndem=new Date(ayIndem,amIndem-2,1);
+      const keyPrecIndem=dPrecIndem.getFullYear()+'-'+String(dPrecIndem.getMonth()+1).padStart(2,'0');
+      const fichePrecIndem=c.fiches&&c.fiches[keyPrecIndem];
+      if(fichePrecIndem&&fichePrecIndem.valide){
+        const recapPrecIndem=calcRecapFiche(c,fichePrecIndem);
+        if(!recapPrecIndem.indemNegoJoursBascule){
+          alerte(`Le montant négocié de l'indemnité d'entretien (${c.indemMontant}€/${c.indemPer==='journalier'?'jour':'heure'}) est désormais inférieur au minimum légal certains jours ce mois-ci — le calcul bascule automatiquement sur le légal ces jours-là. Pense à vérifier si le montant négocié doit être remonté (fiche contrat, ligne Indem. entretien).`);
+        }
+      }
+    }
+  }
   // Vérifier que l'agenda est complet à l'ouverture (contrats avec agenda, non validés)
   if(!fiche.valide&&(c.tc!=='52'||c.th==='plan'||c.th==='sem')&&!(c.tc==='52'&&(c.th==='fixe'||c.th==='min'))){
     const [ky,km]=key.split('-').map(Number);
@@ -8392,6 +8438,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   let joursEnPlus=0;
   let joursEnMoins=0;
   let indemEntretienTotal=0, indemRepasTotal=0, indemKmTotal=0;
+  let indemNegoJoursBascule=0; // 27/07/2026 (correctif Sophie) : jours où le négocié est passé sous
+  // le légal du jour et a donc basculé sur le légal — sert à l'alerte de revalorisation
   let kmTotal=0;
   let montantAbsences=0;
   let hTheoriques=0;
@@ -9877,7 +9925,16 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           const forfait=indem.parJour||2.65;
           indemEntretienTotal+=Math.max(forfait, tauxH*hPourIndem);
         } else if(c.indemType==='nego'&&c.indemMontant){
-          indemEntretienTotal+=c.indemPer==='journalier'?c.indemMontant:c.indemMontant*hPourIndem;
+          // 27/07/2026 (décision Sophie) : le négocié reste la référence tant qu'il dépasse le
+          // légal DE CE JOUR précis (le légal lui-même varie déjà selon les heures du jour, via le
+          // plus grand entre forfait et taux horaire) — jamais un seuil unique fixé pour tout le
+          // mois. Si le légal du jour dépasse le négocié, ce jour-là bascule sur le légal, sans
+          // toucher aux autres jours ni au montant négocié lui-même.
+          const indemJ=getParamAt('indemEntretien',dateStr);
+          const legalJ=Math.max(indemJ.parJour||2.65,(indemJ.parHeure||0.425)*hPourIndem);
+          const negoJ=c.indemPer==='journalier'?c.indemMontant:c.indemMontant*hPourIndem;
+          if(legalJ>negoJ) indemNegoJoursBascule++;
+          indemEntretienTotal+=Math.max(negoJ,legalJ);
         }
       }
       if(c.repas&&j.repas){
@@ -10330,6 +10387,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     donneesManquantes, hMensu, hComp:hComp.toFixed(2), hSup:hSup.toFixed(2),
     coefNetR, // 27/07/2026 (correctif Sophie) : coefficient daté déjà calculé ci-dessus, exposé pour
     // que l'affichage (buildRecapHtml etc.) le réutilise au lieu d'en recalculer un non daté
+    indemNegoJoursBascule, // 27/07/2026 : nombre de jours du mois où le négocié est passé sous le
+    // légal ce jour-là — sert à déclencher l'alerte de revalorisation
     estPassage46vers52:estPassage46vers52||false,
     dateAvenantPassage:estPassage46vers52?avenantDuMois.dateAvenant:null,
     periodeAv:periodeAv||null,
@@ -10789,7 +10848,7 @@ function selTC(el,v){
       txNetOcc=document.createElement('div');
       txNetOcc.className='fg';
       txNetOcc.id='fg-txnet-occ';
-      txNetOcc.innerHTML=`<label class="fl">Taux horaire net</label><div class="rrow"><div class="rbox" id="r-txnet-occ">—</div><span class="rf">× 0,7811975</span></div>`;
+      txNetOcc.innerHTML=`<label class="fl">Taux horaire net</label><div class="rrow"><div class="rbox" id="r-txnet-occ">—</div><span class="rf" id="r-txnet-occ-coef">× 0,7811975</span></div>`;
       document.getElementById('f-txbrut').closest('.fg').insertAdjacentElement('afterend',txNetOcc);
     }
     txNetOcc.style.display='block';
@@ -12213,6 +12272,12 @@ function calcSal(){
   // champ date de début est encore vide (nouveau contrat pas encore daté)
   const dateDebSal=document.getElementById('f-datedeb')?.value||dateToStr(new Date());
   const coefSal=getParamAt('coefficients',dateDebSal).valeur||0.7811975;
+  // 27/07/2026 (correctif Sophie, suite) : les petits indices "× 0,7811975" à côté de ces champs
+  // étaient un texte figé dans le HTML, jamais mis à jour — ils affichaient toujours l'ancien
+  // coefficient même une fois le calcul lui-même corrigé. Mis à jour ici avec le vrai coefficient
+  // utilisé, pour cette date précise.
+  const coefSalTxt='× '+coefSal.toString().replace('.',',');
+  ['r-txnet-coef','r-mn-coef','r-txnet-occ-coef'].forEach(idC=>{const elC=document.getElementById(idC);if(elC)elC.textContent=coefSalTxt;});
   st('r-txnet',(tx*coefSal).toFixed(2)+' €');
   const txNetOcc=document.getElementById('r-txnet-occ');
   if(txNetOcc)txNetOcc.textContent=(tx*coefSal).toFixed(2)+' €';
