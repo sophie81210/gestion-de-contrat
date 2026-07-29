@@ -101,6 +101,27 @@ window.fbLoadData = async(uid)=>{
     }};
   }catch(e){return{ok:false,err:e.message};}
 };
+// 27/07/2026 (décision Sophie) : coefficients et indemnité d'entretien doivent être communs à tous
+// les comptes (un seul jeu de taux officiels, modifiable seulement depuis le compte admin via
+// l'écran paramètres déjà restreint côté interface) — document Firestore fixe, jamais par uid,
+// pour que le compte "test" (et tout autre compte) lise toujours la même chose que l'admin a
+// enregistré, au lieu de sa propre copie jamais mise à jour.
+window.fbSaveParamsPartages = async(data)=>{
+  try{
+    await setDoc(doc(db,'partage','params'),{
+      coefficients:data.coefficients||[],
+      indemEntretien:data.indemEntretien||[],
+      updatedAt:new Date().toISOString()
+    });
+    return{ok:true};
+  }catch(e){return{ok:false,err:e.message};}
+};
+window.fbLoadParamsPartages = async()=>{
+  try{
+    const snap=await getDoc(doc(db,'partage','params'));
+    return{ok:true,exists:snap.exists(),data:snap.exists()?snap.data():null};
+  }catch(e){return{ok:false,err:e.message};}
+};
 
 onAuthStateChanged(auth,async user=>{
   window.FB_USER=user||null;
@@ -322,7 +343,7 @@ input[type=time].fi{width:auto;min-width:92px}
     <div class="card">
       <div class="ctitle">Informations de base</div>
       <div class="fg"><label class="fl">Nom du contrat <small>(ex&nbsp;: Emma Martin)</small></label><input class="fi" type="text" id="f-nom" placeholder="ex&nbsp;: Emma Martin"></div>
-      <div class="fg"><label class="fl">Date de d&eacute;but de contrat</label><input class="fi" type="date" id="f-datedeb" oninput="calcCDD();calcSal()"></div>
+      <div class="fg"><label class="fl">Date de d&eacute;but de contrat</label><input class="fi" type="date" id="f-datedeb" oninput="calcCDD();calcSal()" onchange="calcCDD();calcSal()"></div>
 
       <div class="fg" id="fg-type-duree">
         <label class="fl">Durée du contrat</label>
@@ -708,6 +729,13 @@ function saveParams(){
   if(window.FB_USER&&window.fbSaveData){
     window.fbSaveData(window.FB_USER.uid,{contrats:[],params:S.params,congesAM:S.congesAM||{}})
       .catch(e=>console.error('Save params:',e));
+  }
+  // 27/07/2026 (décision Sophie) : coefficients/indemnité communs à tous les comptes — sauvegarde
+  // en plus (jamais à la place) vers le document partagé, pour que les autres comptes voient ce
+  // que l'admin vient d'enregistrer.
+  if(window.fbSaveParamsPartages){
+    window.fbSaveParamsPartages({coefficients:S.params.coefficients,indemEntretien:S.params.indemEntretien})
+      .catch(e=>console.error('Save params partagés:',e));
   }
   toast('✓ Paramètres enregistrés');
   renderParams();
@@ -1198,6 +1226,26 @@ async function loadFromFirestore(){
       if(r.data.congesAM){ S.congesAM=r.data.congesAM; invaliderSemsCongesGlobal(); }
              if(r.data.params) S.params=r.data.params;
 else S.params=JSON.parse(localStorage.getItem('cam_params')||'null')||JSON.parse(JSON.stringify(PARAMS_DEFAUT));
+     // 27/07/2026 (décision Sophie) : coefficients/indemnité d'entretien communs à tous les comptes
+     // — écrase ce qui vient d'être chargé (propre à ce compte) avec le document partagé, pour que
+     // tous les comptes (y compris l'admin en relisant ses propres données) voient toujours les
+     // mêmes valeurs, éditées uniquement depuis l'écran paramètres restreint à l'admin.
+     if(window.fbLoadParamsPartages){
+       try{
+         const rp=await window.fbLoadParamsPartages();
+         if(rp.ok&&rp.exists&&rp.data){
+           if(!S.params) S.params={};
+           if(rp.data.coefficients) S.params.coefficients=rp.data.coefficients;
+           if(rp.data.indemEntretien) S.params.indemEntretien=rp.data.indemEntretien;
+         }
+       }catch(e){}
+     }
+     // 27/07/2026 (correctif Sophie) : si le formulaire de contrat était déjà ouvert quand ce
+     // chargement (asynchrone) se termine, le taux net/mensualisation nette avait pu être calculé
+     // avec les paramètres pas encore arrivés (repli sur les valeurs par défaut de l'app, souvent
+     // différentes de l'historique réel de Sophie) — recalculer maintenant que les vrais
+     // paramètres sont là.
+     if(S.enEd&&typeof calcSal==='function'){ try{ calcSal(); }catch(e){} }
      migrerFiches();
       localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
       localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM||{}));
