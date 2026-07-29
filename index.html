@@ -3352,24 +3352,6 @@ function ouvrirFiche(contratId,key){
   }
   if(!c.fiches[key])return;
   const fiche=c.fiches[key];
-  // 27/07/2026 (décision Sophie) : indemnité d'entretien négociée passée sous le légal au moins un
-  // jour ce mois — alerter seulement au premier mois où ça arrive (pas à chaque ouverture), et
-  // seulement si le mois précédent était validé (sinon rien à comparer, pas de vraie transition).
-  if(c.indemType==='nego'&&c.indemMontant){
-    const recapIndemAlerte=calcRecapFiche(c,fiche);
-    if(recapIndemAlerte.indemNegoJoursBascule>0){
-      const [ayIndem,amIndem]=key.split('-').map(Number);
-      const dPrecIndem=new Date(ayIndem,amIndem-2,1);
-      const keyPrecIndem=dPrecIndem.getFullYear()+'-'+String(dPrecIndem.getMonth()+1).padStart(2,'0');
-      const fichePrecIndem=c.fiches&&c.fiches[keyPrecIndem];
-      if(fichePrecIndem&&fichePrecIndem.valide){
-        const recapPrecIndem=calcRecapFiche(c,fichePrecIndem);
-        if(!recapPrecIndem.indemNegoJoursBascule){
-          alerte(`Le montant négocié de l'indemnité d'entretien (${c.indemMontant}€/${c.indemPer==='journalier'?'jour':'heure'}) est désormais inférieur au minimum légal certains jours ce mois-ci — le calcul bascule automatiquement sur le légal ces jours-là. Pense à vérifier si le montant négocié doit être remonté (fiche contrat, ligne Indem. entretien).`);
-        }
-      }
-    }
-  }
   // Vérifier que l'agenda est complet à l'ouverture (contrats avec agenda, non validés)
   if(!fiche.valide&&(c.tc!=='52'||c.th==='plan'||c.th==='sem')&&!(c.tc==='52'&&(c.th==='fixe'||c.th==='min'))){
     const [ky,km]=key.split('-').map(Number);
@@ -6898,6 +6880,16 @@ function _validerFicheSuite(contratId,key,c){
     }
   });
   if(manquant){alerte('Heures manquantes — jours : '+manquantJours.join(', ')+'.');return;}
+  // 27/07/2026 (décision Sophie, suite) : l'indemnité négociée passée sous le légal se vérifie ici,
+  // à la validation — c'est le seul moment garanti où toutes les heures du mois sont remplies (à
+  // l'ouverture, la fiche est souvent encore vide, donc rien à détecter). Informatif seulement, la
+  // validation continue normalement : le montant est déjà corrigé automatiquement dans le calcul.
+  if(c.indemType==='nego'&&c.indemMontant){
+    const recapIndemVal=calcRecapFiche(c,c.fiches[key]);
+    if(recapIndemVal.indemNegoJoursBascule>0){
+      alerte(`Le montant négocié de l'indemnité d'entretien (${c.indemMontant}€/${c.indemPer==='journalier'?'jour':'heure'}) est inférieur au minimum légal certains jours ce mois-ci — le montant a été ajusté automatiquement sur le légal ces jours-là. Pense à vérifier si le montant négocié doit être remonté (fiche contrat, ligne Indem. entretien).`);
+    }
+  }
   // Vérifier que la fiche précédente est validée
   const keysTries=Object.keys(c.fiches).sort();
   const idxKey=keysTries.indexOf(key);
