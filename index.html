@@ -2131,7 +2131,13 @@ function renderDetTab(id,tab){
     </div>`;
 }
   else if(tab==='planning'){
-    renderPlanning(c,cont);
+    // 28/07/2026 (correctif Sophie) : même restriction que la feuille de présence — un contrat pas
+    // encore signé n'a pas de planning à modifier (rien n'est encore engagé).
+    if(!c.signe){
+      cont.innerHTML='<div class="card"><div style="text-align:center;padding:30px;color:var(--tx2)">Le contrat doit être signé pour accéder au planning.</div></div>';
+    } else {
+      renderPlanning(c,cont);
+    }
   }
   else if(tab==='presence'){
     renderPresence(c,cont);
@@ -2932,6 +2938,45 @@ function getHeuresPrevues(c, date, sourceForce){
     const typeSemPV = typeSem;
     const vol = typeSemPV ? source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemPV) : null;
     if(vol && vol.jours && vol.jours[jourIdx]){
+      // 28/07/2026 (spec Sophie, affinée) : un jour au-delà de ce qui sera réellement travaillé
+      // cette semaine ne doit jamais être traité comme un jour de congé à décompter. Référence =
+      // ce qui est réellement coché sur le planning, pas un ordre supposé des jours de la semaine
+      // (un jour explicitement coché compte quoi qu'il arrive ; un jour explicitement décoché ne
+      // compte jamais ; un jour jamais touché reste "possible"). Hors modifications autorisées
+      // uniquement — ce cas est laissé de côté pour l'instant, traité comme avant en attendant.
+      const planningRefHP=(c._planningSauvegarde||c.planning)||{};
+      const modifActiveHP=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[dateStr.slice(0,7)]);
+      if(vol.j&&!modifActiveHP){
+        const lundiSemHP=new Date(date); lundiSemHP.setDate(date.getDate()-jourIdx);
+        let heuresCocheesHP=0, joursCochesHP=0, joursPossiblesRestantsHP=0;
+        for(let iSem=0;iSem<7;iSem++){
+          if(!vol.jours[iSem]) continue;
+          const dJourHP=new Date(lundiSemHP); dJourHP.setDate(lundiSemHP.getDate()+iSem);
+          const dsJourHP=dJourHP.getFullYear()+'-'+String(dJourHP.getMonth()+1).padStart(2,'0')+'-'+String(dJourHP.getDate()).padStart(2,'0');
+          const pdHP=planningRefHP[dsJourHP];
+          if(pdHP&&pdHP.coche===true){
+            joursCochesHP++;
+            if(pdHP.d&&pdHP.f) heuresCocheesHP+=(toM(pdHP.f)-toM(pdHP.d))/60;
+          } else {
+            // 28/07/2026 (correctif Sophie) : pour var, un jour jamais touché est déjà décoché par
+            // défaut (pas de distinction entre les deux, contrairement à ce que le code supposait
+            // ici) — les deux comptent donc pareil parmi les jours possibles restants ; seul un
+            // jour EXPLICITEMENT coché en sort.
+            joursPossiblesRestantsHP++;
+          }
+        }
+        // Le plafond de jours est déjà atteint par ce qui est explicitement coché : ce jour, s'il
+        // n'est pas lui-même explicitement coché, ne sera jamais travaillé — non prévu.
+        const pdCeJourHP=planningRefHP[dateStr];
+        const ceJourEstCocheHP=!!(pdCeJourHP&&pdCeJourHP.coche===true);
+        if(joursCochesHP>=vol.j&&!ceJourEstCocheHP) return {debut:null, fin:null};
+        if(!ceJourEstCocheHP&&joursPossiblesRestantsHP>0){
+          const volumeRestantHP=Math.max(0,(vol.h||0)-heuresCocheesHP);
+          const heuresADeduireHP=volumeRestantHP/joursPossiblesRestantsHP;
+          const hFinHP=String(Math.floor(heuresADeduireHP)).padStart(2,'0')+':'+String(Math.round((heuresADeduireHP%1)*60)).padStart(2,'0');
+          return {debut:'00:00', fin:hFinHP, planVar:true};
+        }
+      }
       return {debut:'prévu', fin:null, planVar:true};
     }
     return {debut:null, fin:null};
