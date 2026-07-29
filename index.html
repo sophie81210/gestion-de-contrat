@@ -1672,6 +1672,14 @@ function nettoyerFichesPostCloture(c){
 function archiverContrat(c){
   // Le nettoyage des fiches/agendas a déjà eu lieu dès la clôture (validation de la dernière fiche)
   nettoyerFichesPostCloture(c);
+  // 28/07/2026 (correctif Sophie, précision explicite : à l'archivage, jamais à la rupture — le
+  // contrat rompu reste actif un temps, l'employeur peut encore avoir besoin d'y accéder) : nettoyer
+  // l'accès employeur associé, pour la même raison qu'à la suppression — sinon l'email reste
+  // bloqué indéfiniment sur un contrat désormais archivé.
+  if(c.emailEmployeurAutorise&&window.fbDeleteAccesEmployeur){
+    window.fbDeleteAccesEmployeur(c.emailEmployeurAutorise).catch(e=>console.error('Delete acces employeur (archivage):',e));
+    c.emailEmployeurAutorise=null;
+  }
   // Marquer archivé
   c.archive=true;
   // Retirer de la pointeuse
@@ -3448,7 +3456,14 @@ function ouvrirFiche(contratId,key){
         // motif normal du contrat reste la référence par défaut — garantie du planning : un jour
         // prévu jamais touché sur le planning compte comme prévu tel quel, comme avant le planning.
         const planningRefOF3=c._planningSauvegarde!==undefined?c._planningSauvegarde:c.planning;
-        const planJourOF3=(planningRefOF3||{})[j.date];
+        // 28/07/2026 (correctif Sophie) : ne considérer l'entrée du planning que si modifications
+        // autorisées est cochée POUR LE MOIS DE CE JOUR — sinon la feuille continuait d'appliquer
+        // un échange même case décochée, alors que l'onglet planning, lui, revient correctement au
+        // motif structurel du contrat dans cet état (bug confirmé Sophie : jour resté "non prévu"
+        // sur le planning décoché, mais toujours présent avec ses heures sur la feuille).
+        const moisKeyOF3=j.date.slice(0,7);
+        const modifActiveOF3=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeyOF3]);
+        const planJourOF3=modifActiveOF3?(planningRefOF3||{})[j.date]:undefined;
         const statutFigeOF3=['travaille','conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat','arret','abs-non','abs-am','abs-enfant','ferie-non'].includes(j.statut);
         // Statuts congé/absence : ne doivent JAMAIS être remis à "non prévu" par ce mécanisme, qui ne
         // vise que le "jour ajouté en plus" (ci-dessous). Bug confirmé Sophie 23/07/2026 : cette
@@ -4805,7 +4820,12 @@ function toggleModifPlanningAutorisees(contratId, moisKey, checked){
   // d'être une fois celles-ci désactivées — sinon il reste une donnée fantôme, invisible à
   // l'écran (le jour redevient "Non prévu au contrat"), mais qui continue de consommer un jour
   // du quota max de la semaine (bug confirmé Sophie 23/07/2026, captures d'écran à l'appui).
-  if(!checked&&c.planning){
+  // 28/07/2026 (correctif Sophie) : restreint à var/min uniquement. Pour fixe/sem, un jour hors
+  // motif est désormais TOUJOURS la destination d'un échange (plus jamais un ajout indépendant
+  // depuis la refonte du planning) — le supprimer ici effaçait les heures déplacées sans rien
+  // restaurer côté jour d'origine (resté vide), perte de données confirmée par Sophie (échange
+  // mercredi→lundi, décoché puis recoché : les deux jours se retrouvaient vides, sans bouton).
+  if(!checked&&c.planning&&c.th==='plan'&&(c.planType==='var'||c.planType==='min')){
     const [anneeModif,moisModif]=moisKey.split('-').map(Number);
     const dernierJourModif=new Date(anneeModif,moisModif,0).getDate();
     for(let jModif=1;jModif<=dernierJourModif;jModif++){
@@ -5171,8 +5191,11 @@ function enregistrerPlanningMois(contratId, moisKey){
   if(c.id) _contratsModifies.add(c.id);
   // Message systématique à chaque enregistrement (demande Sophie 18/07/2026), en plus de
   // l'avertissement semaine-à-cheval s'il y en a un.
+  // 28/07/2026 (décision Sophie) : retiré pour fixe/sem — le total ne varie plus jamais avec
+  // l'échange (garanti neutre par construction), le message n'apporte donc plus rien pour ces
+  // deux types. Gardé pour var, où le total dépend toujours de ce qui est réellement coché.
   const jB=joursBaseline||joursBaseV, mB=minBaseline||minBaseV, jR=joursReel||joursReelV, mR=minReel||minReelV;
-  if(jB>0||mB>0){
+  if((jB>0||mB>0)&&!(c.th==='fixe'||c.th==='sem')){
     // 22/07/2026 : le « sur les Xj — Yh possibles » est retiré — Sophie craint qu'il incite à
     // consommer jusqu'à ce plafond, alors qu'il inclut la fin de semaine du mois suivant.
     avertissementsInfo.unshift(`Vous avez prévu ${jR}j — ${fmtH(mR)} ce mois-ci${complSupInfoV}`);
@@ -10522,6 +10545,8 @@ function confSuppr(id){
   document.body.appendChild(m);
 }
 function suppr(id){
+  const cSuppr=S.contrats.find(x=>x.id==id);
+  const emailASuppr=cSuppr&&cSuppr.emailEmployeurAutorise;
   S.contrats=S.contrats.filter(x=>x.id!=id);
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
   // Supprimer aussi dans Firebase
@@ -10529,6 +10554,12 @@ function suppr(id){
     const {doc,deleteDoc}=window._fbModules;
     if(deleteDoc) deleteDoc(doc(window.db,'users',window.FB_USER.uid,'contrats',String(id)))
       .catch(e=>console.error('Delete contrat:',e));
+  }
+  // 28/07/2026 (correctif Sophie) : nettoyer aussi l'accès employeur associé, sinon l'email reste
+  // rattaché à un contrat qui n'existe plus, bloqué pour toujours (aucun autre contrat, même compte,
+  // ne peut le réutiliser) — confirmé par Sophie sur un cas réel.
+  if(emailASuppr&&window.fbDeleteAccesEmployeur){
+    window.fbDeleteAccesEmployeur(emailASuppr).catch(e=>console.error('Delete acces employeur:',e));
   }
   document.querySelectorAll('.modal-wrap').forEach(m=>m.remove());
   toast('Contrat supprimé');goTo('cont');
@@ -10654,6 +10685,11 @@ function resetForm(){
   initJ('j-fixe','fixe');
   const bs=document.getElementById('btn-signe');if(bs)bs.style.display='none';
   document.querySelectorAll('#pg-form input[type="text"],#pg-form input[type="number"],#pg-form input[type="date"],#pg-form input[type="time"]').forEach(el=>el.value='');
+  // 28/07/2026 (correctif Sophie) : les affichages calculés (heures hebdo moyennes, mensualisation,
+  // taux net, jours mensualisés...) n'étaient jamais réinitialisés ici, contrairement aux champs de
+  // saisie eux-mêmes — ils restaient visibles avec les chiffres d'un test précédent (« fantômes »,
+  // confirmé par Sophie) tant qu'aucun nouveau calcul n'était déclenché sur le nouveau contrat.
+  document.querySelectorAll('#pg-form .rbox').forEach(el=>el.textContent='—');
   document.querySelectorAll('#pg-form input[type="checkbox"]').forEach(el=>el.checked=false);
   document.querySelectorAll('#pg-form input[type="radio"]').forEach(el=>el.checked=false);
   ['f-cgantic','f-cgpmt'].forEach(id=>{
