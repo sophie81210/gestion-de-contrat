@@ -3382,6 +3382,19 @@ function calcRegulDiffEurosAuto(c, moisMaxForce){
   c._regulDiffEuros=parseFloat((totGenPrevu-totGenMensu).toFixed(2));
 }
 
+// 29/07/2026 (correctif Sophie) : "quitter sans enregistrer malgré l'avertissement" doit annuler
+// ce qui a été fait, pas juste laisser filer en mémoire — restaure ici anticipeActif à sa dernière
+// valeur réellement enregistrée (voir l'instantané posé dans ouvrirFiche et mis à jour dans
+// enregistrerFiche/validerFiche).
+function quitterFicheSansEnregistrer(contratId,key){
+  if(S.ficheModifiee&&!confirm('Des modifications non enregistrées seront perdues. Continuer ?')) return;
+  const c=S.contrats.find(x=>x.id==contratId);
+  if(c&&c.fiches&&c.fiches[key]&&c.fiches[key]._anticipeActifSauvegarde!==undefined){
+    c.fiches[key].anticipeActif=c.fiches[key]._anticipeActifSauvegarde;
+  }
+  S.ficheModifiee=false;
+  renderDetTab(contratId,'presence');
+}
 function ouvrirFiche(contratId,key){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c)return;
@@ -3405,6 +3418,11 @@ function ouvrirFiche(contratId,key){
   }
   if(!c.fiches[key])return;
   const fiche=c.fiches[key];
+  // 29/07/2026 (correctif Sophie) : instantané de anticipeActif au premier affichage de cette fiche
+  // dans cette session — jamais écrasé tant qu'un vrai enregistrement n'a pas eu lieu (voir
+  // enregistrerFiche/validerFiche), pour pouvoir restaurer la valeur si l'utilisateur quitte sans
+  // enregistrer malgré l'avertissement (voir le bouton "← Retour").
+  if(fiche._anticipeActifSauvegarde===undefined) fiche._anticipeActifSauvegarde=fiche.anticipeActif||false;
   // Vérifier que l'agenda est complet à l'ouverture (contrats avec agenda, non validés)
   if(!fiche.valide&&(c.tc!=='52'||c.th==='plan'||c.th==='sem')&&!(c.tc==='52'&&(c.th==='fixe'||c.th==='min'))){
     const [ky,km]=key.split('-').map(Number);
@@ -3543,6 +3561,12 @@ function ouvrirFiche(contratId,key){
         } else if(!statutFigeOF3){
           j.heureDebPrev=prevus.debut==='prévu'?null:prevus.debut;
           j.heureFinPrev=prevus.fin;
+          // 29/07/2026 (correctif Sophie) : un jour redevenu structurellement prévu (ex. case
+          // "modifications autorisées" décochée après un échange dont il était l'origine) avait ses
+          // heures correctement remises à jour ici, mais gardait un statut "non-prevu" posé plus tôt
+          // par l'échange lui-même (branche juste au-dessus) — jamais nettoyé, d'où l'incohérence
+          // observée par Sophie : "non prévu" affiché malgré des horaires prévus bien présents.
+          if(prevus.debut&&(!j.statut||j.statut==='non-prevu')&&!isFerie(j.date,c)) j.statut='prevu';
         }
       }
     } else {
@@ -4058,7 +4082,7 @@ function ouvrirFiche(contratId,key){
 
   cont.innerHTML=`
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-      <button class="btn bs bsm" onclick="if(S.ficheModifiee&&!confirm('Des modifications non enregistrées seront perdues. Continuer ?'))return;S.ficheModifiee=false;renderDetTab(${contratId},'presence')">← Retour</button>
+      <button class="btn bs bsm" onclick="quitterFicheSansEnregistrer(${contratId},'${key}')">← Retour</button>
       <span style="font-weight:700;font-size:15px;color:var(--m)">Feuille de présence — ${label}</span>
     ${fiche.valide?'<span style="color:var(--vt);font-size:13px;font-weight:600">✓ Validée</span>':''}
     ${(!fiche.valide&&!estLectureSeuleEmployeur())?`<button class="btn bs bsm" style="margin-left:auto" onclick="enregistrerFiche(${contratId},'${key}')">💾</button>`:''}
@@ -4178,7 +4202,7 @@ function ouvrirFiche(contratId,key){
         ?`<span style="color:var(--vt);font-size:13px;font-weight:600">✓ Feuille validée — lecture seule</span>
           <button class="btn bs bsm" onclick="imprimerFiche(${contratId},'${key}')">📄 Télécharger PDF</button>
           ${(peutDeverrouillerFiche(c,key)&&!estLectureSeuleEmployeur())?`<button class="btn bs bsm" onclick="deverrouillerFiche(${contratId},'${key}')">🔓 Déverrouiller</button>`:''}`
-        :estLectureSeuleEmployeur()?'':`<button class="btn bs" onclick="enregistrerFiche(${contratId},'${key}')">💾 Enregistrer</button>
+        :estLectureSeuleEmployeur()?'':`<button class="btn bs" onclick="enregistrerFiche(${contratId},'${key}')" style="${S.ficheModifiee?'':'background:var(--vt);border-color:var(--vt)'}">${S.ficheModifiee?'💾 Enregistrer':'✓ Enregistré'}</button>
           <button class="btn bp" onclick="validerFiche(${contratId},'${key}')">✓ Valider la feuille du mois</button>`}
     </div>
     ${(()=>{
@@ -5664,12 +5688,14 @@ function enregistrerFiche(contratId,key){
         return;
       }
       S.ficheModifiee=false;
+      c.fiches[key]._anticipeActifSauvegarde=c.fiches[key].anticipeActif||false;
       const bandeau=document.getElementById('bandeau-non-enregistre');
       if(bandeau) bandeau.style.display='none';
       toast('Feuille enregistrée ✓');
     }).catch(()=>{hideLoader();toast('⚠ Erreur de sauvegarde')});
   } else {
     S.ficheModifiee=false;
+    c.fiches[key]._anticipeActifSauvegarde=c.fiches[key].anticipeActif||false;
     const bandeau=document.getElementById('bandeau-non-enregistre');
     if(bandeau) bandeau.style.display='none';
     toast('Feuille enregistrée ✓');
@@ -6984,6 +7010,7 @@ function _validerFicheSuite(contratId,key,c){
   if(S.congesAM&&S.congesAM[anneeAmSuivante]) majFichesCgAm(anneeAmSuivante,false);
   // Valider la fiche
   c.fiches[key].valide=true;c.fiches[key].complete=true;
+  c.fiches[key]._anticipeActifSauvegarde=c.fiches[key].anticipeActif||false;
   c._regulDirty=true; // invalider le cache régularisation
   S.ficheModifiee=false;
   // Recalculer les congés acquis APRÈS validation
