@@ -4202,7 +4202,7 @@ function ouvrirFiche(contratId,key){
         ?`<span style="color:var(--vt);font-size:13px;font-weight:600">✓ Feuille validée — lecture seule</span>
           <button class="btn bs bsm" onclick="imprimerFiche(${contratId},'${key}')">📄 Télécharger PDF</button>
           ${(peutDeverrouillerFiche(c,key)&&!estLectureSeuleEmployeur())?`<button class="btn bs bsm" onclick="deverrouillerFiche(${contratId},'${key}')">🔓 Déverrouiller</button>`:''}`
-        :estLectureSeuleEmployeur()?'':`<button class="btn bs" onclick="enregistrerFiche(${contratId},'${key}')" style="${S.ficheModifiee?'':'background:var(--vt);border-color:var(--vt)'}">${S.ficheModifiee?'💾 Enregistrer':'✓ Enregistré'}</button>
+        :estLectureSeuleEmployeur()?'':`<button id="btn-enreg-fiche-${contratId}-${key}" class="btn bs" onclick="enregistrerFiche(${contratId},'${key}')">${S.ficheModifiee?'💾 Enregistrer':'✓ Enregistré'}</button>
           <button class="btn bp" onclick="validerFiche(${contratId},'${key}')">✓ Valider la feuille du mois</button>`}
     </div>
     ${(()=>{
@@ -6737,6 +6737,8 @@ function majFiche(contratId,key,idx,champ,val){
   if(c?.id) _contratsModifies.add(c.id);
   const bandeau=document.getElementById('bandeau-non-enregistre');
   if(bandeau) bandeau.style.display='block';
+  const btnEnregFiche=document.getElementById('btn-enreg-fiche-'+contratId+'-'+key);
+  if(btnEnregFiche) btnEnregFiche.textContent='💾 Enregistrer';
   majRecapFiche(contratId,key);
   // Pour debPrev/finPrev : mettre à jour H± en ligne sans recharger la fiche
   if(champ==='debPrev'||champ==='finPrev'){
@@ -7394,6 +7396,7 @@ function calcCongesContrat(c){
           const dateRepSem=new Date(jours[0].date.split('-')[0],parseInt(jours[0].date.split('-')[1])-1,parseInt(jours[0].date.split('-')[2]));
           const sourceSem=getVersionActive(c,dateRepSem);
           let joursMaxSem=joursMax;
+          let typeSemActif46=null; // 29/07/2026 (principe Sophie) : même type de semaine réutilisé pour le férié
           if(sourceSem.joursFixe) joursMaxSem=sourceSem.joursFixe.filter(j=>j).length||joursMax;
           else if(sourceSem.semTypes){
             // Pour plan-sem 52 : utiliser le type réel de la semaine dans l'agenda
@@ -7420,6 +7423,7 @@ function calcCongesContrat(c){
                 return dJJ.getDay()===0?6:dJJ.getDay()-1;
               });
               const stMatchAcq=joursActifsIdxAcq.length>0?sourceSem.semTypes.find(st=>st.jours&&(st.jours.filter(j=>j&&j.d).length===joursActifsIdxAcq.length)&&joursActifsIdxAcq.every(idx=>st.jours[idx]&&st.jours[idx].d)):null;
+              typeSemActif46=stMatchAcq||sourceSem.semTypes[0];
               joursMaxSem=stMatchAcq?(stMatchAcq.jours||[]).filter(j=>j&&j.d).length||joursMax:(sourceSem.semTypes[0].jours.filter(j=>j).length||joursMax);
             }
           }
@@ -7510,7 +7514,11 @@ function calcCongesContrat(c){
                   const stJF=typeJF?sourceJF.semTypes.find(st=>st.nom===typeJF):null;
                   estTravaille=!!(stJF&&stJF.jours&&stJF.jours[jourIdxISO]&&stJF.jours[jourIdxISO].d);
                 } else {
-                  estTravaille=sourceJF.semTypes.some(st=>st.jours&&st.jours[jourIdxISO]);
+                  // 29/07/2026 (principe Sophie) : utiliser le MÊME type de semaine que celui qui a
+                  // déterminé joursMaxSem plus haut pour cette semaine, jamais un type différent qui
+                  // travaillerait ce jour par coïncidence — sinon la base du férié et celle du reste de
+                  // la semaine divergent, et une semaine 100% congés+férié ne totalise plus exactement 1.
+                  estTravaille=!!(typeSemActif46&&typeSemActif46.jours&&typeSemActif46.jours[jourIdxISO]&&typeSemActif46.jours[jourIdxISO].d);
                 }
               }
               else if(c.th==='plan'&&c.planType==='min'&&sourceJF.joursMin) estTravaille=!!(sourceJF.joursMin[jourIdxISO]);
