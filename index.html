@@ -7378,7 +7378,14 @@ function calcCongesContrat(c){
             const contribCgPV=joursConges16PV*(1/jMaxSem); // 1/jours réels du volume actif
             const contribArretPV=absArret*(0.8)/jMaxSem;
             const prorata=Math.max(0,contribNormPV+contribCgPV);
-            totalSemaines+=prorata;
+            // 29/07/2026 (précision Sophie, même règle que sem/min) : semaine ne contenant que
+            // congés/férié → contribution plafonnée à 1, quel que soit le détail du calcul.
+            const estSemUniquementCongesFeriePV=jours.every(jCapPV=>{
+              const stCapPV=jCapPV.statut||getStatutPrevu(c,jCapPV);
+              return ['conges-acq','conges-anticipe','conges-non','conges-am','ferie','ferie-non','repos'].includes(stCapPV);
+            });
+            const prorataPlafonnePV=estSemUniquementCongesFeriePV?Math.min(prorata,1):prorata;
+            totalSemaines+=prorataPlafonnePV;
             totalSemainesArret+=contribArretPV;
           }
         } else {
@@ -7559,8 +7566,19 @@ function calcCongesContrat(c){
           const contributionConges=joursConges16*(1/joursMaxSem); // 1/jours réels de la semaine type
           const contributionArret=absArret*(0.8)/joursMaxSem;
           const prorata=Math.max(0,contributionNormale+contributionConges);
-          if(prorata>0||contributionArret>0){
-            totalSemaines+=prorata;
+          // 29/07/2026 (précision Sophie) : pour sem/min (fixe exclu, horaires toujours connus donc
+          // non concerné) — quand la semaine ne contient QUE des jours congés/férié (aucun jour
+          // réellement travaillé/prévu), la contribution est plafonnée à 1 semaine, quel que soit le
+          // détail du calcul (évite le sur-comptage type 1,25 quand un férié se glisse dans une
+          // semaine entièrement posée sur un contrat dont le type de semaine actif n'est pas connu).
+          const estSemUniquementCongesFerie=(c.th==='sem'||(c.th==='plan'&&c.planType==='min'))&&
+            jours.every(jCap=>{
+              const stCap=jCap.statut||getStatutPrevu(c,jCap);
+              return ['conges-acq','conges-anticipe','conges-non','conges-am','ferie','ferie-non','repos'].includes(stCap);
+            });
+          const prorataPlafonne=estSemUniquementCongesFerie?Math.min(prorata,1):prorata;
+          if(prorataPlafonne>0||contributionArret>0){
+            totalSemaines+=prorataPlafonne;
             totalSemainesArret+=contributionArret;
           }
         }
@@ -10429,7 +10447,17 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           if(i+11<joursAcqValides.length){
             const d1=new Date(joursAcqValides[i].split('-')[0],parseInt(joursAcqValides[i].split('-')[1])-1,parseInt(joursAcqValides[i].split('-')[2]));
             const d12=new Date(joursAcqValides[i+11].split('-')[0],parseInt(joursAcqValides[i+11].split('-')[1])-1,parseInt(joursAcqValides[i+11].split('-')[2]));
-            if((d12-d1)/(1000*60*60*24)<=14){ // 12 jours dans une plage de 14j max (week-ends inclus)
+            // 29/07/2026 (précision Sophie) : 12 jours = 2 semaines calendaires (14j) ; chaque férié
+            // chômé rencontré dans la séquence élargit la fenêtre d'un jour supplémentaire (il prend
+            // une place dans le calendrier sans compter comme un jour de congé posé).
+            let nbFeriesDansFenetre=0;
+            const curFer=new Date(d1);
+            while(curFer<=d12){
+              const dsFer=curFer.getFullYear()+'-'+String(curFer.getMonth()+1).padStart(2,'0')+'-'+String(curFer.getDate()).padStart(2,'0');
+              if(isFerie(dsFer,c)) nbFeriesDansFenetre++;
+              curFer.setDate(curFer.getDate()+1);
+            }
+            if((d12-d1)/(1000*60*60*24)<=14+nbFeriesDansFenetre){
               debutPrincipale=joursAcqValides[i];
               break;
             }
@@ -17196,11 +17224,20 @@ function verifier12JoursConsecutifs(anneeAm){
     .filter(d=>d>=(anneeAm+'-05-01')&&d<=(anneeAm+'-10-31')&&data.jours[d]==='pose')
     .sort();
   if(jours.length<12) return false;
-  // Vérifier séquence de 12 jours dans une plage de 14 jours calendaires
+  // Vérifier séquence de 12 jours dans une plage de 14 jours calendaires, élargie d'un jour par
+  // férié chômé rencontré (précision Sophie 29/07/2026, même règle qu'à l'endroit qui déclenche
+  // le paiement de l'indemnité).
   for(let i=0;i<=jours.length-12;i++){
     const d1=new Date(jours[i].split('-')[0],parseInt(jours[i].split('-')[1])-1,parseInt(jours[i].split('-')[2]));
     const d12=new Date(jours[i+11].split('-')[0],parseInt(jours[i+11].split('-')[1])-1,parseInt(jours[i+11].split('-')[2]));
-    if((d12-d1)/(1000*60*60*24)<=14) return true;
+    let nbFeriesV12=0;
+    const curFerV12=new Date(d1);
+    while(curFerV12<=d12){
+      const dsFerV12=curFerV12.getFullYear()+'-'+String(curFerV12.getMonth()+1).padStart(2,'0')+'-'+String(curFerV12.getDate()).padStart(2,'0');
+      if(isFerie(dsFerV12)) nbFeriesV12++;
+      curFerV12.setDate(curFerV12.getDate()+1);
+    }
+    if((d12-d1)/(1000*60*60*24)<=14+nbFeriesV12) return true;
   }
   return false;
 }
