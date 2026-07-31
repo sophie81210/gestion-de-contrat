@@ -3423,11 +3423,15 @@ function ouvrirFiche(contratId,key){
     const cidxTmp=S.contrats.findIndex(x=>x.id==contratId);
     if(cidxTmp!==-1) S.contrats[cidxTmp]=c;
     localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
-    // Recalculer les statuts congés pour réappliquer la pose du calendrier AM sur cette fiche nouvellement créée
-    if(S.congesAM){
-      const anneeAmOf=getAnneeAmPourDate(key);
-      if(S.congesAM[anneeAmOf]) majFichesCgAm(anneeAmOf,false);
-    }
+  }
+  // 29/07/2026 (correctif Sophie) : recalculer aussi à l'ouverture d'une fiche déjà EXISTANTE
+  // (pas seulement nouvellement créée, ci-dessus) — sinon l'affichage congés (dont le statut
+  // anticipé) restait figé sur son dernier calcul tant que rien d'autre (comme décocher/recocher
+  // "prise en anticipé") ne le redéclenchait explicitement. Limité aux contrats concernés par
+  // l'anticipé pour éviter le coût du recalcul sur tous les contrats à chaque ouverture de fiche.
+  if(S.congesAM&&c.cgAnticipe==='oui'){
+    const anneeAmOf2=getAnneeAmPourDate(key);
+    if(S.congesAM[anneeAmOf2]) majFichesCgAm(anneeAmOf2,false);
   }
   if(!c.fiches[key])return;
   const fiche=c.fiches[key];
@@ -5704,6 +5708,8 @@ function enregistrerFiche(contratId,key){
       c.fiches[key]._anticipeActifSauvegarde=c.fiches[key].anticipeActif||false;
       const bandeau=document.getElementById('bandeau-non-enregistre');
       if(bandeau) bandeau.style.display='none';
+      const btnEnregF1=document.getElementById('btn-enreg-fiche-'+contratId+'-'+key);
+      if(btnEnregF1) btnEnregF1.textContent='✓ Enregistré';
       toast('Feuille enregistrée ✓');
     }).catch(()=>{hideLoader();toast('⚠ Erreur de sauvegarde')});
   } else {
@@ -5711,6 +5717,8 @@ function enregistrerFiche(contratId,key){
     c.fiches[key]._anticipeActifSauvegarde=c.fiches[key].anticipeActif||false;
     const bandeau=document.getElementById('bandeau-non-enregistre');
     if(bandeau) bandeau.style.display='none';
+    const btnEnregF2=document.getElementById('btn-enreg-fiche-'+contratId+'-'+key);
+    if(btnEnregF2) btnEnregF2.textContent='✓ Enregistré';
     toast('Feuille enregistrée ✓');
   }
 }
@@ -14555,11 +14563,17 @@ function buildCgContratCalendrierAcq(c, anneeAcq){
 
       // Détecter semaine off
       let isOff=false;
-      if(est46Acq&&tousAgendasAcq.length){
-        const ag=tousAgendasAcq.find(ag=>dateStr>=ag.dateDebut&&dateStr<=ag.dateFin);
-        if(ag&&ag.semaines){
+      if(est46Acq){
+        // 29/07/2026 (correctif Sophie) : utiliser la version du contrat ACTIVE à cette date précise
+        // (comme le fait déjà getHeuresPrevues pour la feuille de présence), plutôt qu'une liste
+        // combinant tous les agendas où celui du contrat de base pouvait l'emporter à tort sur celui
+        // d'un avenant plus récent pour la même date — cause du décalage observé après un avenant qui
+        // modifie les semaines d'absence.
+        const sourceCgAcq=getVersionActive(c,parseDateLoc(dateStr));
+        const agCgAcq=(sourceCgAcq.agendas||[]).find(agX=>dateStr>=agX.dateDebut&&dateStr<=agX.dateFin);
+        if(agCgAcq&&agCgAcq.semaines){
           const semNum=getSemISO(dateStr);const semAn=getSemAnnee(dateStr);
-          isOff=ag.semaines[getKeyAgenda(semNum,semAn)]==='off';
+          isOff=agCgAcq.semaines[getKeyAgenda(semNum,semAn)]==='off';
         }
       }
 
@@ -14964,6 +14978,7 @@ if(joursReposIncoherent(c)) manquants.push("des heures ou jours possibles sont i
   const idx=S.contrats.findIndex(x=>x.id==id);
   if(idx===-1)return;
   S.contrats[idx].signe=true;
+  _contratsModifies.add(id);
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
   document.getElementById('btn-signe').style.display='none';
   toast("⏳ Signature en cours...");
