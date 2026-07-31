@@ -2744,7 +2744,12 @@ function renderDetTab(id,tab){
       } // fin else cache
   } // fin regularisation
   else if(tab==='rupture'){
-    renderRupture(c, cont);
+    try{
+      renderRupture(c, cont);
+    }catch(e){
+      cont.innerHTML=`<div class="card"><div style="color:red;padding:20px">Erreur onglet rupture : ${e.message}<br><br><span style="font-size:11px;color:var(--tx2)">${(e.stack||'').replace(/\n/g,'<br>')}</span></div></div>`;
+      console.error('Tab rupture err:',e);
+    }
   }
   else if(tab==='conges'){
     try{
@@ -2907,7 +2912,13 @@ function getHeuresPrevues(c, date, sourceForce){
     // Planning modifié (fixe/sem généralisé, 18/07/2026) : une modification enregistrée dans
     // c.planning pour ce jour prévaut sur le motif de semaine type — sans ça, tout ce que
     // l'utilisateur saisit dans le nouveau planning n'a aucun effet sur le calcul réel.
-    const pdSem=(c._planningSauvegarde||c.planning)&&(c._planningSauvegarde||c.planning)[dateStr];
+    // 29/07/2026 (correctif Sophie) : ne consulter le planning que si modifications autorisées est
+    // cochée pour le MOIS DE CETTE DATE — sinon un échange déjà décoché reste "vu" indéfiniment par
+    // toute fonction appelant getHeuresPrevues (bug confirmé : confirmer les heures d'un jour
+    // ré-ouvre la fiche, qui rappelle cette fonction, qui restaurait l'échange même case décochée).
+    const moisPourModifSem=dateStr.slice(0,7);
+    const modifActiveSem=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisPourModifSem]);
+    const pdSem=modifActiveSem?((c._planningSauvegarde||c.planning)&&(c._planningSauvegarde||c.planning)[dateStr]):undefined;
     if(pdSem&&pdSem.coche&&pdSem.d&&pdSem.f) return {debut:pdSem.d, fin:pdSem.f};
     if(pdSem&&pdSem.coche&&(!pdSem.d||!pdSem.f)) return {debut:null, fin:null}; // coché mais heures pas encore saisies
     // Si semaine pointée dans l'agenda, utiliser sa semaine type — sinon rien (pas de repli arbitraire
@@ -2925,7 +2936,9 @@ function getHeuresPrevues(c, date, sourceForce){
  // ── Horaires fixes ──
   if(source.th === 'fixe' && source.joursFixe){
     // Même raccordement que sem ci-dessus, pour la même raison.
-    const pdFixe=(c._planningSauvegarde||c.planning)&&(c._planningSauvegarde||c.planning)[dateStr];
+    const moisPourModifFixe=dateStr.slice(0,7);
+    const modifActiveFixe=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisPourModifFixe]);
+    const pdFixe=modifActiveFixe?((c._planningSauvegarde||c.planning)&&(c._planningSauvegarde||c.planning)[dateStr]):undefined;
     if(pdFixe&&pdFixe.coche&&pdFixe.d&&pdFixe.f) return {debut:pdFixe.d, fin:pdFixe.f, isOff: isAbsenceEmployeur(agenda, semKey)};
     if(pdFixe&&pdFixe.coche&&(!pdFixe.d||!pdFixe.f)) return {debut:null, fin:null, isOff: isAbsenceEmployeur(agenda, semKey)};
     // Semaine 'off' : retourner les heures normales du contrat (pour calcul déduction)
@@ -7411,20 +7424,18 @@ function calcCongesContrat(c){
               if(stSemAcq) joursMaxSem=(stSemAcq.jours||[]).filter(j=>j&&j.d).length||joursMax;
               else joursMaxSem=sourceSem.semTypes[0].jours.filter(j=>j).length||joursMax;
             } else {
-              // Contrat 46 sem (pas d'agenda de référence) : identifier le type réel de cette semaine à
-              // partir des jours effectivement travaillés/prévus, au lieu de toujours prendre le premier
-              // type saisi (semTypes[0]) — sinon une semaine correspondant à un autre type que le
-              // premier est divisée par le mauvais jMax.
-              const joursActifsIdxAcq=jours.filter(jj=>{
-                const stJJ=jj.statut||getStatutPrevu(c,jj);
-                return !['hors-contrat','repos','non-prevu'].includes(stJJ);
-              }).map(jj=>{
-                const dJJ=new Date(jj.date.split('-')[0],parseInt(jj.date.split('-')[1])-1,parseInt(jj.date.split('-')[2]));
-                return dJJ.getDay()===0?6:dJJ.getDay()-1;
+              // 29/07/2026 (méthodologie Sophie, confirmée explicitement) : contrat 46 sem — un jour
+              // compte pour l'acquisition s'il tombe dans AU MOINS UN des types de semaine définis au
+              // contrat (union de tous les types), jamais une correspondance exacte à un seul type ni
+              // un repli sur le premier type saisi. Remplace l'ancienne détection "meilleur match" qui
+              // ne correspondait pas à cette règle (confirmé par vérification croisée avec une autre
+              // session Claude sur la méthodologie écrite de Sophie).
+              const joursUnionIdx46=new Set();
+              sourceSem.semTypes.forEach(st=>{
+                (st.jours||[]).forEach((jst,ist)=>{ if(jst&&jst.d) joursUnionIdx46.add(ist); });
               });
-              const stMatchAcq=joursActifsIdxAcq.length>0?sourceSem.semTypes.find(st=>st.jours&&(st.jours.filter(j=>j&&j.d).length===joursActifsIdxAcq.length)&&joursActifsIdxAcq.every(idx=>st.jours[idx]&&st.jours[idx].d)):null;
-              typeSemActif46=stMatchAcq||sourceSem.semTypes[0];
-              joursMaxSem=stMatchAcq?(stMatchAcq.jours||[]).filter(j=>j&&j.d).length||joursMax:(sourceSem.semTypes[0].jours.filter(j=>j).length||joursMax);
+              typeSemActif46=joursUnionIdx46; // réutilisé plus loin pour le férié, même base
+              joursMaxSem=joursUnionIdx46.size||joursMax;
             }
           }
 
@@ -7514,11 +7525,11 @@ function calcCongesContrat(c){
                   const stJF=typeJF?sourceJF.semTypes.find(st=>st.nom===typeJF):null;
                   estTravaille=!!(stJF&&stJF.jours&&stJF.jours[jourIdxISO]&&stJF.jours[jourIdxISO].d);
                 } else {
-                  // 29/07/2026 (principe Sophie) : utiliser le MÊME type de semaine que celui qui a
-                  // déterminé joursMaxSem plus haut pour cette semaine, jamais un type différent qui
-                  // travaillerait ce jour par coïncidence — sinon la base du férié et celle du reste de
-                  // la semaine divergent, et une semaine 100% congés+férié ne totalise plus exactement 1.
-                  estTravaille=!!(typeSemActif46&&typeSemActif46.jours&&typeSemActif46.jours[jourIdxISO]&&typeSemActif46.jours[jourIdxISO].d);
+                  // 29/07/2026 (méthodologie Sophie, confirmée) : même base que joursMaxSem — l'union
+                  // de tous les types de semaine (un jour compte s'il est possible dans au moins un
+                  // type), jamais un seul type précis. Cohérent avec joursMaxSem ci-dessus : une
+                  // semaine 100% congés+férié totalise bien 1 exactement.
+                  estTravaille=!!(typeSemActif46&&typeSemActif46.has&&typeSemActif46.has(jourIdxISO));
                 }
               }
               else if(c.th==='plan'&&c.planType==='min'&&sourceJF.joursMin) estTravaille=!!(sourceJF.joursMin[jourIdxISO]);
@@ -7618,7 +7629,12 @@ function calcCongesContrat(c){
 
     // Calcul congés
     const cgNormaux=(totalSemaines/4)*2.5;
-    const cgArret=(totalSemainesArret/4)*2;
+    // 29/07/2026 (correctif Sophie, confirmé par vérification croisée avec une autre session
+    // Claude sur sa méthodologie écrite) : même taux que cgNormaux (2.5), pas un taux réduit à 2.
+    // La méthodologie prévoit UNE SEULE réduction pour l'arrêt (pondération ×0.8 par semaine,
+    // ci-dessus) — appliquer en plus un taux à 2 au lieu de 2.5 revenait à pénaliser l'arrêt une
+    // deuxième fois (0.8×2/2.5=0.64 semaine équivalente au lieu de 0.8 semaine prévue).
+    const cgArret=(totalSemainesArret/4)*2.5;
     const cgBrut=cgNormaux+cgArret;
     let cgTotal=isNaN(cgBrut)?0:Math.min(30,cgBrut);
 
