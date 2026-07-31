@@ -13130,6 +13130,67 @@ function calcIndemnitePreavis(c, dateSignif, dateFinEffective, dureePreavis, cum
   return {montantBrut, montantNet, joursRestants};
 }
 
+// 29/07/2026 (règle Sophie) : le préavis NON effectué (partiellement ou en totalité) ouvre droit à
+// congés — aucun jour réellement posé n'existe sur cette période pour le mécanisme habituel de
+// calcCongesContrat, donc calculé séparément ici avec la MÊME base que ce mécanisme, jamais une
+// règle différente : semaines complètes de préavis non effectué = même calcul qu'une semaine
+// complète de congés acquis en 46 sem (union de tous les types de semaine du contrat, taux
+// 2.5j/4 semaines) ; la semaine de la rupture elle-même (souvent partielle) = même calcul qu'une
+// semaine partielle de congés (jours concernés / union, même taux). Retourne un nombre de
+// "semaines équivalentes" à ajouter au même total que celui utilisé pour cgNormaux.
+function calcSemainesEquivalentesPreavis(c, dateDebutNonEffectue, dateFinPreavisLegale){
+  if(!dateDebutNonEffectue||!dateFinPreavisLegale||dateDebutNonEffectue>dateFinPreavisLegale) return 0;
+  const getJoursMaxSemEtUnion=(dateRef)=>{
+    const src=getVersionActive(c,dateRef);
+    if(src.th==='fixe'&&src.joursFixe){
+      const u=new Set(); src.joursFixe.forEach((j,i)=>{ if(j) u.add(i); });
+      return {max:u.size||6, union:u};
+    }
+    if(src.th==='sem'&&src.semTypes){
+      const u=new Set();
+      src.semTypes.forEach(st=>(st.jours||[]).forEach((jst,ist)=>{ if(jst&&jst.d) u.add(ist); }));
+      return {max:u.size||6, union:u};
+    }
+    if(src.th==='plan'&&src.planType==='min'&&src.joursMin){
+      const u=new Set(); src.joursMin.forEach((j,i)=>{ if(j) u.add(i); });
+      return {max:u.size||6, union:u};
+    }
+    if(src.th==='plan'&&src.planType==='var'&&src.planVar){
+      const u=new Set();
+      src.planVar.forEach(v=>(v.jours||[]).forEach((jv,iv)=>{ if(jv) u.add(iv); }));
+      return {max:u.size||6, union:u};
+    }
+    return {max:6, union:new Set([0,1,2,3,4,5,6])};
+  };
+  let semainesEq=0;
+  let curLundi=new Date(dateDebutNonEffectue);
+  curLundi.setDate(curLundi.getDate()-((curLundi.getDay()+6)%7)); // ramène au lundi de sa semaine
+  while(curLundi<=dateFinPreavisLegale){
+    const dimancheSem=new Date(curLundi); dimancheSem.setDate(dimancheSem.getDate()+6);
+    const {max:joursMaxSemPr,union:unionPr}=getJoursMaxSemEtUnion(curLundi);
+    // Semaine entièrement dans la période non effectuée -> même calcul qu'une semaine complète de
+    // congés acquis : contribue exactement 1 (comme vérifié aujourd'hui), pas besoin de repasser par
+    // le détail jour par jour.
+    if(curLundi>=dateDebutNonEffectue&&dimancheSem<=dateFinPreavisLegale){
+      semainesEq+=1;
+    } else {
+      // Semaine partielle (la semaine de la rupture, ou la dernière semaine de préavis si elle ne
+      // se termine pas un dimanche) : compte les jours de CETTE semaine qui tombent dans la période
+      // non effectuée ET dans l'union des types du contrat (même base que joursMaxSem ci-dessus),
+      // comme une semaine de congés partielle (jours concernés / joursMaxSem).
+      let joursConcernes=0;
+      for(let d=0;d<7;d++){
+        const jourSem=new Date(curLundi); jourSem.setDate(jourSem.getDate()+d);
+        if(jourSem<dateDebutNonEffectue||jourSem>dateFinPreavisLegale) continue;
+        if(unionPr.has(d)) joursConcernes++;
+      }
+      if(joursConcernes>0) semainesEq+=joursConcernes/joursMaxSemPr;
+    }
+    curLundi=new Date(curLundi); curLundi.setDate(curLundi.getDate()+7);
+  }
+  return semainesEq;
+}
+
 function calcIndemniteRupture(c, dateFin){
   const [ddy,ddm,ddd]=c.dateDeb.split('-').map(Number);
   const dateDebContrat=new Date(ddy,ddm-1,ddd);
@@ -14030,6 +14091,29 @@ function renderRupture(c, cont){
       if(ip.montantBrut>0){
         lignes.push({label:`Indemnité de préavis (${ip.joursRestants} j)`,net:ip.montantNet,brut:ip.montantBrut});
         totalNet+=ip.montantNet;totalBrut+=ip.montantBrut;
+      }
+      // 29/07/2026 (règle Sophie) : le préavis non effectué ouvre droit à congés — calculé
+      // séparément (fonction dédiée, vérifiée), valorisé au taux/coefficient de la rupture, même
+      // référence que l'indemnité compensatrice de congés payés (point confirmé le même jour).
+      const dateFinLegalePr=calcDateFinPreavis(dateSignifObj,duree,true,c);
+      const debutNonEffectuePr=dateFinEff>dateSignifObj?new Date(dateFinEff.getFullYear(),dateFinEff.getMonth(),dateFinEff.getDate()+1):dateSignifObj;
+      const semainesEqPr=calcSemainesEquivalentesPreavis(c,debutNonEffectuePr,dateFinLegalePr);
+      if(semainesEqPr>0){
+        const joursAcqPr=parseFloat(((semainesEqPr/4)*2.5).toFixed(2));
+        const srcPr=getVersionActive(c,dateSit);
+        const hSemMoyPr=(srcPr.hMensu||0)*12/getNbSemReel(srcPr,c);
+        const hJourPr=hSemMoyPr/6;
+        const montantBrutPr=parseFloat((joursAcqPr*hJourPr*(srcPr.txBrut||0)).toFixed(2));
+        const coefNetPr=getParamAt('coefficients',dateToStr(dateSit)).valeur||0.7811975;
+        const montantNetPr=parseFloat((montantBrutPr*coefNetPr).toFixed(2));
+        const ligneCgEnCours=lignes.find(l=>l.label==='Congés en cours');
+        if(ligneCgEnCours){
+          ligneCgEnCours.net=parseFloat((ligneCgEnCours.net+montantNetPr).toFixed(2));
+          ligneCgEnCours.brut=parseFloat((ligneCgEnCours.brut+montantBrutPr).toFixed(2));
+        } else {
+          lignes.push({label:'Congés en cours',net:montantNetPr,brut:montantBrutPr});
+        }
+        totalNet+=montantNetPr;totalBrut+=montantBrutPr;
       }
     }
 
