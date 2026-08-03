@@ -4683,7 +4683,12 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       // cochable, même sans modification autorisée, dès qu'il n'appartenait à aucun type pointé.
       const estSaisissable=(infos.jourPossible||(infos.ferieChome&&!ferieDansConges&&(infos.jourPossible||modifMoisActive))||(estCongeAM&&estSemCongesPartiellePln))&&(!estCongeAM||estSemCongesPartiellePln)&&!moisVerrouille&&!casesVerrouillee;
       let contenu;
-      if(estCongeAM&&estSemCongesPartiellePln){
+      // 03/08/2026 (correctif Sophie) : cette case ne doit apparaître que si le jour est réellement
+      // possible pour le contrat, ou si les modifications sont autorisées ce mois-là — sinon un jour
+      // de congé tombant sur un jour non possible (ex. samedi hors motif) devenait à tort cochable,
+      // sans jamais vérifier infos.jourPossible. Sans cette condition, retombe sur l'affichage figé
+      // du cas suivant (estCongeAM||ferieDansConges).
+      if(estCongeAM&&estSemCongesPartiellePln&&(infos.jourPossible||modifMoisActive)){
         contenu=`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);cursor:${(moisVerrouille||casesVerrouillee)?'default':'pointer'}">
           <input type="checkbox" ${dejaCoche?'checked':''} ${(moisVerrouille||casesVerrouillee)?'disabled':''}
             onchange="toggleJourPlanning(${c.id},'${j.date}',this.checked,'${semKeyDom}',true)">
@@ -5336,6 +5341,18 @@ function enregistrerPlanningMois(contratId, moisKey){
       // étroit.
       if(jourR.statut) jourR.statut=null;
     }
+  }
+  // 03/08/2026 (correctif Sophie) : la réinitialisation ci-dessus efface aussi le statut congé des
+  // jours concernés (stocké dans le même champ que prévu/non-prévu/travaillé) sans jamais le
+  // reconstituer — jusqu'ici seule une actualisation complète de la page (qui relance ce recalcul en
+  // arrière-plan pour toutes les années de congés) le restaurait. On le redéclenche ici directement,
+  // comme déjà fait ailleurs (validation de fiche) — sans attendre une actualisation.
+  if(S.congesAM){
+    const anneeAmPln=getAnneeAmPourDate(moisKey);
+    if(S.congesAM[anneeAmPln]) majFichesCgAm(anneeAmPln,false);
+    const moisSuivPlnKey=am===12?(ay+1)+'-01':ay+'-'+String(am+1).padStart(2,'0');
+    const anneeAmPlnSuivante=getAnneeAmPourDate(moisSuivPlnKey);
+    if(anneeAmPlnSuivante!==anneeAmPln&&S.congesAM[anneeAmPlnSuivante]) majFichesCgAm(anneeAmPlnSuivante,false);
   }
   c._planningSauvegarde=JSON.parse(JSON.stringify(c.planning||{}));
   saveToFirestore();
@@ -7788,6 +7805,25 @@ function calcCongesContrat(c){
 
 function toMins(t){return toM(t);}
          
+// 03/08/2026 (correctif Sophie) : détermine si la semaine contenant dateStr est une semaine de
+// congés PARTIELLE (au moins un jour normalement possible n'est ni congé AM ni férié — donc
+// réellement travaillé) ou ENTIÈRE (tous les jours possibles sont congé/férié). Sert à choisir entre
+// jours max (semaine partielle, le motif réel est connu, coché) et jours possibles/union (semaine
+// entière, aucun jour n'étant cochable on ne peut pas présumer lesquels auraient été travaillés) —
+// source unique partagée par le calcul des congés non acquis et celui du férié.
+function estSemainePartielleConge(c, dateStr, joursPossiblesIdx){
+  const d=parseDateLoc(dateStr);
+  const jourIdxD=d.getDay()===0?6:d.getDay()-1;
+  const lundiSem=new Date(d);
+  lundiSem.setDate(d.getDate()-jourIdxD);
+  return joursPossiblesIdx.some(idx=>{
+    const dj=new Date(lundiSem);
+    dj.setDate(lundiSem.getDate()+idx);
+    const djStr=dj.getFullYear()+'-'+String(dj.getMonth()+1).padStart(2,'0')+'-'+String(dj.getDate()).padStart(2,'0');
+    return !(isJourCongeAM(djStr)||isFerie(djStr,c));
+  });
+}
+
 function getHJourFerie(c, sourceActif, dateStr, agendaMois, estSemConges){
   // Retourne la valeur en heures d'un férié dans les hTheoriques
   // estSemConges = true si la semaine est une semaine de congés (type inconnu)
@@ -7819,11 +7855,16 @@ function getHJourFerie(c, sourceActif, dateStr, agendaMois, estSemConges){
     return 0;
   }
 
-  // 52 sem min et var : si jour possible valeur volume / jours possibles (pas jMax — le type est
-  // toujours connu en 52 semaines, aucune ambiguïté à couvrir par un plafond)
+  // 52 sem min et var : semaine partielle (motif réel connu, au moins un jour possible réellement
+  // travaillé) → volume / jours max. Semaine entière en congés/férié (rien de cochable, motif exact
+  // inconnu) → volume / jours possibles — corrigé 03/08/2026 (confirmé Sophie) : l'ancienne version
+  // utilisait jours possibles inconditionnellement, y compris pour une semaine partielle où le motif
+  // réel est pourtant connu.
   if(tc==='52'&&planType==='min'){
     if(sourceActif.joursMin&&sourceActif.joursMin[jourIdx]){
-      const nbJoursPossiblesMin=sourceActif.joursMin.filter(Boolean).length||1;
+      const joursPossiblesIdxMinF=Array.from({length:7},(_,i)=>i).filter(i=>sourceActif.joursMin[i]);
+      if(estSemainePartielleConge(c,dateStr,joursPossiblesIdxMinF)) return (sourceActif.hMin||0)/(sourceActif.jMaxMin||1);
+      const nbJoursPossiblesMin=joursPossiblesIdxMinF.length||1;
       return (sourceActif.hMin||0)/nbJoursPossiblesMin;
     }
     return 0;
@@ -7834,7 +7875,9 @@ function getHJourFerie(c, sourceActif, dateStr, agendaMois, estSemConges){
     const typeSem=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKey];
     const vol=typeSem&&sourceActif.planVar?sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
     if(vol&&vol.jours&&vol.jours[jourIdx]){
-      const nbJoursPossiblesVol=vol.jours.filter(Boolean).length||1;
+      const joursPossiblesIdxVolF=Array.from({length:7},(_,i)=>i).filter(i=>vol.jours[i]);
+      if(estSemainePartielleConge(c,dateStr,joursPossiblesIdxVolF)) return (vol.h||0)/(vol.j||1);
+      const nbJoursPossiblesVol=joursPossiblesIdxVolF.length||1;
       return (vol.h||0)/nbJoursPossiblesVol;
     }
     return 0;
@@ -8544,7 +8587,11 @@ function getHJourCongesNonDeduit(c, dateStr, jourSemaine){
       const jjV=volConge.jours&&volConge.jours[jourIdxConge];
       if(jjV&&jjV.d&&jjV.f) return parseFloat(((toM(jjV.f)-toM(jjV.d))/60).toFixed(4));
       if(jjV){
-        const nbPossVolConge=(volConge.jours||[]).filter(Boolean).length||1;
+        // 03/08/2026 (correctif Sophie) : semaine partielle (motif réel connu) → jours max ; semaine
+        // entière en congés/férié (rien de cochable) → jours possibles, comme avant.
+        const joursPossiblesIdxVolC=Array.from({length:7},(_,i)=>i).filter(i=>volConge.jours[i]);
+        if(estSemainePartielleConge(c,dateStr,joursPossiblesIdxVolC)) return parseFloat(((volConge.h||0)/(volConge.j||1)).toFixed(4));
+        const nbPossVolConge=joursPossiblesIdxVolC.length||1;
         return parseFloat(((volConge.h||0)/nbPossVolConge).toFixed(4));
       }
       return 0;
@@ -8557,7 +8604,14 @@ function getHJourCongesNonDeduit(c, dateStr, jourSemaine){
     const joursMinConge=sourceConge.joursMin||c.joursMin;
     const jMaxMinConge=sourceConge.jMaxMin||c.jMaxMin||4;
     const hMinConge=sourceConge.hMin||c.hMin||0;
-    return (joursMinConge&&joursMinConge[jourIdxConge]&&jMaxMinConge>0)?parseFloat((hMinConge/jMaxMinConge).toFixed(4)):0;
+    if(!joursMinConge||!joursMinConge[jourIdxConge]) return 0;
+    // 03/08/2026 (correctif Sophie) : même logique que le plan var — semaine partielle → jours max ;
+    // semaine entière en congés/férié → jours possibles (l'ancienne version utilisait jours max
+    // inconditionnellement).
+    const joursPossiblesIdxMinC=Array.from({length:7},(_,i)=>i).filter(i=>joursMinConge[i]);
+    if(estSemainePartielleConge(c,dateStr,joursPossiblesIdxMinC)) return jMaxMinConge>0?parseFloat((hMinConge/jMaxMinConge).toFixed(4)):0;
+    const nbJoursPossiblesMinC=joursPossiblesIdxMinC.length||1;
+    return parseFloat((hMinConge/nbJoursPossiblesMinC).toFixed(4));
   }
   return parseFloat((hSemMoyConge/6).toFixed(4));
 }
