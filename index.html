@@ -7931,10 +7931,15 @@ function getHJourFerie(c, sourceActif, dateStr, agendaMois, estSemConges){
     }
   }
 
-  // 46 sem min : si jour possible valeur volume / jour max
+  // 46 sem min : semaine partielle (motif réel connu, cochable) → jours max ; semaine complète (rien
+  // de cochable) → jours possibles — corrigé 03/08/2026 (confirmé Sophie), même distinction que sem/var
+  // juste au-dessus, qui l'appliquaient déjà (cette branche min ne le faisait pas).
   if(planType==='min'){
     if(sourceActif.joursMin&&sourceActif.joursMin[jourIdx]){
-      return (sourceActif.hMin||0)/(sourceActif.jMaxMin||1);
+      const joursPossiblesIdxMin46=Array.from({length:7},(_,i)=>i).filter(i=>sourceActif.joursMin[i]);
+      if(estSemainePartielleConge(c,dateStr,joursPossiblesIdxMin46)) return (sourceActif.hMin||0)/(sourceActif.jMaxMin||1);
+      const nbJoursPossiblesMin46=joursPossiblesIdxMin46.length||1;
+      return (sourceActif.hMin||0)/nbJoursPossiblesMin46;
     }
     return 0;
   }
@@ -8259,12 +8264,15 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
       }
     });
 
-    // Jours décomptés congés dans cette semaine : volume hebdo / jours possibles prévus au contrat
+    // Jours décomptés congés dans cette semaine : semaine partielle → jours max (motif réel connu) ;
+    // semaine complète → jours possibles — corrigé 03/08/2026 (confirmé Sophie, "heures théoriques si
+    // semaine partielle = jours max"), cohérent avec le férié et la déduction dans cette même semaine.
     const nbJoursDecompte=joursDesSem.filter(jj=>{
       const st=jj.statut||getStatutPrevu(sourceActif||c,jj);
       return ['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe','reprise'].includes(st);
     }).length;
-    const joursCochesMinTh=joursMinTh.filter(Boolean).length||jMaxMinTh;
+    const joursPossiblesIdxMinTh=Array.from({length:7},(_,i)=>i).filter(i=>joursMinTh[i]);
+    const joursCochesMinTh=estSemainePartielleConge(c,dateEx,joursPossiblesIdxMinTh)?jMaxMinTh:(joursPossiblesIdxMinTh.length||jMaxMinTh);
     hTheoriques+=(hMinTh/joursCochesMinTh)*nbJoursDecompte;
 
     // Heures théoriques de la semaine : hMin entier ou prorata si semaine à cheval
