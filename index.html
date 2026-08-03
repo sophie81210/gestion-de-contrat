@@ -7460,18 +7460,34 @@ function calcCongesContrat(c){
               if(stSemAcq) joursMaxSem=(stSemAcq.jours||[]).filter(j=>j&&j.d).length||joursMax;
               else joursMaxSem=sourceSem.semTypes[0].jours.filter(j=>j).length||joursMax;
             } else {
-              // 29/07/2026 (méthodologie Sophie, confirmée explicitement) : contrat 46 sem — un jour
-              // compte pour l'acquisition s'il tombe dans AU MOINS UN des types de semaine définis au
-              // contrat (union de tous les types), jamais une correspondance exacte à un seul type ni
-              // un repli sur le premier type saisi. Remplace l'ancienne détection "meilleur match" qui
-              // ne correspondait pas à cette règle (confirmé par vérification croisée avec une autre
-              // session Claude sur la méthodologie écrite de Sophie).
-              const joursUnionIdx46=new Set();
-              sourceSem.semTypes.forEach(st=>{
-                (st.jours||[]).forEach((jst,ist)=>{ if(jst&&jst.d) joursUnionIdx46.add(ist); });
-              });
-              typeSemActif46=joursUnionIdx46; // réutilisé plus loin pour le férié, même base
-              joursMaxSem=joursUnionIdx46.size||joursMax;
+              // 03/08/2026 (corrigé, confirmé Sophie) : essayer d'abord le type précis de la semaine
+              // via l'agenda (comme pour tc 52 juste au-dessus) — une semaine PARTIELLE (mélange
+              // congés/travail) a un type identifiable au même titre qu'une semaine travaillée
+              // normale, contrairement à une semaine ENTIÈREMENT en congés (qui, elle, n'a jamais de
+              // type réel dans l'agenda). Repli sur l'union de tous les types (principe Sophie du
+              // 29/07, toujours valable pour ce cas précis) seulement si aucun type précis ne
+              // correspond — l'ancienne version retombait sur l'union systématiquement, même pour
+              // une semaine partielle dont le type était pourtant identifiable.
+              const tousAgSemAcq=[...(sourceSem.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
+              const semNumAcq46=getSemISO(jours[0].date);
+              const semAnAcq46=getSemAnnee(jours[0].date);
+              const agKeySemAcq46=getKeyAgenda(semNumAcq46,semAnAcq46);
+              const agSemAcq46=tousAgSemAcq.find(ag=>parseDateLoc(ag.dateDebut)<=dateRepSem&&parseDateLoc(ag.dateFin)>=dateRepSem);
+              const typeSemAcq46=agSemAcq46?.semaines?.[agKeySemAcq46];
+              const stSemAcq46=typeSemAcq46?sourceSem.semTypes.find(st=>st.nom===typeSemAcq46):null;
+              if(stSemAcq46){
+                joursMaxSem=(stSemAcq46.jours||[]).filter(j=>j&&j.d).length||joursMax;
+                const typeSemPrecis46=new Set();
+                (stSemAcq46.jours||[]).forEach((jst,ist)=>{ if(jst&&jst.d) typeSemPrecis46.add(ist); });
+                typeSemActif46=typeSemPrecis46;
+              } else {
+                const joursUnionIdx46=new Set();
+                sourceSem.semTypes.forEach(st=>{
+                  (st.jours||[]).forEach((jst,ist)=>{ if(jst&&jst.d) joursUnionIdx46.add(ist); });
+                });
+                typeSemActif46=joursUnionIdx46; // réutilisé plus loin pour le férié, même base
+                joursMaxSem=joursUnionIdx46.size||joursMax;
+              }
             }
           }
 
@@ -7913,22 +7929,22 @@ function getHJourFerie(c, sourceActif, dateStr, agendaMois, estSemConges){
   }
   const hMoyJour=totalJAnnuel>0?totalHAnnuel/totalJAnnuel:0;
 
-  // 46 sem sem : pendant congés = hMoyJour si prévu dans au moins un semType
-  //              pendant semaine travaillée = valeur exacte du jour
+  // 46 sem sem : essaie toujours le type précis de la semaine en premier (valable aussi bien pour
+  // une semaine travaillée que pour une semaine partielle, dès que le type est identifiable) ;
+  // repli sur la moyenne pondérée seulement si aucun type ne correspond (semaine entièrement en
+  // congés, cf. règle Sophie 03/08/2026) — corrigé : ne dépend plus du paramètre estSemConges, qui
+  // n'est jamais positionné à vrai par aucun appelant de cette fonction dans tout le fichier, ce qui
+  // faisait retomber à tort sur 0 au lieu de la moyenne pondérée pour une semaine entièrement en congés.
   if(th==='sem'){
-    if(estSemConges){
-      const jourPossible=sourceActif.semTypes&&sourceActif.semTypes.some(st=>st.jours&&st.jours[jourIdx]&&st.jours[jourIdx].d);
-      return jourPossible?hMoyJour:0;
-    } else {
-      const semKey=getSemISO(dateStr);
-      const agKey=getKeyAgenda(semKey,getSemAnnee(dateStr));
-      const typeSem=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKey];
-      const st=sourceActif.semTypes&&typeSem?sourceActif.semTypes.find(s=>s.nom===typeSem):null;
-      if(st&&st.jours&&st.jours[jourIdx]&&st.jours[jourIdx].d&&st.jours[jourIdx].f){
-        return (toM(st.jours[jourIdx].f)-toM(st.jours[jourIdx].d))/60;
-      }
-      return 0;
+    const semKey=getSemISO(dateStr);
+    const agKey=getKeyAgenda(semKey,getSemAnnee(dateStr));
+    const typeSem=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKey];
+    const st=sourceActif.semTypes&&typeSem?sourceActif.semTypes.find(s=>s.nom===typeSem):null;
+    if(st&&st.jours&&st.jours[jourIdx]&&st.jours[jourIdx].d&&st.jours[jourIdx].f){
+      return (toM(st.jours[jourIdx].f)-toM(st.jours[jourIdx].d))/60;
     }
+    const jourPossible=sourceActif.semTypes&&sourceActif.semTypes.some(st2=>st2.jours&&st2.jours[jourIdx]&&st2.jours[jourIdx].d);
+    return jourPossible?hMoyJour:0;
   }
 
   // 46 sem min : semaine partielle (motif réel connu, cochable) → jours max ; semaine complète (rien
@@ -7947,25 +7963,25 @@ function getHJourFerie(c, sourceActif, dateStr, agendaMois, estSemConges){
   // 46 sem var : semaine de congés (type inconnu) → moyenne pondérée / jours possibles union (comme un
   // jour de congé, aucun volume précis ne peut légalement s'appliquer) ; semaine travaillée (type
   // connu, via la case à cocher du planning) → volume spécifique de cette semaine / jMax de ce volume
+  // 46 sem var : essaie toujours le volume précis de la semaine en premier (volume ÷ jMax) ; repli
+  // sur la moyenne pondérée / jours union seulement si aucun volume ne correspond (semaine
+  // entièrement en congés) — corrigé 03/08/2026, même raison que sem 46 juste au-dessus : ne dépend
+  // plus du paramètre estSemConges, jamais positionné à vrai par aucun appelant.
   if(planType==='var'){
     const jourPossibleVar=sourceActif.planVar&&sourceActif.planVar.some(v=>v.jours&&v.jours[jourIdx]);
     if(!jourPossibleVar) return 0;
-    if(estSemConges){
-      const totalSAnnuel=sourceActif.planVar.reduce((t,v)=>t+(v.s||0),0);
-      const hSemMoyF=totalSAnnuel>0?totalHAnnuel/totalSAnnuel:0;
-      const joursPossiblesUnionF=Array.from({length:7},(_,idx)=>sourceActif.planVar.some(v=>v.jours&&v.jours[idx]));
-      const nbJoursPossiblesUnionF=joursPossiblesUnionF.filter(Boolean).length||1;
-      return hSemMoyF/nbJoursPossiblesUnionF;
-    } else {
-      const semKey=getSemISO(dateStr);
-      const agKey=getKeyAgenda(semKey,getSemAnnee(dateStr));
-      const typeSem=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKey];
-      const vol=sourceActif.planVar&&typeSem?sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
-      if(vol&&vol.jours&&vol.jours[jourIdx]){
-        return (vol.h||0)/(vol.j||1);
-      }
-      return 0;
+    const semKey=getSemISO(dateStr);
+    const agKey=getKeyAgenda(semKey,getSemAnnee(dateStr));
+    const typeSem=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKey];
+    const vol=sourceActif.planVar&&typeSem?sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
+    if(vol&&vol.jours&&vol.jours[jourIdx]){
+      return (vol.h||0)/(vol.j||1);
     }
+    const totalSAnnuel=sourceActif.planVar.reduce((t,v)=>t+(v.s||0),0);
+    const hSemMoyF=totalSAnnuel>0?totalHAnnuel/totalSAnnuel:0;
+    const joursPossiblesUnionF=Array.from({length:7},(_,idx)=>sourceActif.planVar.some(v=>v.jours&&v.jours[idx]));
+    const nbJoursPossiblesUnionF=joursPossiblesUnionF.filter(Boolean).length||1;
+    return hSemMoyF/nbJoursPossiblesUnionF;
   }
 
   return 0;
@@ -8046,8 +8062,11 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
         const st=jj.statut||getStatutPrevu(sourceActif||c,jj);
         return statsCongés.includes(st)||(jj.planVarPrevu&&!jj.heureDebPrev);
       }).length;
-      hTheoriques+=hSemMoyPS/nbJoursPossiblesSem*nbJoursDecompteNoType;
-      // Fériés dans semaine de congés : hSemMoy/nbJoursPossiblesSem si jour possible
+      // 03/08/2026 (confirmé Sophie) : aligné sur la moyenne pondérée du férié (hMoyJour) au lieu de
+      // hSemMoyPS/nbJoursPossiblesSem — l'ancienne moyenne ne tenait pas compte du nombre de
+      // semaines de chaque type dans l'année, contrairement au férié.
+      hTheoriques+=hMoyJour*nbJoursDecompteNoType;
+      // Fériés dans semaine de congés : même moyenne pondérée (hMoyJour) que le calcul du férié lui-même
       joursDesSem.forEach(jj=>{
         if(jj.jourSemaine===reposHPS) return;
         const st=jj.statut||getStatutPrevu(sourceActif||c,jj);
@@ -8055,7 +8074,7 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
           // Vérifier si jour possible au contrat
           const jourIdx=jj.jourSemaine===0?6:jj.jourSemaine-1;
           const estPossible=semTypes.some(st=>st.jours&&st.jours[jourIdx]?.d);
-          if(estPossible) hTheoriques+=hSemMoyPS/nbJoursPossiblesSem;
+          if(estPossible) hTheoriques+=hMoyJour;
         }
       });
       return;
@@ -8228,6 +8247,11 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
   semaines.forEach(semNum=>{
     const joursDesSem=fiche.jours.filter(jj=>getSemISO(jj.date)===semNum);
     if(!joursDesSem.length) return;
+    // 03/08/2026 (nouveau, confirmé Sophie) : semaine entièrement hors contrat (avant la 1ère
+    // semaine du contrat, ou après la dernière) — jamais exclue jusqu'ici pour plan min (contrairement
+    // à var/sem), ce qui comptait à tort une semaine hors contrat comme une semaine normale complète.
+    // Traitée séparément plus bas, jour par jour.
+    if(joursHCExclus&&joursDesSem.every(jj=>joursHCExclus.has(jj.date))) return;
     const dateEx=joursDesSem[0].date;
     const semAn=getSemAnnee(dateEx);
     const semKey=semAn+'-S'+String(semNum).padStart(2,'0');
@@ -8301,6 +8325,19 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
       } else {
         hTheoriques+=hMinTh;
       }
+    }
+  });
+
+  // Jours hors contrat (avant la 1ère semaine du contrat, ou après la dernière), un par un : s'il
+  // s'agit d'un jour possible du motif, moyenne pondérée / jours possibles — même principe que pour
+  // var/sem — nouveau 03/08/2026 (confirmé Sophie), cette section n'existait pas du tout pour plan
+  // min alors que le paramètre était déjà reçu par la fonction sans jamais être utilisé.
+  fiche.jours.forEach(jjHC=>{
+    if(!joursHCExclus||!joursHCExclus.has(jjHC.date)) return;
+    const idxHC=jjHC.jourSemaine===0?6:jjHC.jourSemaine-1;
+    if(joursMinTh[idxHC]){
+      const joursPossiblesMinHC=joursMinTh.filter(Boolean).length||jMaxMinTh;
+      hTheoriques+=hMinTh/joursPossiblesMinHC;
     }
   });
 
@@ -8482,16 +8519,21 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
 
       // Jours décomptés/congés : même valorisation que la déduction (règle Sophie 14/07/2026),
       // pour que les deux côtés de la formule « mensu ÷ h théoriques × h d'absence » se
-      // correspondent. Volume pointé connu : heures précises du jour si saisies dans le
-      // volume, sinon volume ÷ jours possibles du volume ; jour hors volume → 0.
+      // correspondent. Volume pointé connu, semaine partielle (motif réel connu) : heures précises
+      // si saisies, sinon volume ÷ jours max. Semaine entière : volume ÷ jours possibles — corrigé
+      // 03/08/2026, cette part utilisait jours possibles inconditionnellement.
       // Semaine sans volume : jours de l'union seulement, moyenne hebdo ÷ jours union.
       if(['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe','reprise'].includes(statutJourTh)){
         if(volTh){
           const jjVTh=volTh.jours&&volTh.jours[jourIdxTh];
           if(jjVTh&&jjVTh.d&&jjVTh.f) hTheoriques+=(toM(jjVTh.f)-toM(jjVTh.d))/60;
           else if(jjVTh){
-            const nbPossVolTh=(volTh.jours||[]).filter(Boolean).length||1;
-            hTheoriques+=volTh.h/nbPossVolTh;
+            const joursPossiblesIdxVolThDec=Array.from({length:7},(_,i)=>i).filter(i=>volTh.jours[i]);
+            if(estSemainePartielleConge(c,jj.date,joursPossiblesIdxVolThDec)) hTheoriques+=volTh.h/(volTh.j||1);
+            else {
+              const nbPossVolTh=joursPossiblesIdxVolThDec.length||1;
+              hTheoriques+=volTh.h/nbPossVolTh;
+            }
           }
         } else if(joursPossiblesSem[jourIdxTh]){
           hTheoriques+=hSemMoyPV/nbJoursPossiblesSem;
@@ -14283,8 +14325,15 @@ function calcIndemniteConges(c, anneeRef){
 
   // Moyenne hebdo
   let hHebdo=0;
-  if(sourceM.th==='fixe'||sourceM.th==='sem'){
+  if(sourceM.th==='fixe'){
     hHebdo=parseFloat(((sourceM.hMensu||c.hMensu)*12/getNbSemReel(sourceM,c)).toFixed(2));
+  } else if(sourceM.th==='sem'&&sourceM.semTypes){
+    // 03/08/2026 (confirmé Sophie) : moyenne pondérée par le nombre de semaines de chaque type,
+    // comme var juste en dessous — remplace l'ancienne moyenne mensuelle plate du contrat, qui ne
+    // tenait pas compte du détail des types de semaine.
+    const totHSem=sourceM.semTypes.reduce((t,st)=>t+(st.jours||[]).reduce((s,j)=>j&&j.d&&j.f?s+(toM(j.f)-toM(j.d))/60:s,0)*(parseFloat(st.nb)||0),0);
+    const totSemSem=sourceM.semTypes.reduce((t,st)=>t+(parseFloat(st.nb)||0),0);
+    hHebdo=totSemSem>0?parseFloat((totHSem/totSemSem).toFixed(2)):0;
   } else if(sourceM.th==='plan'&&sourceM.planType==='var'&&sourceM.planVar){
     const totH=sourceM.planVar.reduce((t,v)=>t+(v.h||0)*(v.s||0),0);
     const totS=sourceM.planVar.reduce((t,v)=>t+(v.s||0),0);
