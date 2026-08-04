@@ -16897,6 +16897,34 @@ if(tousNonPrevus){
         const jour=fiche.jours[jourIdx];
 
       if(premierTrav&&dateStr>=premierTrav) decompteCommence=true;
+      // 04/08/2026 (bug signalé Sophie : aucune déduction jamais déclenchée sur une période de congés
+      // étendue) : le calcul ci-dessus (via premierTrav, qui vérifie maintenant si un jour est
+      // vraiment coché) répond bien à "semaine de travail normale avec un jour non coché au milieu",
+      // mais une période de congés qui dure plusieurs semaines n'a jamais rien de coché avant la
+      // reprise du travail, donc decompteCommence ne démarrait jamais pendant toute la période. Pour
+      // var 52/min (qui gardent toujours un type/motif identifiable même en semaine entière de
+      // congés), un jour structurellement possible dans une semaine ENTIÈREMENT en congés démarre
+      // aussi le décompte indépendamment du coché — cohérent avec la règle "semaine entière : compte
+      // s'il tombe sur un jour possible" déjà établie pour le férié et la déduction.
+      if(!decompteCommence){
+        const sourceC2=getVersionActive(c,cur);
+        if(sourceC2&&sourceC2.th==='plan'&&(sourceC2.planType==='var'||sourceC2.planType==='min')){
+        const jourIdxDCsem=jourSem===0?6:jourSem-1;
+        let motifDCsem=null;
+        if(sourceC2.planType==='min') motifDCsem=sourceC2.joursMin||c.joursMin;
+        else {
+          const semKeyDCsem=getSemISO(dateStr);
+          const agKeyDCsem=getKeyAgenda(semKeyDCsem,getSemAnnee(dateStr));
+          const agendasDCsem=sourceC2.agendas||c.agendas||[];
+          const agDCsem=agendasDCsem.find(a=>new Date(a.dateDebut)<=new Date(dateStr)&&new Date(a.dateFin)>=new Date(dateStr));
+          const typeSemDCsem=agDCsem&&agDCsem.semaines&&agDCsem.semaines[agKeyDCsem];
+          const volDCsem=typeSemDCsem&&sourceC2.planVar?sourceC2.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemDCsem):null;
+          motifDCsem=volDCsem?volDCsem.jours:null;
+        }
+        if(motifDCsem&&motifDCsem[jourIdxDCsem]&&!estSemainePartielleConge(c,dateStr,Array.from({length:7},(_,i)=>i).filter(i=>motifDCsem[i]))) decompteCommence=true;
+        if(window.DEBUG_CGAM)console.log('[CGAM-decompteIndep]',dateStr,'| motif trouvé:',motifDCsem,'| jour possible ce jour:',motifDCsem&&motifDCsem[jourIdxDCsem],'| decompteCommence après ce bloc:',decompteCommence);
+        }
+      }
       // reprise = même effet que travaille pour les hTheoriques
         // Suspendre le décompte pendant les semaines absence employeur
         // (sauf si c'est après finPeriode = la semaine off est après la pose)
