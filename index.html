@@ -5107,16 +5107,21 @@ function enregistrerPlanningMois(contratId, moisKey){
     const agKey=getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr));
     const typeSem=ag&&ag.semaines&&ag.semaines[agKey];
     let volH=0, joursPattern=null, jMaxVol=1;
-    if(typeSem&&typeSem!=='off'){
+    // 03/08/2026 (confirmé Sophie) : plan min n'a qu'un seul rythme possible et n'a jamais besoin
+    // qu'un type soit pointé dans l'agenda (contrairement à var) — exiger typeSem ici empêchait tout
+    // ce contrôle de se déclencher pour min dès que l'agenda n'avait rien pointé, ce qui est le cas
+    // normal pour min, pas l'exception. Cohérent avec calcHTheoriquesPlanMin, qui traite déjà min
+    // ainsi.
+    if(source.planType==='min'&&typeSem!=='off'){
+      volH=source.hMin||0;
+      joursPattern=source.joursMin;
+      jMaxVol=source.jMaxMin||1;
+    } else if(typeSem&&typeSem!=='off'){
       if(source.planType==='var'&&source.planVar){
         const vol=source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);
         volH=vol?vol.h:0;
         joursPattern=vol?vol.jours:null;
         jMaxVol=vol?(vol.j||1):1;
-      } else if(source.planType==='min'){
-        volH=source.hMin||0;
-        joursPattern=source.joursMin;
-        jMaxVol=source.jMaxMin||1;
       }
     }
     if(!(volH>0&&joursPattern)) continue;
@@ -8662,7 +8667,26 @@ function getHJourCongesNonDeduit(c, dateStr, jourSemaine){
         const semainePartielleVolC=estSemainePartielleConge(c,dateStr,joursPossiblesIdxVolC);
         if(semainePartielleVolC){
           const jourEstCocheVolC=!!(c.planning&&c.planning[dateStr]&&c.planning[dateStr].coche===true);
-          return jourEstCocheVolC?parseFloat(((volConge.h||0)/(volConge.j||1)).toFixed(4)):0;
+          if(!jourEstCocheVolC) return 0;
+          // 03/08/2026 (corrigé, confirmé Sophie par un cas concret) : la valeur d'un jour de congé
+          // coché doit tenir compte du volume déjà consommé par les heures RÉELLES des autres jours
+          // cochés de la même semaine — sinon un jour de congé pouvait être déduit à jours max même
+          // quand le volume était déjà entièrement pris par ailleurs (ex. 2 jours à 10h = 20h sur une
+          // semaine de 20h, un 3e jour de congé coché se voyait quand même déduire un tiers du volume,
+          // dépassant le total réel de la semaine).
+          const lundiSemVolC=new Date(dCND); lundiSemVolC.setDate(dCND.getDate()-jourIdxConge);
+          let heuresReellesAutresVolC=0, nbJoursSansHeureVolC=0;
+          for(let iSemVolC=0;iSemVolC<7;iSemVolC++){
+            if(!volConge.jours[iSemVolC]) continue;
+            const dJourVolC=new Date(lundiSemVolC); dJourVolC.setDate(lundiSemVolC.getDate()+iSemVolC);
+            const dsJourVolC=dJourVolC.getFullYear()+'-'+String(dJourVolC.getMonth()+1).padStart(2,'0')+'-'+String(dJourVolC.getDate()).padStart(2,'0');
+            const pdJourVolC=c.planning&&c.planning[dsJourVolC];
+            if(!(pdJourVolC&&pdJourVolC.coche===true)) continue;
+            if(pdJourVolC.d&&pdJourVolC.f) heuresReellesAutresVolC+=(toM(pdJourVolC.f)-toM(pdJourVolC.d))/60;
+            else nbJoursSansHeureVolC++;
+          }
+          const volumeRestantVolC=Math.max(0,(volConge.h||0)-heuresReellesAutresVolC);
+          return nbJoursSansHeureVolC>0?parseFloat((volumeRestantVolC/nbJoursSansHeureVolC).toFixed(4)):0;
         }
         const nbPossVolConge=joursPossiblesIdxVolC.length||1;
         return parseFloat(((volConge.h||0)/nbPossVolConge).toFixed(4));
@@ -8685,7 +8709,22 @@ function getHJourCongesNonDeduit(c, dateStr, jourSemaine){
     const semainePartielleMinC=estSemainePartielleConge(c,dateStr,joursPossiblesIdxMinC);
     if(semainePartielleMinC){
       const jourEstCocheMinC=!!(c.planning&&c.planning[dateStr]&&c.planning[dateStr].coche===true);
-      return jourEstCocheMinC&&jMaxMinConge>0?parseFloat((hMinConge/jMaxMinConge).toFixed(4)):0;
+      if(!jourEstCocheMinC) return 0;
+      // 03/08/2026 (même correctif que var) : volume restant après les heures réelles des autres
+      // jours cochés de la semaine, partagé entre les jours cochés sans heures réelles.
+      const lundiSemMinC=new Date(dCND); lundiSemMinC.setDate(dCND.getDate()-jourIdxConge);
+      let heuresReellesAutresMinC=0, nbJoursSansHeureMinC=0;
+      for(let iSemMinC=0;iSemMinC<7;iSemMinC++){
+        if(!joursMinConge[iSemMinC]) continue;
+        const dJourMinC=new Date(lundiSemMinC); dJourMinC.setDate(lundiSemMinC.getDate()+iSemMinC);
+        const dsJourMinC=dJourMinC.getFullYear()+'-'+String(dJourMinC.getMonth()+1).padStart(2,'0')+'-'+String(dJourMinC.getDate()).padStart(2,'0');
+        const pdJourMinC=c.planning&&c.planning[dsJourMinC];
+        if(!(pdJourMinC&&pdJourMinC.coche===true)) continue;
+        if(pdJourMinC.d&&pdJourMinC.f) heuresReellesAutresMinC+=(toM(pdJourMinC.f)-toM(pdJourMinC.d))/60;
+        else nbJoursSansHeureMinC++;
+      }
+      const volumeRestantMinC=Math.max(0,hMinConge-heuresReellesAutresMinC);
+      return nbJoursSansHeureMinC>0?parseFloat((volumeRestantMinC/nbJoursSansHeureMinC).toFixed(4)):0;
     }
     const nbJoursPossiblesMinC=joursPossiblesIdxMinC.length||1;
     return parseFloat((hMinConge/nbJoursPossiblesMinC).toFixed(4));
