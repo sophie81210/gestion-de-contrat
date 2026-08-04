@@ -3655,7 +3655,13 @@ function ouvrirFiche(contratId,key){
       // déduction, semaine comptée 1 pour les congés — comportement d'avant l'introduction du
       // planning, à préserver intégralement quand la semaine n'a jamais été touchée).
       const semKeyPVP=getSemISO(j.date)+'-'+getSemAnnee(j.date);
-      const semaineToucheePVP=Object.keys(planningRefPVP||{}).some(dt=>(getSemISO(dt)+'-'+getSemAnnee(dt))===semKeyPVP);
+      // 04/08/2026 (bug signalé Sophie) : décocher un jour SUPPRIME son entrée du planning (au lieu de
+      // la garder "non cochée") — si c'était la seule entrée de la semaine, celle-ci semblait alors
+      // "jamais touchée du tout", désactivant cette protection à tort. Le mois ayant été explicitement
+      // enregistré au moins une fois (`planningConfirmeMois`) est un signal fiable de "touché" qui
+      // survient même quand plus aucune entrée ne subsiste pour cette semaine précise.
+      const moisKeyPVP=j.date.slice(0,7);
+      const semaineToucheePVP=(c.planningConfirmeMois&&c.planningConfirmeMois[moisKeyPVP])||Object.keys(planningRefPVP||{}).some(dt=>(getSemISO(dt)+'-'+getSemAnnee(dt))===semKeyPVP);
       if(semaineToucheePVP&&(!planJourPVP||!planJourPVP.d||!planJourPVP.f)) j.planVarPrevu=false;
     }
     // Pour plan min/var : semaines off → pas de 'non-prevu' forcé, garder null pour rester cohérent avec la migration
@@ -8527,10 +8533,15 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
       return;
     }
 
-    // 03/08/2026 (confirmé Sophie) : semaine normale, entièrement dans le contrat, type connu — le
-    // volume est garanti quel que soit le détail du planning (prévu, férié, congé...), donc ajouté
-    // directement en une fois plutôt que reconstruit jour par jour. La boucle jour par jour plus bas
-    // ne sert donc plus qu'au cas où aucun type n'est identifiable (semaine entièrement en congés).
+    // 03/08/2026 (confirmé Sophie, confirmé À NOUVEAU le 04/08 après une tentative de correctif erronée
+    // entre-temps) : semaine avec un type/volume pointé — le volume est garanti quel que soit le détail
+    // du planning (prévu, férié, congé, même AUCUN jour coché), ajouté directement en une fois. Ça
+    // s'applique aussi à une semaine ENTIÈREMENT en congés en var 52 (qui garde un type pointé,
+    // contrairement à var 46) : Sophie a explicitement confirmé qu'elle compte pour son plein volume,
+    // pas une part réduite selon les jours de congé — "en plan min et var les semaines comptent pour
+    // leur volume, pointée ou pas". Vérifié par Sophie avec le détail exact de 2 mois réels (résultat
+    // attendu confirmé semaine par semaine). La boucle jour par jour plus bas ne sert donc qu'au cas où
+    // AUCUN type n'est identifiable du tout (semaine entièrement en congés, var 46/sem uniquement).
     if(volTh){
       hTheoriques+=volTh.h;
       semJoursCpt[semKey]=volTh.j||1;
