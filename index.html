@@ -4792,7 +4792,10 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
         // Désactivée hors du type pointé cette semaine, sauf si la modification est autorisée ce
         // mois-là — bug confirmé Sophie 23/07/2026 : cette case restait toujours activable, même
         // hors du type pointé et sans modification autorisée.
-        const ferieDisabled=moisVerrouille||casesVerrouillee||(!infos.jourPossible&&!modifMoisActive);
+        // 03/08/2026 (confirmé Sophie) : un férié ne doit jamais être cochable sur un jour impossible,
+        // même en modifications autorisées — contrairement à un jour normal (supplémentaire), pour
+        // lequel les modifications autorisées permettent justement d'ajouter un jour hors motif.
+        const ferieDisabled=moisVerrouille||casesVerrouillee||!infos.jourPossible;
         contenu=`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);cursor:${ferieDisabled?'default':'pointer'}">
           <input type="checkbox" ${dejaCoche?'checked':''} ${ferieDisabled?'disabled':''}
             onchange="toggleJourPlanning(${c.id},'${j.date}',this.checked,'${semKeyDom}',true)">
@@ -7931,8 +7934,15 @@ function getHJourFerie(c, sourceActif, dateStr, agendaMois, estSemConges){
       }
       return 0;
     }
-    const jourPossible=sourceActif.semTypes&&sourceActif.semTypes.some(st2=>st2.jours&&st2.jours[jourIdx]&&st2.jours[jourIdx].d);
-    return jourPossible?hMoyJour:0;
+    // 03/08/2026 (aligné sur le bilan férié de Sophie et la correction déjà faite dans les heures
+    // théoriques) : semaine entièrement en congés → moyenne HEBDOMADAIRE / jours union, pas hMoyJour
+    // (moyenne par jour) — sinon la valeur de ce jour isolé peut dépasser ce qu'une part de semaine
+    // vaut réellement, comme déjà corrigé ailleurs pour ce même cas.
+    const nbSemActifSem=sourceActif.semTypes.reduce((t,st2)=>t+(parseFloat(st2.nb)||0),0);
+    const hSemMoyFerieSem=nbSemActifSem>0?totalHAnnuel/nbSemActifSem:0;
+    const joursPossiblesUnionSem=Array.from({length:7},(_,idx)=>sourceActif.semTypes.some(st2=>st2.jours&&st2.jours[idx]&&st2.jours[idx].d));
+    const nbJoursPossiblesUnionSem=joursPossiblesUnionSem.filter(Boolean).length||1;
+    return joursPossiblesUnionSem[jourIdx]?hSemMoyFerieSem/nbJoursPossiblesUnionSem:0;
   }
 
   // 46 sem min : semaine partielle (motif réel connu, cochable) → jours max ; semaine complète (rien
@@ -8047,27 +8057,28 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
     if(!typeSemTh||estSemCongesPlanSem){
       // Semaine sans type ou semaine violette (congés) : jours décomptés → hSemMoy/6 par jour
       const reposHPS=sourceActif.reposHebdo||c.reposHebdo||0;
-      const statsCongés=['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe','reprise'];
+      const statsCongés=['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe','reprise','ferie'];
       const nbJoursDecompteNoType=joursDesSem.filter(jj=>{
         if(jj.jourSemaine===reposHPS) return false; // exclure jour de repos
+        // 03/08/2026 (bug signalé Sophie) : ne compter que les jours structurellement possibles au
+        // contrat (comme le fait déjà le bloc férié juste en dessous) — sinon un jour jamais travaillé
+        // (ex. samedi hors motif) mais portant un statut congé se comptait quand même à plein tarif,
+        // gonflant le total sur une semaine ou une période entièrement en congés.
+        const jourIdxND=jj.jourSemaine===0?6:jj.jourSemaine-1;
+        if(!joursPossiblesSem[jourIdxND]) return false;
         const st=jj.statut||getStatutPrevu(sourceActif||c,jj);
-        return statsCongés.includes(st)||(jj.planVarPrevu&&!jj.heureDebPrev);
+        return statsCongés.includes(st)||(!jj.statut&&isFerie(jj.date,c))||(jj.planVarPrevu&&!jj.heureDebPrev);
       }).length;
-      // 03/08/2026 (confirmé Sophie) : aligné sur la moyenne pondérée du férié (hMoyJour) au lieu de
-      // hSemMoyPS/nbJoursPossiblesSem — l'ancienne moyenne ne tenait pas compte du nombre de
-      // semaines de chaque type dans l'année, contrairement au férié.
-      hTheoriques+=hMoyJour*nbJoursDecompteNoType;
-      // Fériés dans semaine de congés : même moyenne pondérée (hMoyJour) que le calcul du férié lui-même
-      joursDesSem.forEach(jj=>{
-        if(jj.jourSemaine===reposHPS) return;
-        const st=jj.statut||getStatutPrevu(sourceActif||c,jj);
-        if(st==='ferie'||(!jj.statut&&isFerie(jj.date,c))){
-          // Vérifier si jour possible au contrat
-          const jourIdx=jj.jourSemaine===0?6:jj.jourSemaine-1;
-          const estPossible=semTypes.some(st=>st.jours&&st.jours[jourIdx]?.d);
-          if(estPossible) hTheoriques+=hMoyJour;
-        }
-      });
+      // 03/08/2026 (corrigé une 2e fois, confirmé Sophie) : revenu à la proportion sur la moyenne
+      // hebdomadaire (hSemMoyPS × part des jours congé parmi les jours union) plutôt qu'un calcul
+      // jour par jour à hMoyJour — appliquer une moyenne PAR JOUR à CHAQUE jour de l'union gonflait le
+      // total, puisqu'aucune semaine réelle n'a jamais tous ces jours en même temps (chez Sophie,
+      // lundi et mercredi ne coexistent jamais dans la même semaine, par exemple). hMoyJour reste
+      // juste pour un jour isolé (le férié ci-dessous), pas pour une somme sur plusieurs jours.
+      // 03/08/2026 (corrigé une 3e fois, confirmé Sophie) : le férié fait maintenant partie de
+      // nbJoursDecompteNoType ci-dessus (même titre qu'un autre jour de congé de cette semaine, comme
+      // pour var) — le total de la semaine ne peut plus dépasser la moyenne hebdomadaire de référence.
+      hTheoriques+=hSemMoyPS/nbJoursPossiblesSem*nbJoursDecompteNoType;
       return;
     }
 
@@ -8111,17 +8122,23 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
             const jourDate=new Date(lundiSem);jourDate.setDate(lundiSem.getDate()+i);
             const jourStr=jourDate.getFullYear()+'-'+String(jourDate.getMonth()+1).padStart(2,'0')+'-'+String(jourDate.getDate()).padStart(2,'0');
             if(jourStr<debutMoisStr||jourStr>finMoisStr) continue;
+            const jourIdxHC2=jourDate.getDay()===0?6:jourDate.getDay()-1;
+            const stJourSemHC=stTh.jours&&stTh.jours[jourIdxHC2];
+            const hJourReelChHC=stJourSemHC&&stJourSemHC.d&&stJourSemHC.f?(toM(stJourSemHC.f)-toM(stJourSemHC.d))/60:0;
             if(joursHCExclus&&joursHCExclus.has(jourStr)){
-              const jourIdxHC2=jourDate.getDay()===0?6:jourDate.getDay()-1;
-              if(joursPossiblesSem[jourIdxHC2]) hCheval+=hSemMoyPS/nbJoursPossiblesSem;
+              // 03/08/2026 (confirmé Sophie) : dans la semaine à cheval sur le DÉBUT du contrat, un
+              // jour hors contrat se déduit selon le type connu de cette semaine (heures réelles),
+              // pas la moyenne — contrairement aux jours hors contrat de semaines entièrement hors
+              // contrat plus tôt (traitées séparément, ailleurs, toujours à la moyenne).
+              hCheval+=hJourReelChHC;
               continue;
             }
             // Trouver le jour dans la fiche
             const jourFiche=joursDesSem.find(jj=>jj.date===jourStr);
             const stJour=jourFiche?.statut||getStatutPrevu(sourceActif||c,jourFiche||{date:jourStr,jourSemaine:jourDate.getDay()===0?0:jourDate.getDay()});
-            const jourIdx=jourDate.getDay()===0?6:jourDate.getDay()-1;
-            const stJourSem=stTh.jours&&stTh.jours[jourIdx];
-            const hJourReelCh=stJourSem&&stJourSem.d&&stJourSem.f?(toM(stJourSem.f)-toM(stJourSem.d))/60:0;
+            const jourIdx=jourIdxHC2;
+            const stJourSem=stJourSemHC;
+            const hJourReelCh=hJourReelChHC;
             const est52Ch=c.tc==='52'||sourceActif.tc==='52';
             if(stJour==='conges-am'){
               // 0h quel que soit le contrat
@@ -8271,24 +8288,11 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
     // exactes, ou simplement pas encore pointée) ne doit pas empêcher le calcul — seul un 'off' explicite
     // (absence employeur) doit contribuer 0
 
-    // Jours fériés sur jours possibles dans cette semaine travaillée
-    joursDesSem.forEach(jj=>{
-      if((jj.statut==='ferie')||(!jj.statut&&isFerie(jj.date,c))){
-        const hF=getHJourFerie(c,sourceActif,jj.date,agendaMois,false);
-        hTheoriques+=hF;
-      }
-    });
-
-    // Jours décomptés congés dans cette semaine : semaine partielle → jours max (motif réel connu) ;
-    // semaine complète → jours possibles — corrigé 03/08/2026 (confirmé Sophie, "heures théoriques si
-    // semaine partielle = jours max"), cohérent avec le férié et la déduction dans cette même semaine.
-    const nbJoursDecompte=joursDesSem.filter(jj=>{
-      const st=jj.statut||getStatutPrevu(sourceActif||c,jj);
-      return ['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe','reprise'].includes(st);
-    }).length;
-    const joursPossiblesIdxMinTh=Array.from({length:7},(_,i)=>i).filter(i=>joursMinTh[i]);
-    const joursCochesMinTh=estSemainePartielleConge(c,dateEx,joursPossiblesIdxMinTh)?jMaxMinTh:(joursPossiblesIdxMinTh.length||jMaxMinTh);
-    hTheoriques+=(hMinTh/joursCochesMinTh)*nbJoursDecompte;
+    // 03/08/2026 (confirmé Sophie) : le volume de la semaine est garanti quel que soit le détail du
+    // planning (prévu, férié, congé...) — les anciens ajouts séparés du férié et des jours décomptés
+    // ci-dessous doublaient ce volume déjà ajouté en entier plus bas (section "hMin entier ou prorata"),
+    // pour toute semaine contenant un férié ou un jour de congé. Retirés : plus rien à calculer jour
+    // par jour pour une semaine normale, seul le volume compte.
 
     // Heures théoriques de la semaine : hMin entier ou prorata si semaine à cheval
     if(!semTheoriquesVues.has(semKey)){
@@ -8500,6 +8504,16 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
         hTheoriques+=quotaDispoPV;
       }
       semJoursCpt[semKey]=volTh.j||1; // semaine considérée complète, plus rien à ajouter par jour
+      return;
+    }
+
+    // 03/08/2026 (confirmé Sophie) : semaine normale, entièrement dans le contrat, type connu — le
+    // volume est garanti quel que soit le détail du planning (prévu, férié, congé...), donc ajouté
+    // directement en une fois plutôt que reconstruit jour par jour. La boucle jour par jour plus bas
+    // ne sert donc plus qu'au cas où aucun type n'est identifiable (semaine entièrement en congés).
+    if(volTh){
+      hTheoriques+=volTh.h;
+      semJoursCpt[semKey]=volTh.j||1;
       return;
     }
 
