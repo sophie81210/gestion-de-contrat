@@ -4856,8 +4856,8 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
         <span id="modif-autorisees-total-${c.id}-${moisKeyTile}" style="font-size:11px;color:var(--tx2);white-space:nowrap">${totalJoursMoisFS}j — ${fmtH(totalMoisMinFS)}</span>
       </div>`:''}
       ${semainesHtml}
-      ${!moisVerrouille?`<button id="${idMois}-btn-save" onclick="enregistrerPlanningMois(${c.id},'${moisKeyTile}')"
-        style="margin-top:8px;width:100%;padding:10px;border:2px solid #4E5F46;border-radius:var(--rs);background:#8FA383;color:#1a2a15;font-weight:700;cursor:pointer;font-size:14px">💾 Enregistrer</button>`:''}
+      ${!moisVerrouille?`<button id="${idMois}-btn-save" onclick="enregistrerPlanningMois(${c.id},'${moisKeyTile}')" ${planningNonEnregistrePourMois(c,moisKeyTile)?'':'disabled'}
+        style="margin-top:8px;width:100%;padding:10px;border:2px solid #4E5F46;border-radius:var(--rs);background:#8FA383;color:#1a2a15;font-weight:700;cursor:pointer;font-size:14px">${planningNonEnregistrePourMois(c,moisKeyTile)?'💾 Enregistrer':'Enregistré ✓'}</button>`:''}
     </div>
   </div>`;
 }
@@ -5020,31 +5020,13 @@ function majPlanningJour(contratId, dateStr, champ, val, semKeyDom){
   // le prévu par défaut, ni ne soustrayait un jour supprimé (bug confirmé Sophie 18/07/2026).
   const semDiv=document.querySelector(`.pln-sem[data-semkey="${semKeyDom}"][data-contrat="${contratId}"]`);
   if(semDiv){
-    // 03/08/2026 (bug signalé Sophie) : recalcul complet à partir des données du contrat (comme au
-    // premier affichage de la semaine), au lieu de ne resommer que les champs heure visibles dans le
-    // DOM — celui-ci ignorait totalement les jours fériés/congés (aucun champ heure), donnant des
-    // totaux faux et changeants pendant la saisie (0h avec un seul des deux champs remplis, jours
-    // fériés/congés disparus du total). Un jour dont un seul des deux champs (début OU fin) est
-    // rempli n'est pas encore compté, plutôt que de fausser le total avec une valeur à moitié saisie.
-    const lundiSemJ=new Date(dateStr.split('-')[0],parseInt(dateStr.split('-')[1])-1,parseInt(dateStr.split('-')[2]));
-    lundiSemJ.setDate(lundiSemJ.getDate()-(lundiSemJ.getDay()===0?6:lundiSemJ.getDay()-1));
-    let totalSemMinLive=0, volHSemLive=0;
-    for(let iSemJ=0;iSemJ<7;iSemJ++){
-      const dJourSemJ=new Date(lundiSemJ); dJourSemJ.setDate(lundiSemJ.getDate()+iSemJ);
-      const dsJourSemJ=dJourSemJ.getFullYear()+'-'+String(dJourSemJ.getMonth()+1).padStart(2,'0')+'-'+String(dJourSemJ.getDate()).padStart(2,'0');
-      const infosJourSemJ=getInfosJourPlanning(c,dsJourSemJ);
-      if(iSemJ===0) volHSemLive=infosJourSemJ.volH||0;
-      const planDataSemJ=c.planning&&c.planning[dsJourSemJ];
-      if(!planDataSemJ||!planDataSemJ.coche) continue;
-      if(planDataSemJ.d&&planDataSemJ.f) totalSemMinLive+=(toM(planDataSemJ.f)-toM(planDataSemJ.d));
-      else if(!planDataSemJ.d&&!planDataSemJ.f) totalSemMinLive+=((infosJourSemJ.volH||0)/(infosJourSemJ.jMax||1))*60;
-      // un seul des deux champs rempli : jour ignoré pour l'instant, pas encore compté
-    }
+    let totalSemMinLive=0;
+    semDiv.querySelectorAll('.pln-deb').forEach(debEl=>{
+      const finEl=debEl.closest('div').querySelector('.pln-fin');
+      if(debEl.value&&finEl&&finEl.value) totalSemMinLive+=toM(finEl.value)-toM(debEl.value);
+    });
     const totSemSpan=semDiv.querySelector('.pln-total');
-    if(totSemSpan){
-      totSemSpan.textContent=fmtH(totalSemMinLive);
-      totSemSpan.style.color=(totalSemMinLive>volHSemLive*60+0.5)?'var(--al)':'';
-    }
+    if(totSemSpan) totSemSpan.textContent=fmtH(totalSemMinLive);
   }
   const moisKeyTile2=moisKeyJ;
   const tileEl2=document.getElementById('pln-tile-'+contratId+'-'+moisKeyTile2);
@@ -5125,21 +5107,16 @@ function enregistrerPlanningMois(contratId, moisKey){
     const agKey=getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr));
     const typeSem=ag&&ag.semaines&&ag.semaines[agKey];
     let volH=0, joursPattern=null, jMaxVol=1;
-    // 03/08/2026 (confirmé Sophie) : plan min n'a qu'un seul rythme possible et n'a jamais besoin
-    // qu'un type soit pointé dans l'agenda (contrairement à var) — exiger typeSem ici empêchait tout
-    // ce contrôle de se déclencher pour min dès que l'agenda n'avait rien pointé, ce qui est le cas
-    // normal pour min, pas l'exception. Cohérent avec calcHTheoriquesPlanMin, qui traite déjà min
-    // ainsi.
-    if(source.planType==='min'&&typeSem!=='off'){
-      volH=source.hMin||0;
-      joursPattern=source.joursMin;
-      jMaxVol=source.jMaxMin||1;
-    } else if(typeSem&&typeSem!=='off'){
+    if(typeSem&&typeSem!=='off'){
       if(source.planType==='var'&&source.planVar){
         const vol=source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);
         volH=vol?vol.h:0;
         joursPattern=vol?vol.jours:null;
         jMaxVol=vol?(vol.j||1):1;
+      } else if(source.planType==='min'){
+        volH=source.hMin||0;
+        joursPattern=source.joursMin;
+        jMaxVol=source.jMaxMin||1;
       }
     }
     if(!(volH>0&&joursPattern)) continue;
@@ -5248,7 +5225,7 @@ function enregistrerPlanningMois(contratId, moisKey){
         erreurs.push(`Semaine ${getSemISO(dateStr)} à cheval sur deux mois : ${fmtH(totalSemaineCeMois*60)} prévues pour ${fmtH(volHCeMois*60)} possibles dans ce mois (prorata du volume hebdomadaire selon les jours de la semaine qui tombent dans ce mois)`);
       }
     } else if(totalSemaine>volH+0.01&&!modifActiveSemV){
-      erreurs.push(`Semaine ${getSemISO(dateStr)} : ${fmtH(totalSemaine*60)} prévues pour un volume de ${fmtH(volH*60)} — limitez le nombre d'heures par semaine à celui prévu au contrat, les heures complémentaires seront à ajouter sur la feuille de présence`);
+      erreurs.push(`Semaine ${getSemISO(dateStr)} : ${fmtH(totalSemaine*60)} prévues pour un volume de ${fmtH(volH*60)} — limitez le nombre d'heures par semaine à celui prévu au contrat (les heures complémentaires seront à ajouter sur la feuille de présence) ou autorisez la modification du planning pour répartir les heures sur le mois`);
     }
   }
   // Étape 2 (18/07/2026) : plafond mensuel jours ET heures pour fixe/sem — une vraie
@@ -5406,6 +5383,8 @@ function enregistrerPlanningMois(contratId, moisKey){
     if(anneeAmPlnSuivante!==anneeAmPln&&S.congesAM[anneeAmPlnSuivante]) majFichesCgAm(anneeAmPlnSuivante,false);
   }
   c._planningSauvegarde=JSON.parse(JSON.stringify(c.planning||{}));
+  if(!c.planningConfirmeMois) c.planningConfirmeMois={};
+  c.planningConfirmeMois[moisKey]=true;
   saveToFirestore();
   const btn=document.getElementById('pln-mois-'+contratId+'-'+moisKey+'-btn-save');
   if(btn){ btn.disabled=true; btn.textContent='Enregistré ✓'; }
@@ -6928,6 +6907,14 @@ function validerFiche(contratId,key){
   const now3=new Date();
   const moisActuel3=now3.getFullYear()+'-'+String(now3.getMonth()+1).padStart(2,'0');
   if(key>moisActuel3){alerte('Cette fiche est à venir — elle ne peut pas encore être validée.');return;}
+  // 04/08/2026 (confirmé Sophie) : pour var/min, le planning doit avoir été explicitement enregistré
+  // au moins une fois pour ce mois (même vide) avant de valider la feuille — pour que l'utilisateur
+  // prenne conscience que le planning ne contient rien plutôt que de valider une fiche à 0h sans s'en
+  // rendre compte.
+  if(c.th==='plan'&&(c.planType==='var'||c.planType==='min')&&!(c.planningConfirmeMois&&c.planningConfirmeMois[key])){
+    alerte('Le planning de ce mois n\u2019a jamais été enregistré — retournez sur l\u2019onglet Planning et cliquez sur 💾 Enregistrer (même s\u2019il est vide) avant de valider cette feuille.');
+    return;
+  }
   // Bloquer si un jour est en statut "reprise" non résolu
   const joursReprise=c.fiches[key].jours.filter(j=>j.statut==='reprise');
   if(joursReprise.length>0){
@@ -8686,14 +8673,13 @@ function getHJourCongesNonDeduit(c, dateStr, jourSemaine){
         if(semainePartielleVolC){
           const jourEstCocheVolC=!!(c.planning&&c.planning[dateStr]&&c.planning[dateStr].coche===true);
           if(!jourEstCocheVolC) return 0;
-          // 03/08/2026 (corrigé, confirmé Sophie par un cas concret) : la valeur d'un jour de congé
-          // coché doit tenir compte du volume déjà consommé par les heures RÉELLES des autres jours
-          // cochés de la même semaine — sinon un jour de congé pouvait être déduit à jours max même
-          // quand le volume était déjà entièrement pris par ailleurs (ex. 2 jours à 10h = 20h sur une
-          // semaine de 20h, un 3e jour de congé coché se voyait quand même déduire un tiers du volume,
-          // dépassant le total réel de la semaine).
+          // 04/08/2026 (re-corrigé, Sophie a précisé la vraie règle) : PAS un partage entre les jours
+          // sans heures réelles — chaque jour de congé/férié reçoit le taux plein volume/jours max,
+          // individuellement, la même règle que pour les heures théoriques. Seules les heures RÉELLES
+          // des autres jours cochés de la semaine réduisent le volume encore disponible (plafond),
+          // jamais un partage entre plusieurs jours de congé/férié entre eux.
           const lundiSemVolC=new Date(dCND); lundiSemVolC.setDate(dCND.getDate()-jourIdxConge);
-          let heuresReellesAutresVolC=0, nbJoursSansHeureVolC=0;
+          let heuresReellesAutresVolC=0;
           for(let iSemVolC=0;iSemVolC<7;iSemVolC++){
             if(!volConge.jours[iSemVolC]) continue;
             const dJourVolC=new Date(lundiSemVolC); dJourVolC.setDate(lundiSemVolC.getDate()+iSemVolC);
@@ -8701,10 +8687,10 @@ function getHJourCongesNonDeduit(c, dateStr, jourSemaine){
             const pdJourVolC=c.planning&&c.planning[dsJourVolC];
             if(!(pdJourVolC&&pdJourVolC.coche===true)) continue;
             if(pdJourVolC.d&&pdJourVolC.f) heuresReellesAutresVolC+=(toM(pdJourVolC.f)-toM(pdJourVolC.d))/60;
-            else nbJoursSansHeureVolC++;
           }
+          const tauxPleinVolC=(volConge.h||0)/(volConge.j||1);
           const volumeRestantVolC=Math.max(0,(volConge.h||0)-heuresReellesAutresVolC);
-          return nbJoursSansHeureVolC>0?parseFloat((volumeRestantVolC/nbJoursSansHeureVolC).toFixed(4)):0;
+          return parseFloat(Math.min(tauxPleinVolC,volumeRestantVolC).toFixed(4));
         }
         const nbPossVolConge=joursPossiblesIdxVolC.length||1;
         return parseFloat(((volConge.h||0)/nbPossVolConge).toFixed(4));
@@ -8730,8 +8716,11 @@ function getHJourCongesNonDeduit(c, dateStr, jourSemaine){
       if(!jourEstCocheMinC) return 0;
       // 03/08/2026 (même correctif que var) : volume restant après les heures réelles des autres
       // jours cochés de la semaine, partagé entre les jours cochés sans heures réelles.
+      // 04/08/2026 (re-corrigé, même règle que var) : taux plein volume/jours max par jour,
+      // individuellement — pas un partage entre les jours de congé/férié entre eux. Seules les heures
+      // RÉELLES des autres jours cochés plafonnent ce qui reste disponible.
       const lundiSemMinC=new Date(dCND); lundiSemMinC.setDate(dCND.getDate()-jourIdxConge);
-      let heuresReellesAutresMinC=0, nbJoursSansHeureMinC=0;
+      let heuresReellesAutresMinC=0;
       for(let iSemMinC=0;iSemMinC<7;iSemMinC++){
         if(!joursMinConge[iSemMinC]) continue;
         const dJourMinC=new Date(lundiSemMinC); dJourMinC.setDate(lundiSemMinC.getDate()+iSemMinC);
@@ -8739,10 +8728,10 @@ function getHJourCongesNonDeduit(c, dateStr, jourSemaine){
         const pdJourMinC=c.planning&&c.planning[dsJourMinC];
         if(!(pdJourMinC&&pdJourMinC.coche===true)) continue;
         if(pdJourMinC.d&&pdJourMinC.f) heuresReellesAutresMinC+=(toM(pdJourMinC.f)-toM(pdJourMinC.d))/60;
-        else nbJoursSansHeureMinC++;
       }
+      const tauxPleinMinC=hMinConge/(jMaxMinConge||1);
       const volumeRestantMinC=Math.max(0,hMinConge-heuresReellesAutresMinC);
-      return nbJoursSansHeureMinC>0?parseFloat((volumeRestantMinC/nbJoursSansHeureMinC).toFixed(4)):0;
+      return parseFloat(Math.min(tauxPleinMinC,volumeRestantMinC).toFixed(4));
     }
     const nbJoursPossiblesMinC=joursPossiblesIdxMinC.length||1;
     return parseFloat((hMinConge/nbJoursPossiblesMinC).toFixed(4));
@@ -16412,13 +16401,21 @@ function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
           let jourPossible=false;
           const planTypePT=srcPT.planType||c.planType;
           if(planTypePT==='var'&&(srcPT.planVar||c.planVar)){
-            if(pourReprise||c.tc==='52'||srcPT.tc==='52'){
-              // Reprise (et contrats 52 dans tous les cas) : jour possible selon le volume
-              // attribué à la semaine via l'agenda — même résolution que getHeuresPrevues,
-              // déjà utilisée par dernierJourDecompte, ce qui garantit la cohérence entre
-              // les deux recherches de reprise. Semaine sans volume attribué (off ou
-              // pointée congés) : aucun jour possible, la recherche passe à la suite.
+            if(pourReprise){
+              // Reprise : jour possible selon le volume attribué à la semaine via l'agenda — même
+              // résolution que getHeuresPrevues, déjà utilisée par dernierJourDecompte, ce qui
+              // garantit la cohérence entre les deux recherches de reprise. Semaine sans volume
+              // attribué (off ou pointée congés) : aucun jour possible, la recherche passe à la suite.
               jourPossible=!!getHeuresPrevues(c,d).planVar;
+            } else if(c.tc==='52'||srcPT.tc==='52'){
+              // 04/08/2026 (confirmé Sophie) : pour la détection "décompte commencé" (pas la reprise),
+              // getHeuresPrevues répond "prévu" dès qu'un jour est structurellement possible et que le
+              // quota n'est pas déjà atteint par d'autres jours — vrai ou coché ou pas, ce n'est pas ce
+              // qu'on veut ici. Vérifier directement si CE jour précis est coché sur le planning.
+              const dsPT52=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+              const cochePT52=!!(c.planning&&c.planning[dsPT52]&&c.planning[dsPT52].coche===true);
+              const volPointePT52=typeSemainePointe(c,d);
+              jourPossible=!!(cochePT52&&volPointePT52&&volPointePT52.jours&&volPointePT52.jours[jourIdx]);
             } else {
               // Démarrage du décompte en 46 : volume pointé d'abord, union des volumes en
               // secours quand le type de la semaine est inconnu (semaines pointées congés,
@@ -16428,12 +16425,7 @@ function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
                                     :(srcPT.planVar||c.planVar).some(v=>v.jours&&v.jours[jourIdx]);
             }
           } else if(planTypePT==='min'&&(srcPT.joursMin||c.joursMin)){
-            // 03/08/2026 (confirmé Sophie) : un jour structurellement possible mais jamais coché ne
-            // doit pas déclencher le décompte — même principe que pour var (getHeuresPrevues, qui lit
-            // la case cochée), jusqu'ici min ne vérifiait que la possibilité structurelle.
-            const dsMinPT=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-            const cocheMinPT=!!(c.planning&&c.planning[dsMinPT]&&c.planning[dsMinPT].coche===true);
-            jourPossible=!!((srcPT.joursMin||c.joursMin)[jourIdx]&&cocheMinPT);
+            jourPossible=(srcPT.joursMin||c.joursMin)[jourIdx];
           }
           if(jourPossible) return dateStr;
         } else if(srcPT.th==='sem'&&srcPT.semTypes){
