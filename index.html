@@ -8683,6 +8683,7 @@ function getHJourCongesNonDeduit(c, dateStr, jourSemaine){
     const agCongeV=agendasCongeV.find(a=>new Date(a.dateDebut)<=dCND&&new Date(a.dateFin)>=dCND);
     const typeSemCongeV=agCongeV&&agCongeV.semaines&&agCongeV.semaines[agKeyCongeV];
     const volConge=typeSemCongeV&&typeSemCongeV!=='off'?sourceConge.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemCongeV):null;
+    if(window.DEBUG_CGAM)console.log('[CGAM-congeNonDeduit-var]',dateStr,'| typeSemCongeV (type pointé):',typeSemCongeV,'| volConge trouvé:',!!volConge,'| tc:',sourceConge.tc);
     if(volConge){
       const jjV=volConge.jours&&volConge.jours[jourIdxConge];
       if(jjV&&jjV.d&&jjV.f) return parseFloat(((toM(jjV.f)-toM(jjV.d))/60).toFixed(4));
@@ -8736,6 +8737,7 @@ function getHJourCongesNonDeduit(c, dateStr, jourSemaine){
     // jours max.
     const joursPossiblesIdxMinC=Array.from({length:7},(_,i)=>i).filter(i=>joursMinConge[i]);
     const semainePartielleMinC=estSemainePartielleConge(c,dateStr,joursPossiblesIdxMinC);
+    if(window.DEBUG_CGAM)console.log('[CGAM-congeNonDeduit-min]',dateStr,'| semainePartielleMinC:',semainePartielleMinC,'| tc:',sourceConge.tc,'| coché:',!!(c.planning&&c.planning[dateStr]&&c.planning[dateStr].coche===true));
     if(semainePartielleMinC){
       const jourEstCocheMinC=!!(c.planning&&c.planning[dateStr]&&c.planning[dateStr].coche===true);
       if(!jourEstCocheMinC) return 0;
@@ -16437,25 +16439,25 @@ function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
               // garantit la cohérence entre les deux recherches de reprise. Semaine sans volume
               // attribué (off ou pointée congés) : aucun jour possible, la recherche passe à la suite.
               jourPossible=!!getHeuresPrevues(c,d).planVar;
-            } else if(c.tc==='52'||srcPT.tc==='52'){
-              // 04/08/2026 (confirmé Sophie) : pour la détection "décompte commencé" (pas la reprise),
-              // getHeuresPrevues répond "prévu" dès qu'un jour est structurellement possible et que le
-              // quota n'est pas déjà atteint par d'autres jours — vrai ou coché ou pas, ce n'est pas ce
-              // qu'on veut ici. Vérifier directement si CE jour précis est coché sur le planning.
+            } else {
+              // 04/08/2026 (confirmé Sophie, étendu à var 46 après vérification console — le
+              // correctif du 04/08 pour var 52 laissait var 46 sur l'ancienne logique structurelle,
+              // qui trouvait "premier jour travaillé" un jour non coché du seul fait qu'il est
+              // structurellement possible) : pour la détection "décompte commencé" (pas la reprise),
+              // vérifier directement si CE jour précis est coché sur le planning, quel que soit tc.
               const dsPT52=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
               const cochePT52=!!(c.planning&&c.planning[dsPT52]&&c.planning[dsPT52].coche===true);
               const volPointePT52=typeSemainePointe(c,d);
-              jourPossible=!!(cochePT52&&volPointePT52&&volPointePT52.jours&&volPointePT52.jours[jourIdx]);
-            } else {
-              // Démarrage du décompte en 46 : volume pointé d'abord, union des volumes en
-              // secours quand le type de la semaine est inconnu (semaines pointées congés,
-              // jamais typées) — règle Sophie confirmée 14/07/2026
-              const volPointe=typeSemainePointe(c,d);
-              jourPossible=volPointe?!!(volPointe.jours&&volPointe.jours[jourIdx])
-                                    :(srcPT.planVar||c.planVar).some(v=>v.jours&&v.jours[jourIdx]);
+              const motifPossiblePT52=volPointePT52?!!(volPointePT52.jours&&volPointePT52.jours[jourIdx])
+                                                    :(srcPT.planVar||c.planVar).some(v=>v.jours&&v.jours[jourIdx]);
+              jourPossible=!!(cochePT52&&motifPossiblePT52);
             }
           } else if(planTypePT==='min'&&(srcPT.joursMin||c.joursMin)){
-            jourPossible=(srcPT.joursMin||c.joursMin)[jourIdx];
+            // 04/08/2026 (restauré — écrasé par erreur lors d'une modification suivante) : un jour
+            // structurellement possible mais jamais coché ne doit pas déclencher le décompte.
+            const dsMinPT=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+            const cocheMinPT=!!(c.planning&&c.planning[dsMinPT]&&c.planning[dsMinPT].coche===true);
+            jourPossible=!!((srcPT.joursMin||c.joursMin)[jourIdx]&&cocheMinPT);
           }
           if(jourPossible) return dateStr;
         } else if(srcPT.th==='sem'&&srcPT.semTypes){
