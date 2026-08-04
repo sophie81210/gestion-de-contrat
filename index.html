@@ -5139,26 +5139,23 @@ function enregistrerPlanningMois(contratId, moisKey){
     else if(dateAvenantC&&lundiSemStr<=dateAvenantC&&dimSemStr>=dateAvenantC) limiteDebut=dateAvenantC;
     if(dateRuptureC&&lundiSemStr<=dateRuptureC&&dimSemStr>dateRuptureC) limiteFin=dateRuptureC;
     if(limiteDebut||limiteFin){
-      let joursPossiblesUnion, hSemMoy;
-      if(source.planType==='var'&&source.planVar){
-        const totJ=source.planVar.reduce((t,v)=>t+(v.h||0)*(v.s||0),0);
-        const totS=source.planVar.reduce((t,v)=>t+(v.s||0),0);
-        hSemMoy=totS>0?totJ/totS:0;
-        joursPossiblesUnion=Array.from({length:7},(_,idx)=>source.planVar.some(v=>v.jours&&v.jours[idx]));
-      } else {
-        hSemMoy=volH;
-        joursPossiblesUnion=joursPattern;
-      }
-      const nbJoursPossiblesUnion=joursPossiblesUnion.filter(Boolean).length||1;
-      let joursHorsContrat=0;
+      // 04/08/2026 (confirmé Sophie, aligné sur le même principe que calcHTheoriquesPlanVar) : cette
+      // section utilisait jours UNION (structurel, plusieurs types confondus) comme diviseur — jamais
+      // jours max du type réellement pointé, jamais les jours cochés. Corrigé : jours max du type
+      // pointé (joursPattern/jMaxVol, déjà calculés plus haut) comme diviseur, et le plus grand entre
+      // (a) le plancher structurel des jours du motif côté SOUS CONTRAT et (b) les jours réellement
+      // cochés dans cette même portion, si plus nombreux — jamais moins que le plancher.
+      let joursPossiblesBonCoteEnr=0, joursCochesBonCoteEnr=0;
       for(let dd2=0;dd2<7;dd2++){
         const jd=new Date(lundiSem); jd.setDate(lundiSem.getDate()+dd2);
         const jdStr=fmtSem(jd);
-        if(joursPossiblesUnion[dd2]&&limiteDebut&&jdStr<limiteDebut) joursHorsContrat++;
-        else if(joursPossiblesUnion[dd2]&&limiteFin&&jdStr>limiteFin) joursHorsContrat++;
+        const estBonCote=(!limiteDebut||jdStr>=limiteDebut)&&(!limiteFin||jdStr<=limiteFin);
+        if(!estBonCote||!joursPattern[dd2]) continue;
+        joursPossiblesBonCoteEnr++;
+        if(c.planning&&c.planning[jdStr]&&c.planning[jdStr].coche) joursCochesBonCoteEnr++;
       }
-      const hAbsHorsContratSem=joursHorsContrat*(hSemMoy/nbJoursPossiblesUnion);
-      volH=Math.max(0,volH-hAbsHorsContratSem);
+      const joursDonnesBonCoteEnr=Math.min(jMaxVol,Math.max(joursPossiblesBonCoteEnr,joursCochesBonCoteEnr));
+      volH=joursDonnesBonCoteEnr*(volH/jMaxVol);
     }
     // Semaine à cheval sur un MOIS CALENDAIRE (différent du cas contrat/avenant ci-dessus) :
     // prorata au même principe que les heures théoriques (hebdo × joursPossiblesCeMois/joursPossiblesSemaine)
@@ -8334,12 +8331,24 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
       const dimStr=dimSem.getFullYear()+'-'+String(dimSem.getMonth()+1).padStart(2,'0')+'-'+String(dimSem.getDate()).padStart(2,'0');
       const estCheval=lundiStr<debutMoisStr||dimStr>finMoisStr||(dateDebContrat&&lundiStr<dateDebContrat)||((dateAvenant)&&lundiStr<=dateAvenant&&dimStr>=dateAvenant);
       if(estCheval){
-        const joursCoches=joursMinTh.filter(Boolean).length||jMaxMinTh;
-        const nbJoursCochesMois=joursDesSem.filter(jj=>{
+        // 04/08/2026 (confirmé Sophie — "joursCoches" ci-dessous était mal nommé : c'était en réalité
+        // jours possibles, jamais jours max, et jamais les jours réellement cochés non plus) : aligné
+        // sur le même principe que var — jours MAX comme diviseur, et le plus grand entre (a) le
+        // plancher structurel (jours du motif présents dans la portion mois/contrat de cette semaine)
+        // et (b) les jours réellement cochés dans cette même portion, si plus nombreux. Jamais moins
+        // que le plancher, plus si le planning montre plus de jours réels.
+        const nbJoursPossiblesMoisCourant=joursDesSem.filter(jj=>{
+          if(joursHCExclus&&joursHCExclus.has(jj.date)) return false;
           const idx=jj.jourSemaine===0?6:jj.jourSemaine-1;
           return joursMinTh[idx];
         }).length;
-        hTheoriques+=hMinTh*(nbJoursCochesMois/joursCoches);
+        const nbJoursCochesMoisCourant=joursDesSem.filter(jj=>{
+          if(joursHCExclus&&joursHCExclus.has(jj.date)) return false;
+          const idx=jj.jourSemaine===0?6:jj.jourSemaine-1;
+          return joursMinTh[idx]&&c.planning&&c.planning[jj.date]&&c.planning[jj.date].coche;
+        }).length;
+        const joursDonnesMoisCourant=Math.min(jMaxMinTh,Math.max(nbJoursPossiblesMoisCourant,nbJoursCochesMoisCourant));
+        hTheoriques+=hMinTh*(joursDonnesMoisCourant/jMaxMinTh);
       } else {
         hTheoriques+=hMinTh;
       }
@@ -8350,8 +8359,18 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
   // s'agit d'un jour possible du motif, moyenne pondérée / jours possibles — même principe que pour
   // var/sem — nouveau 03/08/2026 (confirmé Sophie), cette section n'existait pas du tout pour plan
   // min alors que le paramètre était déjà reçu par la fonction sans jamais être utilisé.
+  // 04/08/2026 (bug signalé Sophie, double comptage confirmé) : cette boucle ajoutait une valeur pour
+  // CHAQUE jour hors contrat individuellement, même pour une semaine MIXTE (une partie hors contrat,
+  // une partie dedans) déjà entièrement traitée par le bloc "à cheval" plus haut (qui donne à la
+  // partie sous contrat sa valeur en jours max, sans rien laisser à la partie hors contrat). Ne doit
+  // s'appliquer qu'aux semaines ENTIÈREMENT hors contrat (qui ne passent jamais par le bloc à cheval,
+  // via le `return` en tout début de la boucle des semaines).
   fiche.jours.forEach(jjHC=>{
     if(!joursHCExclus||!joursHCExclus.has(jjHC.date)) return;
+    const semHC=getSemISO(jjHC.date);
+    const joursDeCetteSemHC=fiche.jours.filter(jj2=>getSemISO(jj2.date)===semHC);
+    const estSemaineEntierementHC=joursDeCetteSemHC.every(jj2=>joursHCExclus.has(jj2.date));
+    if(!estSemaineEntierementHC) return;
     const idxHC=jjHC.jourSemaine===0?6:jjHC.jourSemaine-1;
     if(joursMinTh[idxHC]){
       const joursPossiblesMinHC=joursMinTh.filter(Boolean).length||jMaxMinTh;
@@ -8513,13 +8532,13 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
       const estDebutContratDansSem=debutContratHC&&debutContratHC>=lundiSemHC&&debutContratHC<=dimancheSemHC;
       const estFinContratDansSem=finContratHC&&finContratHC>=lundiSemHC&&finContratHC<=dimancheSemHC;
       if(estDebutContratDansSem||estFinContratDansSem){
-        // Déduction au plus favorable pour l'ass mat (décision Sophie 23/07/2026) : ne déduire que
-        // le nombre de jours max qui n'auraient structurellement pas pu être travaillés du bon
-        // côté de la semaine (jours du motif, jamais la saisie réelle) — pas un jour par jour
-        // hors contrat au calendrier. Exemple Sophie : 4 jours max, 5 possibles mardi-samedi,
-        // début (ou fin) de contrat le jeudi → 3 jours max possibles du bon côté → 1 seul jour
-        // déduit, pas 3. Marquer la semaine comme traitée pour éviter le double comptage avec la
-        // boucle "hors contrat jour par jour" plus bas (qui reste utile pour les autres cas).
+        // 04/08/2026 (confirmé Sophie, aligné sur le même principe que la semaine à cheval de fin de
+        // mois) : la partie SOUS CONTRAT de la semaine reçoit le plus grand de (a) ses jours
+        // structurellement possibles (le plancher garanti, décision du 23/07/2026 — au plus favorable
+        // pour l'ass mat même si rien n'est coché) et (b) ses jours RÉELLEMENT cochés si plus nombreux
+        // — jamais moins que le plancher, mais plus si le planning montre plus de jours réels. Plafonné
+        // à jours max. Marquer la semaine comme traitée pour éviter le double comptage avec la boucle
+        // "hors contrat jour par jour" plus bas (qui reste utile pour les autres cas).
         const jMaxHC=volTh.j||1;
         const compterJoursPossiblesHC=(d1,d2)=>{
           let n=0; const cur=new Date(d1);
@@ -8530,9 +8549,20 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
           }
           return n;
         };
+        const compterJoursCochesHC=(d1,d2)=>{
+          let n=0; const cur=new Date(d1);
+          while(cur<=d2){
+            const dsHC=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
+            const idxHC=cur.getDay()===0?6:cur.getDay()-1;
+            if(volTh.jours&&volTh.jours[idxHC]&&c.planning&&c.planning[dsHC]&&c.planning[dsHC].coche) n++;
+            cur.setDate(cur.getDate()+1);
+          }
+          return n;
+        };
         const joursPossiblesBonCoteHC=estDebutContratDansSem?compterJoursPossiblesHC(debutContratHC,dimancheSemHC):compterJoursPossiblesHC(lundiSemHC,finContratHC);
-        const joursADeduireHC=Math.max(0,jMaxHC-joursPossiblesBonCoteHC);
-        hTheoriques+=Math.max(0,volTh.h-joursADeduireHC*(volTh.h/jMaxHC));
+        const joursCochesBonCoteHC=estDebutContratDansSem?compterJoursCochesHC(debutContratHC,dimancheSemHC):compterJoursCochesHC(lundiSemHC,finContratHC);
+        const joursDonnesBonCoteHC=Math.min(jMaxHC,Math.max(joursPossiblesBonCoteHC,joursCochesBonCoteHC));
+        hTheoriques+=joursDonnesBonCoteHC*(volTh.h/jMaxHC);
         semTheoriquesVues.add(semKey);
       } else {
         // Autre cas hors contrat (ex. agenda manquant) : plan var ne connaît pas le planning
