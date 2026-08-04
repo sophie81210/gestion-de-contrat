@@ -5020,13 +5020,31 @@ function majPlanningJour(contratId, dateStr, champ, val, semKeyDom){
   // le prévu par défaut, ni ne soustrayait un jour supprimé (bug confirmé Sophie 18/07/2026).
   const semDiv=document.querySelector(`.pln-sem[data-semkey="${semKeyDom}"][data-contrat="${contratId}"]`);
   if(semDiv){
-    let totalSemMinLive=0;
-    semDiv.querySelectorAll('.pln-deb').forEach(debEl=>{
-      const finEl=debEl.closest('div').querySelector('.pln-fin');
-      if(debEl.value&&finEl&&finEl.value) totalSemMinLive+=toM(finEl.value)-toM(debEl.value);
-    });
+    // 03/08/2026 (bug signalé Sophie) : recalcul complet à partir des données du contrat (comme au
+    // premier affichage de la semaine), au lieu de ne resommer que les champs heure visibles dans le
+    // DOM — celui-ci ignorait totalement les jours fériés/congés (aucun champ heure), donnant des
+    // totaux faux et changeants pendant la saisie (0h avec un seul des deux champs remplis, jours
+    // fériés/congés disparus du total). Un jour dont un seul des deux champs (début OU fin) est
+    // rempli n'est pas encore compté, plutôt que de fausser le total avec une valeur à moitié saisie.
+    const lundiSemJ=new Date(dateStr.split('-')[0],parseInt(dateStr.split('-')[1])-1,parseInt(dateStr.split('-')[2]));
+    lundiSemJ.setDate(lundiSemJ.getDate()-(lundiSemJ.getDay()===0?6:lundiSemJ.getDay()-1));
+    let totalSemMinLive=0, volHSemLive=0;
+    for(let iSemJ=0;iSemJ<7;iSemJ++){
+      const dJourSemJ=new Date(lundiSemJ); dJourSemJ.setDate(lundiSemJ.getDate()+iSemJ);
+      const dsJourSemJ=dJourSemJ.getFullYear()+'-'+String(dJourSemJ.getMonth()+1).padStart(2,'0')+'-'+String(dJourSemJ.getDate()).padStart(2,'0');
+      const infosJourSemJ=getInfosJourPlanning(c,dsJourSemJ);
+      if(iSemJ===0) volHSemLive=infosJourSemJ.volH||0;
+      const planDataSemJ=c.planning&&c.planning[dsJourSemJ];
+      if(!planDataSemJ||!planDataSemJ.coche) continue;
+      if(planDataSemJ.d&&planDataSemJ.f) totalSemMinLive+=(toM(planDataSemJ.f)-toM(planDataSemJ.d));
+      else if(!planDataSemJ.d&&!planDataSemJ.f) totalSemMinLive+=((infosJourSemJ.volH||0)/(infosJourSemJ.jMax||1))*60;
+      // un seul des deux champs rempli : jour ignoré pour l'instant, pas encore compté
+    }
     const totSemSpan=semDiv.querySelector('.pln-total');
-    if(totSemSpan) totSemSpan.textContent=fmtH(totalSemMinLive);
+    if(totSemSpan){
+      totSemSpan.textContent=fmtH(totalSemMinLive);
+      totSemSpan.style.color=(totalSemMinLive>volHSemLive*60+0.5)?'var(--al)':'';
+    }
   }
   const moisKeyTile2=moisKeyJ;
   const tileEl2=document.getElementById('pln-tile-'+contratId+'-'+moisKeyTile2);
