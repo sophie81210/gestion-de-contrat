@@ -8343,14 +8343,18 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
       const dimSem=new Date(lundiSem);dimSem.setDate(lundiSem.getDate()+6);
       const lundiStr=lundiSem.getFullYear()+'-'+String(lundiSem.getMonth()+1).padStart(2,'0')+'-'+String(lundiSem.getDate()).padStart(2,'0');
       const dimStr=dimSem.getFullYear()+'-'+String(dimSem.getMonth()+1).padStart(2,'0')+'-'+String(dimSem.getDate()).padStart(2,'0');
-      const estCheval=lundiStr<debutMoisStr||dimStr>finMoisStr||(dateDebContrat&&lundiStr<dateDebContrat)||((dateAvenant)&&lundiStr<=dateAvenant&&dimStr>=dateAvenant);
-      if(estCheval){
-        // 04/08/2026 (confirmé Sophie — "joursCoches" ci-dessous était mal nommé : c'était en réalité
-        // jours possibles, jamais jours max, et jamais les jours réellement cochés non plus) : aligné
-        // sur le même principe que var — jours MAX comme diviseur, et le plus grand entre (a) le
-        // plancher structurel (jours du motif présents dans la portion mois/contrat de cette semaine)
-        // et (b) les jours réellement cochés dans cette même portion, si plus nombreux. Jamais moins
-        // que le plancher, plus si le planning montre plus de jours réels.
+      const estChevalMoisSeul=lundiStr<debutMoisStr||dimStr>finMoisStr;
+      const estChevalDebutContrat=dateDebContrat&&lundiStr<dateDebContrat;
+      const estCheval=estChevalMoisSeul||estChevalDebutContrat||((dateAvenant)&&lundiStr<=dateAvenant&&dimStr>=dateAvenant);
+      if(estChevalDebutContrat&&!estChevalMoisSeul){
+        // 05/08/2026 (Sophie, même erreur que var corrigée juste avant) : la semaine de début de
+        // contrat reçoit les heures théoriques COMPLÈTES, inconditionnellement — la réduction "jours
+        // max moins jours possibles côté contrat" ne concerne QUE la déduction hors-contrat, calculée
+        // à part dans calcRecapFiche, jamais les théoriques elles-mêmes.
+        hTheoriques+=hMinTh;
+      } else if(estCheval){
+        // Coupure de MOIS (jamais de contrat ici) : reste le plancher jours max + jours cochés,
+        // cohérent avec le même principe que var pour cette situation précise (04/08, confirmé Sophie).
         const nbJoursPossiblesMoisCourant=joursDesSem.filter(jj=>{
           if(joursHCExclus&&joursHCExclus.has(jj.date)) return false;
           const idx=jj.jourSemaine===0?6:jj.jourSemaine-1;
@@ -8580,10 +8584,15 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
           }
           return n;
         };
-        const joursPossiblesBonCoteHC=estDebutContratDansSem?compterJoursPossiblesHC(debutContratHC,dimancheSemHC):compterJoursPossiblesHC(lundiSemHC,finContratHC);
-        const joursCochesBonCoteHC=estDebutContratDansSem?compterJoursCochesHC(debutContratHC,dimancheSemHC):compterJoursCochesHC(lundiSemHC,finContratHC);
-        const joursDonnesBonCoteHC=Math.min(jMaxHC,Math.max(joursPossiblesBonCoteHC,joursCochesBonCoteHC));
-        hTheoriques+=joursDonnesBonCoteHC*(volTh.h/jMaxHC);
+        // 05/08/2026 (Sophie, calcul semaine par semaine sur un mois entier réel) : erreur de
+        // raisonnement corrigée — les heures théoriques de la semaine de début de contrat restent le
+        // volume COMPLET du type, INCONDITIONNELLEMENT, exactement comme la règle déjà établie pour
+        // toute semaine avec un type pointé (volume garanti, peu importe ce qui est coché). La
+        // réduction "jours max moins jours possibles côté contrat" ne concerne QUE la déduction
+        // hors-contrat, calculée entièrement à part dans calcRecapFiche — jamais les théoriques
+        // elles-mêmes. Le correctif précédent confondait ces deux calculs, causant un manque exact de
+        // (jours déduits × volume/jMax) sur les théoriques affichées.
+        hTheoriques+=volTh.h;
         semTheoriquesVues.add(semKey);
       } else {
         // Autre cas hors contrat (ex. agenda manquant) : plan var ne connaît pas le planning
