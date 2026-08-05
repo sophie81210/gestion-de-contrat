@@ -10410,11 +10410,46 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           // Semaine off : toutes les heures réelles comptent en HC, pas de seuil
           hPrev=0;
         } else if(statut==='hors-contrat'&&c.th==='sem'){
-          // Jour hors contrat en plan sem : aucun type précis ne peut légalement s'appliquer →
-          // moyenne pondérée / jours possibles (union), cohérent avec calcHTheoriquesPlanSem
+          // 05/08/2026 (Sophie, exemple chiffré précis) : cette section déduisait TOUJOURS selon les
+          // jours union, même quand un type précis est pointé pour cette semaine dans l'agenda — même
+          // erreur déjà corrigée pour var/min (règle absolue : même mode que les heures théoriques,
+          // qui elles utilisent bien le type précis quand il est connu). Cherche maintenant le type
+          // pointé en premier ; jours union seulement si vraiment aucun type n'est identifiable.
           const srcHCsem=getVersionActive(c,new Date(j.date));
           const semTypesHC=srcHCsem.semTypes||c.semTypes||[];
           const jourIdxHCsem=j.jourSemaine===0?6:j.jourSemaine-1;
+          const agKeyHCsem=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
+          const agendasHCsem=srcHCsem.agendas||c.agendas||[];
+          const agHCsem=agendasHCsem.find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date))||agendaMois;
+          const typeSemHCsem=agHCsem&&agHCsem.semaines&&agHCsem.semaines[agKeyHCsem];
+          const stHCsem=typeSemHCsem?semTypesHC.find(st=>st.nom===typeSemHCsem):null;
+          if(stHCsem&&stHCsem.jours&&stHCsem.jours[jourIdxHCsem]&&stHCsem.jours[jourIdxHCsem].d){
+            // Type précis connu pour cette semaine : jours max moins jours possibles côté sous contrat
+            // (même principe que var/min pour le début/fin de contrat), avec compteur par semaine pour
+            // ne déduire que ce qu'il reste, jamais plus.
+            const dateDebHCsem=c.dateDeb||j.date;
+            const [dHCa,dHCm,dHCj]=dateDebHCsem.split('-').map(Number);
+            const dateDebSafeHCsem=new Date(dHCa,dHCm-1,dHCj);
+            const jourSemDebHCsem=dateDebSafeHCsem.getDay()===0?6:dateDebSafeHCsem.getDay()-1;
+            const lundiSemDebHCsem=new Date(dateDebSafeHCsem); lundiSemDebHCsem.setDate(dateDebSafeHCsem.getDate()-jourSemDebHCsem);
+            const lundiSemDebHCsemStr=lundiSemDebHCsem.getFullYear()+'-'+String(lundiSemDebHCsem.getMonth()+1).padStart(2,'0')+'-'+String(lundiSemDebHCsem.getDate()).padStart(2,'0');
+            const semKeyHCsemD=lundiSemDebHCsem.getFullYear()+'-S'+String(getSemISO(lundiSemDebHCsemStr)).padStart(2,'0');
+            if(!fiche._joursADeduireHCsemCache) fiche._joursADeduireHCsemCache={};
+            if(!(semKeyHCsemD in fiche._joursADeduireHCsemCache)){
+              const jMaxSemHCsem=stHCsem.jours.filter(j2=>j2&&j2.d).length||1;
+              let joursPossiblesEnContratHCsem=0;
+              for(let dd4=0;dd4<7;dd4++){
+                const jd4=new Date(lundiSemDebHCsem); jd4.setDate(lundiSemDebHCsem.getDate()+dd4);
+                if(jd4>=dateDebSafeHCsem&&stHCsem.jours[dd4]&&stHCsem.jours[dd4].d) joursPossiblesEnContratHCsem++;
+              }
+              fiche._joursADeduireHCsemCache[semKeyHCsemD]={restant:Math.max(0,jMaxSemHCsem-joursPossiblesEnContratHCsem),hJourSem:(toM(stHCsem.jours[jourIdxHCsem].f)-toM(stHCsem.jours[jourIdxHCsem].d))/60};
+            }
+            const compteurHCsem=fiche._joursADeduireHCsemCache[semKeyHCsemD];
+            if(compteurHCsem.restant>0){ hPrev=(toM(stHCsem.jours[jourIdxHCsem].f)-toM(stHCsem.jours[jourIdxHCsem].d))/60; compteurHCsem.restant--; }
+            else hPrev=0;
+          } else {
+          // Jour hors contrat en plan sem, AUCUN type précis identifiable : moyenne pondérée / jours
+          // possibles (union), cohérent avec calcHTheoriquesPlanSem pour ce même cas.
           const jourPossibleHCsem=semTypesHC.some(st=>st.jours&&st.jours[jourIdxHCsem]&&st.jours[jourIdxHCsem].d);
           if(jourPossibleHCsem){
             let totalHAnnuelHC=0, totalJAnnuelHC=0;
@@ -10432,6 +10467,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             hPrev=hSemMoyHC/nbJoursPossiblesHC;
           } else {
             hPrev=0;
+          }
           }
         } else {
           // Vérifier si ce jour précis est normalement prévu au planning (pas seulement la semaine)
@@ -12550,6 +12586,24 @@ function peindreAgenda(key,cid,agid){
   if(!pinceau){toast('Sélectionnez d\'abord un pinceau');return;}
   if(ag.semaines[key]===pinceau)delete ag.semaines[key];
   else ag.semaines[key]=pinceau;
+  // 05/08/2026 (Sophie, "assez urgente") : un changement de type dans l'agenda se répercute bien sur
+  // le motif de la semaine dans le planning, mais les heures déjà saisies restaient — pouvant bloquer
+  // la saisie si le nouveau type a un volume plus grand (ex. 30h déjà cochées sur ce qui devient une
+  // semaine de 40h, impossible d'ajouter les 10h manquantes). Réinitialise le planning de CETTE
+  // semaine (les 7 jours), pour tous les types de contrat.
+  {
+    const keyPartsReset=key.split('-S');
+    const semNumReset=keyPartsReset[1]?parseInt(keyPartsReset[1]):0;
+    const anneeReset=parseInt(keyPartsReset[0]);
+    if(semNumReset&&anneeReset&&c.planning){
+      const lundiReset=getDateFromSemISO(semNumReset,anneeReset);
+      for(let ddReset=0;ddReset<7;ddReset++){
+        const jReset=new Date(lundiReset); jReset.setDate(lundiReset.getDate()+ddReset);
+        const dsReset=jReset.getFullYear()+'-'+String(jReset.getMonth()+1).padStart(2,'0')+'-'+String(jReset.getDate()).padStart(2,'0');
+        delete c.planning[dsReset];
+      }
+    }
+  }
   // Si la semaine peinte est la dernière semaine de cet agenda (celle qui chevauche le suivant),
   // répercuter la même valeur sur la 1ère semaine de l'agenda suivant s'il existe déjà — pour que
   // remplir cette semaine après coup n'introduise pas de conflit entre les deux cycles
