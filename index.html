@@ -10542,18 +10542,33 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           // Vérifier si ce jour précis est normalement prévu au planning (pas seulement la semaine)
           const jourIdxFS=j.jourSemaine===0?6:j.jourSemaine-1;
           let jourEstPrevuFS=true;
+          let hJourPropreFS=null;
           if(c.th==='fixe'&&sourceActif.joursFixe){
-            jourEstPrevuFS=!!(sourceActif.joursFixe[jourIdxFS]&&sourceActif.joursFixe[jourIdxFS].d);
+            const jfFS=sourceActif.joursFixe[jourIdxFS];
+            jourEstPrevuFS=!!(jfFS&&jfFS.d);
+            if(jourEstPrevuFS&&jfFS.f) hJourPropreFS=(toM(jfFS.f)-toM(jfFS.d))/60;
           } else if(c.th==='sem'&&sourceActif.semTypes){
             const agKeyFS=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
             const agendasFS=(sourceActif.agendas||c.agendas||[]);
             const agFS=agendasFS.find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date))||agendaMois;
             const typeSemFS=agFS&&agFS.semaines&&agFS.semaines[agKeyFS];
             const stFS=typeSemFS?sourceActif.semTypes.find(st=>st.nom===typeSemFS):null;
-            if(stFS) jourEstPrevuFS=!!(stFS.jours&&stFS.jours[jourIdxFS]&&stFS.jours[jourIdxFS].d);
-            else jourEstPrevuFS=sourceActif.semTypes.some(st=>st.jours&&st.jours[jourIdxFS]&&st.jours[jourIdxFS].d);
+            if(stFS){
+              const jfFSsem=stFS.jours&&stFS.jours[jourIdxFS];
+              jourEstPrevuFS=!!(jfFSsem&&jfFSsem.d);
+              if(jourEstPrevuFS&&jfFSsem.f) hJourPropreFS=(toM(jfFSsem.f)-toM(jfFSsem.d))/60;
+            } else {
+              jourEstPrevuFS=sourceActif.semTypes.some(st=>st.jours&&st.jours[jourIdxFS]&&st.jours[jourIdxFS].d);
+            }
           }
-          hPrev=jourEstPrevuFS?hMensu/(nbJoursMoisContrat||20):0;
+          // 05/08/2026 (Sophie : "pourquoi calculer en jours, si les heures du contrat sont
+          // différentes chaque jour ?") : fixe et sem connaissent déjà les heures EXACTES de chaque
+          // jour de leur motif — jamais besoin d'une moyenne mensuelle. Une moyenne traite à tort un
+          // jour court et un jour long comme valant la même chose, ce qui explique les décimales
+          // inattendues sur un contrat aux horaires irréguliers. Utilise maintenant les heures
+          // propres du jour quand elles sont connues ; la moyenne ne sert plus qu'en dernier recours
+          // si un motif est identifié comme "prévu" sans heures de fin renseignées (cas limite).
+          hPrev=jourEstPrevuFS?(hJourPropreFS!==null?hJourPropreFS:hMensu/(nbJoursMoisContrat||20)):0;
         }
       } else {
         hPrev=hMensu/(nbJoursMoisContrat||20);
