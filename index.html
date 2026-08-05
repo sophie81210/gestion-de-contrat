@@ -9860,6 +9860,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const hAbsJoursCpt={};
   const hAbsDedJoursCpt={};
   const hAbsDedJoursCpt2={};
+  const hAbsDedRestantHCplanvar={}; // 05/08/2026 : compteur dédié pour la déduction hors-contrat var (semaine de début de contrat), séparé de hAbsDedJoursCpt2 pour éviter toute collision de clé sur la même semaine
   if(sourceActif.th==='plan'||c.th==='plan'||sourceActif.th==='sem'||c.th==='sem'){
     // Pour plan sem et plan var : moyenne pondérée / jours possibles (union), cohérent avec
     // calcHTheoriquesPlanSem/PlanVar — un jour hors contrat n'a légalement aucun type/volume précis
@@ -10358,11 +10359,54 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       } else if(c.th==='plan'&&c.planType==='var'&&c.planVar){
         const jourIdxHCplanvar=j.jourSemaine===0?6:j.jourSemaine-1;
         if(statut==='hors-contrat'){
-          // Jour hors contrat : aucun volume précis ne peut légalement s'appliquer (le contrat n'existe
-          // pas encore) → toujours la moyenne pondérée / jours possibles (union), qu'un type soit
-          // assigné ou non à cette semaine — cohérent avec calcHTheoriquesPlanVar et joursHCExclus
+          // 05/08/2026 (Sophie, var 46 — après plusieurs tentatives infructueuses sur le MAUVAIS
+          // emplacement du code) : ceci est le VRAI calcul de la valeur déduite pour un jour hors
+          // contrat en plan var — jamais localisé ni corrigé jusqu'ici (le bloc "horsContratDeduit"
+          // plus haut dans la fonction n'alimente qu'un statut d'affichage, pas cette valeur). Même
+          // défaut que celui déjà corrigé pour sem : utilisait systématiquement la moyenne pondérée
+          // jours union, même quand un type précis est pointé pour cette semaine. Cherche maintenant
+          // le type précis en priorité (même principe que calcHTheoriquesPlanVar et le compteur jours
+          // max déjà établi), jours union seulement si vraiment aucun type identifiable.
           const srcHCplanvar=getVersionActive(c,new Date(j.date));
           const planVarHC2=srcHCplanvar.planVar||c.planVar;
+          const agendasHCplanvar=srcHCplanvar.agendas||c.agendas||[];
+          const agHCplanvar=agendasHCplanvar.find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date))||agendaMois;
+          const agKeyHCplanvar=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
+          const typeSemHCplanvar=agHCplanvar&&agHCplanvar.semaines&&agHCplanvar.semaines[agKeyHCplanvar];
+          const volHCplanvar=typeSemHCplanvar&&planVarHC2?planVarHC2.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemHCplanvar):null;
+          if(volHCplanvar&&!(volHCplanvar.jours&&volHCplanvar.jours[jourIdxHCplanvar])){
+            // Type connu mais ce jour précis hors de son motif à lui : ne vaut rien, jamais une
+            // valeur calculée sur l'union d'autres types qui ne concernent pas cette semaine.
+            hPrev=0;
+          } else if(volHCplanvar&&volHCplanvar.jours&&volHCplanvar.jours[jourIdxHCplanvar]){
+            // Type précis connu, jour dans son motif : jours max moins jours possibles côté sous
+            // contrat, compteur par semaine pour ne déduire que ce qu'il reste, jamais plus.
+            const dateDebHCplanvar=c.dateDeb||j.date;
+            const [dHCpv,mHCpv,jHCpv]=dateDebHCplanvar.split('-').map(Number);
+            const dateDebSafeHCplanvar=new Date(dHCpv,mHCpv-1,jHCpv);
+            const jourSemDebHCplanvar=dateDebSafeHCplanvar.getDay()===0?6:dateDebSafeHCplanvar.getDay()-1;
+            const lundiSemDebHCplanvar=new Date(dateDebSafeHCplanvar); lundiSemDebHCplanvar.setDate(dateDebSafeHCplanvar.getDate()-jourSemDebHCplanvar);
+            const lundiSemDebHCplanvarStr=lundiSemDebHCplanvar.getFullYear()+'-'+String(lundiSemDebHCplanvar.getMonth()+1).padStart(2,'0')+'-'+String(lundiSemDebHCplanvar.getDate()).padStart(2,'0');
+            const semKeyHCplanvarD=lundiSemDebHCplanvar.getFullYear()+'-S'+String(getSemISO(lundiSemDebHCplanvarStr)).padStart(2,'0');
+            if(!hAbsDedRestantHCplanvar[semKeyHCplanvarD]){
+              const jMaxHCplanvar=volHCplanvar.j||1;
+              let joursPossiblesEnContratHCplanvar=0;
+              for(let dd5=0;dd5<7;dd5++){
+                const jd5=new Date(lundiSemDebHCplanvar); jd5.setDate(lundiSemDebHCplanvar.getDate()+dd5);
+                if(jd5>=dateDebSafeHCplanvar&&volHCplanvar.jours[dd5]) joursPossiblesEnContratHCplanvar++;
+              }
+              hAbsDedRestantHCplanvar[semKeyHCplanvarD]=Math.max(0,jMaxHCplanvar-joursPossiblesEnContratHCplanvar);
+            }
+            if(window.DEBUG_CGAM)console.log('[CGAM-varHC-abs-detail]',j.date,'| typeSemHCplanvar:',typeSemHCplanvar,'| jMax-joursPossiblesEnContrat (restant semaine):',hAbsDedRestantHCplanvar[semKeyHCplanvarD]);
+            if(hAbsDedRestantHCplanvar[semKeyHCplanvarD]>0){
+              hPrev=(volHCplanvar.h||0)/(volHCplanvar.j||1);
+              hAbsDedRestantHCplanvar[semKeyHCplanvarD]--;
+            } else {
+              hPrev=0;
+            }
+          } else {
+          // Jour hors contrat en plan var, AUCUN type précis identifiable : moyenne pondérée / jours
+          // possibles (union), cohérent avec calcHTheoriquesPlanVar pour ce même cas.
           const jourPossibleMoyHC=planVarHC2&&planVarHC2.some(v=>v.jours&&v.jours[jourIdxHCplanvar]);
           if(jourPossibleMoyHC){
             const totJHC2=planVarHC2.reduce((t,v)=>t+(v.h||0)*(v.s||0),0);
@@ -10372,6 +10416,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             hPrev=hSemMoyHC2/nbJoursPossiblesHC2;
           } else {
             hPrev=0;
+          }
           }
         } else {
         const semKeyAbs=getSemISO(j.date);
