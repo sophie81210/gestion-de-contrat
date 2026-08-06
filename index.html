@@ -5240,7 +5240,9 @@ function enregistrerPlanningMois(contratId, moisKey){
       else totalSemaine+=volH/jMaxVol; // férié coché (pas de champs d'heures) : compte pour volume/jMax
     });
     if(window.DEBUG_CGAM)console.log('[CGAM-totalSemaine]',semKeyISO,'| totalSemaine:',totalSemaine,'| volH:',volH,'| jMaxVol:',jMaxVol);
-    const modifActiveSemV=source.planType==='var'&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey];
+    // 06/08/2026 (Sophie) : oubliait "min" — le blocage "volume de la semaine dépassé" n'était donc
+    // jamais levé pour min même case "modifications autorisées" cochée, contrairement à var.
+    const modifActiveSemV=(source.planType==='var'||source.planType==='min')&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey];
     if(semACheval){
       if(totalSemaineCeMois>volHCeMois+0.01&&!modifActiveSemV){ // modèle libre 22/07 : var+case → plus de refus
         erreurs.push(`Semaine ${getSemISO(dateStr)} à cheval sur deux mois : ${fmtH(totalSemaineCeMois*60)} prévues pour ${fmtH(volHCeMois*60)} possibles dans ce mois (prorata du volume hebdomadaire selon les jours de la semaine qui tombent dans ce mois)`);
@@ -9146,21 +9148,19 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         if(dateDebC2&&lundiVStr2<dateDebC2&&dimVStr2>=dateDebC2) limiteCheval2=dateDebC2;
         else if(dateAvenant2&&lundiVStr2<=dateAvenant2&&dimVStr2>=dateAvenant2) limiteCheval2=dateAvenant2;
         if(limiteCheval2&&vol.jours){
-          const planVarUnion=sourceActif.planVar||c.planVar;
-          const totJUn=planVarUnion.reduce((t,v)=>t+(v.h||0)*(v.s||0),0);
-          const totSUn=planVarUnion.reduce((t,v)=>t+(v.s||0),0);
-          const hSemMoyUn=totSUn>0?totJUn/totSUn:0;
-          const joursPossiblesUn=Array.from({length:7},(_,idx)=>planVarUnion.some(v=>v.jours&&v.jours[idx]));
-          const nbJoursPossiblesUn=joursPossiblesUn.filter(Boolean).length||1;
-          let joursHorsContrat=0;
+          // 06/08/2026 (Sophie) : même défaut que calcEnveloppeMoisVar (corrigé plus tôt aujourd'hui) —
+          // comptait les jours hors-contrat sur la moyenne annuelle/jours union de TOUS les volumes du
+          // contrat, jamais le volume/jMax propre à CETTE semaine précise. Corrigé pareil : la partie
+          // travaillée récupère d'abord tous les jours max qu'elle peut vraiment prendre cette semaine.
+          let joursDansContrat2=0;
           for(let d=0;d<7;d++){
             const cur=new Date(lundiV2); cur.setDate(lundiV2.getDate()+d);
             const curStr=fmtV2(cur);
-            if(joursPossiblesUn[d]&&curStr<limiteCheval2) joursHorsContrat++;
+            if(vol.jours[d]&&curStr>=limiteCheval2) joursDansContrat2++;
           }
-          const hAbsHorsContratSem=joursHorsContrat*(hSemMoyUn/nbJoursPossiblesUn);
-          hPrevuParSemaine[semKey]=Math.max(0,vol.h-hAbsHorsContratSem);
-          hAbsHorsContratParSemaine[semKey]=hAbsHorsContratSem;
+          const jMaxSemaine2=Math.min(vol.j||1,joursDansContrat2);
+          hPrevuParSemaine[semKey]=(vol.h||0)*jMaxSemaine2/(vol.j||1);
+          hAbsHorsContratParSemaine[semKey]=(vol.h||0)-hPrevuParSemaine[semKey];
         } else {
           hPrevuParSemaine[semKey]=vol.h;
         }
@@ -9180,16 +9180,17 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       if(dateDebM&&lundiVMStr<dateDebM&&dimVMStr>=dateDebM) limiteChevalM=dateDebM;
       else if(dateAvenantM&&lundiVMStr<=dateAvenantM&&dimVMStr>=dateAvenantM) limiteChevalM=dateAvenantM;
       if(limiteChevalM){
-        const joursCochesM=joursMinRef.filter(Boolean).length||jMaxMinRef;
-        let joursHorsContratM=0;
+        // 06/08/2026 (Sophie) : même correctif que le bloc var juste au-dessus — jours max de la
+        // semaine plutôt que jours possibles du motif/moyenne.
+        let joursDansContratM=0;
         for(let d=0;d<7;d++){
           const cur=new Date(lundiVM); cur.setDate(lundiVM.getDate()+d);
           const curStr=fmtVM(cur);
-          if(joursMinRef[d]&&curStr<limiteChevalM) joursHorsContratM++;
+          if(joursMinRef[d]&&curStr>=limiteChevalM) joursDansContratM++;
         }
-        const hAbsHorsContratM=joursHorsContratM*(hMinRef/joursCochesM);
-        hPrevuParSemaine[semKey]=Math.max(0,hMinRef-hAbsHorsContratM);
-        hAbsHorsContratParSemaine[semKey]=hAbsHorsContratM;
+        const jMaxSemaineM=Math.min(jMaxMinRef||1,joursDansContratM);
+        hPrevuParSemaine[semKey]=hMinRef*jMaxSemaineM/(jMaxMinRef||1);
+        hAbsHorsContratParSemaine[semKey]=hMinRef-hPrevuParSemaine[semKey];
       } else {
         hPrevuParSemaine[semKey]=hMinRef;
       }
