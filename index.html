@@ -4100,19 +4100,13 @@ function ouvrirFiche(contratId,key){
   const aDesConges=fiche.jours.some(j=>['conges-acq','conges-non','conges-anticipe'].includes(j.statut));
   const anticipeActif=fiche.anticipeActif!==undefined?fiche.anticipeActif:(c.cgAnticipe==='oui');
   const anticipeAutorise=c.cgAnticipe==='oui';
-  // Case anticipe : visible seulement si premier jour décompté est dans ce mois
-  // Verrouillée si décompte commencé le mois précédent (prise à cheval)
-  const moisPrecKeyAntic=parseInt(key.split('-')[1])===1
-    ?(parseInt(key.split('-')[0])-1)+'-12'
-    :key.split('-')[0]+'-'+String(parseInt(key.split('-')[1])-1).padStart(2,'0');
-  const fichePrecAntic=c.fiches?.[moisPrecKeyAntic];
-  const moisPrecADesConges=fichePrecAntic?.jours?.some(j=>['conges-acq','conges-non','conges-anticipe'].includes(j.statut));
-  // Premier jour décompté dans ce mois = ce mois a des congés ET le mois précédent n'en a pas (ou pas de fiche)
-  const estPremierMoisPose=aDesConges&&!moisPrecADesConges;
-  // Verrouillé si décompte commencé le mois précédent
-  const anticipeVerrouille=aDesConges&&moisPrecADesConges;
-  // Case visible seulement si premier mois de la pose
-  const afficherCaseAnticipe=estPremierMoisPose;
+  // 06/08/2026 (Sophie) : case affichée sur TOUS les mois ayant des congés, plus seulement le
+  // premier mois de la pose — le calcul (majFichesCgAmPasse) ne consulte de toute façon plus que
+  // la case du mois où l'anticipé devient réellement nécessaire pour une pose donnée (décidée une
+  // fois pour toute la pose, voir anticipeDecidePose) ; cocher la case d'un mois qui ne sera pas
+  // consulté pour cette pose précise ne fait rien de mal — plus besoin de deviner à l'avance lequel
+  // sera consulté, ni de verrouiller les mois suivants d'une même pose.
+  const afficherCaseAnticipe=aDesConges;
 
   // Récap
   cont.innerHTML=
@@ -4148,13 +4142,12 @@ function ouvrirFiche(contratId,key){
     ${afficherCaseAnticipe&&!fiche.valide?`
     <div class="card" style="margin-top:10px;background:${anticipeActif?'#fef3eb':'#fff'}">
       <div style="display:flex;align-items:center;gap:10px">
-        <label style="display:flex;align-items:center;gap:8px;cursor:${anticipeVerrouille?'not-allowed':'pointer'};font-size:13px;font-weight:600">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600">
           <input type="checkbox" ${anticipeActif?'checked':''} 
             style="width:16px;height:16px;accent-color:var(--m)"
-            ${(anticipeVerrouille||estLectureSeuleEmployeur())?'disabled title="'+(anticipeVerrouille?'Option verrouillée : la prise a commencé le mois précédent':'Lecture seule')+'"':''}
+            ${estLectureSeuleEmployeur()?'disabled title="Lecture seule"':''}
             onchange="toggleAnticipe(${contratId},'${key}',this.checked)">
           Prise de congés par anticipation
-          ${anticipeVerrouille?'<span style="font-size:11px;color:var(--tx2);font-weight:400"> — défini sur le mois précédent</span>':''}
         </label>
         ${!anticipeAutorise?`<span style="font-size:11px;color:var(--al)">(non autorisé au contrat)</span>`:''}
       </div>
@@ -16770,6 +16763,22 @@ function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
     return periodes;
   }
 
+  // 06/08/2026 (Sophie) : deux fragments de pose (coupés par getPeriodes à cause d'un jour de repos
+  // hebdo non "posé" entre les deux, puisqu'on ne pose pas un jour où l'on ne travaille pas)
+  // appartiennent à la MÊME pose continue si tous les jours entre les deux sont des jours non
+  // travaillés (repos hebdo ou férié chômé) — sinon c'est une pose SÉPARÉE, sans lien (ex. un jour de
+  // pont isolé suivi, bien plus tard, d'une autre prise). Sert à savoir si le choix "anticipé
+  // autorisé" doit continuer de s'appliquer ou être redemandé pour la nouvelle pose.
+  function memePoseCgAm(c, finPrec, debutSuiv){
+    const d1=new Date(finPrec); d1.setDate(d1.getDate()+1);
+    const d2=new Date(debutSuiv);
+    for(let cur=new Date(d1); cur<d2; cur.setDate(cur.getDate()+1)){
+      const curStr=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
+      if(cur.getDay()!==(c.reposHebdo||0)&&!isFerie(curStr,c)) return false;
+    }
+    return true;
+  }
+
   // Type de semaine / volume pointé dans l'agenda pour la semaine d'une date donnée.
   // Retourne l'objet semType (plan sem) ou volume (plan var), ou null si la semaine n'a
   // pas de type connu (non pointée, off, ou pointage ne correspondant à aucun type/volume).
@@ -17087,6 +17096,11 @@ if(tousNonPrevus){
 
     // compteurTotal sera calculé par période (voir ci-dessous)
     let compteurTotal=0;
+    // 06/08/2026 (Sophie) : décision "anticipé autorisé" figée UNE FOIS par pose (au moment précis où
+    // elle devient nécessaire, voir plus bas), pas remise en cause ensuite pour cette même pose même
+    // en changeant de mois — remise à null à chaque nouvelle pose (voir memePoseCgAm juste au-dessus).
+    let anticipeDecidePose=null;
+    let finPosePrecedenteCgAm=null;
     Object.values(c.fiches).forEach(fiche=>{
       if(fiche.valide) return;
       fiche.jours.forEach(j=>{
@@ -17136,6 +17150,10 @@ if(tousNonPrevus){
       });
     }
     periodes.forEach(({debut,fin})=>{
+      // 06/08/2026 (Sophie) : nouvelle pose (pas la continuation de la précédente, malgré la coupure
+      // artificielle de getPeriodes sur les jours de repos) → la décision "anticipé" se redemande.
+      if(finPosePrecedenteCgAm&&!memePoseCgAm(c,finPosePrecedenteCgAm,debut)) anticipeDecidePose=null;
+      finPosePrecedenteCgAm=fin;
       const premierTrav=premierJourTravaille(c,debut,fin);
       const finDate=new Date(fin);
       const apresFinDate=new Date(finDate);apresFinDate.setDate(apresFinDate.getDate()+1);
@@ -17501,19 +17519,6 @@ if(tousNonPrevus){
           if(jour.statut==='travaille') break;
 
           if(!fiche.valide){
-            // anticipeOk : réglage du contrat ET case mensuelle anticipeActif (précision
-            // Sophie 15/07/2026) — même logique que les autres branches
-            const debutMoisKeyPP=new Date(debut).getFullYear()+'-'+String(new Date(debut).getMonth()+1).padStart(2,'0');
-            const ficheDebutPP=c.fiches?.[debutMoisKeyPP];
-            let anticipeOkPP=c.cgAnticipe==='oui';
-            if(ficheDebutPP&&ficheDebutPP.anticipeActif!==undefined){
-              anticipeOkPP=c.cgAnticipe==='oui'&&ficheDebutPP.anticipeActif!==false;
-            } else {
-              const [dbYPP,dbMPP]=debutMoisKeyPP.split('-').map(Number);
-              const moisAvDebKeyPP=dbMPP===1?(dbYPP-1)+'-12':dbYPP+'-'+String(dbMPP-1).padStart(2,'0');
-              const ficheAvDebPP=c.fiches?.[moisAvDebKeyPP];
-              if(ficheAvDebPP?.anticipeActif!==undefined) anticipeOkPP=c.cgAnticipe==='oui'&&ficheAvDebPP.anticipeActif!==false;
-            }
             // Le compteur n'avance QUE si le jour devient réellement acquis ou anticipé —
             // jamais pour un jour qui finit non-acquis (règle Sophie 15/07/2026 : un jour
             // "gâché" ne doit jamais grignoter le quota disponible pour une pose différente,
@@ -17521,11 +17526,21 @@ if(tousNonPrevus){
             if(compteurTotal+1<=quotaAcquis){
               compteurTotal++;
               jour.statut='decompte-acq';
-            } else if(anticipeOkPP&&compteurTotal+1<=quotaAnticipeTotal){
-              compteurTotal++;
-              jour.statut='decompte-anticipe';
             } else {
-              jour.statut='decompte-conges'; // hors quota — ne consomme pas le compteur
+              // 06/08/2026 (Sophie) : la case consultée est celle du mois où CE JOUR précis a lieu
+              // (pas celui du début de la pose) — décidé une seule fois par pose, au moment exact où
+              // l'anticipé devient nécessaire, puis réutilisé tel quel jusqu'à la fin de cette même
+              // pose (anticipeDecidePose, remis à null à chaque nouvelle pose — voir memePoseCgAm).
+              if(anticipeDecidePose===null){
+                const ficheDecisionPP=c.fiches?.[dateStr.slice(0,7)];
+                anticipeDecidePose=c.cgAnticipe==='oui'&&!!(ficheDecisionPP&&ficheDecisionPP.anticipeActif);
+              }
+              if(anticipeDecidePose&&compteurTotal+1<=quotaAnticipeTotal){
+                compteurTotal++;
+                jour.statut='decompte-anticipe';
+              } else {
+                jour.statut='decompte-conges'; // hors quota — ne consomme pas le compteur
+              }
             }
           } else {
             compteurTotal++; // fiche validée : incrément conservé tel quel (cf. bug #5, 14/07)
@@ -17673,22 +17688,14 @@ if(tousNonPrevus){
             // même quand le lendemain réel allait légitimement devenir anticipé.
             const debutPoseDateFerLend=new Date(anneeAcqPose+1,4,1);
             const estEnPeriodePoseFerLend=lendStr>=debutPoseDateFerLend;
-            // anticipeOk : le réglage du contrat NE SUFFIT PAS — il faut EN PLUS que la case
-            // mensuelle de la feuille de présence (anticipeActif, cochée par défaut) soit
-            // active pour le mois de la pose — précision Sophie 15/07/2026. Même logique que
-            // les autres branches (pose normale, post-pose) : chercher d'abord le mois de
-            // début de la période, sinon le mois précédent.
-            const debutMoisKeyFerLend=new Date(debut).getFullYear()+'-'+String(new Date(debut).getMonth()+1).padStart(2,'0');
-            const ficheDebutFerLend=c.fiches?.[debutMoisKeyFerLend];
-            let anticipeOkFerLend=c.cgAnticipe==='oui';
-            if(ficheDebutFerLend&&ficheDebutFerLend.anticipeActif!==undefined){
-              anticipeOkFerLend=c.cgAnticipe==='oui'&&ficheDebutFerLend.anticipeActif!==false;
-            } else {
-              const [dbYFerLend,dbMFerLend]=debutMoisKeyFerLend.split('-').map(Number);
-              const moisAvDebKeyFerLend=dbMFerLend===1?(dbYFerLend-1)+'-12':dbYFerLend+'-'+String(dbMFerLend-1).padStart(2,'0');
-              const ficheAvDebFerLend=c.fiches?.[moisAvDebKeyFerLend];
-              if(ficheAvDebFerLend?.anticipeActif!==undefined) anticipeOkFerLend=c.cgAnticipe==='oui'&&ficheAvDebFerLend.anticipeActif!==false;
+            // 06/08/2026 (Sophie) : même mécanisme que les autres branches — décision unique par
+            // pose, prise au moment précis où elle devient nécessaire, réutilisée telle quelle
+            // jusqu'à la fin de la pose (anticipeDecidePose, voir plus haut).
+            if(anticipeDecidePose===null){
+              const ficheDecisionFerLend=c.fiches?.[dateStr.slice(0,7)];
+              anticipeDecidePose=c.cgAnticipe==='oui'&&!!(ficheDecisionFerLend&&ficheDecisionFerLend.anticipeActif);
             }
+            const anticipeOkFerLend=anticipeDecidePose;
             const lendAcquis=lendConges&&((estEnPeriodePoseFerLend&&compteurTotal+1<=quotaAcquis)||(anticipeOkFerLend&&compteurTotal+1<=quotaAnticipeTotal));
             if(veilleAcquis&&lendAcquis){
               // Reste férié (entouré de jours acquis ou anticipés) — confirmer explicitement
@@ -17751,19 +17758,16 @@ if(tousNonPrevus){
               // compteur n'avance que si le jour devient acquis ou anticipé (2e correctif du
               // même jour : jamais pour un non-acquis).
               if(!fiche.valide){
-                const debutMoisKeyHP=new Date(debut).getFullYear()+'-'+String(new Date(debut).getMonth()+1).padStart(2,'0');
-                const ficheDebutHP=c.fiches?.[debutMoisKeyHP];
-                let anticipeOkHP;
-                if(ficheDebutHP&&ficheDebutHP.anticipeActif!==undefined){
-                  anticipeOkHP=c.cgAnticipe==='oui'&&ficheDebutHP.anticipeActif!==false;
-                } else {
-                  const [dbYHP,dbMHP]=debutMoisKeyHP.split('-').map(Number);
-                  const moisAvDebKeyHP=dbMHP===1?(dbYHP-1)+'-12':dbYHP+'-'+String(dbMHP-1).padStart(2,'0');
-                  const ficheAvDebHP=c.fiches?.[moisAvDebKeyHP];
-                  anticipeOkHP=c.cgAnticipe==='oui'&&(ficheAvDebHP?.anticipeActif!==false);
-                }
                 const debutPoseDateHP=new Date(anneeAcqPose+1,4,1);
                 const estEnPeriodePoseHP=cur>=debutPoseDateHP;
+                // 06/08/2026 (Sophie) : décision unique par pose (anticipeDecidePose, voir plus
+                // haut) — consultée seulement si ce jour a vraiment besoin d'anticipé (l'acquis ne
+                // suffit pas), au moment précis où c'est le cas, jamais avant.
+                if(!(estEnPeriodePoseHP&&compteurTotal+1<=quotaAcquis)&&anticipeDecidePose===null){
+                  const ficheDecisionHP=c.fiches?.[dateStr.slice(0,7)];
+                  anticipeDecidePose=c.cgAnticipe==='oui'&&!!(ficheDecisionHP&&ficheDecisionHP.anticipeActif);
+                }
+                const anticipeOkHP=anticipeDecidePose;
                 if(window.DEBUG_CGAM)console.log('[CGAM]',dateStr,'| post-pose non prévu | compteur',compteurTotal,'/ quota',quotaAcquis,'/ anticipé total',quotaAnticipeTotal,'| enPériodePose',estEnPeriodePoseHP,'| anticipéOk',anticipeOkHP);
                 if(estEnPeriodePoseHP&&compteurTotal+1<=quotaAcquis){
                   compteurTotal++;
@@ -17780,19 +17784,16 @@ if(tousNonPrevus){
             } else {
               // Jour prévu ou dans la période : pose normale
               if(!fiche.valide){
-                const debutMoisKey2=new Date(debut).getFullYear()+'-'+String(new Date(debut).getMonth()+1).padStart(2,'0');
-                const ficheDebut2=c.fiches?.[debutMoisKey2];
-                let anticipeOk;
-                if(ficheDebut2&&ficheDebut2.anticipeActif!==undefined){
-                  anticipeOk=c.cgAnticipe==='oui'&&ficheDebut2.anticipeActif!==false;
-                } else {
-                  const [dbY2,dbM2]=debutMoisKey2.split('-').map(Number);
-                  const moisAvDebKey2=dbM2===1?(dbY2-1)+'-12':dbY2+'-'+String(dbM2-1).padStart(2,'0');
-                  const ficheAvDeb2=c.fiches?.[moisAvDebKey2];
-                  anticipeOk=c.cgAnticipe==='oui'&&(ficheAvDeb2?.anticipeActif!==false);
-                }
                 const debutPoseDate2=new Date(anneeAcqPose+1,4,1);
                 const estEnPeriodePose2=cur>=debutPoseDate2;
+                // 06/08/2026 (Sophie) : décision unique par pose (anticipeDecidePose, voir plus
+                // haut) — consultée seulement si ce jour a vraiment besoin d'anticipé (l'acquis ne
+                // suffit pas), au moment précis où c'est le cas, jamais avant.
+                if(!(estEnPeriodePose2&&compteurTotal+1<=quotaAcquis)&&anticipeDecidePose===null){
+                  const ficheDecision2=c.fiches?.[dateStr.slice(0,7)];
+                  anticipeDecidePose=c.cgAnticipe==='oui'&&!!(ficheDecision2&&ficheDecision2.anticipeActif);
+                }
+                const anticipeOk=anticipeDecidePose;
                 if(window.DEBUG_CGAM)console.log('[CGAM]',dateStr,'| pose | compteur',compteurTotal,'/ quota',quotaAcquis,'/ anticipé total',quotaAnticipeTotal,'| enPériodePose',estEnPeriodePose2,'| anticipéOk',anticipeOk);
                 // Le compteur n'avance que si le jour devient acquis ou anticipé — jamais pour
                 // un non-acquis ni pour une semaine off (règle Sophie 15/07/2026)
