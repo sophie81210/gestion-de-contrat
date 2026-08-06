@@ -1157,13 +1157,18 @@ function getContratsCompresses(){
       });
       fichesClean[k]={...f,jours:joursClean};
     });
-    const {_regulHtml:_, _regulDirty:__, _planningSauvegarde:planningSauve, ...cClean}=c;
+    const {_regulHtml:_, _regulDirty:__, _planningSauvegarde:planningSauve, _modifAutoriseesSauvegarde:modifSauve, ...cClean}=c;
     // Si un planning "brouillon" (non encore validé via le bouton Enregistrer) existe en mémoire, ne
     // jamais l'enregistrer — utiliser la dernière version réellement validée à la place, pour qu'une
     // sauvegarde déclenchée ailleurs (ex. la feuille de présence) ne fige pas accidentellement des
     // heures en cours de saisie qui dépassent le volume ou n'ont pas encore été vérifiées
     const planningAEnregistrer=planningSauve!==undefined?planningSauve:c.planning;
-    return {...cClean,fiches:fichesClean,planning:planningAEnregistrer};
+    // 06/08/2026 (Sophie) : même principe pour la case "modifications autorisées", qui passe
+    // maintenant par ce même circuit (voir toggleModifPlanningAutorisees) — sinon une sauvegarde
+    // déclenchée ailleurs persisterait quand même une case tout juste cochée/décochée sans être
+    // passée par le bouton Enregistrer.
+    const modifAutoriseesAEnregistrer=modifSauve!==undefined?modifSauve:c.modifPlanningAutoriseesMois;
+    return {...cClean,fiches:fichesClean,planning:planningAEnregistrer,modifPlanningAutoriseesMois:modifAutoriseesAEnregistrer};
   });
 }
 
@@ -4927,6 +4932,12 @@ function renderPlanning(c, cont){
   if(c._planningSauvegarde===undefined){
     c._planningSauvegarde=JSON.parse(JSON.stringify(c.planning||{}));
   }
+  // 06/08/2026 (Sophie) : même principe que _planningSauvegarde juste au-dessus, mais pour l'état
+  // de la case "modifications autorisées" par mois — nécessaire pour que le bouton Enregistrer la
+  // détecte désormais comme une modification en attente (voir toggleModifPlanningAutorisees).
+  if(c._modifAutoriseesSauvegarde===undefined){
+    c._modifAutoriseesSauvegarde=JSON.parse(JSON.stringify(c.modifPlanningAutoriseesMois||{}));
+  }
   const debut=new Date(c.dateDeb);
   const dateFinC=getDateFinContrat(c);
   const now=new Date();
@@ -4984,10 +4995,11 @@ function toggleModifPlanningAutorisees(contratId, moisKey, checked){
   }
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
-  // Sauvegarde via le mécanisme établi (localStorage immédiat + Firestore débouncé 2s + filet
-  // de sécurité à la fermeture de l'onglet), comme le reste de l'app.
-  _contratsModifies.add(contratId);
-  saveToFirestore();
+  // 06/08/2026 (Sophie) : ce changement passe désormais par le même circuit d'enregistrement que
+  // le reste du planning (bouton Enregistrer), au lieu d'être sauvegardé tout de suite en
+  // contournant les contrôles de volume hebdomadaire — Sophie a signalé que ça permettait de
+  // décocher la case et de laisser une semaine en dépassement sans aucun avertissement ni blocage.
+  marquerPlanningNonEnregistre(contratId, moisKey);
   // Rafraîchissement CIBLÉ de cette seule tuile (pas un redessin complet, qui refermerait tous
   // les mois — même bug déjà corrigé une fois sur le cadenas par jour). Nécessaire maintenant
   // que l'étape 3 fait dépendre l'affichage du formulaire de cet état — bug confirmé Sophie
@@ -5063,6 +5075,12 @@ function planningNonEnregistrePourMois(c, moisKey){
   // enregistrement réel). Ajouté 22/07/2026 pour un rappel fiable à l'ouverture de la feuille de
   // présence : l'astérisque du bouton n'est jamais recréé lors d'un rafraîchissement de tuile
   // déclenché depuis un autre mois (semaine à cheval), donc pas fiable comme seul indicateur.
+  // 06/08/2026 (Sophie) : ajout de la case "modifications autorisées" à cette même comparaison —
+  // avant, un changement de cette case n'était jamais détecté ici (seuls les jours cochés
+  // l'étaient), donc jamais compté comme "en attente" lors d'un rafraîchissement de tuile.
+  const modifVive=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey]);
+  const modifSauve=!!((c._modifAutoriseesSauvegarde||{})[moisKey]);
+  if(modifVive!==modifSauve) return true;
   if(!c.planning||c._planningSauvegarde===undefined) return false;
   const [ay,am]=moisKey.split('-').map(Number);
   const dernierJour=new Date(ay,am,0).getDate();
@@ -5406,6 +5424,9 @@ function enregistrerPlanningMois(contratId, moisKey){
     if(anneeAmPlnSuivante!==anneeAmPln&&S.congesAM[anneeAmPlnSuivante]) majFichesCgAm(anneeAmPlnSuivante,false);
   }
   c._planningSauvegarde=JSON.parse(JSON.stringify(c.planning||{}));
+  // 06/08/2026 (Sophie) : snapshot de la case au même moment que le planning lui-même, puisqu'elle
+  // passe maintenant par ce même bouton Enregistrer (voir toggleModifPlanningAutorisees).
+  c._modifAutoriseesSauvegarde=JSON.parse(JSON.stringify(c.modifPlanningAutoriseesMois||{}));
   if(!c.planningConfirmeMois) c.planningConfirmeMois={};
   c.planningConfirmeMois[moisKey]=true;
   saveToFirestore();
