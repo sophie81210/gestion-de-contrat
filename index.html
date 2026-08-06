@@ -5081,6 +5081,13 @@ function planningNonEnregistrePourMois(c, moisKey){
   const modifVive=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey]);
   const modifSauve=!!((c._modifAutoriseesSauvegarde||{})[moisKey]);
   if(modifVive!==modifSauve) return true;
+  // 06/08/2026 (Sophie) : un mois jamais confirmé via le bouton Enregistrer (même vide, même sans
+  // rien modifié depuis l'ouverture) compte toujours comme "en attente" — sinon le bouton s'affiche
+  // par défaut "Enregistré ✓" dès l'ouverture (la comparaison ci-dessous ne voit aucune différence,
+  // faute d'un vrai enregistrement de référence), ce qui laisse croire à tort qu'un planning jamais
+  // rempli est à jour. S'applique à tous les types (fixe/sem compris) — affichage seulement, pas un
+  // blocage.
+  if(c.th==='plan'&&!(c.planningConfirmeMois&&c.planningConfirmeMois[moisKey])) return true;
   if(!c.planning||c._planningSauvegarde===undefined) return false;
   const [ay,am]=moisKey.split('-').map(Number);
   const dernierJour=new Date(ay,am,0).getDate();
@@ -5327,9 +5334,14 @@ function enregistrerPlanningMois(contratId, moisKey){
         minReelV+=(pd3.d&&pd3.f)?(toM(pd3.f)-toM(pd3.d)):((infosReel3.volH||0)/(infosReel3.jMax||1))*60;
       }
     }
-    // MODÈLE LIBRE (décision Sophie 22/07/2026) : plus aucun refus var — l'enveloppe informe, la
-    // paie arbitre. Complémentaires = excédent de l'ENVELOPPE MENSUELLE ; supplémentaires =
-    // tranches hebdo au-delà de 45h, semaine rattachée au mois de son DERNIER jour (règle art. 109).
+    // 06/08/2026 (Sophie) : le modèle libre du 22/07 est abandonné pour le dépassement de l'enveloppe
+    // mensuelle — exemple concret de Sophie montrant que laisser dépasser puis absorber l'écart via la
+    // feuille de présence casse le calcul (une absence posée sur un jour prévu déduit à tort des heures
+    // complémentaires, sans savoir de quelle semaine elles proviennent réellement — jusqu'à une double
+    // déduction si plusieurs jours sont concernés). Redevient un refus, comme le contrôle hebdomadaire
+    // quand la case n'est pas cochée. Les heures sup (>45h/semaine, art. 109) restent informatives :
+    // ce sont des heures réellement travaillées cette semaine-là, pas un dépassement du volume du
+    // contrat à répartir — rien d'ambigu à corriger après coup pour celles-ci.
     const excedentMinV=Math.max(0,minReelV-minBaseV);
     let hSupMoisV=0;
     for(let d6=1; d6<=finMoisDate.getDate(); d6++){
@@ -5347,10 +5359,10 @@ function enregistrerPlanningMois(contratId, moisKey){
       }
       hSupMoisV+=Math.max(0,totSem6-45);
     }
-    if(excedentMinV>1||hSupMoisV>0.001){
-      // 22/07/2026 : un seul montant — les Yh supplémentaires (>45h/sem) sont déjà COMPRISES dans
-      // les Xh d'excédent, pas un ajout distinct (le texte précédent laissait croire à une somme X+Y).
-      complSupInfoV=`, dont ${fmtH(Math.round(excedentMinV))} heures complémentaires / supplémentaires`;
+    if(excedentMinV>1){
+      erreurs.push(`Ce mois totalise ${fmtH(minReelV)} pour une enveloppe de ${fmtH(minBaseV)} — limitez le nombre d'heures à celui prévu au contrat (les heures complémentaires seront à ajouter sur la feuille de présence)`);
+    } else if(hSupMoisV>0.001){
+      complSupInfoV=`, dont ${fmtH(Math.round(hSupMoisV))} heures supplémentaires`;
     }
   }
   if(erreurs.length){
@@ -6965,9 +6977,19 @@ function validerFiche(contratId,key){
   // au moins une fois pour ce mois (même vide) avant de valider la feuille — pour que l'utilisateur
   // prenne conscience que le planning ne contient rien plutôt que de valider une fiche à 0h sans s'en
   // rendre compte.
-  if(c.th==='plan'&&(c.planType==='var'||c.planType==='min')&&!(c.planningConfirmeMois&&c.planningConfirmeMois[key])){
-    alerte('Le planning de ce mois n\u2019a jamais été enregistré — retournez sur l\u2019onglet Planning et cliquez sur 💾 Enregistrer (même s\u2019il est vide) avant de valider cette feuille.');
-    return;
+  if(c.th==='plan'&&(c.planType==='var'||c.planType==='min')){
+    if(!(c.planningConfirmeMois&&c.planningConfirmeMois[key])){
+      alerte('Le planning de ce mois n\u2019a jamais été enregistré — retournez sur l\u2019onglet Planning et cliquez sur 💾 Enregistrer (même s\u2019il est vide) avant de valider cette feuille.');
+      return;
+    }
+    // 06/08/2026 (Sophie) : le contrôle ci-dessus ne couvrait que "jamais enregistré" — une fois un
+    // premier enregistrement fait, il restait satisfait pour toujours, même avec des modifications
+    // ensuite jamais réenregistrées (case modifications autorisées ou jours modifiés). Sophie a pu
+    // valider une feuille dans cet état — ajout de ce même contrôle utilisé pour le bouton Enregistrer.
+    if(planningNonEnregistrePourMois(c,key)){
+      alerte('Le planning de ce mois a des modifications non enregistrées — retournez sur l\u2019onglet Planning et cliquez sur 💾 Enregistrer avant de valider cette feuille.');
+      return;
+    }
   }
   // Bloquer si un jour est en statut "reprise" non résolu
   const joursReprise=c.fiches[key].jours.filter(j=>j.statut==='reprise');
