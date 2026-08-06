@@ -8361,9 +8361,14 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
       const dimStr=dimSem.getFullYear()+'-'+String(dimSem.getMonth()+1).padStart(2,'0')+'-'+String(dimSem.getDate()).padStart(2,'0');
       const estChevalMoisSeul=lundiStr<debutMoisStr||dimStr>finMoisStr;
       const estChevalDebutContrat=dateDebContrat&&lundiStr<dateDebContrat;
-      const estCheval=estChevalMoisSeul||estChevalDebutContrat||((dateAvenant)&&lundiStr<=dateAvenant&&dimStr>=dateAvenant);
-      if(estChevalDebutContrat&&!estChevalMoisSeul){
-        // 05/08/2026 (Sophie, même erreur que var corrigée juste avant) : la semaine de début de
+      // 05/08/2026 (Sophie : même principe pour la fin de contrat que pour le début, jamais fait pour
+      // min jusqu'ici — var l'avait déjà) : réutilise getDateFinContrat, déjà utilisée ailleurs.
+      const dateFinContratMinTh=getDateFinContrat(c);
+      const dateFinContratMinThStr=dateFinContratMinTh?(dateFinContratMinTh.getFullYear()+'-'+String(dateFinContratMinTh.getMonth()+1).padStart(2,'0')+'-'+String(dateFinContratMinTh.getDate()).padStart(2,'0')):null;
+      const estChevalFinContrat=dateFinContratMinThStr&&dimStr>dateFinContratMinThStr&&lundiStr<=dateFinContratMinThStr;
+      const estCheval=estChevalMoisSeul||estChevalDebutContrat||estChevalFinContrat||((dateAvenant)&&lundiStr<=dateAvenant&&dimStr>=dateAvenant);
+      if((estChevalDebutContrat||estChevalFinContrat)&&!estChevalMoisSeul){
+        // 05/08/2026 (Sophie, même erreur que var corrigée juste avant) : la semaine de début OU fin de
         // contrat reçoit les heures théoriques COMPLÈTES, inconditionnellement — la réduction "jours
         // max moins jours possibles côté contrat" ne concerne QUE la déduction hors-contrat, calculée
         // à part dans calcRecapFiche, jamais les théoriques elles-mêmes.
@@ -10032,6 +10037,18 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           const dimSemDebHC=new Date(lundiSemDebHC); dimSemDebHC.setDate(lundiSemDebHC.getDate()+6);
           const jDateSafeHC=new Date(j.date.split('-').map(Number)[0],j.date.split('-').map(Number)[1]-1,j.date.split('-').map(Number)[2]);
           const estMemeSemaineQueDebutHC=jDateSafeHC>=lundiSemDebHC&&jDateSafeHC<=dimSemDebHC;
+          // 05/08/2026 (Sophie : même principe "au plus favorable" à appliquer pour la FIN de contrat,
+          // en miroir du début déjà fait et confirmé) : réutilise getDateFinContrat, déjà utilisée
+          // pour ce même usage dans calcHTheoriquesPlanVar (heures théoriques).
+          const dateFinContratHCsafe=getDateFinContrat(c);
+          let estMemeSemaineQueFinHC=false, lundiSemFinHC=null, dimSemFinHC=null;
+          if(dateFinContratHCsafe){
+            const jourSemFinHC=dateFinContratHCsafe.getDay()===0?6:dateFinContratHCsafe.getDay()-1;
+            lundiSemFinHC=new Date(dateFinContratHCsafe); lundiSemFinHC.setDate(dateFinContratHCsafe.getDate()-jourSemFinHC);
+            dimSemFinHC=new Date(lundiSemFinHC); dimSemFinHC.setDate(lundiSemFinHC.getDate()+6);
+            estMemeSemaineQueFinHC=jDateSafeHC>=lundiSemFinHC&&jDateSafeHC<=dimSemFinHC;
+          }
+          const estSemaineChevalContratHC=estMemeSemaineQueDebutHC||estMemeSemaineQueFinHC;
           const srcJourHC=getVersionActive(c,new Date(j.date));
           const planVarActif2=srcJourHC.planVar||c.planVar;
           const planTypeActif2=srcJourHC.planType||c.planType;
@@ -10039,14 +10056,15 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           const jourIdxHC2=j.jourSemaine===0?6:j.jourSemaine-1;
           const jourPossibleHC2=planTypeActif2==='var'?(planVarActif2&&planVarActif2.some(v=>v.jours&&v.jours[jourIdxHC2])):(joursMinActif2&&joursMinActif2[jourIdxHC2]);
           if(window.DEBUG_CGAM)console.log('[CGAM-horsContrat-detail]',j.date,'| planType:',planTypeActif2,'| jourPossibleHC2:',jourPossibleHC2,'| estMemeSemaineQueDebutHC:',estMemeSemaineQueDebutHC,'| dateDeb utilisée:',(c.dateDeb||j.date));
-          if(!estMemeSemaineQueDebutHC){
+          if(!estSemaineChevalContratHC){
             if(jourPossibleHC2) horsContratDeduit=true;
           } else if(jourPossibleHC2){
-            // Semaine de début de contrat : ne déduire que jusqu'à (jours max - jours possibles côté
-            // contrat), jamais plus, jamais 0 automatiquement. Clé par semaine pour ne pas redemander
-            // le même calcul jour par jour à chaque itération de la boucle.
-            const lundiSemDebHCStr=lundiSemDebHC.getFullYear()+'-'+String(lundiSemDebHC.getMonth()+1).padStart(2,'0')+'-'+String(lundiSemDebHC.getDate()).padStart(2,'0');
-            const semKeyHCD=lundiSemDebHC.getFullYear()+'-S'+String(getSemISO(lundiSemDebHCStr)).padStart(2,'0');
+            // Semaine de début OU fin de contrat : ne déduire que jusqu'à (jours max - jours possibles
+            // côté contrat), jamais plus, jamais 0 automatiquement — même principe des deux côtés.
+            // Clé par semaine pour ne pas redemander le même calcul jour par jour à chaque itération.
+            const lundiSemRefHC=estMemeSemaineQueDebutHC?lundiSemDebHC:lundiSemFinHC;
+            const lundiSemRefHCStr=lundiSemRefHC.getFullYear()+'-'+String(lundiSemRefHC.getMonth()+1).padStart(2,'0')+'-'+String(lundiSemRefHC.getDate()).padStart(2,'0');
+            const semKeyHCD=lundiSemRefHC.getFullYear()+'-S'+String(getSemISO(lundiSemRefHCStr)).padStart(2,'0')+(estMemeSemaineQueDebutHC?'-deb':'-fin');
             if(!(semKeyHCD in localCompteurHCD)){
               let jMaxSemHCD=1, joursPossiblesEnContratHCD=0;
               if(planTypeActif2==='var'){
@@ -10061,16 +10079,18 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
                 jMaxSemHCD=volHCD?(volHCD.j||1):1;
                 if(volHCD&&volHCD.jours){
                   for(let dd3=0;dd3<7;dd3++){
-                    const jd3=new Date(lundiSemDebHC); jd3.setDate(lundiSemDebHC.getDate()+dd3);
-                    if(jd3>=dateDebSafeHC&&volHCD.jours[dd3]) joursPossiblesEnContratHCD++;
+                    const jd3=new Date(lundiSemRefHC); jd3.setDate(lundiSemRefHC.getDate()+dd3);
+                    const jd3DansContrat=estMemeSemaineQueDebutHC?(jd3>=dateDebSafeHC):(jd3<=dateFinContratHCsafe);
+                    if(jd3DansContrat&&volHCD.jours[dd3]) joursPossiblesEnContratHCD++;
                   }
                 }
               } else {
                 jMaxSemHCD=srcJourHC.jMaxMin||1;
                 if(joursMinActif2){
                   for(let dd3=0;dd3<7;dd3++){
-                    const jd3=new Date(lundiSemDebHC); jd3.setDate(lundiSemDebHC.getDate()+dd3);
-                    if(jd3>=dateDebSafeHC&&joursMinActif2[dd3]) joursPossiblesEnContratHCD++;
+                    const jd3=new Date(lundiSemRefHC); jd3.setDate(lundiSemRefHC.getDate()+dd3);
+                    const jd3DansContrat=estMemeSemaineQueDebutHC?(jd3>=dateDebSafeHC):(jd3<=dateFinContratHCsafe);
+                    if(jd3DansContrat&&joursMinActif2[dd3]) joursPossiblesEnContratHCD++;
                   }
                 }
               }
@@ -10405,19 +10425,34 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           } else if(volHCplanvar&&volHCplanvar.jours&&volHCplanvar.jours[jourIdxHCplanvar]){
             // Type précis connu, jour dans son motif : jours max moins jours possibles côté sous
             // contrat, compteur par semaine pour ne déduire que ce qu'il reste, jamais plus.
+            // 05/08/2026 (Sophie : même principe pour la fin de contrat que pour le début) : détermine
+            // si CE jour tombe dans la semaine de début OU de fin de contrat, et compte les jours
+            // possibles côté sous contrat dans le bon sens selon le cas (après le début, ou avant la
+            // fin).
             const dateDebHCplanvar=c.dateDeb||j.date;
             const [dHCpv,mHCpv,jHCpv]=dateDebHCplanvar.split('-').map(Number);
             const dateDebSafeHCplanvar=new Date(dHCpv,mHCpv-1,jHCpv);
             const jourSemDebHCplanvar=dateDebSafeHCplanvar.getDay()===0?6:dateDebSafeHCplanvar.getDay()-1;
             const lundiSemDebHCplanvar=new Date(dateDebSafeHCplanvar); lundiSemDebHCplanvar.setDate(dateDebSafeHCplanvar.getDate()-jourSemDebHCplanvar);
-            const lundiSemDebHCplanvarStr=lundiSemDebHCplanvar.getFullYear()+'-'+String(lundiSemDebHCplanvar.getMonth()+1).padStart(2,'0')+'-'+String(lundiSemDebHCplanvar.getDate()).padStart(2,'0');
-            const semKeyHCplanvarD=lundiSemDebHCplanvar.getFullYear()+'-S'+String(getSemISO(lundiSemDebHCplanvarStr)).padStart(2,'0');
-            if(!hAbsDedRestantHCplanvar[semKeyHCplanvarD]){
+            const dimSemDebHCplanvar=new Date(lundiSemDebHCplanvar); dimSemDebHCplanvar.setDate(lundiSemDebHCplanvar.getDate()+6);
+            const jDateSafeHCplanvar=new Date(j.date.split('-').map(Number)[0],j.date.split('-').map(Number)[1]-1,j.date.split('-').map(Number)[2]);
+            const estSemDebutHCplanvar=jDateSafeHCplanvar>=lundiSemDebHCplanvar&&jDateSafeHCplanvar<=dimSemDebHCplanvar;
+            const dateFinHCplanvar=getDateFinContrat(c);
+            let lundiSemFinHCplanvar=null;
+            if(!estSemDebutHCplanvar&&dateFinHCplanvar){
+              const jourSemFinHCplanvar=dateFinHCplanvar.getDay()===0?6:dateFinHCplanvar.getDay()-1;
+              lundiSemFinHCplanvar=new Date(dateFinHCplanvar); lundiSemFinHCplanvar.setDate(dateFinHCplanvar.getDate()-jourSemFinHCplanvar);
+            }
+            const lundiSemRefHCplanvar=estSemDebutHCplanvar?lundiSemDebHCplanvar:lundiSemFinHCplanvar;
+            const lundiSemDebHCplanvarStr=lundiSemRefHCplanvar.getFullYear()+'-'+String(lundiSemRefHCplanvar.getMonth()+1).padStart(2,'0')+'-'+String(lundiSemRefHCplanvar.getDate()).padStart(2,'0');
+            const semKeyHCplanvarD=lundiSemRefHCplanvar.getFullYear()+'-S'+String(getSemISO(lundiSemDebHCplanvarStr)).padStart(2,'0')+(estSemDebutHCplanvar?'-deb':'-fin');
+            if(!(semKeyHCplanvarD in hAbsDedRestantHCplanvar)){
               const jMaxHCplanvar=volHCplanvar.j||1;
               let joursPossiblesEnContratHCplanvar=0;
               for(let dd5=0;dd5<7;dd5++){
-                const jd5=new Date(lundiSemDebHCplanvar); jd5.setDate(lundiSemDebHCplanvar.getDate()+dd5);
-                if(jd5>=dateDebSafeHCplanvar&&volHCplanvar.jours[dd5]) joursPossiblesEnContratHCplanvar++;
+                const jd5=new Date(lundiSemRefHCplanvar); jd5.setDate(lundiSemRefHCplanvar.getDate()+dd5);
+                const jd5DansContrat=estSemDebutHCplanvar?(jd5>=dateDebSafeHCplanvar):(jd5<=dateFinHCplanvar);
+                if(jd5DansContrat&&volHCplanvar.jours[dd5]) joursPossiblesEnContratHCplanvar++;
               }
               hAbsDedRestantHCplanvar[semKeyHCplanvarD]=Math.max(0,jMaxHCplanvar-joursPossiblesEnContratHCplanvar);
             }
