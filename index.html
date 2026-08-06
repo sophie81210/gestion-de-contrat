@@ -5904,6 +5904,51 @@ function calcEnveloppeMoisVar(c,ay,am){
           // compte son jMax/volume COMPLET au lieu de sa seule portion (bug confirmé Sophie
           // 18/07/2026 par un test chiffré précis).
           const lundiSem3=new Date(dCur3); lundiSem3.setDate(dCur3.getDate()-(dCur3.getDay()||7)+1);
+          const dimancheSem3=new Date(lundiSem3); dimancheSem3.setDate(lundiSem3.getDate()+6);
+          const fmtSem3=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
+          // 06/08/2026 (Sophie) : un avenant qui tombe EN COURS de semaine (pas le lundi) coupe la
+          // semaine en deux motifs différents — "au plus favorable" appliqué séparément à chacune des
+          // deux portions paierait deux fois trop de jours (jusqu'à jMax de CHAQUE côté pour une seule
+          // semaine). Dans ce cas précis, et seulement celui-là, chaque portion est valorisée en jours
+          // possibles (comme avant "au plus favorable"), jamais en jours max — les deux portions
+          // s'additionnent simplement, chacune ne comptant que ses propres jours tombant dans LE MOIS
+          // demandé. Gère aussi une semaine à cheval sur un mois calendaire ET un avenant en même
+          // temps sans mécanisme séparé : chaque jour n'est compté qu'une fois, par la portion à
+          // laquelle il appartient, pour le mois auquel il appartient — pas de plafond partagé à
+          // négocier avec l'autre mois, contrairement au cas "jours max" ci-dessous.
+          const avenantSemaine3=(c.avenants||[]).find(av=>{
+            if(!av.signe||!av.dateAvenant) return false;
+            const dAv3=parseDateLoc(av.dateAvenant);
+            return dAv3>lundiSem3&&dAv3<=dimancheSem3;
+          });
+          if(avenantSemaine3){
+            const dateDebC3b=c.dateDeb, dateFinC3b=getDateFinContrat(c);
+            const dAvenant3=parseDateLoc(avenantSemaine3.dateAvenant);
+            const veilleAvenant3=new Date(dAvenant3); veilleAvenant3.setDate(dAvenant3.getDate()-1);
+            [{depuis:lundiSem3, jusqua:veilleAvenant3, version:getVersionActive(c,lundiSem3)},
+             {depuis:dAvenant3, jusqua:dimancheSem3, version:getVersionActive(c,dAvenant3)}]
+            .forEach(portion=>{
+              const srcP=portion.version;
+              const estMinPlanP=srcP.planType==='min';
+              const agendasP=srcP.agendas||c.agendas||[];
+              const agP=agendasP.find(a=>parseDateLoc(a.dateDebut)<=portion.depuis&&parseDateLoc(a.dateFin)>=portion.depuis);
+              const agKeyP=getKeyAgenda(getSemISO(fmtSem3(portion.depuis)),getSemAnnee(fmtSem3(portion.depuis)));
+              const typeSemP=agP&&agP.semaines&&agP.semaines[agKeyP];
+              const volP=estMinPlanP?{h:srcP.hMin||0,j:srcP.jMaxMin||1,jours:srcP.joursMin||[]}:(srcP.planVar||[]).find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemP);
+              if(!volP||!volP.jours) return;
+              const nbJoursPossiblesP=volP.jours.filter(Boolean).length||1;
+              for(let cur=new Date(portion.depuis); cur<=portion.jusqua; cur.setDate(cur.getDate()+1)){
+                const curStr=fmtSem3(cur);
+                const idxP=cur.getDay()===0?6:cur.getDay()-1;
+                if(!volP.jours[idxP]) continue;
+                const horsContratP=(dateDebC3b&&curStr<dateDebC3b)||(dateFinC3b&&cur>dateFinC3b);
+                if(horsContratP) continue;
+                if(cur.getMonth()!==am-1||cur.getFullYear()!==ay) continue;
+                joursBaseV++;
+                minBaseV+=(volP.h/nbJoursPossiblesP)*60;
+              }
+            });
+          } else {
           // Conscience de dateDeb/dateFin (correctif 21/07/2026) : jMax réduit sur le motif PROPRE à cette
           // semaine, le volume d'heures réduit au taux MOYEN (motif union / moyenne annuelle) — même
           // formule que calcHTheoriquesPlanVar pour ce même cas, pour rester aligné avec la paie.
@@ -5995,6 +6040,7 @@ function calcEnveloppeMoisVar(c,ay,am){
             joursBaseV+=Math.min(joursDansCeMois3,jMaxRestant3);
           }
           minBaseV+=volHRestant3*60;
+          }
         }
       }
     }
@@ -6034,13 +6080,11 @@ function calcEnveloppeMoisFixeSem(c,ay,am,ficheRef){
   return {jours:jours4, minutes:minutes4, heures:minutes4/60};
 }
 
-function getDateFinContrat(c){
-  // Une simulation de rupture ENREGISTRÉE MAIS PAS CONFIRMÉE ne doit jamais être traitée comme
-  // une vraie date de fin de contrat — bug confirmé Sophie 18/07/2026 (une simulation coupait
-  // à tort l'affichage des mois futurs du planning). Toutes les autres fonctions du code qui
-  // lisent c.rupture vérifient déjà `confirmee` en premier (ex. L4960 juste plus bas) ; cette
-  // fonction-ci était la seule à ne pas le faire.
-  if(!c.rupture||!c.rupture.confirmee) return null;
+function calcDateFinContratBrute(c){
+  // 06/08/2026 (Sophie) : cœur du calcul, sans le contrôle "confirmee" ci-dessous — nécessaire pour
+  // confirmerRupture, qui doit savoir si une date SERAIT déterminable avant même d'avoir confirmé
+  // (avec getDateFinContrat seul, la question est sans issue : il répond toujours "non déterminable"
+  // tant qu'on n'a pas confirmé, alors que confirmer est justement ce qu'on cherche à valider).
   const rp=c.rupture||{};
   const motif=rp.motif||'';
   const aPreavis=motif==='retrait-enfant'||motif==='demission';
@@ -6065,6 +6109,15 @@ function getDateFinContrat(c){
     return new Date(rp.dateSignif);
   }
   return null;
+}
+function getDateFinContrat(c){
+  // Une simulation de rupture ENREGISTRÉE MAIS PAS CONFIRMÉE ne doit jamais être traitée comme
+  // une vraie date de fin de contrat — bug confirmé Sophie 18/07/2026 (une simulation coupait
+  // à tort l'affichage des mois futurs du planning). Toutes les autres fonctions du code qui
+  // lisent c.rupture vérifient déjà `confirmee` en premier (ex. L4960 juste plus bas) ; cette
+  // fonction-ci était la seule à ne pas le faire.
+  if(!c.rupture||!c.rupture.confirmee) return null;
+  return calcDateFinContratBrute(c);
 }
 
 function calcSoldeToutCompte(c, key){
@@ -13822,11 +13875,22 @@ function dateISOversTexte(val){
 
 // Formate un input date-texte à la saisie (ajoute les / automatiquement)
 function formaterSaisieDate(input){
+  // 06/08/2026 (Sophie) : remettre le curseur au bon endroit après reformatage — sinon il saute par
+  // défaut à la fin du champ à chaque frappe (réécrire .value fait ça), ce qui peut faire atterrir la
+  // frappe suivante au mauvais endroit et mélanger les chiffres d'une date modifiée en son milieu.
+  const posAvant=input.selectionStart;
+  const chiffresAvant=input.value.slice(0,posAvant).replace(/[^\d]/g,'').length;
   let v=input.value.replace(/[^\d]/g,'');
   if(v.length>2) v=v.slice(0,2)+'/'+v.slice(2);
   if(v.length>5) v=v.slice(0,5)+'/'+v.slice(5);
   if(v.length>10) v=v.slice(0,10);
   input.value=v;
+  let nouveauPos=0, chiffresComptes=0;
+  while(nouveauPos<v.length&&chiffresComptes<chiffresAvant){
+    if(/\d/.test(v[nouveauPos])) chiffresComptes++;
+    nouveauPos++;
+  }
+  input.setSelectionRange(nouveauPos,nouveauPos);
   // Vérifier la validité quand la date est complète (10 chars)
   const errId=input.id+'-err';
   let errEl=document.getElementById(errId);
@@ -13946,7 +14010,7 @@ function rafraichirRupture(cid){
   renderRupture(c,cont);
 }
 
-function sauvegarderRupture(cid){
+async function sauvegarderRupture(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c) return;
   if(c.rupture?.confirmee){
@@ -13959,7 +14023,11 @@ function sauvegarderRupture(cid){
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
-  fbSaveData(window.FB_USER?.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}});
+  // 06/08/2026 (Sophie) : cet enregistrement n'attendait jamais la fin réelle de la sauvegarde
+  // distante — un rechargement de page juste après pouvait retomber sur d'anciennes données pas
+  // encore à jour côté serveur et effacer ce qui venait d'être saisi. On attend maintenant la
+  // confirmation avant d'afficher "Rupture enregistrée".
+  await fbSaveData(window.FB_USER?.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}});
   const cont=document.getElementById('det-content');
   renderRupture(c,cont);
   toast('Rupture enregistrée');
@@ -14037,7 +14105,11 @@ function confirmerRupture(cid){
   }
   // 4. Date de fin de contrat dans une fiche validée
   const motifsAvecDateFin=['retrait-enfant','demission','retrait-force','fin-essai','fin-essai-am'];
-  const dateFinR=getDateFinContrat(c);
+  // 06/08/2026 (Sophie) : calcDateFinContratBrute (pas getDateFinContrat) — cette dernière refuse
+  // toujours de répondre tant que c.rupture.confirmee n'est pas déjà vrai, ce qui rendait ce contrôle
+  // impossible à passer dans TOUS les cas, quels que soient les champs remplis (le message d'erreur
+  // se déclenchait systématiquement, jamais lié aux données de Sophie).
+  const dateFinR=calcDateFinContratBrute(c);
   if(motifsAvecDateFin.includes(rp.motif)&&!dateFinR){
     alerte('Impossible de déterminer la date de fin de contrat. Vérifiez que tous les champs requis sont bien renseignés (date de signification, statut du préavis...).');
     return;
@@ -14049,13 +14121,21 @@ function confirmerRupture(cid){
       return;
     }
   }
+  confirmerRuptureSuite(cid);
+}
+async function confirmerRuptureSuite(cid){
+  const c=S.contrats.find(x=>x.id==cid);
+  if(!c) return;
   c.rupture.confirmee=true;
   c._regulDirty=true;
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
   const cCleanR=JSON.parse(JSON.stringify(c));
-  fbSaveData(window.FB_USER?.uid,{contrats:[cCleanR],params:{},congesAM:S.congesAM||{}});
+  // 06/08/2026 (Sophie) : même correctif que sauvegarderRupture — attendre la vraie fin de la
+  // sauvegarde distante avant d'afficher "Rupture confirmée", pour éviter qu'un rechargement rapide
+  // retombe sur d'anciennes données pas encore à jour côté serveur.
+  await fbSaveData(window.FB_USER?.uid,{contrats:[cCleanR],params:{},congesAM:S.congesAM||{}});
   const cont=document.getElementById('det-content');
   renderRupture(c,cont);
   toast('Rupture confirmée');
