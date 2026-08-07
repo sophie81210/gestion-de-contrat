@@ -4554,13 +4554,22 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
   const moisKeyTile=annee+'-'+String(moisIdx+1).padStart(2,'0');
   const ficheTile=c.fiches&&c.fiches[moisKeyTile];
   const moisVerrouille=!!(ficheTile&&ficheTile.valide)||estLectureSeuleEmployeur();
-  const srcTileModif=getVersionActive(c, new Date(annee,moisIdx,1));
-  const estFixeOuSemTile=srcTileModif.th==='fixe'||srcTileModif.th==='sem';
-  const estVarTile=srcTileModif.th==='plan'&&(srcTileModif.planType==='var'||srcTileModif.planType==='min');
-  const estCaseModifTile=estFixeOuSemTile||estVarTile;
+  const nbJoursTileP=new Date(annee, moisIdx+1, 0).getDate();
+  // 06/08/2026 (Sophie) : le type du mois (fixe/sem/var/min, donc le style d'affichage — case à
+  // cocher ou bouton Échanger) était déterminé UNE SEULE FOIS pour toute la tuile, à partir du seul
+  // 1er jour du mois — avec un avenant en cours de mois, tout le mois héritait à tort du style de
+  // l'ANCIEN type, y compris les jours après l'avenant qui doivent utiliser le nouveau. Chaque jour
+  // recalcule maintenant son propre type plus bas (voir estFixeOuSemTile/estVarTile dans la boucle
+  // par jour) ; ici on garde seulement une visibilité de la case "modifications autorisées" basée
+  // sur N'IMPORTE QUEL jour éligible du mois, pour qu'elle ne disparaisse pas à tort selon le 1er jour.
+  let estCaseModifTile=false;
+  for(let dCM=1;dCM<=nbJoursTileP&&!estCaseModifTile;dCM++){
+    const srcCM=getVersionActive(c, new Date(annee,moisIdx,dCM));
+    if((srcCM.th==='fixe'||srcCM.th==='sem')||(srcCM.th==='plan'&&(srcCM.planType==='var'||srcCM.planType==='min'))) estCaseModifTile=true;
+  }
   const modifMoisActive=estCaseModifTile&&!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeyTile]);
   const modifMoisChecked=modifMoisActive?'checked':'';
-  const nbJours=new Date(annee, moisIdx+1, 0).getDate();
+  const nbJours=nbJoursTileP;
   const jours=[];
   for(let d=1; d<=nbJours; d++){
     const dt=new Date(annee, moisIdx, d);
@@ -4624,6 +4633,12 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
     }
     const joursHtml=sem.jours.map((j,ji)=>{
       const infos=infosSemaine[ji];
+      // 06/08/2026 (Sophie) : recalculé pour CE jour précis (avant : une seule fois pour tout le mois,
+      // au 1er jour — cassait tout le style d'affichage après un avenant en cours de mois, y compris
+      // au sein d'une semaine qui contient elle-même l'avenant).
+      const srcJourTile=getVersionActive(c, j.dt);
+      const estFixeOuSemTile=srcJourTile.th==='fixe'||srcJourTile.th==='sem';
+      const estVarTile=srcJourTile.th==='plan'&&(srcJourTile.planType==='var'||srcJourTile.planType==='min');
       if(infos.jMax>jMaxSem){ jMaxSem=infos.jMax; volHSem=infos.volH; }
       if(infos.couleur&&!couleurSem) couleurSem=infos.couleur;
       const nomJourAbr=JOURS_ABR_P[j.dt.getDay()===0?6:j.dt.getDay()-1];
@@ -4854,6 +4869,12 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
     totalMoisMin+=totalSemMin;
     const bgSem=couleurSem?couleurSem.bg+'40':'var(--mp)';
     const brdSem=couleurSem?couleurSem.brd+'88':'var(--mb)';
+    // 06/08/2026 (Sophie) : type au niveau de l'EN-TÊTE de semaine (hors de la boucle par jour ci-dessus)
+    // — basé sur le dernier jour présent dans ce mois pour cette semaine, pour qu'une semaine à cheval
+    // sur un avenant en cours de semaine affiche l'en-tête cohérent avec sa portion la plus récente.
+    const srcSemTile=getVersionActive(c, sem.jours[sem.jours.length-1].dt);
+    const estFixeOuSemTile=srcSemTile.th==='fixe'||srcSemTile.th==='sem';
+    const estVarTile=srcSemTile.th==='plan'&&(srcSemTile.planType==='var'||srcSemTile.planType==='min');
     return `<div class="pln-sem" data-semkey="${semKeyDom}" data-contrat="${c.id}" data-jmax="${jMaxSem}"
       style="border:1px solid ${brdSem};border-radius:var(--rs);margin-bottom:8px;overflow:hidden">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:${bgSem};font-size:11px;font-weight:600;color:var(--tx2)">
