@@ -6230,7 +6230,7 @@ function calcSoldeToutCompte(c, key){
   // Indemnité de rupture
   let indemRupture=null;
   if(aIndemniteRupture){
-    const ir=calcIndemniteRupture(c,dateFinContrat);
+    const ir=calcIndemniteRupture(c,dateFinContrat,indemConges?.montantBrut||0);
     if(ir) indemRupture={montantBrut:ir.montantBrut};
   }
   
@@ -6244,7 +6244,7 @@ function buildSoldeToutCompteHtml(c, recap, solde, ficheValide){
   const vs='font-weight:600';
   let html='<div class="card" style="margin-top:10px;background:var(--mp);border:2px solid var(--m)">';
   html+='<div class="ctitle" style="color:var(--m)">Solde de tout compte</div>';
-  html+='<div style="font-size:12px;color:var(--tx2);font-style:italic;margin-bottom:8px">Les montants seront mis à jour après validation de la feuille de présence.</div>';
+  if(!ficheValide) html+='<div style="font-size:12px;color:var(--tx2);font-style:italic;margin-bottom:8px">Les montants seront mis à jour après validation de la feuille de présence.</div>';
   let totalSoldeNet=0, totalSoldeBrut=0;
   if(solde.regul){
     html+=`<div style="${ls}"><span>Régularisation (${solde.regul.hRegul.toFixed(2)}h — ${solde.regul.joursRegul} j)</span><span style="${vs};color:var(--vt)">${solde.regul.montantNet.toFixed(2)} € net</span></div>`;
@@ -13534,6 +13534,16 @@ function calcSoldeConges52(c, dateRupture){
     if(cg.estTerminee) joursAcquisRestants+=cg.restants||0;
     else joursEnCoursRestants+=cg.acqBrut||0;
   });
+  // 06/08/2026 (Sophie) : le dernier mois (celui de la rupture) n'est pas encore validé à ce stade —
+  // mais s'il affiche déjà des congés prévus sur sa feuille, ces jours seront de toute façon payés via
+  // le salaire normal du mois une fois la feuille validée (comme n'importe quel mois validé plus tôt) :
+  // ils ne doivent pas rester comptés comme "encore dus" dans l'indemnité compensatrice.
+  const keyRuptSC52=dateRefIccp.getFullYear()+'-'+String(dateRefIccp.getMonth()+1).padStart(2,'0');
+  const ficheRuptSC52=c.fiches?.[keyRuptSC52];
+  if(ficheRuptSC52&&!ficheRuptSC52.valide){
+    const nbAcqPrevuSC52=(ficheRuptSC52.jours||[]).filter(j=>j.statut==='conges-acq').length;
+    joursEnCoursRestants=Math.max(0,joursEnCoursRestants-nbAcqPrevuSC52);
+  }
   const montantAcquisBrut=parseFloat((joursAcquisRestants*hJour*txBrut).toFixed(2));
   const montantAcquisNet=parseFloat((montantAcquisBrut*coefNet).toFixed(2));
   joursEnCoursRestants=Math.ceil(joursEnCoursRestants);
@@ -13584,8 +13594,17 @@ function calcSoldeConges46(c){
   // Jours en cours d'acquisition
   const cgEnCours=Object.values(c.conges||{}).find(cg=>!cg.estTerminee);
   if(cgEnCours) joursEnCours=Math.ceil(cgEnCours.acqBrut||0);
-  // Calcul montant en cours : meilleur entre 10ème et maintien
   const dateSit=getDateSituationAu(c)||new Date();
+  // 06/08/2026 (Sophie) : même principe que pour 52 sem — le dernier mois (rupture) pas encore validé,
+  // s'il affiche déjà des congés prévus, ces jours seront payés via le salaire normal du mois une fois
+  // validé, donc à ne plus compter comme "encore dus" ici.
+  const keyRuptSC46=dateSit.getFullYear()+'-'+String(dateSit.getMonth()+1).padStart(2,'0');
+  const ficheRuptSC46=c.fiches?.[keyRuptSC46];
+  if(ficheRuptSC46&&!ficheRuptSC46.valide){
+    const nbAcqPrevuSC46=(ficheRuptSC46.jours||[]).filter(j=>j.statut==='conges-acq').length;
+    joursEnCours=Math.max(0,joursEnCours-nbAcqPrevuSC46);
+  }
+  // Calcul montant en cours : meilleur entre 10ème et maintien
   const anneeRefDebut=dateSit.getMonth()>=5?dateSit.getFullYear():dateSit.getFullYear()-1;
   const dateJuin=new Date(anneeRefDebut,5,1);
   const totalBrutDepuisJuin=calcBrutTotal(c,dateJuin,dateSit);
@@ -13831,12 +13850,15 @@ function calcSemainesEquivalentesPreavis(c, dateDebutNonEffectue, dateFinPreavis
   return semainesEq;
 }
 
-function calcIndemniteRupture(c, dateFin){
+function calcIndemniteRupture(c, dateFin, indemCongesBrut=0){
   const [ddy,ddm,ddd]=c.dateDeb.split('-').map(Number);
   const dateDebContrat=new Date(ddy,ddm-1,ddd);
   const diffMois=(dateFin-dateDebContrat)/(1000*60*60*24*30.44);
   if(diffMois<9) return null;
-  const totalBrut=calcBrutTotal(c,null,dateFin);
+  // 06/08/2026 (Sophie) : la base du 1/80ème inclut aussi l'indemnité compensatrice de congés payés
+  // (pas de détail à part dans le calcul lui-même — un seul montant global), pas seulement les
+  // salaires bruts déjà versés pendant le contrat.
+  const totalBrut=calcBrutTotal(c,null,dateFin)+(indemCongesBrut||0);
   const montantBrut=parseFloat((totalBrut/80).toFixed(2));
   const params=S.params||{};
   const coefNet=getParamAt('coefficients',dateToStr(dateFin)).valeur||0.7811975; // 27/07/2026 (correctif Sophie)
