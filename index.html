@@ -13573,15 +13573,27 @@ function calcSoldeConges52(c, dateRupture){
     // pris, et une deuxième fois ici. Même principe que pour une année terminée : brut moins pris.
     else joursEnCoursRestants+=Math.max(0,(cg.acqBrut||0)-(cg.pris||0));
   });
-  // 06/08/2026 (Sophie) : le dernier mois (celui de la rupture) n'est pas encore validé à ce stade —
-  // mais s'il affiche déjà des congés prévus sur sa feuille, ces jours seront de toute façon payés via
-  // le salaire normal du mois une fois la feuille validée (comme n'importe quel mois validé plus tôt) :
-  // ils ne doivent pas rester comptés comme "encore dus" dans l'indemnité compensatrice.
+  // 06/08/2026 (Sophie) : reformulé complètement — ce n'est pas seulement le dernier mois pas encore
+  // validé qui compte, ni seulement les jours "acquis" : TOUS les jours de congé posés ce mois (acquis
+  // ET anticipé/en cours, peu importe la validation) sont de toute façon déjà payés via le salaire
+  // normal du mois (voir "dont congés payés" sur la fiche, même logique/mêmes statuts réutilisés ici)
+  // — ils ne doivent donc plus compter comme "encore dus". Priorité de déduction : d'abord le solde le
+  // plus ancien (années déjà terminées), puis l'année en cours pour le reste si besoin.
   const keyRuptSC52=dateRefIccp.getFullYear()+'-'+String(dateRefIccp.getMonth()+1).padStart(2,'0');
   const ficheRuptSC52=c.fiches?.[keyRuptSC52];
-  if(ficheRuptSC52&&!ficheRuptSC52.valide){
-    const nbAcqPrevuSC52=(ficheRuptSC52.jours||[]).filter(j=>j.statut==='conges-acq').length;
-    joursEnCoursRestants=Math.max(0,joursEnCoursRestants-nbAcqPrevuSC52);
+  if(ficheRuptSC52){
+    const statsCongesTypeSC52=['conges-acq','conges-anticipe','decompte-acq','decompte-anticipe'];
+    const nbCongesPoseSC52=(ficheRuptSC52.jours||[]).filter(j=>statsCongesTypeSC52.includes(j.statut)).length;
+    const deduitAnciennesSC52=Math.min(joursAcquisRestants,nbCongesPoseSC52);
+    joursAcquisRestants=Math.max(0,joursAcquisRestants-deduitAnciennesSC52);
+    const resteADeduirSC52=nbCongesPoseSC52-deduitAnciennesSC52;
+    if(!ficheRuptSC52.valide){
+      // Mois pas encore validé : "pris" (qui gère normalement l'année en cours une fois validée, voir
+      // plus haut) ne reflète pas encore ces jours — les déduire ici pour ne pas les compter en double.
+      joursEnCoursRestants=Math.max(0,joursEnCoursRestants-resteADeduirSC52);
+    }
+    // Si déjà validée : "pris" a déjà normalement pris en compte la part de l'année en cours — ne pas
+    // soustraire une deuxième fois ici.
   }
   const montantAcquisBrut=parseFloat((joursAcquisRestants*hJour*txBrut).toFixed(2));
   const montantAcquisNet=parseFloat((montantAcquisBrut*coefNet).toFixed(2));
@@ -13643,6 +13655,11 @@ function calcSoldeConges46(c, dateRupture){
   // (justement celui qui n'est PAS encore validé) : ce contrôle ne se déclenchait donc jamais.
   const keyRuptSC46=dateSit.getFullYear()+'-'+String(dateSit.getMonth()+1).padStart(2,'0');
   const ficheRuptSC46=c.fiches?.[keyRuptSC46];
+  // 06/08/2026 (Sophie) : le principe "jours posés ce mois déjà payés via le salaire normal" ne
+  // s'applique PAS à 46 — contrairement à 52, les congés y sont payés séparément (mode dateCg :
+  // juin/principale/chaque), jamais mensualisés dans le salaire de base. Retour à la version qui ne
+  // déduit que les jours acquis prévus sur un mois pas encore validé (l'autre correctif "mode chaque"
+  // reste en pause, sujet distinct).
   if(ficheRuptSC46&&!ficheRuptSC46.valide){
     const nbAcqPrevuSC46=(ficheRuptSC46.jours||[]).filter(j=>j.statut==='conges-acq').length;
     joursEnCours=Math.max(0,joursEnCours-nbAcqPrevuSC46);
