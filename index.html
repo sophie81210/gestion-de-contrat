@@ -6203,7 +6203,7 @@ function calcSoldeToutCompte(c, key){
     if(totalNet>0) indemConges={montantNet:totalNet,montantBrut:totalBrut,
       label:`Indemnité compensatrice de congés (${s.joursAcquisRestants+s.joursEnCoursRestants} j)`};
   } else if(srcActifSolde.tc!=='occ'){
-    const s=calcSoldeConges46(c);
+    const s=calcSoldeConges46(c,dateFinContrat);
     const totalNet=(s.montantNonVersesNet||0)+(s.montantEnCoursNet||0);
     const totalBrut=(s.montantNonVersesBrut||0)+(s.montantEnCoursBrut||0);
     if(totalNet>0) indemConges={montantNet:totalNet,montantBrut:totalBrut,
@@ -7374,7 +7374,7 @@ function deverrouillerFiche(contratId,key){
   return lundi;
 }
          
-function calcCongesContrat(c){
+function calcCongesContrat(c, dateRefOverride){
   if(!c.fiches||!c.dateDeb) return;
   if(!c.conges) c.conges={};
   const [ddy,ddm,ddd]=c.dateDeb.split('-').map(Number);
@@ -7389,7 +7389,12 @@ function calcCongesContrat(c){
       dateDebAcquisition=new Date(say,sam-1,sad);
     }
   }
-  const now=new Date();
+  // 06/08/2026 (Sophie) : par défaut la vraie date du jour, comme avant — sinon "semaine terminée" ne
+  // pourrait jamais reconnaître une semaine future non encore arrivée, ce qui reste le bon principe
+  // pour un contrat actif normal. Réservé au calcul de solde de rupture (et son simulateur) : une date
+  // de référence différente peut être fournie pour anticiper le montant à payer avant la fin réelle du
+  // mois de rupture, à partir du moment où la feuille de ce mois est déjà validée dans le test/simulation.
+  const now=dateRefOverride||new Date();
   // Déterminer la date de la dernière fiche validée
   const fichesValideesKeys=Object.keys(c.fiches).filter(k=>c.fiches[k].valide).sort();
   const dernierMoisValide=fichesValideesKeys.length?fichesValideesKeys[fichesValideesKeys.length-1]:null;
@@ -13558,7 +13563,7 @@ function calcSoldeConges52(c, dateRupture){
   const nbSem=sourcePrecRupture.nbSem||52;
   const hHebdo=(sourcePrecRupture.hMensu||0)*12/nbSem;
   const hJour=hHebdo/6;
-  calcCongesContrat(c);
+  calcCongesContrat(c,dateRefIccp);
   let joursAcquisRestants=0, joursEnCoursRestants=0;
   Object.values(c.conges||{}).forEach(cg=>{
     if(cg.estTerminee) joursAcquisRestants+=cg.restants||0;
@@ -13586,9 +13591,9 @@ function calcSoldeConges52(c, dateRupture){
   return {joursAcquisRestants, montantAcquisBrut, montantAcquisNet, joursEnCoursRestants:parseFloat(joursEnCoursRestants.toFixed(2)), montantEnCoursBrut, montantEnCoursNet};
 }
 
-function calcSoldeConges46(c){
+function calcSoldeConges46(c, dateRupture){
   const params=S.params||{};
-  calcCongesContrat(c);
+  calcCongesContrat(c,dateRupture);
   let joursNonVerses=0, montantNonVersesBrut=0, montantNonVersesNet=0;
   let joursEnCours=0, montantEnCoursBrut=0, montantEnCoursNet=0;
   Object.entries(c.conges||{}).forEach(([anneeRef,cg])=>{
@@ -13632,10 +13637,10 @@ function calcSoldeConges46(c){
   // (salaire normal du mois où ils sont pris + indemnité de fin de contrat). Brut moins pris, comme
   // pour une année déjà terminée.
   if(cgEnCours) joursEnCours=Math.ceil(Math.max(0,(cgEnCours.acqBrut||0)-(cgEnCours.pris||0)));
-  const dateSit=getDateSituationAu(c)||new Date();
-  // 06/08/2026 (Sophie) : même principe que pour 52 sem — le dernier mois (rupture) pas encore validé,
-  // s'il affiche déjà des congés prévus, ces jours seront payés via le salaire normal du mois une fois
-  // validé, donc à ne plus compter comme "encore dus" ici.
+  const dateSit=dateRupture||getDateSituationAu(c)||new Date();
+  // 06/08/2026 (Sophie) : corrigé — utilisait auparavant uniquement le dernier mois VALIDÉ
+  // (`getDateSituationAu`), qui par construction ne peut jamais être le mois cherché ici
+  // (justement celui qui n'est PAS encore validé) : ce contrôle ne se déclenchait donc jamais.
   const keyRuptSC46=dateSit.getFullYear()+'-'+String(dateSit.getMonth()+1).padStart(2,'0');
   const ficheRuptSC46=c.fiches?.[keyRuptSC46];
   if(ficheRuptSC46&&!ficheRuptSC46.valide){
@@ -14807,7 +14812,7 @@ function renderRupture(c, cont){
       if(s.montantAcquisBrut>0){lignes.push({label:'Solde congés acquis',net:s.montantAcquisNet,brut:s.montantAcquisBrut});totalNet+=s.montantAcquisNet;totalBrut+=s.montantAcquisBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
     } else {
-      const s=calcSoldeConges46(c);
+      const s=calcSoldeConges46(c,dateFinContrat||dateSit);
       if(s.montantNonVersesBrut>0){lignes.push({label:'Congés acquis non versés',net:s.montantNonVersesNet,brut:s.montantNonVersesBrut});totalNet+=s.montantNonVersesNet;totalBrut+=s.montantNonVersesBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
       if(srcActifSim.tc!=='52'){
