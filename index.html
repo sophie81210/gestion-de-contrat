@@ -8503,7 +8503,37 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
           const idx=jj.jourSemaine===0?6:jj.jourSemaine-1;
           return joursMinTh[idx]&&c.planning&&c.planning[jj.date]&&c.planning[jj.date].coche;
         }).length;
-        const joursDonnesMoisCourant=Math.min(jMaxMinTh,Math.max(nbJoursPossiblesMoisCourant,nbJoursCochesMoisCourant));
+        const joursSemaineComplete=[0,1,2,3,4,5,6].map(off=>{const d=new Date(lundiSem);d.setDate(lundiSem.getDate()+off);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');});
+        const joursDesSemDates=new Set(joursDesSem.map(jj=>jj.date));
+        const nbJoursPossiblesAutrePortion=joursSemaineComplete.filter(dStr=>{
+          if(joursDesSemDates.has(dStr)) return false; // fait partie de CE mois, pas de l'autre portion
+          const dObj=new Date(dStr);
+          const idx=dObj.getDay()===0?6:dObj.getDay()-1;
+          return joursMinTh[idx];
+        }).length;
+        const nbJoursCochesAutrePortion=joursSemaineComplete.filter(dStr=>{
+          if(joursDesSemDates.has(dStr)) return false;
+          const dObj=new Date(dStr);
+          const idx=dObj.getDay()===0?6:dObj.getDay()-1;
+          return joursMinTh[idx]&&c.planning&&c.planning[dStr]&&c.planning[dStr].coche;
+        }).length;
+        // 06/08/2026 (Sophie, reformulé après ses précisions — pas symétrique) : c'est la portion de
+        // FIN de mois qui cède la place à celle du mois SUIVANT (jamais l'inverse), et un jour
+        // réellement coché (n'importe où dans la semaine) prend toujours le pas sur un jour seulement
+        // théorique. Sur les jMax jours de la semaine : ceux réellement cochés (des deux côtés) sont
+        // comptés d'abord ; sur ce qui reste, priorité au mois suivant (jusqu'à sa propre capacité en
+        // jours possibles), la fin de mois ne récupérant que ce qu'il en reste, jamais plus.
+        const estPortionFinDeMois=joursDesSemDates.has(joursSemaineComplete[0]); // contient le lundi = portion qui commence la semaine = celle qui SE TERMINE ce mois-ci
+        const resteApresCoches=Math.max(0,jMaxMinTh-nbJoursCochesMoisCourant-nbJoursCochesAutrePortion);
+        let joursDonnesMoisCourant;
+        if(estPortionFinDeMois){
+          const suivantPrendDuReste=Math.min(resteApresCoches,Math.max(0,nbJoursPossiblesAutrePortion-nbJoursCochesAutrePortion));
+          const finDeMoisRecoitDuReste=Math.max(0,resteApresCoches-suivantPrendDuReste);
+          joursDonnesMoisCourant=Math.min(nbJoursPossiblesMoisCourant,nbJoursCochesMoisCourant+finDeMoisRecoitDuReste);
+        } else {
+          const prendDuReste=Math.min(resteApresCoches,Math.max(0,nbJoursPossiblesMoisCourant-nbJoursCochesMoisCourant));
+          joursDonnesMoisCourant=Math.min(nbJoursPossiblesMoisCourant,nbJoursCochesMoisCourant+prendDuReste);
+        }
         hTheoriques+=hMinTh*(joursDonnesMoisCourant/jMaxMinTh);
       } else {
         hTheoriques+=hMinTh;
