@@ -3232,7 +3232,8 @@ function ouvrirFicheSolde(contratId){
 
 function getStatutPrevu(c,j){
   if(c.dateDeb&&j.date<c.dateDeb) return 'hors-contrat';
-  const reposHebdo=c.reposHebdo||0;
+  const srcRepos=getVersionActive(c,new Date(j.date));
+  const reposHebdo=srcRepos.reposHebdo||0;
   if(j.jourSemaine===reposHebdo) return 'repos';
   // Semaine off → non-prevu (sauf contrats 52 sem)
   if(c.tc!=='52'){
@@ -5133,7 +5134,18 @@ function planningNonEnregistrePourMois(c, moisKey){
   // faute d'un vrai enregistrement de référence), ce qui laisse croire à tort qu'un planning jamais
   // rempli est à jour. S'applique à tous les types (fixe/sem compris) — affichage seulement, pas un
   // blocage.
-  if(c.th==='plan'&&!(c.planningConfirmeMois&&c.planningConfirmeMois[moisKey])) return true;
+  // 11/08/2026 (Sophie) : l'obligation de confirmation (même sans modification) ne concerne QUE
+  // plan min/var — les autres types n'en ont besoin que s'il y a une vraie modification en attente
+  // (couverte par les vérifications ci-dessus/dessous). Vérifier le type ACTUEL du mois, jamais le
+  // type D'ORIGINE du contrat (`c.th`, jamais mis à jour par avenant) — sinon un contrat qui était
+  // en var/min avant un avenant reste bloqué sur cette obligation même après passage en fixe/sem.
+  // Vérifie début ET fin de mois pour couvrir un avenant tombant en cours de mois.
+  const [ayPNE,amPNE]=moisKey.split('-').map(Number);
+  const srcDebutPNE=getVersionActive(c,new Date(ayPNE,amPNE-1,1));
+  const srcFinPNE=getVersionActive(c,new Date(ayPNE,amPNE,0));
+  const estPlanVarMinPNE=(srcDebutPNE.th==='plan'&&(srcDebutPNE.planType==='min'||srcDebutPNE.planType==='var'))
+    ||(srcFinPNE.th==='plan'&&(srcFinPNE.planType==='min'||srcFinPNE.planType==='var'));
+  if(estPlanVarMinPNE&&!(c.planningConfirmeMois&&c.planningConfirmeMois[moisKey])) return true;
   if(!c.planning||c._planningSauvegarde===undefined) return false;
   const [ay,am]=moisKey.split('-').map(Number);
   const dernierJour=new Date(ay,am,0).getDate();
