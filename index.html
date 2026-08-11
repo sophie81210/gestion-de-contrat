@@ -9934,6 +9934,23 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       joursPossiblesAbsHPArr=Array.from({length:7},(_,idx)=>sourceActif.planVar.some(v=>v.jours&&v.jours[idx]));
       nbJoursPossiblesAbsHP=joursPossiblesAbsHPArr.filter(Boolean).length||1;
     }
+    // 11/08/2026 (Sophie) : même règle "semaine sans type identifiable → moyenne hebdo/jours union",
+    // jamais étendue à sem jusqu'ici — une semaine hors-période dont l'agenda du nouveau contrat ne
+    // couvre pas encore la date (typiquement les semaines bien avant un avenant) contribuait zéro,
+    // au lieu de la moyenne pondérée des types de semaine sur les jours "union" (n'importe quel jour
+    // travaillé dans au moins un type).
+    let hSemMoyAbsHPSem=0, nbJoursPossiblesAbsHPSem=1, joursPossiblesAbsHPArrSem=null;
+    if(sourceActif.th==='sem'&&sourceActif.semTypes){
+      let totalHAnnuelHPSem=0, totalSHPSem=0;
+      sourceActif.semTypes.forEach(st=>{
+        const hType=(st.jours||[]).reduce((sum,jj)=>sum+(jj&&jj.d&&jj.f?(toM(jj.f)-toM(jj.d))/60:0),0);
+        totalHAnnuelHPSem+=hType*(st.nb||0);
+        totalSHPSem+=(st.nb||0);
+      });
+      hSemMoyAbsHPSem=totalSHPSem>0?(totalHAnnuelHPSem/totalSHPSem):0;
+      joursPossiblesAbsHPArrSem=Array.from({length:7},(_,idx)=>sourceActif.semTypes.some(st=>st.jours&&st.jours[idx]));
+      nbJoursPossiblesAbsHPSem=joursPossiblesAbsHPArrSem.filter(Boolean).length||1;
+    }
     for(let d=new Date(premierJourMois);d<=dernierJourMois;d.setDate(d.getDate()+1)){
       const dateStr=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
       const horsperiode=(periodeAv==='avant'&&dateStr>=dateAvenantStr)||(periodeAv==='apres'&&dateStr<dateAvenantStr);
@@ -9988,6 +10005,19 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             }
           }
         }
+      } else if(sourceActif.th==='sem'&&joursPossiblesAbsHPArrSem){
+        // 11/08/2026 (Sophie) : même règle que var ci-dessus, étendue à sem — semaine sans type
+        // identifiable (agenda du nouveau contrat ne couvrant pas encore cette date) → moyenne
+        // hebdo/jours union, jamais zéro.
+        const jourIdxHPSem=d.getDay()===0?6:d.getDay()-1;
+        const semKeyHPSem=getSemISO(dateStr);
+        if(joursPossiblesAbsHPArrSem[jourIdxHPSem]){
+          if(!semJoursCptM['hp_'+semKeyHPSem]) semJoursCptM['hp_'+semKeyHPSem]=0;
+          if(semJoursCptM['hp_'+semKeyHPSem]<nbJoursPossiblesAbsHPSem){
+            hAbsHorsPeriode+=hSemMoyAbsHPSem/nbJoursPossiblesAbsHPSem;
+            semJoursCptM['hp_'+semKeyHPSem]++;
+          }
+        }
       } else if(sourceActif.th==='plan'&&sourceActif.planType==='min'){
         const jourIdxHP=d.getDay()===0?6:d.getDay()-1;
         const joursMinHP=sourceActif.joursMin||c.joursMin||[];
@@ -10016,7 +10046,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // côté chronologique du jour par rapport à l'avenant, jamais d'une absence réelle saisie dans la
     // période — aucune interaction avec les absences normales. Scope fixe uniquement : var/min a déjà
     // sa propre gestion (calcHTheoriquesPlanVar/Min via joursHCExclus), ne pas dupliquer ici.
-    if(sourceActif.th==='fixe') hTheoriques+=hAbsHorsPeriode;
+    if(sourceActif.th==='fixe'||sourceActif.th==='sem') hTheoriques+=hAbsHorsPeriode;
   }
   // Pour th='sem' ou th='plan' non-var : utiliser la méthode alternative (moyenne par jour)
   // hTheoriques = totalHeuresAnnuelles / totalJoursAnnuels × nbJoursMois
