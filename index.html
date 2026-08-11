@@ -8364,6 +8364,7 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
           // Plan sem : le planning est connu (contrairement à plan var/min), donc on déduit simplement
           // les heures prévues qui tombent hors contrat — pas de notion de "volume/jours possibles"
           // comme pour plan var, puisqu'ici les heures exactes de chaque jour prévu sont connues.
+          if(window.DEBUG_CGAM)console.log('[CGAM-chevalSemDetail]',dateEx,'| hCheval:',hCheval,'| joursHCExclus:',joursHCExclus?[...joursHCExclus]:null);
           hTheoriques+=hCheval;
         } else {
           if(c.tc==='52'||sourceActif.tc==='52'){
@@ -9922,6 +9923,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // Le calcul de hTheoriquesMois ci-dessus reste en place (semJoursCptM est réutilisé plus bas pour
     // autre chose, sous des clés préfixées "hp_"), mais son résultat n'écrase plus hTheoriques.
     let hAbsHorsPeriode=0;
+    let hAbsHorsPeriodeTheoSem=0; // 11/08/2026 : comme hAbsHorsPeriode, mais sans la semaine de l'avenant (sem) — évite le double comptage théoriques tout en gardant la déduction complète
     // 06/08/2026 (Sophie) : pour une semaine ENTIÈREMENT hors contrat (pas celle qui contient
     // l'avenant lui-même), la règle voulue est moyenne hebdo/jours union du contrat — jamais le
     // volume précis pointé dans l'agenda cette semaine-là (l'ancien calcul allait chercher un volume
@@ -9955,6 +9957,20 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const dateStr=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
       const horsperiode=(periodeAv==='avant'&&dateStr>=dateAvenantStr)||(periodeAv==='apres'&&dateStr<dateAvenantStr);
       if(!horsperiode) continue;
+      // 11/08/2026 (Sophie) : pour sem, la semaine ISO qui contient la date de l'avenant lui-même est
+      // déjà intégralement traitée pour les THÉORIQUES par la gestion "semaine à cheval" de
+      // calcHTheoriquesPlanSem (heures réelles de chaque jour hors-période de cette semaine précise) —
+      // compter aussi ces jours ici, pour les théoriques, les comptait deux fois. La déduction
+      // (hAbs), elle, doit rester complète : cette semaine n'est traitée nulle part ailleurs pour la
+      // déduction, donc hAbsHorsPeriode doit continuer à la couvrir pour hAbs, juste pas pour
+      // l'ajout aux théoriques plus bas.
+      let dansSemaineAvenantHP=false;
+      if(sourceActif.th==='sem'&&dateAvenantStr){
+        const lundiAvHP=new Date(dateAvenantStr);lundiAvHP.setDate(lundiAvHP.getDate()-(lundiAvHP.getDay()||7)+1);
+        const dimAvHP=new Date(lundiAvHP);dimAvHP.setDate(lundiAvHP.getDate()+6);
+        dansSemaineAvenantHP=d>=lundiAvHP&&d<=dimAvHP;
+      }
+      const hAbsHorsPeriodeAvantIter=hAbsHorsPeriode;
       const prevusHP=getHeuresPrevues(c,new Date(d),sourceActif);
       if(prevusHP.debut&&prevusHP.fin){
         const contribHP=(toM(prevusHP.fin)-toM(prevusHP.debut))/60;
@@ -10047,6 +10063,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           }
         }
       }
+      // 11/08/2026 : ajouter le delta de cette itération à l'accumulateur théoriques séparé, sauf
+      // dans la semaine de l'avenant pour sem (déjà comptée par calcHTheoriquesPlanSem, voir plus haut)
+      if(!dansSemaineAvenantHP) hAbsHorsPeriodeTheoSem+=(hAbsHorsPeriode-hAbsHorsPeriodeAvantIter);
     }
     hAbs+=hAbsHorsPeriode;
     // 11/08/2026 (suggestion Sophie, vérifiée) : pour fixe, aucune autre branche n'ajoute les heures
@@ -10056,7 +10075,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // côté chronologique du jour par rapport à l'avenant, jamais d'une absence réelle saisie dans la
     // période — aucune interaction avec les absences normales. Scope fixe uniquement : var/min a déjà
     // sa propre gestion (calcHTheoriquesPlanVar/Min via joursHCExclus), ne pas dupliquer ici.
-    if(sourceActif.th==='fixe'||sourceActif.th==='sem') hTheoriques+=hAbsHorsPeriode;
+    if(window.DEBUG_CGAM&&sourceActif.th==='sem')console.log('[CGAM-theoSemDetail]','hTheoriques AVANT ajout:',hTheoriques,'| hAbsHorsPeriode (complet, pour hAbs):',hAbsHorsPeriode,'| hAbsHorsPeriodeTheoSem (sans semaine avenant, pour théoriques):',hAbsHorsPeriodeTheoSem,'| periodeAv:',periodeAv,'| dateAvenantStr:',dateAvenantStr);
+    if(sourceActif.th==='fixe') hTheoriques+=hAbsHorsPeriode;
+    else if(sourceActif.th==='sem') hTheoriques+=hAbsHorsPeriodeTheoSem;
+    if(window.DEBUG_CGAM&&sourceActif.th==='sem')console.log('[CGAM-theoSemDetail]','hTheoriques APRÈS:',hTheoriques);
   }
   // Pour th='sem' ou th='plan' non-var : utiliser la méthode alternative (moyenne par jour)
   // hTheoriques = totalHeuresAnnuelles / totalJoursAnnuels × nbJoursMois
