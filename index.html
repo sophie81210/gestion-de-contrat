@@ -7735,7 +7735,21 @@ function calcCongesContrat(c, dateRefOverride){
               const gateMinOk=!(c.th==='plan'&&c.planType==='min')||semaineCompleteCgMin||cocheCgMin;
               const [jpy,jpm,jpd]=j.date.split('-').map(Number);
               const sourceCgProt=getVersionActive(c,new Date(jpy,jpm-1,jpd));
-              if(['travaille','reprise'].includes(statutJ)){
+              // 11/08/2026 (Sophie) : une "semaine employeur" (off) pour fixe/sem n'a jamais de statut
+              // enregistré (rien à enregistrer) — le calcul retombait alors sur le motif hebdomadaire
+              // habituel du contrat, qui ignore que cette semaine précise est "off", et comptait le
+              // jour comme normal/travaillé à tort. Var/min a déjà cette protection plus haut
+              // (`typeSemPV==='off'`) ; fixe/sem ne l'avait pas.
+              const estSemaineOffCg=(sourceCgProt.th==='fixe'||sourceCgProt.th==='sem')&&(()=>{
+                const agendasCgProt=sourceCgProt.agendas||c.agendas||[];
+                const dateJCgProt=new Date(jpy,jpm-1,jpd);
+                const agCgProt=agendasCgProt.find(ag=>parseDateLoc(ag.dateDebut)<=dateJCgProt&&parseDateLoc(ag.dateFin)>=dateJCgProt);
+                return !!(agCgProt&&agCgProt.semaines&&agCgProt.semaines[j.semKey]==='off');
+              })();
+              if(estSemaineOffCg&&!j.heureDebReel&&statutJ!=='travaille'&&statutJ!=='reprise'){
+                // rien à compter cette semaine-là (sauf un jour réellement travaillé malgré tout,
+                // qui garde son heureDebReel et passe par les branches normales ci-dessous)
+              } else if(['travaille','reprise'].includes(statutJ)){
                 joursTravailleFSM++;
               } else if(['prevu','abs-partielle','abs-rem'].includes(statutJ)){
                 joursNormaux++;
@@ -7826,6 +7840,7 @@ function calcCongesContrat(c, dateRefOverride){
                 return ['conges-acq','conges-anticipe','conges-non','conges-am','ferie','ferie-non','repos'].includes(stCap);
               });
             const prorataPlafonne=estSemUniquementCongesFerie?Math.min(prorata,1):prorata;
+            if(window.DEBUG_CGAM&&c.nom==='Constance')console.log('[CGAM-contribSemaine]',joursSub[0]?.date,'-',joursSub[joursSub.length-1]?.date,'| joursNormaux:',joursNormaux,'| joursMaxSem:',joursMaxSem,'| joursTravailleFSM:',joursTravailleFSM,'| contributionNormale:',contributionNormale,'| contrib final:',prorataPlafonne);
             return {contrib:prorataPlafonne,contribArret:contributionArret};
           };
 
@@ -9966,7 +9981,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       // l'ajout aux théoriques plus bas.
       let dansSemaineAvenantHP=false;
       if(sourceActif.th==='sem'&&dateAvenantStr){
-        const lundiAvHP=new Date(dateAvenantStr);lundiAvHP.setDate(lundiAvHP.getDate()-(lundiAvHP.getDay()||7)+1);
+        const lundiAvHP=parseDateLoc(dateAvenantStr);lundiAvHP.setDate(lundiAvHP.getDate()-(lundiAvHP.getDay()||7)+1);
         const dimAvHP=new Date(lundiAvHP);dimAvHP.setDate(lundiAvHP.getDate()+6);
         dansSemaineAvenantHP=d>=lundiAvHP&&d<=dimAvHP;
       }
@@ -10031,8 +10046,15 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         // (double comptage confirmé par Sophie).
         const agKeyHPSem=getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr));
         const agendasHPSem=sourceActif.agendas||c.agendas||[];
-        const agendaHPSem=agendasHPSem.find(ag=>new Date(ag.dateDebut)<=new Date(dateStr)&&new Date(ag.dateFin)>=new Date(dateStr));
+        const agendaHPSem=agendasHPSem.find(ag=>parseDateLoc(ag.dateDebut)<=d&&parseDateLoc(ag.dateFin)>=d)
+          ||agendasHPSem.find(ag=>{
+            // Repli semaine à cheval sur le mois (même principe que getHeuresPrevues)
+            const premierMoisHPSem=new Date(d.getFullYear(),d.getMonth(),1);
+            const dernierMoisHPSem=new Date(d.getFullYear(),d.getMonth()+1,0);
+            return parseDateLoc(ag.dateDebut)<=dernierMoisHPSem&&parseDateLoc(ag.dateFin)>=premierMoisHPSem;
+          });
         const typeSemHPSem=agendaHPSem&&agendaHPSem.semaines&&agendaHPSem.semaines[agKeyHPSem];
+        if(window.DEBUG_CGAM)console.log('[CGAM-brancheSemDetail]',dateStr,'| agKeyHPSem:',agKeyHPSem,'| agendaHPSem trouvé:',!!agendaHPSem,'| agendaHPSem.dateDebut/dateFin:',agendaHPSem?.dateDebut,agendaHPSem?.dateFin,'| typeSemHPSem:',typeSemHPSem,'| clés semaines disponibles:',agendaHPSem?.semaines?Object.keys(agendaHPSem.semaines):null);
         if(!typeSemHPSem){
           const jourIdxHPSem=d.getDay()===0?6:d.getDay()-1;
           const semKeyHPSem=getSemISO(dateStr);
@@ -10065,6 +10087,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       }
       // 11/08/2026 : ajouter le delta de cette itération à l'accumulateur théoriques séparé, sauf
       // dans la semaine de l'avenant pour sem (déjà comptée par calcHTheoriquesPlanSem, voir plus haut)
+      if(window.DEBUG_CGAM&&sourceActif.th==='sem'){
+        const deltaJourHP=hAbsHorsPeriode-hAbsHorsPeriodeAvantIter;
+        if(deltaJourHP>0)console.log('[CGAM-hAbsHorsPeriodeJour]',dateStr,'| delta:',deltaJourHP,'| dansSemaineAvenantHP:',dansSemaineAvenantHP,'| semKey:',getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr)));
+      }
       if(!dansSemaineAvenantHP) hAbsHorsPeriodeTheoSem+=(hAbsHorsPeriode-hAbsHorsPeriodeAvantIter);
     }
     hAbs+=hAbsHorsPeriode;
@@ -10076,8 +10102,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // période — aucune interaction avec les absences normales. Scope fixe uniquement : var/min a déjà
     // sa propre gestion (calcHTheoriquesPlanVar/Min via joursHCExclus), ne pas dupliquer ici.
     if(window.DEBUG_CGAM&&sourceActif.th==='sem')console.log('[CGAM-theoSemDetail]','hTheoriques AVANT ajout:',hTheoriques,'| hAbsHorsPeriode (complet, pour hAbs):',hAbsHorsPeriode,'| hAbsHorsPeriodeTheoSem (sans semaine avenant, pour théoriques):',hAbsHorsPeriodeTheoSem,'| periodeAv:',periodeAv,'| dateAvenantStr:',dateAvenantStr);
-    if(sourceActif.th==='fixe') hTheoriques+=hAbsHorsPeriode;
-    else if(sourceActif.th==='sem') hTheoriques+=hAbsHorsPeriodeTheoSem;
+    if(sourceActif.th==='fixe'||sourceActif.th==='sem') hTheoriques+=hAbsHorsPeriode;
     if(window.DEBUG_CGAM&&sourceActif.th==='sem')console.log('[CGAM-theoSemDetail]','hTheoriques APRÈS:',hTheoriques);
   }
   // Pour th='sem' ou th='plan' non-var : utiliser la méthode alternative (moyenne par jour)
