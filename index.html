@@ -10020,8 +10020,23 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         dansSemaineAvenantHP=d>=lundiAvHP&&d<=dimAvHP;
       }
       const hAbsHorsPeriodeAvantIter=hAbsHorsPeriode;
-      const prevusHP=getHeuresPrevues(c,new Date(d),sourceActif);
-      if(prevusHP.debut&&prevusHP.fin){
+      // 11/08/2026 (Sophie) : pour sem, seule la semaine de l'avenant elle-même (dansSemaineAvenantHP)
+      // doit consulter l'agenda/heures réelles (mécanisme cheval de calcHTheoriquesPlanSem). Toute
+      // autre semaine hors-période — pleine ou partielle — doit systématiquement passer par la
+      // moyenne jours-union, jamais par un agenda "fantôme" qui ne représente plus le contrat réel.
+      const dansHorsSemNormaleSem=sourceActif.th==='sem'&&sourceActif.semTypes&&!dansSemaineAvenantHP;
+      const prevusHP=dansHorsSemNormaleSem?{debut:null,fin:null}:getHeuresPrevues(c,new Date(d),sourceActif);
+      if(dansHorsSemNormaleSem){
+        const jourIdxHPSemDirect=d.getDay()===0?6:d.getDay()-1;
+        const semKeyHPSemDirect=getSemISO(dateStr);
+        if(joursPossiblesAbsHPArrSem&&joursPossiblesAbsHPArrSem[jourIdxHPSemDirect]){
+          if(!semJoursCptM['hp_'+semKeyHPSemDirect]) semJoursCptM['hp_'+semKeyHPSemDirect]=0;
+          if(semJoursCptM['hp_'+semKeyHPSemDirect]<nbJoursPossiblesAbsHPSem){
+            hAbsHorsPeriode+=hSemMoyAbsHPSem/nbJoursPossiblesAbsHPSem;
+            semJoursCptM['hp_'+semKeyHPSemDirect]++;
+          }
+        }
+      } else if(prevusHP.debut&&prevusHP.fin){
         const contribHP=(toM(prevusHP.fin)-toM(prevusHP.debut))/60;
         hAbsHorsPeriode+=contribHP;
       } else if(isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr)))){
@@ -10034,7 +10049,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           // 11/08/2026 (Sophie) : ne compter que les jours "union" (jamais le week-end) — cette
           // branche appliquait la contribution à TOUS les jours de la semaine sans distinction.
           if(joursPossiblesAbsHPArrSem&&joursPossiblesAbsHPArrSem[jourIdxHP]){
-            hAbsHorsPeriode+=(hMensu*12/nbSemActif)/joursMaxMoyen;
+            hAbsHorsPeriode+=hSemMoyAbsHPSem/nbJoursPossiblesAbsHPSem;
           }
         }
       } else if(sourceActif.th==='plan'&&sourceActif.planType==='var'&&sourceActif.planVar){
