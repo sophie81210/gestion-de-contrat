@@ -8556,11 +8556,16 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
       const dateFinContratMinThStr=dateFinContratMinTh?(dateFinContratMinTh.getFullYear()+'-'+String(dateFinContratMinTh.getMonth()+1).padStart(2,'0')+'-'+String(dateFinContratMinTh.getDate()).padStart(2,'0')):null;
       const estChevalFinContrat=dateFinContratMinThStr&&dimStr>dateFinContratMinThStr&&lundiStr<=dateFinContratMinThStr;
       const estCheval=estChevalMoisSeul||estChevalDebutContrat||estChevalFinContrat||((dateAvenant)&&lundiStr<=dateAvenant&&dimStr>=dateAvenant);
-      if((estChevalDebutContrat||estChevalFinContrat)&&!estChevalMoisSeul){
+      const estChevalAvenantSeul=dateAvenant&&lundiStr<=dateAvenant&&dimStr>=dateAvenant;
+      if((estChevalDebutContrat||estChevalFinContrat||estChevalAvenantSeul)&&!estChevalMoisSeul){
         // 05/08/2026 (Sophie, même erreur que var corrigée juste avant) : la semaine de début OU fin de
         // contrat reçoit les heures théoriques COMPLÈTES, inconditionnellement — la réduction "jours
         // max moins jours possibles côté contrat" ne concerne QUE la déduction hors-contrat, calculée
         // à part dans calcRecapFiche, jamais les théoriques elles-mêmes.
+        // 11/08/2026 (Sophie, confirmé par test comparatif var/min) : même principe étendu à la semaine
+        // de l'avenant elle-même — la logique "coupure de mois" ci-dessous (jours empruntés au mois
+        // suivant) ne s'applique qu'à un vrai chevauchement de mois, jamais à un avenant en cours de
+        // mois, où les jours fabriqués hors-contrat sont exclus du décompte au lieu d'être crédités.
         hTheoriques+=hMinTh;
       } else if(estCheval){
         // Coupure de MOIS (jamais de contrat ici) : reste le plancher jours max + jours cochés,
@@ -9104,14 +9109,12 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           const semJourJHP=j.semKey||getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
           if(semJourJHP===semAvJHP) return false;
         }
-        const srcJ=getVersionActive(c,new Date(j.date));
         const jourIdx=j.jourSemaine===0?6:j.jourSemaine-1;
-        if(srcJ.planType==='min') return !!(srcJ.joursMin&&srcJ.joursMin[jourIdx]);
-        if(srcJ.planType==='var'&&srcJ.planVar) return srcJ.planVar.some(v=>v.jours&&v.jours[jourIdx]);
-        // 11/08/2026 (Sophie) : si l'autre côté n'est pas lui-même var/min (ex. fixe/sem), ses heures
-        // réelles n'ont aucun rapport avec ce calcul — traiter ces jours comme des jours "jours union"
-        // du plan var/min ACTUEL (même principe que "semaine sans type identifiable" déjà établi),
-        // jamais selon le motif de l'ancien contrat.
+        // 11/08/2026 (Sophie) : le motif réel de l'AUTRE côté (qu'il soit fixe/sem OU même var/min)
+        // n'a jamais aucun rapport avec ce calcul — seul compte le motif "jours union" du plan var/min
+        // ACTUEL. Une vérification du motif de l'autre côté existait ici quand cet autre côté était
+        // lui-même var/min (ex. min→var), faisant à tort manquer des jours comme le lundi quand le
+        // motif min de l'ancien contrat ne travaillait pas ce jour-là.
         if(srcPourIsPlanMinVar.planType==='min'&&srcPourIsPlanMinVar.joursMin) return !!srcPourIsPlanMinVar.joursMin[jourIdx];
         if(srcPourIsPlanMinVar.planType==='var'&&srcPourIsPlanMinVar.planVar) return srcPourIsPlanMinVar.planVar.some(v=>v.jours&&v.jours[jourIdx]);
         return false;
