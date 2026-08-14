@@ -18260,29 +18260,38 @@ if(tousNonPrevus){
             // fonction) reste sûr à lire directement — Sophie 15/07 : on ne peut PAS prédire
             // un arrêt pas encore déclaré, ce n'est pas une donnée calculable, c'est une limite
             // acceptée (pas de mécanisme à construire pour ce cas).
-            const lendStr=new Date(cur);lendStr.setDate(lendStr.getDate()+1);
-            const lendDateStrFer=lendStr.getFullYear()+'-'+String(lendStr.getMonth()+1).padStart(2,'0')+'-'+String(lendStr.getDate()).padStart(2,'0');
-            const lendKey=lendStr.getFullYear()+'-'+String(lendStr.getMonth()+1).padStart(2,'0');
+            // 11/08/2026 (Sophie, décision explicite "option 2") : le texte CCN vise le "premier
+            // jour de travail" qui suit le férié, pas le tout premier jour du calendrier — avancer
+            // jusqu'au prochain jour réellement prévu (en sautant les non-prévus), max 14 jours pour
+            // rester dans une fenêtre raisonnable, avant d'appliquer la vérification.
+            let lendStr=new Date(cur);lendStr.setDate(lendStr.getDate()+1);
+            let lendDateStrFer,lendKey,srcLendFer,prevusLendFer,lendPrevuFer;
+            let iAvanceLendFer=0;
+            do{
+              lendDateStrFer=lendStr.getFullYear()+'-'+String(lendStr.getMonth()+1).padStart(2,'0')+'-'+String(lendStr.getDate()).padStart(2,'0');
+              lendKey=lendStr.getFullYear()+'-'+String(lendStr.getMonth()+1).padStart(2,'0');
+              srcLendFer=getVersionActive(c,lendStr);
+              prevusLendFer=getHeuresPrevues(srcLendFer,lendStr);
+              lendPrevuFer=!!(prevusLendFer.debut&&prevusLendFer.debut!=='prévu')||!!(prevusLendFer.planVar);
+              // Repli sur l'union des volumes/types si la semaine n'est pas pointée — même règle
+              // que "type pointé d'abord, union en secours" déjà appliquée à premierJourTravaille
+              // ce matin, jamais étendue à getHeuresPrevues (utilisée largement ailleurs pour les
+              // heures/la paie, où l'absence de repli est probablement voulue — donc pas touchée
+              // ici, juste complétée localement). Bug confirmé Sophie 17/07/2026 : un jour "jour
+              // possible" au sens de l'union (semaine non pointée) était traité comme "non prévu"
+              // par cette vérification, faussant la protection du férié qui le précède.
+              if(!lendPrevuFer){
+                const lendJourIdxUnion=lendStr.getDay()===0?6:lendStr.getDay()-1;
+                if(srcLendFer.th==='sem'&&srcLendFer.semTypes){
+                  lendPrevuFer=srcLendFer.semTypes.some(st=>st.jours&&st.jours[lendJourIdxUnion]&&st.jours[lendJourIdxUnion].d);
+                } else if(srcLendFer.th==='plan'&&srcLendFer.planType==='var'&&srcLendFer.planVar){
+                  lendPrevuFer=srcLendFer.planVar.some(v=>v.jours&&v.jours[lendJourIdxUnion]);
+                }
+              }
+              if(!lendPrevuFer){lendStr=new Date(lendStr);lendStr.setDate(lendStr.getDate()+1);iAvanceLendFer++;}
+            }while(!lendPrevuFer&&iAvanceLendFer<14);
             const lendJour=c.fiches[lendKey]?.jours.find(j=>j.date===lendDateStrFer);
             const lendArret=['arret','abs-am'].includes(lendJour?.statut);
-            const srcLendFer=getVersionActive(c,lendStr);
-            const prevusLendFer=getHeuresPrevues(srcLendFer,lendStr);
-            let lendPrevuFer=!!(prevusLendFer.debut&&prevusLendFer.debut!=='prévu')||!!(prevusLendFer.planVar);
-            // Repli sur l'union des volumes/types si la semaine n'est pas pointée — même règle
-            // que "type pointé d'abord, union en secours" déjà appliquée à premierJourTravaille
-            // ce matin, jamais étendue à getHeuresPrevues (utilisée largement ailleurs pour les
-            // heures/la paie, où l'absence de repli est probablement voulue — donc pas touchée
-            // ici, juste complétée localement). Bug confirmé Sophie 17/07/2026 : un jour "jour
-            // possible" au sens de l'union (semaine non pointée) était traité comme "non prévu"
-            // par cette vérification, faussant la protection du férié qui le précède.
-            if(!lendPrevuFer){
-              const lendJourIdxUnion=lendStr.getDay()===0?6:lendStr.getDay()-1;
-              if(srcLendFer.th==='sem'&&srcLendFer.semTypes){
-                lendPrevuFer=srcLendFer.semTypes.some(st=>st.jours&&st.jours[lendJourIdxUnion]&&st.jours[lendJourIdxUnion].d);
-              } else if(srcLendFer.th==='plan'&&srcLendFer.planType==='var'&&srcLendFer.planVar){
-                lendPrevuFer=srcLendFer.planVar.some(v=>v.jours&&v.jours[lendJourIdxUnion]);
-              }
-            }
             const lendDansFenetreFer=lendDateStrFer<=fin||(premierTravReprise&&lendDateStrFer<premierTravReprise);
             const lendConges=lendPrevuFer&&lendDansFenetreFer&&!lendArret;
             // Le lendemain projeté doit être reconnu "acquis-équivalent" s'il deviendrait soit
