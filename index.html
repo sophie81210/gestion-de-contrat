@@ -15987,7 +15987,9 @@ function genCumul(c){
     }
 
     // Indemnité de congés juste après l'année terminée
-    if(c.tc!=='52'&&c.tc!=='occ'&&cg.estTerminee){
+    const dateFinAcquisitionCg46=new Date(anneeRef+1,4,31);
+    const srcFinAcquisitionCg46=getVersionActive(c,dateFinAcquisitionCg46);
+    if(srcFinAcquisitionCg46.tc!=='52'&&c.tc!=='occ'&&cg.estTerminee){
       // Vérifier que la fiche de mai est validée
       const keyMai=(anneeRef+1)+'-05';
       const ficheMai=c.fiches?.[keyMai];
@@ -16023,8 +16025,33 @@ function genCumul(c){
             }
             dejaPaye=parseFloat(dejaPaye.toFixed(2));
           }
+          // 11/08/2026 (Sophie) : si une partie de CETTE année d'acquisition (juin anneeRef → mai
+          // anneeRef+1) a été passée sous contrat 52 avant un avenant vers 46, les jours anticipés
+          // pris PENDANT le 52 ont déjà été réellement payés à ce moment-là (visibles en "dont XXX"
+          // sur la fiche de l'époque) — à déduire en plus, au montant RÉEL versé alors (pas le taux
+          // théorique). Le 46 ne peut structurellement pas avoir de jours anticipés sur l'année en
+          // cours (ceux-ci n'existent que sous 52) — seuls les jours pris PENDANT le 52 comptent ici.
+          let dejaPayeSous52=0;
+          const debutAcq52=new Date(anneeRef,5,1), finAcq52=new Date(anneeRef+1,4,31);
+          Object.entries(c.fiches||{}).forEach(([kF52,fF52])=>{
+            (fF52.jours||[]).forEach(j52=>{
+              if(!['conges-acq','conges-anticipe','decompte-acq','decompte-anticipe'].includes(j52.statut)) return;
+              const [jy52,jm52,jd52]=j52.date.split('-').map(Number);
+              const dateJ52=new Date(jy52,jm52-1,jd52);
+              if(dateJ52<debutAcq52||dateJ52>finAcq52) return;
+              if(getVersionActive(c,dateJ52).tc!=='52') return;
+              const dateVeille52=new Date(jy52,jm52-1,jd52);dateVeille52.setDate(dateVeille52.getDate()-1);
+              const srcV52=getVersionActive(c,dateVeille52);
+              const txNetV52=srcV52.txNet||(srcV52.txBrut*(getParamAt('coefficients',dateToStr(dateVeille52)).valeur||0.7811975));
+              const hSemMoyV52=(srcV52.hMensu||0)*12/(srcV52.nbSem||52);
+              dejaPayeSous52+=(hSemMoyV52/6)*txNetV52;
+            });
+          });
+          dejaPayeSous52=parseFloat(dejaPayeSous52.toFixed(2));
+          dejaPaye=parseFloat((dejaPaye+dejaPayeSous52).toFixed(2));
           const resteAVerser=Math.max(0,meilleurNet-dejaPaye);
-          return '<div style="'+ls+'"><span>Montants déjà versés</span><span style="'+vs+'">'+dejaPaye.toFixed(2)+' €</span></div>'
+          return (dejaPayeSous52>0?'<div style="'+ls+'"><span>Dont jours anticipés versés sous contrat 52</span><span style="'+vs+'">'+dejaPayeSous52.toFixed(2)+' €</span></div>':'')
+               +'<div style="'+ls+'"><span>Montants déjà versés</span><span style="'+vs+'">'+dejaPaye.toFixed(2)+' €</span></div>'
                +'<div style="'+ls+';border-bottom:none"><span>Restant à verser</span><span style="'+vs+'">'+resteAVerser.toFixed(2)+' €</span></div>';
         })()}
       </div>`;
