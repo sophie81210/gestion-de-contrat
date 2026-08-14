@@ -8422,6 +8422,20 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
         const dimStr=dimSem.getFullYear()+'-'+String(dimSem.getMonth()+1).padStart(2,'0')+'-'+String(dimSem.getDate()).padStart(2,'0');
         const estCheval=lundiStr<debutMoisStr||dimStr>finMoisStr||(c.dateDeb&&lundiStr<c.dateDeb&&dimStr>=c.dateDeb)||((c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&lundiStr<=av.dateAvenant&&dimStr>=av.dateAvenant));
         if(estCheval){
+          const avenantDeCetteSemCh=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&lundiStr<=av.dateAvenant&&dimStr>=av.dateAvenant);
+          const statsCongésChevalDetect=['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe','conges-am'];
+          const contientJourCongesCh=avenantDeCetteSemCh&&joursDesSem.some(jj=>{
+            const st=jj.statut||getStatutPrevu(sourceActif||c,jj);
+            return statsCongésChevalDetect.includes(st);
+          });
+          if(contientJourCongesCh){
+            // 11/08/2026 (Sophie) : une semaine à cheval sur un AVENANT qui contient un jour congés
+            // compte simplement pour le volume complet du type de semaine — rien d'autre (pas de détail
+            // jour par jour, qui mélangeait à tort heures hors-contrat réelles et heures congés).
+            if(window.DEBUG_CGAM)console.log('[CGAM-chevalSemVolume]',dateEx,'| semaine à cheval avenant + congés | hSemType (volume complet):',hSemType);
+            hTheoriques+=hSemType;
+            return;
+          }
           // Jours présents dans le mois : travaillés → heures du semType, congés → hSemMoy/6, hors
           // contrat → moyenne pondérée / jours possibles (comme pour une semaine sans type connu —
           // avant l'embauche, aucun horaire précis ne peut légalement s'appliquer, même si le type de
@@ -8441,6 +8455,7 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
               // pas la moyenne — contrairement aux jours hors contrat de semaines entièrement hors
               // contrat plus tôt (traitées séparément, ailleurs, toujours à la moyenne).
               hCheval+=hJourReelChHC;
+              if(window.DEBUG_CGAM)console.log('[CGAM-chevalSemJour]',jourStr,'| branche: joursHCExclus | ajouté:',hJourReelChHC,'| hCheval cumulé:',hCheval);
               continue;
             }
             // Trouver le jour dans la fiche
@@ -8455,7 +8470,9 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
             } else if(statsCongésCheval.includes(stJour)){
               // 52 sem : heures réelles du jour selon le type de semaine réel (agenda)
               // 46 sem : aucune donnée de planning sur ces semaines de congés, hSemMoyPS/6 reste nécessaire
-              hCheval+=est52Ch?hJourReelCh:hSemMoyPS/nbJoursPossiblesSem;
+              const ajoutCongesCheval=est52Ch?hJourReelCh:hSemMoyPS/nbJoursPossiblesSem;
+              hCheval+=ajoutCongesCheval;
+              if(window.DEBUG_CGAM)console.log('[CGAM-chevalSemJour]',jourStr,'| branche: congés (stJour='+stJour+') | ajouté:',ajoutCongesCheval,'| hCheval cumulé:',hCheval);
             } else if(est52Ch&&['conges-6j','conges-6j-fin','non-prevu'].includes(stJour)){
               // 0h plan-sem 52
             } else {
