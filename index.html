@@ -3978,7 +3978,7 @@ function ouvrirFiche(contratId,key){
           if(hPrevAff2>0) hDeduit='−'+fmtH(Math.round(hPrevAff2*60));
         }
       }
-    } else if(['conges-non','decompte-conges'].includes(statutActuel)&&(c.tc==='52'||getVersionActive(c,new Date(j.date)).tc==='52')){
+    } else if(['conges-non','decompte-conges'].includes(statutActuel)&&getVersionActive(c,new Date(j.date)).tc==='52'){
       // Congé non acquis / décompte au-delà du quota (52) : même valeur que le moteur de
       // déduction — une seule source de vérité (getHJourCongesNonDeduit). La colonne H±
       // affiche exactement ce qui sera déduit ; 0 h (jour non prévu) → rien d'affiché.
@@ -4148,7 +4148,7 @@ function ouvrirFiche(contratId,key){
       ${!isPlanVar?`<td id="hpm-${contratId}-${key}-${idx}" style="padding:3px 4px;font-size:11px;font-weight:600">
         ${(()=>{
           const srcActifJ=getVersionActive(c,new Date(j.date));
-          const estCongesNon46=statutActuel==='conges-non'&&c.tc!=='52'&&srcActifJ.tc!=='52';
+          const estCongesNon46=statutActuel==='conges-non'&&srcActifJ.tc!=='52';
           if(estCongesNon46) return '—';
           if(hComp) return '<span style="color:var(--vt)">'+hComp+'</span>';
           if(hSup) return '<span style="color:var(--vt)">'+hSup+'</span>';
@@ -16575,6 +16575,17 @@ function signerAvenant(){
   av.signe=true;
   av.dateSigne=new Date().toISOString().slice(0,10);
   c._regulDirty=true;
+  // 11/08/2026 (Sophie) : les modifications de planning jour par jour (échanges, jours modifiés)
+  // enregistrées AVANT cet avenant appartiennent à l'ancien type de contrat — les garder au-delà de
+  // la date de l'avenant fait ressurgir d'anciens horaires qui n'ont plus de sens (ex. un contrat
+  // passé en "1 jour/semaine" qui affiche encore les jours modifiés de l'ancien planning complet).
+  ['planning','_planningSauvegarde'].forEach(champPlanningAv=>{
+    if(c[champPlanningAv]){
+      Object.keys(c[champPlanningAv]).forEach(dateKeyAv=>{
+        if(dateKeyAv>=av.dateAvenant) delete c[champPlanningAv][dateKeyAv];
+      });
+    }
+  });
   // Forcer nbSem=52 si passage vers contrat 52 sem
   if(av.tc==='52') av.nbSem=52;
   // Passage CDD → CDI : ce champ ne vit que sur le contrat (pas par avenant), donc le reporter ici
@@ -17370,7 +17381,7 @@ function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
           if(jourPossible) return dateStr;
         } else if(srcPT.th==='sem'&&srcPT.semTypes){
           let jourPossibleSem=false;
-          if(pourReprise||c.tc==='52'||srcPT.tc==='52'){
+          if(pourReprise||srcPT.tc==='52'){
             // Reprise (et contrats 52) : selon le type pointé de la semaine dans l'agenda —
             // même résolution que getHeuresPrevues/dernierJourDecompte. Une semaine sans
             // type connu n'offre aucun jour possible.
