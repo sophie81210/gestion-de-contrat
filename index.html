@@ -7741,7 +7741,20 @@ function calcCongesContrat(c, dateRefOverride){
         const d=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
         return d>max?d:max;
       },new Date(0));
-      const semTerminee=dernierJourRecueilli<nowRef;
+      // 17/08/2026 (Sophie) : nowRef (dernière fiche validée sur TOUT le contrat) contaminait le statut
+      // "terminée" de semaines à cheval bien plus tôt dans l'année dès qu'un mois SANS RAPPORT changeait
+      // d'état verrouillé/déverrouillé (ex. décembre affecté par janvier, avril par mai) — repéré par
+      // Sophie via déverrouillages successifs (l'écart se déplaçait à chaque fiche déverrouillée, une
+      // semaine ordinaire jamais affectée, seulement les semaines à cheval touchant congés/off/avenant).
+      // Référence désormais calculée UNIQUEMENT à partir des mois que CETTE semaine touche réellement
+      // (1 ou 2 — jamais un mois sans rapport ailleurs sur le contrat) : jours ne contient que des jours
+      // de fiches déjà validées (filtre plus haut), donc le dernier mois présent ici est forcément
+      // validé — la semaine est "terminée" dès qu'on est passé au mois suivant CE dernier mois-là.
+      const moisSemaineLocaux=[...new Set(jours.map(j=>j.date.slice(0,7)))].sort();
+      const dernierMoisSemaineLocal=moisSemaineLocaux[moisSemaineLocaux.length-1];
+      const [nsy,nsm]=dernierMoisSemaineLocal.split('-').map(Number);
+      const nowRefSemaine=new Date(nsy,nsm,1);
+      const semTerminee=dernierJourRecueilli<nowRefSemaine;
 
       // Compter les absences non rémunérées
     const absNonRem=jours.filter(j=>j.statut==='abs-non'||j.statut==='abs-am'||j.statut==='ferie-non').length;
@@ -18268,6 +18281,14 @@ if(tousNonPrevus){
         }
 
         if(!decompteCommence&&estDansPeriodeCochee){
+          // 17/08/2026 (Sophie) : un jour férié avant le 1er jour prévu travaillé reste "Férié" — il
+          // ne déclenche toujours pas le décompte (inchangé), mais ne doit jamais basculer en
+          // conges-am. Signalé par Sophie sur Constance (contrat vendredi seul, férié un jeudi
+          // pendant une semaine de congés, affiché à tort en conges-am).
+          if(estFerie){
+            if(!fiche.valide) jour.statut='ferie';
+            cur.setDate(cur.getDate()+1);continue;
+          }
           // Avant le 1er jour prévu travaillé → conges-am
           // Sauf si semaine off : ne pas décompter
           const agKeyOff0=getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr));
