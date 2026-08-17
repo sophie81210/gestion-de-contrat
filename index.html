@@ -2644,6 +2644,9 @@ function renderDetTab(id,tab){
             let debutMois=ay2+'-'+String(am2).padStart(2,'0')+'-01';
             const finMoisDate=new Date(ay2,am2,0);
             let finMois=ay2+'-'+String(am2).padStart(2,'0')+'-'+String(finMoisDate.getDate()).padStart(2,'0');
+            // 17/08/2026 (Sophie) : bornes du mois ENTIER, conservées avant le rétrécissement à la
+            // portion anniversaire ci-dessous — nécessaires au prorata de la mensu (voir portionAnniv).
+            const debutMoisComplet=debutMois, finMoisComplet=finMois;
             if(portionAnniv==='avant') finMois=veilleAnniv;
             else if(portionAnniv==='apres') debutMois=dateAnniv;
 
@@ -2700,6 +2703,7 @@ function renderDetTab(id,tab){
             const estPassage46vers46Reg=estPassageVers46Reg&&(()=>{const srcAv=getVersionActive(c,new Date(debutMois));return srcAv.tc!=='occ';})();
             // Calcul recap selon le type de passage
             let montantMensu=0, txNetMois=0, finMoisRegul=finMois, debutMoisRegul=debutMois;
+            let montantPrevuOverride=null; // 17/08/2026 (Sophie) : salaire dû calculé en 2 portions (voir branche 46-46 ci-dessous)
             if(avenantDuMoisReg&&estPassage46vers46Reg){
               // 46→46 : cumuler avant + après avenant
               const recapAvant=ficheMois?calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant'):null;
@@ -2709,6 +2713,14 @@ function renderDetTab(id,tab){
               montantMensu=parseFloat((mensuAvant+mensuApres).toFixed(2));
               txNetMois=parseFloat(recapApres?.txNetExact||0);
               debutMoisRegul=debutMois; finMoisRegul=finMois;
+              // 17/08/2026 (Sophie) : salaire dû — même logique que la mensu ci-dessus, chaque portion
+              // avec son propre taux, au lieu de tout le mois multiplié par le seul taux "après avenant"
+              // (signalé par Sophie : coefficient figé sur le salaire dû quand le taux change pile à
+              // l'avenant). hReelPortion(deb,fin) est définie plus bas ; déclarée en amont via var pour
+              // être utilisable ici (hoisting).
+              const hReelAvant=hReelPortion(debutMois,veilleAvenantReg);
+              const hReelApres=hReelPortion(avenantDuMoisReg.dateAvenant,finMois);
+              montantPrevuOverride=parseFloat((hReelAvant*(recapAvant?.txNetExact||0)+hReelApres*(recapApres?.txNetExact||0)).toFixed(2));
             } else if(avenantDuMoisReg&&estPassageVers46Reg){
               // occ→46 : partie après avenant uniquement
               const recapMois=ficheMois?calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres'):null;
@@ -2721,60 +2733,70 @@ function renderDetTab(id,tab){
               txNetMois=parseFloat(recapMois?.txNetExact||0);
               montantMensu=parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)-(recapMois?.montantAbsences||0)).toFixed(2));
               debutMoisRegul=debutMois; finMoisRegul=veilleAvenantReg||finMois;
-            } else if(portionAnniv==='avant'){
-              // Portion avant l'anniversaire exact (mois scindé, pas d'avenant réel) — même mécanique
-              // que le cas avenant : les jours après l'anniversaire sont exclus de la période donnée à
-              // calcRecapFiche, qui les traite via le même moteur d'absences que pour un avenant réel
-              // (cohérence avec le cas 46→52 ci-dessus, plutôt qu'un prorata théorique séparé).
-              const recapMois=ficheMois?calcRecapFiche(c,ficheMois,null,veilleAnniv,veilleAnniv,null,'avant'):null;
-              txNetMois=parseFloat(recapMois?.txNetExact||0);
-              montantMensu=parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)-(recapMois?.montantAbsences||0)).toFixed(2));
-              debutMoisRegul=debutMois; finMoisRegul=veilleAnniv||finMois;
-            } else if(portionAnniv==='apres'){
-              const recapMois=ficheMois?calcRecapFiche(c,ficheMois,dateAnniv,null,dateAnniv,null,'apres'):null;
-              txNetMois=parseFloat(recapMois?.txNetExact||0);
-              montantMensu=parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)-(recapMois?.montantAbsences||0)).toFixed(2));
-              debutMoisRegul=dateAnniv; finMoisRegul=finMois;
+            } else if(portionAnniv==='avant'||portionAnniv==='apres'){
+              // 17/08/2026 (Sophie) : anniversaire SANS avenant réel — ne réutilise plus le mécanisme
+              // avenant (qui s'appuie sur les heures théoriques et le moteur d'absences par version de
+              // contrat ; inadapté ici puisque la même version couvre tout le mois, congés/semaines off
+              // en 46 comptés différemment). Calcul dédié : le montant mensuel du mois ENTIER (calculé
+              // normalement, comme un mois sans coupure) est réparti entre avant/après au prorata des
+              // heures PRÉVUES de chaque portion — jamais des heures théoriques.
+              const hPrevuComplet=calcHPrevuReg(debutMoisComplet,finMoisComplet);
+              const hMensuRegComplet=calcHMensuReg(debutMoisComplet,finMoisComplet,hPrevuComplet,false);
+              const recapMoisComplet=ficheMois?calcRecapFiche(c,ficheMois):null;
+              const txNetMoisComplet=parseFloat(recapMoisComplet?.txNetExact||0);
+              const montantMensuComplet=Math.max(0,hMensuRegComplet*txNetMoisComplet-((recapMoisComplet?.montantAbsences||0)-(recapMoisComplet?.montantAbsMaj||0)));
+              const ratioPortion=hPrevuComplet>0?(hPrevu/hPrevuComplet):0;
+              montantMensu=parseFloat((montantMensuComplet*ratioPortion).toFixed(2));
+              txNetMois=txNetMoisComplet;
+              if(portionAnniv==='avant'){ debutMoisRegul=debutMois; finMoisRegul=veilleAnniv||finMois; }
+              else { debutMoisRegul=dateAnniv; finMoisRegul=finMois; }
             } else {
               // Mois normal
               const recapMois=ficheMois?calcRecapFiche(c,ficheMois):null;
               txNetMois=parseFloat(recapMois?.txNetExact||0);
               montantMensu=parseFloat(Math.max(0,hMensuReg*txNetMois-((recapMois?.montantAbsences||0)-(recapMois?.montantAbsMaj||0))).toFixed(2));
             }
-            let hReel=0;
-            const srcRegulHR=getVersionActive(c,new Date(debutMoisRegul));
-            const estPlanMinVarHR=srcRegulHR.th==='plan'&&(srcRegulHR.planType==='min'||srcRegulHR.planType==='var');
-            if(ficheMois&&estPlanMinVarHR){
-              hReel=calcHPrevuReg(debutMoisRegul, finMoisRegul);
-            } else if(ficheMois){
-              const statutsExclus=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-conges',
-                'abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat','travaille','reprise'];
-              ficheMois.jours.forEach(j=>{
-                if(j.date<debutMoisRegul||j.date>finMoisRegul) return;
-                const statut=j.statut||getStatutPrevu(c,j);
-                // Jour férié normalement prévu, passé en "travaillé" (statut nécessaire pour que la
-                // majoration férié s'applique) : ce statut n'entretient jamais d'heures prévues et est
-                // exclu ci-dessous — on retrouve ici les heures qui auraient été dues, recalculées
-                // depuis le motif structurel du contrat pour cette date.
-                if(statut==='travaille'&&isFerie(j.date,c)){
-                  const prevusFerieHR=getHeuresPrevues(c,new Date(j.date));
-                  if(prevusFerieHR&&prevusFerieHR.debut&&prevusFerieHR.fin){
-                    hReel+=Math.max(0,(toMins(prevusFerieHR.fin)-toMins(prevusFerieHR.debut))/60);
+            // 17/08/2026 (Sophie) : extrait en fonction réutilisable (hReelPortion) — inchangée dans son
+            // fonctionnement, seulement paramétrée par (debQ,finQ) au lieu de debutMoisRegul/finMoisRegul
+            // en dur, pour pouvoir être appelée 2 fois (avant/après avenant) dans la branche 46-46 plus
+            // haut. Déclaration de fonction : hissée, utilisable avant ce point du fichier (voir plus haut).
+            function hReelPortion(debQ,finQ){
+              let hR=0;
+              const srcQ=getVersionActive(c,new Date(debQ));
+              const estPlanMinVarQ=srcQ.th==='plan'&&(srcQ.planType==='min'||srcQ.planType==='var');
+              if(ficheMois&&estPlanMinVarQ){
+                hR=calcHPrevuReg(debQ, finQ);
+              } else if(ficheMois){
+                const statutsExclus=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-conges',
+                  'abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat','travaille','reprise'];
+                ficheMois.jours.forEach(j=>{
+                  if(j.date<debQ||j.date>finQ) return;
+                  const statut=j.statut||getStatutPrevu(c,j);
+                  // Jour férié normalement prévu, passé en "travaillé" (statut nécessaire pour que la
+                  // majoration férié s'applique) : ce statut n'entretient jamais d'heures prévues et est
+                  // exclu ci-dessous — on retrouve ici les heures qui auraient été dues, recalculées
+                  // depuis le motif structurel du contrat pour cette date.
+                  if(statut==='travaille'&&isFerie(j.date,c)){
+                    const prevusFerieHR=getHeuresPrevues(c,new Date(j.date));
+                    if(prevusFerieHR&&prevusFerieHR.debut&&prevusFerieHR.fin){
+                      hR+=Math.max(0,(toMins(prevusFerieHR.fin)-toMins(prevusFerieHR.debut))/60);
+                    }
+                    return;
                   }
-                  return;
-                }
-                if(statutsExclus.includes(statut)) return;
-                if(statut==='abs-partielle'){
-                  // Heures réelles saisies (pas les prévues)
-                  if(j.heureDebReel&&j.heureFinReel){
-                    hReel+=Math.max(0,(toMins(j.heureFinReel)-toMins(j.heureDebReel))/60);
+                  if(statutsExclus.includes(statut)) return;
+                  if(statut==='abs-partielle'){
+                    // Heures réelles saisies (pas les prévues)
+                    if(j.heureDebReel&&j.heureFinReel){
+                      hR+=Math.max(0,(toMins(j.heureFinReel)-toMins(j.heureDebReel))/60);
+                    }
+                  } else if(j.heureDebPrev&&j.heureFinPrev){
+                    hR+=Math.max(0,(toMins(j.heureFinPrev)-toMins(j.heureDebPrev))/60);
                   }
-                } else if(j.heureDebPrev&&j.heureFinPrev){
-                  hReel+=Math.max(0,(toMins(j.heureFinPrev)-toMins(j.heureDebPrev))/60);
-                }
-              });
+                });
+              }
+              return hR;
             }
-            const montantPrevu=parseFloat((hReel*txNetMois).toFixed(2));
+            const montantPrevu=montantPrevuOverride!==null?montantPrevuOverride:parseFloat((hReelPortion(debutMoisRegul,finMoisRegul)*txNetMois).toFixed(2));
             totMensu+=montantMensu; totPrevu+=montantPrevu;
             cycleTotMensu+=montantMensu; cycleTotPrevu+=montantPrevu;
             const diff=montantPrevu-montantMensu;
