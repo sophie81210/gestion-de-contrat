@@ -2657,7 +2657,11 @@ function renderDetTab(id,tab){
 
             // Détecter tout avenant dans ce mois (46→52, occ→46, etc.)
             const tousAvenantsSignes=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant);
-            const avenantDuMoisReg=tousAvenantsSignes.find(av=>av.dateAvenant>debutMois&&av.dateAvenant<=finMois)||null;
+            // 17/08/2026 (Sophie) : cherche sur le mois ENTIER (pas debutMois/finMois, qui peuvent être
+            // rétrécis par une portion anniversaire) — sinon la moitié du mois qui ne contient pas
+            // physiquement l'avenant ne le détecte jamais, alors que les deux portions ont besoin de le
+            // savoir (anniversaire + avenant le même mois, cf. partage plus bas).
+            const avenantDuMoisReg=tousAvenantsSignes.find(av=>av.dateAvenant>debutMoisComplet&&av.dateAvenant<=finMoisComplet)||null;
             const veilleAvenantReg=avenantDuMoisReg?(()=>{
               const [avy,avm,avd]=avenantDuMoisReg.dateAvenant.split('-').map(Number);
               const dV=new Date(avy,avm-1,avd-1);
@@ -2700,52 +2704,68 @@ function renderDetTab(id,tab){
             const ficheMois=c.fiches?.[key];
             // Détecter le type de passage
             const estPassageVers46Reg=avenantDuMoisReg&&avenantDuMoisReg.tc!=='52'&&avenantDuMoisReg.tc!=='occ';
-            const estPassage46vers46Reg=estPassageVers46Reg&&(()=>{const srcAv=getVersionActive(c,new Date(debutMois));return srcAv.tc!=='occ';})();
+            const estPassage46vers46Reg=estPassageVers46Reg&&(()=>{const srcAv=getVersionActive(c,new Date(debutMoisComplet));return srcAv.tc!=='occ';})();
             // Calcul recap selon le type de passage
             let montantMensu=0, txNetMois=0, finMoisRegul=finMois, debutMoisRegul=debutMois;
             let montantPrevuOverride=null; // 17/08/2026 (Sophie) : salaire dû calculé en 2 portions (voir branche 46-46 ci-dessous)
+            // 17/08/2026 (Sophie) : anniversaire ET avenant le même mois — validé avec Sophie sur
+            // plusieurs cas chiffrés. zoneDeb/zoneFin = bornes de la partie du mois qui reste
+            // régularisable une fois l'avenant pris en compte (calcul avenant ci-dessous INCHANGÉ,
+            // toujours sur le mois entier) ; la part hors de cette zone est définitivement perdue pour
+            // la régularisation (absorbée par le nouveau type de contrat, pas de "fantôme"). Si en plus
+            // il y a un anniversaire, le montant obtenu est ENSUITE reréparti entre les deux années au
+            // prorata des heures PRÉVUES de la portion, restreinte à cette même zone (jamais tout le
+            // mois, jamais les théoriques ici — voir le partage commun après ce bloc).
+            const maxD=(a,b)=>a>b?a:b, minD=(a,b)=>a<b?a:b;
+            let zoneDeb=null, zoneFin=null;
             if(avenantDuMoisReg&&estPassage46vers46Reg){
-              // 46→46 : cumuler avant + après avenant
+              // 46→46 : cumuler avant + après avenant (zone régularisable = tout le mois, rien ne se perd)
               const recapAvant=ficheMois?calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant'):null;
               const recapApres=ficheMois?calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres'):null;
               const mensuAvant=recapAvant?parseFloat(((recapAvant.hMensu||0)*(recapAvant.txNetExact||0)-(recapAvant.montantAbsences||0)).toFixed(2)):0;
               const mensuApres=recapApres?parseFloat(((recapApres.hMensu||0)*(recapApres.txNetExact||0)-(recapApres.montantAbsences||0)).toFixed(2)):0;
               montantMensu=parseFloat((mensuAvant+mensuApres).toFixed(2));
               txNetMois=parseFloat(recapApres?.txNetExact||0);
-              debutMoisRegul=debutMois; finMoisRegul=finMois;
-              // 17/08/2026 (Sophie) : salaire dû — même logique que la mensu ci-dessus, chaque portion
-              // avec son propre taux, au lieu de tout le mois multiplié par le seul taux "après avenant"
-              // (signalé par Sophie : coefficient figé sur le salaire dû quand le taux change pile à
-              // l'avenant). hReelPortion(deb,fin) est définie plus bas ; déclarée en amont via var pour
-              // être utilisable ici (hoisting).
-              const hReelAvant=hReelPortion(debutMois,veilleAvenantReg);
-              const hReelApres=hReelPortion(avenantDuMoisReg.dateAvenant,finMois);
+              debutMoisRegul=debutMoisComplet; finMoisRegul=finMoisComplet;
+              zoneDeb=debutMoisComplet; zoneFin=finMoisComplet;
+              // Salaire dû : chaque moitié (avant/après avenant) restreinte à CETTE portion anniversaire
+              // si elle existe (sinon tout le mois, comme avant) — hReelPortion(deb,fin) définie plus
+              // bas ; déclaration de fonction hissée, utilisable ici.
+              const portionDebSD=portionAnniv==='avant'?debutMoisComplet:(portionAnniv==='apres'?dateAnniv:debutMoisComplet);
+              const portionFinSD=portionAnniv==='avant'?veilleAnniv:(portionAnniv==='apres'?finMoisComplet:finMoisComplet);
+              const debAvantSD=maxD(debutMoisComplet,portionDebSD), finAvantSD=minD(veilleAvenantReg,portionFinSD);
+              const debApresSD=maxD(avenantDuMoisReg.dateAvenant,portionDebSD), finApresSD=minD(finMoisComplet,portionFinSD);
+              const hReelAvant=debAvantSD<=finAvantSD?hReelPortion(debAvantSD,finAvantSD):0;
+              const hReelApres=debApresSD<=finApresSD?hReelPortion(debApresSD,finApresSD):0;
               montantPrevuOverride=parseFloat((hReelAvant*(recapAvant?.txNetExact||0)+hReelApres*(recapApres?.txNetExact||0)).toFixed(2));
             } else if(avenantDuMoisReg&&estPassageVers46Reg){
-              // occ→46 : partie après avenant uniquement
+              // occ→46 ou 52→46 : partie après avenant reste régularisable, avant avenant définitivement perdu
               const recapMois=ficheMois?calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres'):null;
               txNetMois=parseFloat(recapMois?.txNetExact||0);
               montantMensu=parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)-(recapMois?.montantAbsences||0)).toFixed(2));
-              debutMoisRegul=avenantDuMoisReg.dateAvenant; finMoisRegul=finMois;
+              debutMoisRegul=avenantDuMoisReg.dateAvenant; finMoisRegul=finMoisComplet;
+              zoneDeb=avenantDuMoisReg.dateAvenant; zoneFin=finMoisComplet;
             } else if(avenantDuMoisReg){
-              // 46→52 : partie avant avenant uniquement
+              // 46→52 : partie avant avenant reste régularisable, après avenant définitivement perdu
               const recapMois=ficheMois?calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant'):null;
               txNetMois=parseFloat(recapMois?.txNetExact||0);
               montantMensu=parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)-(recapMois?.montantAbsences||0)).toFixed(2));
-              debutMoisRegul=debutMois; finMoisRegul=veilleAvenantReg||finMois;
+              debutMoisRegul=debutMoisComplet; finMoisRegul=veilleAvenantReg||finMoisComplet;
+              zoneDeb=debutMoisComplet; zoneFin=veilleAvenantReg||finMoisComplet;
             } else if(portionAnniv==='avant'||portionAnniv==='apres'){
-              // 17/08/2026 (Sophie) : anniversaire SANS avenant réel — ne réutilise plus le mécanisme
-              // avenant (qui s'appuie sur les heures théoriques et le moteur d'absences par version de
-              // contrat ; inadapté ici puisque la même version couvre tout le mois, congés/semaines off
-              // en 46 comptés différemment). Calcul dédié : le montant mensuel du mois ENTIER (calculé
-              // normalement, comme un mois sans coupure) est réparti entre avant/après au prorata des
-              // heures PRÉVUES de chaque portion — jamais des heures théoriques.
+              // 17/08/2026 (Sophie) : anniversaire SANS avenant réel — ne réutilise pas le mécanisme
+              // avenant (inadapté ici, même version des deux côtés). Calcul dédié : le montant mensuel
+              // du mois ENTIER (calcul normal) réparti entre avant/après au prorata des heures
+              // THÉORIQUES de chaque portion (jamais le prévu — une semaine off ou un congé doit garder
+              // sa valeur pleine dans ce partage, contrairement au cas avec avenant ci-dessous).
+              const hTheoComplet=calcHTheoReg(debutMoisComplet,finMoisComplet);
               const hPrevuComplet=calcHPrevuReg(debutMoisComplet,finMoisComplet);
               const hMensuRegComplet=calcHMensuReg(debutMoisComplet,finMoisComplet,hPrevuComplet,false);
               const recapMoisComplet=ficheMois?calcRecapFiche(c,ficheMois):null;
               const txNetMoisComplet=parseFloat(recapMoisComplet?.txNetExact||0);
               const montantMensuComplet=Math.max(0,hMensuRegComplet*txNetMoisComplet-((recapMoisComplet?.montantAbsences||0)-(recapMoisComplet?.montantAbsMaj||0)));
-              const ratioPortion=hPrevuComplet>0?(hPrevu/hPrevuComplet):0;
+              const hTheoPortion=calcHTheoReg(debutMois,finMois);
+              const ratioPortion=hTheoComplet>0?(hTheoPortion/hTheoComplet):0;
               montantMensu=parseFloat((montantMensuComplet*ratioPortion).toFixed(2));
               txNetMois=txNetMoisComplet;
               if(portionAnniv==='avant'){ debutMoisRegul=debutMois; finMoisRegul=veilleAnniv||finMois; }
@@ -2755,6 +2775,33 @@ function renderDetTab(id,tab){
               const recapMois=ficheMois?calcRecapFiche(c,ficheMois):null;
               txNetMois=parseFloat(recapMois?.txNetExact||0);
               montantMensu=parseFloat(Math.max(0,hMensuReg*txNetMois-((recapMois?.montantAbsences||0)-(recapMois?.montantAbsMaj||0))).toFixed(2));
+            }
+            // 17/08/2026 (Sophie) : anniversaire ET avenant le même mois — la part encore
+            // régularisable calculée ci-dessus (calcul avenant inchangé) se répartit en plus entre les
+            // deux années au prorata des heures PRÉVUES de la portion anniversaire, restreinte à la
+            // zone encore régularisable (jamais tout le mois : la part hors zone est déjà
+            // définitivement perdue dans le calcul avenant ci-dessus, elle ne doit pas réapparaître
+            // ici). Pas de théoriques ici (voir cas anniversaire seul plus haut) : si la régularisation
+            // s'arrête à cause de l'avenant, une semaine off comptée à sa valeur théorique pleine ferait
+            // apparaître un montant qui ne sera plus jamais régularisé nulle part.
+            if(portionAnniv&&zoneDeb!==null){
+              const portionDebA=portionAnniv==='avant'?debutMoisComplet:dateAnniv;
+              const portionFinA=portionAnniv==='avant'?veilleAnniv:finMoisComplet;
+              const interDebA=maxD(portionDebA,zoneDeb), interFinA=minD(portionFinA,zoneFin);
+              if(interDebA<=interFinA){
+                const hPrevuZoneA=calcHPrevuReg(zoneDeb,zoneFin);
+                const hPrevuInterA=calcHPrevuReg(interDebA,interFinA);
+                const ratioAnnivA=hPrevuZoneA>0?(hPrevuInterA/hPrevuZoneA):0;
+                montantMensu=parseFloat((montantMensu*ratioAnnivA).toFixed(2));
+                debutMoisRegul=interDebA; finMoisRegul=interFinA;
+              } else {
+                // Cette portion anniversaire est entièrement hors de la zone régularisable — rien à
+                // régulariser ici pour cette moitié du mois. Plage vide (deb>fin) pour que le calcul du
+                // salaire dû plus bas ne compte aucun jour.
+                montantMensu=0; debutMoisRegul='9999-12-31'; finMoisRegul='0000-01-01';
+              }
+              // montantPrevuOverride (salaire dû, branche 46-46 uniquement) est déjà restreint à la
+              // portion anniversaire plus haut dans cette branche — ne pas le retoucher ici.
             }
             // 17/08/2026 (Sophie) : extrait en fonction réutilisable (hReelPortion) — inchangée dans son
             // fonctionnement, seulement paramétrée par (debQ,finQ) au lieu de debutMoisRegul/finMoisRegul
