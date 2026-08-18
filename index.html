@@ -5394,9 +5394,22 @@ function planningNonEnregistrePourMois(c, moisKey){
   // 06/08/2026 (Sophie) : ajout de la case "modifications autorisées" à cette même comparaison —
   // avant, un changement de cette case n'était jamais détecté ici (seuls les jours cochés
   // l'étaient), donc jamais compté comme "en attente" lors d'un rafraîchissement de tuile.
-  const modifVive=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey]);
-  const modifSauve=!!((c._modifAutoriseesSauvegarde||{})[moisKey]);
-  if(modifVive!==modifSauve) return true;
+  // 17/08/2026 (Sophie) : `_planningSauvegarde`/`_modifAutoriseesSauvegarde` ne sont JAMAIS persistés
+  // sur Firestore (exclus volontairement de la sauvegarde compressée, `getContratsCompresses`) — ils
+  // n'existent qu'en mémoire, initialisés seulement quand l'onglet Planning est ouvert pour ce
+  // contrat (voir plus bas dans le fichier). Juste après un rechargement complet (F5), avant d'avoir
+  // visité Planning, ils sont donc undefined pour TOUS les mois — les comparer à {} (vide) déclenchait
+  // un faux "à enregistrer" dès qu'une case "modifications autorisées" était réellement cochée, sans
+  // rien de réellement en attente. Ce garde-fou existait déjà plus bas pour la boucle jour par jour,
+  // pas pour la comparaison de la case ci-dessous, exécutée avant. Ne touche PAS au signalement d'une
+  // vraie modification (quand le cache EST initialisé) ni à l'obligation de 1er enregistrement
+  // var/min (plus bas, appuyée sur `planningConfirmeMois`, un champ persisté à part).
+  const cacheNonInitialisePNE=c._planningSauvegarde===undefined||c._modifAutoriseesSauvegarde===undefined;
+  if(!cacheNonInitialisePNE){
+    const modifVive=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey]);
+    const modifSauve=!!((c._modifAutoriseesSauvegarde||{})[moisKey]);
+    if(modifVive!==modifSauve) return true;
+  }
   // 06/08/2026 (Sophie) : un mois jamais confirmé via le bouton Enregistrer (même vide, même sans
   // rien modifié depuis l'ouverture) compte toujours comme "en attente" — sinon le bouton s'affiche
   // par défaut "Enregistré ✓" dès l'ouverture (la comparaison ci-dessous ne voit aucune différence,
@@ -5415,7 +5428,7 @@ function planningNonEnregistrePourMois(c, moisKey){
   const estPlanVarMinPNE=(srcDebutPNE.th==='plan'&&(srcDebutPNE.planType==='min'||srcDebutPNE.planType==='var'))
     ||(srcFinPNE.th==='plan'&&(srcFinPNE.planType==='min'||srcFinPNE.planType==='var'));
   if(estPlanVarMinPNE&&!(c.planningConfirmeMois&&c.planningConfirmeMois[moisKey])) return true;
-  if(!c.planning||c._planningSauvegarde===undefined) return false;
+  if(cacheNonInitialisePNE||!c.planning) return false;
   const [ay,am]=moisKey.split('-').map(Number);
   const dernierJour=new Date(ay,am,0).getDate();
   for(let d=1; d<=dernierJour; d++){
