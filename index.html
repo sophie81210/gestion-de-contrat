@@ -4332,26 +4332,29 @@ function ouvrirFiche(contratId,key){
 
   // Détecter les poses de congés dans la fiche
   const aDesConges=fiche.jours.some(j=>['conges-acq','conges-non','conges-anticipe'].includes(j.statut));
-  // 17/08/2026 (Sophie) : si le mois précédent (pose continue d'un mois sur l'autre) a déjà réellement
-  // posé des jours en anticipé, cette case ne doit plus pouvoir être décochée — la pose continue
-  // automatiquement, sans repasser par un choix indépendant qui pourrait annuler ce qui est déjà posé
-  // (signalé par Sophie : décembre avait posé de l'anticipé, janvier permettait quand même de décocher
-  // et annulait l'anticipation — un vrai utilisateur peut déverrouiller une fiche comme Sophie l'a fait).
-  const [keyAnneeAnt,keyMoisAnt]=key.split('-').map(Number);
-  const moisPrecAntDate=new Date(keyAnneeAnt,keyMoisAnt-2,1);
-  const moisPrecAntKey=moisPrecAntDate.getFullYear()+'-'+String(moisPrecAntDate.getMonth()+1).padStart(2,'0');
-  const fichePrecAnt=c.fiches?.[moisPrecAntKey];
-  const premierJourMoisEstConge=fiche.jours[0]&&['conges-acq','conges-non','conges-anticipe'].includes(fiche.jours[0].statut);
-  const dernierJourPrecEstConge=!!(fichePrecAnt&&fichePrecAnt.jours&&fichePrecAnt.jours.length&&['conges-acq','conges-non','conges-anticipe'].includes(fichePrecAnt.jours[fichePrecAnt.jours.length-1].statut));
-  const posePrecedenteADejaAnticipe=!!(fichePrecAnt&&fichePrecAnt.jours&&fichePrecAnt.jours.some(j=>j.statut==='conges-anticipe'||j.statut==='decompte-anticipe'));
-  const anticipeVerrouille=premierJourMoisEstConge&&dernierJourPrecEstConge&&posePrecedenteADejaAnticipe;
+  // 17/08/2026 (Sophie) : tentative de verrou (case non décochable si le mois précédent avait déjà
+  // posé de l'anticipé) essayée puis ANNULÉE — bloquait un usage réel de Sophie (décocher/recocher
+  // pour forcer un recalcul sur un jour resté coincé en congés non-acquis). Retour à une case
+  // librement décochable ; seul le correctif d'affichage ci-dessous (ne plus cocher par défaut) reste.
   // 17/08/2026 (Sophie) : la case ne doit JAMAIS se cocher toute seule sur la base du seul "contrat
   // autorise l'anticipation en général" — sans choix explicite pour CE mois, elle doit s'afficher
   // décochée, pour rester alignée avec ce que le calcul réel voit (!!fiche.anticipeActif, jamais ce
   // repli). Sinon la case peut sembler cochée à l'écran sans qu'aucun anticipé ne soit réellement pris
   // en compte, sans aucun signe visible en dehors du texte au survol.
-  const anticipeActif=anticipeVerrouille?true:!!fiche.anticipeActif;
+  const anticipeActif=!!fiche.anticipeActif;
   const anticipeAutorise=c.cgAnticipe==='oui';
+  // 17/08/2026 (Sophie) : avertissement (pas un verrou, essayé puis annulé) — si le mois précédent
+  // (pose continue d'un mois sur l'autre) a réellement posé des jours en anticipé et que la case de
+  // CE mois n'est pas cochée, prévenir l'utilisatrice à l'ouverture plutôt que la laisser découvrir
+  // le décalage seulement au survol de la case (ce qui s'est produit avant ce correctif).
+  const [keyAnneeAntW,keyMoisAntW]=key.split('-').map(Number);
+  const moisPrecAntDateW=new Date(keyAnneeAntW,keyMoisAntW-2,1);
+  const moisPrecAntKeyW=moisPrecAntDateW.getFullYear()+'-'+String(moisPrecAntDateW.getMonth()+1).padStart(2,'0');
+  const fichePrecAntW=c.fiches?.[moisPrecAntKeyW];
+  const premierJourMoisEstCongeW=fiche.jours[0]&&['conges-acq','conges-non','conges-anticipe'].includes(fiche.jours[0].statut);
+  const dernierJourPrecEstCongeW=!!(fichePrecAntW&&fichePrecAntW.jours&&fichePrecAntW.jours.length&&['conges-acq','conges-non','conges-anticipe'].includes(fichePrecAntW.jours[fichePrecAntW.jours.length-1].statut));
+  const posePrecedenteADejaAnticipeW=!!(fichePrecAntW&&fichePrecAntW.jours&&fichePrecAntW.jours.some(j=>j.statut==='conges-anticipe'||j.statut==='decompte-anticipe'));
+  const avertirAnticipeManquant=premierJourMoisEstCongeW&&dernierJourPrecEstCongeW&&posePrecedenteADejaAnticipeW&&!anticipeActif;
   // 06/08/2026 (Sophie) : case affichée sur TOUS les mois ayant des congés, plus seulement le
   // premier mois de la pose — le calcul (majFichesCgAmPasse) ne consulte de toute façon plus que
   // la case du mois où l'anticipé devient réellement nécessaire pour une pose donnée (décidée une
@@ -4371,6 +4374,7 @@ function ouvrirFiche(contratId,key){
     ${(!fiche.valide&&!estLectureSeuleEmployeur())?`<button class="btn bs bsm" style="margin-left:auto" onclick="enregistrerFiche(${contratId},'${key}')">💾</button>`:''}
     </div>
     ${planningNonEnregistrePourMois(c,key)?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">⚠ Le planning de ce mois a des modifications non enregistrées — retournez sur l'onglet Planning et cliquez sur 💾 Enregistrer avant de continuer, sinon cette feuille ne reflète pas vos derniers changements.</div>`:''}
+    ${avertirAnticipeManquant?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">⚠ Cette pose de congés a commencé par de l'anticipé le mois précédent — pensez à cocher « Prise de congés par anticipation » plus bas si elle doit continuer sur ce mois-ci.</div>`:''}
     <div style="width:100%;overflow:hidden">
       <table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed">
         <colgroup>
@@ -4397,7 +4401,7 @@ function ouvrirFiche(contratId,key){
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600">
           <input type="checkbox" ${anticipeActif?'checked':''} 
             style="width:16px;height:16px;accent-color:var(--m)"
-            ${estLectureSeuleEmployeur()||anticipeVerrouille?`disabled title="${anticipeVerrouille?'Anticipation déjà en cours depuis le mois précédent, ne peut pas être annulée ici':'Lecture seule'}"`:''}
+            ${estLectureSeuleEmployeur()?'disabled title="Lecture seule"':''}
             onchange="toggleAnticipe(${contratId},'${key}',this.checked)">
           Prise de congés par anticipation
         </label>
@@ -7365,6 +7369,23 @@ function validerFiche(contratId,key){
     // valider une feuille dans cet état — ajout de ce même contrôle utilisé pour le bouton Enregistrer.
     if(planningNonEnregistrePourMois(c,key)){
       alerte('Le planning de ce mois a des modifications non enregistrées — retournez sur l\u2019onglet Planning et cliquez sur 💾 Enregistrer avant de valider cette feuille.');
+      return;
+    }
+  }
+  // 17/08/2026 (Sophie) : même principe que le contrôle planning ci-dessus — bloquer la validation si
+  // cette pose de congés a commencé par de l'anticipé le mois précédent et que la case de CE mois
+  // n'est pas cochée, plutôt qu'une simple bannière qu'on peut valider sans l'avoir traitée.
+  {
+    const ficheCourAntV=c.fiches[key];
+    const [keyAnneeAntV,keyMoisAntV]=key.split('-').map(Number);
+    const moisPrecAntDateV=new Date(keyAnneeAntV,keyMoisAntV-2,1);
+    const moisPrecAntKeyV=moisPrecAntDateV.getFullYear()+'-'+String(moisPrecAntDateV.getMonth()+1).padStart(2,'0');
+    const fichePrecAntV=c.fiches?.[moisPrecAntKeyV];
+    const premierJourMoisEstCongeV=ficheCourAntV.jours[0]&&['conges-acq','conges-non','conges-anticipe'].includes(ficheCourAntV.jours[0].statut);
+    const dernierJourPrecEstCongeV=!!(fichePrecAntV&&fichePrecAntV.jours&&fichePrecAntV.jours.length&&['conges-acq','conges-non','conges-anticipe'].includes(fichePrecAntV.jours[fichePrecAntV.jours.length-1].statut));
+    const posePrecedenteADejaAnticipeV=!!(fichePrecAntV&&fichePrecAntV.jours&&fichePrecAntV.jours.some(j=>j.statut==='conges-anticipe'||j.statut==='decompte-anticipe'));
+    if(premierJourMoisEstCongeV&&dernierJourPrecEstCongeV&&posePrecedenteADejaAnticipeV&&!ficheCourAntV.anticipeActif){
+      alerte('Cette pose de congés a commencé par de l\u2019anticipé le mois précédent — cochez « Prise de congés par anticipation » sur cette feuille avant de valider.');
       return;
     }
   }
