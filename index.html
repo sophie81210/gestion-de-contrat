@@ -11750,24 +11750,30 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const moisKeyP=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0');
         const debutMaip=new Date(fiche.annee,4,1);  // 1er mai
         const finOctp=new Date(fiche.annee,9,31);   // 31 octobre
-        // Chercher la prise principale : ≥12 jours conges-acq consécutifs entre mai-oct
-        const joursAcqValides=[];
-        Object.entries(c.fiches||{}).forEach(([k,f])=>{
-          if(!f.valide) return;
-          f.jours.forEach(j=>{
-            if(j.statut!=='conges-acq') return;
-            const dj=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
-            if(dj>=debutMaip&&dj<=finOctp) joursAcqValides.push(j.date);
+        // 17/08/2026 (Sophie) : la prise principale se détecte sur la DURÉE DE LA POSE (calendrier
+        // congés AM, commun à tous les contrats), pas sur le nombre de jours décomptés pour CE contrat
+        // précis — un contrat à faible volume peut avoir une pose qui s'étend sur ≥12 jours ouvrables
+        // sans jamais décompter 12 jours (ex. 6 jours acquis seulement). Le nombre de jours décomptés
+        // sert uniquement, ensuite, à calculer le MONTANT une fois la prise principale identifiée
+        // (inchangé, voir joursAcqValides plus bas).
+        const joursPoseValides=[];
+        for(let annAmP=getAnneeAmPourDate(debutMaip.getFullYear()+'-05'); annAmP<=getAnneeAmPourDate(finOctp.getFullYear()+'-10'); annAmP++){
+          const joursAmP=(S.congesAM[annAmP]||{}).jours||{};
+          Object.entries(joursAmP).forEach(([ds,st])=>{
+            if(st!=='pose') return;
+            const [py,pm,pd]=ds.split('-').map(Number);
+            const dj=new Date(py,pm-1,pd);
+            if(dj>=debutMaip&&dj<=finOctp) joursPoseValides.push(ds);
           });
-        });
-        joursAcqValides.sort();
+        }
+        joursPoseValides.sort();
         // Trouver séquence de 12 jours consécutifs
         let debutPrincipale=null;
-        for(let i=0;i<joursAcqValides.length;i++){
+        for(let i=0;i<joursPoseValides.length;i++){
           // Vérifier si 12 jours consécutifs à partir de i (consécutifs = jours calendaires sans trou > 2j)
-          if(i+11<joursAcqValides.length){
-            const d1=new Date(joursAcqValides[i].split('-')[0],parseInt(joursAcqValides[i].split('-')[1])-1,parseInt(joursAcqValides[i].split('-')[2]));
-            const d12=new Date(joursAcqValides[i+11].split('-')[0],parseInt(joursAcqValides[i+11].split('-')[1])-1,parseInt(joursAcqValides[i+11].split('-')[2]));
+          if(i+11<joursPoseValides.length){
+            const d1=new Date(joursPoseValides[i].split('-')[0],parseInt(joursPoseValides[i].split('-')[1])-1,parseInt(joursPoseValides[i].split('-')[2]));
+            const d12=new Date(joursPoseValides[i+11].split('-')[0],parseInt(joursPoseValides[i+11].split('-')[1])-1,parseInt(joursPoseValides[i+11].split('-')[2]));
             // 29/07/2026 (précision Sophie) : 12 jours = 2 semaines calendaires (14j) ; chaque férié
             // chômé rencontré dans la séquence élargit la fenêtre d'un jour supplémentaire (il prend
             // une place dans le calendrier sans compter comme un jour de congé posé).
@@ -11779,11 +11785,22 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
               curFer.setDate(curFer.getDate()+1);
             }
             if((d12-d1)/(1000*60*60*24)<=14+nbFeriesDansFenetre){
-              debutPrincipale=joursAcqValides[i];
+              debutPrincipale=joursPoseValides[i];
               break;
             }
           }
         }
+        // Jours acquis décomptés (pour CE contrat) sur mai-oct — sert au montant, pas à la détection
+        const joursAcqValides=[];
+        Object.entries(c.fiches||{}).forEach(([k,f])=>{
+          if(!f.valide) return;
+          f.jours.forEach(j=>{
+            if(j.statut!=='conges-acq') return;
+            const dj=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
+            if(dj>=debutMaip&&dj<=finOctp) joursAcqValides.push(j.date);
+          });
+        });
+        joursAcqValides.sort();
         if(debutPrincipale){
           const moisDebutPrincipale=debutPrincipale.slice(0,7);
           // Si début en mai → reporter versement en juin
