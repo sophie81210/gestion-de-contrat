@@ -11730,16 +11730,30 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const ind=calcIndemniteConges(c,anneeAcq);
     if(ind){
       if(c.dateCg==='chaque'){
+        // 17/08/2026 (Sophie) : compter les jours POSÉS (calendrier congés AM, hors férié) plutôt
+        // que le statut conges-acq de la feuille — un jour décompté conges-acq pourrait dans certains
+        // cas correspondre à un jour anticipé de l'année suivante ; compter la pose physique garantit
+        // que tous les jours acquis sont payés, quel que soit le statut exact assigné. Le point de
+        // départ (1er jour réellement décompté) reste inchangé — voir "prise principale" plus bas.
+        const compterJoursPosesHorsFerie=(f,moisK)=>{
+          const anneeAmJ=getAnneeAmPourDate(moisK);
+          const joursAmJ=(S.congesAM&&S.congesAM[anneeAmJ]&&S.congesAM[anneeAmJ].jours)||{};
+          let n=0;
+          f.jours.forEach(j=>{
+            if(joursAmJ[j.date]==='pose'&&!isFerie(j.date,c)) n++;
+          });
+          return n;
+        };
         // Compter les jours acquis déjà payés dans les fiches précédentes validées
         let dejaPayesAcq=0;
         const moisKeyCur=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0');
         Object.entries(c.fiches||{}).forEach(([k,f])=>{
           if(!f.valide||k>=moisKeyCur) return;
-          dejaPayesAcq+=f.jours.filter(j=>j.statut==='conges-acq').length;
+          dejaPayesAcq+=compterJoursPosesHorsFerie(f,k);
         });
         const totalAcquis=ind.acquis||0;
         const resteAPayer=Math.max(0,totalAcquis-dejaPayesAcq);
-        const nbAcqMois=Math.min(fiche.jours.filter(j=>j.statut==='conges-acq').length, resteAPayer);
+        const nbAcqMois=Math.min(compterJoursPosesHorsFerie(fiche,moisKeyCur), resteAPayer);
         if(nbAcqMois>0){
           indemCongeNbJours=nbAcqMois;
           if(fiche.mois===4&&c.tc!=='52'){
