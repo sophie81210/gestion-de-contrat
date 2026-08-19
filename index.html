@@ -136,6 +136,11 @@ document.addEventListener('DOMContentLoaded',()=>{
 </script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
+/* 17/08/2026 (Sophie) : retirer les flèches natives de tous les champs numériques (majorations,
+   taux...) — Chrome/Safari (::-webkit-*) et Firefox (-moz-appearance). */
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+input[type=number]{-moz-appearance:textfield}
 :root{
   --m:#6B4C3B;--m2:#9B7264;--mp:#f5ede8;--mb:#d4b8ad;
   --tx:#3a2218;--tx2:#7a5c50;--tx3:#b09080;
@@ -618,9 +623,17 @@ input[type=time].fi{width:auto;min-width:92px}
         }
       }
       S.enAvenant=null;
+      S.enEd=null;
       S.enCours=cid;S.detTab='contrat';goTo('det');
     }
   } else if(!S.enEd&&!S.dernierContratId||confirm('Les modifications non enregistrées seront perdues.')){
+    // 17/08/2026 (Sophie) : S.enEd n'était JAMAIS remis à zéro ici — goTo('det') ne le fait pas non
+    // plus exprès (pour ne pas casser une navigation de sauvegarde réussie). En annulant (pas en
+    // sauvegardant), l'ancien contrat édité restait donc "actif" en mémoire et pouvait ressurgir dans
+    // le prochain formulaire ouvert, même pour un contrat sans rapport (repéré par Sophie : édition
+    // annulée sur un contrat, formulaire d'avenant d'un AUTRE contrat pré-rempli avec les données
+    // annulées).
+    S.enEd=null;
     if(S.dernierContratId){S.enCours=S.dernierContratId;S.detTab='contrat';goTo('det');}
     else goTo('cont');
   }">Retour</button>
@@ -16523,6 +16536,12 @@ async function signerContrat(){
   // Vérifications complétude
   const manquants=[];
   if(!c.dateDeb) manquants.push("date de début");
+  // 17/08/2026 (Sophie) : plage d'année raisonnable — évite une signature avec une faute de frappe
+  // sur l'année (ex. "32023" au lieu de "2023").
+  if(c.dateDeb){
+    const anneeDebC=parseInt(c.dateDeb.split('-')[0]);
+    if(anneeDebC<2000||anneeDebC>2100) manquants.push("date de début : année invalide ("+anneeDebC+")");
+  }
   // 11/08/2026 (Sophie) : garde-fou — pas de signature possible si la date de début tombe sur un
   // jour posé congés dans le calendrier AM.
   if(c.dateDeb&&S.congesAM&&Object.values(S.congesAM).some(am=>am.jours&&am.jours[c.dateDeb]==='pose')){
@@ -16540,7 +16559,11 @@ async function signerContrat(){
          if(c.majRepos===null||c.majRepos===undefined) manquants.push("majoration jour de repos");
 if(c.majFerie===null||c.majFerie===undefined) manquants.push("majoration jours fériés");
 if(c.maj1erMai===null||c.maj1erMai===undefined) manquants.push("majoration 1er mai");
-  if(c.th==='fixe'&&(!c.joursFixe||!c.joursFixe.some(j=>j))) manquants.push("horaires (aucun jour coché)");
+  if(c.th==='fixe'&&(!c.joursFixe||!c.joursFixe.some(j=>j&&j.d))) manquants.push("horaires (aucun jour coché)");
+  // 17/08/2026 (Sophie) : vérifier que CHAQUE jour coché a bien ses DEUX heures (début ET fin), pas
+  // seulement qu'au moins un jour existe — un jour avec une seule des deux heures remplies passait
+  // jusqu'ici la signature sans être détecté.
+  if(c.th==='fixe'&&c.joursFixe&&c.joursFixe.some(j=>j&&((j.d&&!j.f)||(!j.d&&j.f)))) manquants.push("horaires incomplets (un jour a une heure de début ou de fin manquante)");
   if(c.th==='sem'&&(!c.semTypes||!c.semTypes.length)) manquants.push("semaines types");
 if(c.th==='plan'&&!c.planType) manquants.push("type de planning");
 if(c.th==='plan'&&c.planType==='min'&&!c.hMin) manquants.push("heures minimales hebdomadaires");
@@ -16720,14 +16743,17 @@ function creerAvenant(id){
   // Créer un nouvel avenant brouillon
   if(!c.avenants)c.avenants=[];
   const num=(c.avenants.length)+1;
+  // 17/08/2026 (Sophie) : plus de pré-remplissage automatique depuis getDonneesActives(c) — source
+  // d'une fuite de données entre formulaires sans rapport (ex. avenant d'un contrat pré-rempli avec
+  // les données d'une édition annulée sur un AUTRE contrat). Seuls les verrouillages (date de début,
+  // période d'essai) restent — gérés séparément dans le rendu du formulaire, pas par une copie ici.
   const newAv={
     id:Date.now(),
     num,
     dateAvenant:null,
     signe:false,
     dateSigne:null,
-    // Copier toutes les données modifiables du dernier avenant signé ou du contrat
-    ...getDonneesActives(c)
+    agendas:[]
   };
   c.avenants.push(newAv);
   const cidx=S.contrats.findIndex(x=>x.id==id);
@@ -16998,6 +17024,14 @@ function signerAvenant(){
 
   // Vérifier date d'effet
   if(!av.dateAvenant){toast('Veuillez d\'abord enregistrer l\'avenant avec une date d\'effet');return;}
+  // 17/08/2026 (Sophie) : même garde-fou que le contrat initial — plage d'année raisonnable.
+  {
+    const anneeAvC=parseInt(av.dateAvenant.split('-')[0]);
+    if(anneeAvC<2000||anneeAvC>2100){
+      toast('⚠ Date d\'effet invalide : année incohérente ('+anneeAvC+')');
+      return;
+    }
+  }
   // 11/08/2026 (Sophie) : garde-fou — pas de signature possible si la date d'effet tombe sur un jour
   // posé congés dans le calendrier AM.
   if(S.congesAM&&Object.values(S.congesAM).some(am=>am.jours&&am.jours[av.dateAvenant]==='pose')){
@@ -17018,7 +17052,10 @@ function signerAvenant(){
   if(av.majRepos===null||av.majRepos===undefined) manquantsAv.push("majoration jour de repos");
   if(av.majFerie===null||av.majFerie===undefined) manquantsAv.push("majoration jours fériés");
   if(av.maj1erMai===null||av.maj1erMai===undefined) manquantsAv.push("majoration 1er mai");
-  if(av.th==='fixe'&&(!av.joursFixe||!av.joursFixe.some(j=>j))) manquantsAv.push("horaires (aucun jour coché)");
+  if(av.th==='fixe'&&(!av.joursFixe||!av.joursFixe.some(j=>j&&j.d))) manquantsAv.push("horaires (aucun jour coché)");
+  // 17/08/2026 (Sophie) : même correctif que le contrat initial — chaque jour coché doit avoir ses
+  // deux heures.
+  if(av.th==='fixe'&&av.joursFixe&&av.joursFixe.some(j=>j&&((j.d&&!j.f)||(!j.d&&j.f)))) manquantsAv.push("horaires incomplets (un jour a une heure de début ou de fin manquante)");
   if(av.th==='sem'&&(!av.semTypes||!av.semTypes.length)) manquantsAv.push("semaines types");
   if(av.th==='plan'&&!av.planType) manquantsAv.push("type de planning");
   if(av.th==='plan'&&av.planType==='min'&&!av.hMin) manquantsAv.push("heures minimales hebdomadaires");
@@ -18677,7 +18714,29 @@ if(tousNonPrevus){
             {
               const dVeilleSkip=new Date(veilleStr);
               let iSkipDbleFer=0;
-              while(['ferie','ferie-non'].includes(veilleJour?.statut)&&iSkipDbleFer<14){
+              // 17/08/2026 (Sophie) : étendu au-delà du seul cas "double férié" — avance aussi sur
+              // tout jour NON-PRÉVU (pas seulement un férié consécutif), avec le même repli sur
+              // l'union des types/volumes (sem/var) déjà utilisé côté lendemain juste en dessous.
+              // Sinon un jour non-prévu isolé juste avant un férié empêchait de retrouver le vrai
+              // jour de congé qui précède, faussant la protection du férié entouré de congés.
+              const veillePasPrevu=(dCandVeille)=>{
+                if(['ferie','ferie-non'].includes(dCandVeille.statut)) return true;
+                const dsCandVeille=dCandVeille.date;
+                const srcCandVeille=getVersionActive(c,new Date(dsCandVeille.split('-')[0],parseInt(dsCandVeille.split('-')[1])-1,parseInt(dsCandVeille.split('-')[2])));
+                const prevusCandVeille=getHeuresPrevues(srcCandVeille,dsCandVeille);
+                let estPrevuCandVeille=!!(prevusCandVeille.debut&&prevusCandVeille.debut!=='prévu')||!!(prevusCandVeille.planVar);
+                if(!estPrevuCandVeille){
+                  const dObjCandVeille=new Date(dsCandVeille.split('-')[0],parseInt(dsCandVeille.split('-')[1])-1,parseInt(dsCandVeille.split('-')[2]));
+                  const idxCandVeille=dObjCandVeille.getDay()===0?6:dObjCandVeille.getDay()-1;
+                  if(srcCandVeille.th==='sem'&&srcCandVeille.semTypes){
+                    estPrevuCandVeille=srcCandVeille.semTypes.some(st=>st.jours&&st.jours[idxCandVeille]&&st.jours[idxCandVeille].d);
+                  } else if(srcCandVeille.th==='plan'&&srcCandVeille.planType==='var'&&srcCandVeille.planVar){
+                    estPrevuCandVeille=srcCandVeille.planVar.some(v=>v.jours&&v.jours[idxCandVeille]);
+                  }
+                }
+                return !estPrevuCandVeille;
+              };
+              while(veilleJour&&veillePasPrevu(veilleJour)&&iSkipDbleFer<14){
                 dVeilleSkip.setDate(dVeilleSkip.getDate()-1);
                 const dsSkipDbleFer=dVeilleSkip.getFullYear()+'-'+String(dVeilleSkip.getMonth()+1).padStart(2,'0')+'-'+String(dVeilleSkip.getDate()).padStart(2,'0');
                 veilleJour=c.fiches[dsSkipDbleFer.slice(0,7)]?.jours.find(j=>j.date===dsSkipDbleFer);
