@@ -11753,12 +11753,16 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           }
         }
         if(fiche.mois===5){
+          // 17/08/2026 (Sophie) : bornée depuis le 1er juin de l'ANNÉE PRÉCÉDENTE — sans cette borne
+          // basse, des jours anticipés bien plus anciens (déjà payés lors d'un juin précédent) étaient
+          // resommés et repayés une seconde fois, faute de limite inférieure.
           let nbAnticipe=0;
           const limiteMai=fiche.annee+'-05-01';
+          const limiteJuinPrec=(fiche.annee-1)+'-06-01';
           Object.entries(c.fiches||{}).forEach(([k,f])=>{
             if(!f.valide) return;
             f.jours.forEach(j=>{
-              if(j.date>=limiteMai) return;
+              if(j.date>=limiteMai||j.date<limiteJuinPrec) return;
               if(j.statut==='conges-anticipe') nbAnticipe++;
             });
           });
@@ -17137,6 +17141,50 @@ function signerAvenant(){
       _semFin:{sem:getSemISO(finStr),annee:getSemAnnee(finStr)},
       semaines:{}
     }];
+  }
+
+  // 17/08/2026 (Sophie) : combler aussi un éventuel trou de couverture sur les agendas du CONTRAT DE
+  // BASE jusqu'à aujourd'hui — sinon un avenant signé avec une date d'effet future, sans que l'agenda
+  // suivant du contrat de base ait été créé manuellement au préalable, laisse un trou entre la fin du
+  // dernier agenda existant et aujourd'hui, avec plus aucun moyen de le créer ensuite (repéré par
+  // Sophie : contrat var 46, avenant 52 sem signé avant la création de l'agenda suivant). Même
+  // logique que `creerAgenda`, en boucle jusqu'à couvrir aujourd'hui, jamais au-delà de l'avenant.
+  if(contratNeedAgenda(c)){
+    let gardeAgC=0;
+    while(gardeAgC<12){
+      gardeAgC++;
+      const aujourdBoucle=new Date();
+      const dernierAgC=c.agendas&&c.agendas.length?c.agendas[c.agendas.length-1]:null;
+      if(dernierAgC&&new Date(dernierAgC.dateFin)>=aujourdBoucle) break;
+      if(dernierAgC&&new Date(dernierAgC.dateDebut)>aujourdBoucle) break;
+      let dateDebutC;
+      if(dernierAgC){
+        const dFinPrecC=new Date(dernierAgC.dateFin+'T00:00:00');
+        dFinPrecC.setDate(dFinPrecC.getDate()+1);
+        dateDebutC=dFinPrecC.getFullYear()+'-'+String(dFinPrecC.getMonth()+1).padStart(2,'0')+'-'+String(dFinPrecC.getDate()).padStart(2,'0');
+      } else {
+        dateDebutC=c.dateDeb;
+      }
+      if(dateDebutC>=av.dateAvenant) break;
+      const partsC=dateDebutC.split('-').map(Number);
+      const dRefC=new Date(partsC[0],partsC[1]-1,partsC[2]);
+      const dernierJourC=new Date(dRefC.getFullYear()+1,dRefC.getMonth(),dRefC.getDate()-1);
+      const finStrC=dernierJourC.getFullYear()+'-'+String(dernierJourC.getMonth()+1).padStart(2,'0')+'-'+String(dernierJourC.getDate()).padStart(2,'0');
+      const agC={
+        id:Date.now()+gardeAgC,
+        dateDebut:dateDebutC,
+        dateFin:finStrC,
+        _semDebut:{sem:getSemISO(dRefC),annee:getSemAnnee(dRefC)},
+        _semFin:{sem:getSemISO(finStrC),annee:getSemAnnee(finStrC)},
+        semaines:{}
+      };
+      if(dernierAgC){
+        const agKeyDebC=getKeyAgenda(agC._semDebut.sem,agC._semDebut.annee);
+        const typeLimiteC=dernierAgC.semaines&&dernierAgC.semaines[agKeyDebC];
+        if(typeLimiteC) agC.semaines[agKeyDebC]=typeLimiteC;
+      }
+      c.agendas.push(agC);
+    }
   }
 
   const cidx=S.contrats.findIndex(x=>x.id==cid);
