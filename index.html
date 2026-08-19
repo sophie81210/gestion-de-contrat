@@ -7936,7 +7936,9 @@ function calcCongesContrat(c, dateRefOverride){
               } else if(sj==='ferie'){
                 const jourIdx=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])).getDay();
                 const jourIdxISO=jourIdx===0?6:jourIdx-1;
-                const volActif=c.planVar?c.planVar.find(v=>v.jours&&v.jours[jourIdxISO]):null;
+                // 17/08/2026 (Sophie) : sourcePV.planVar (version ACTIVE), pas c.planVar (origine) —
+                // même bug systémique que fixe/sem/min, trouvé en creusant le cas Constance.
+                const volActif=sourcePV.planVar?sourcePV.planVar.find(v=>v.jours&&v.jours[jourIdxISO]):null;
                 if(volActif&&(semaineCompleteCgPV||cocheCgPV)) joursNormauxPV++;
               }
             });
@@ -8113,10 +8115,16 @@ function calcCongesContrat(c, dateRefOverride){
                 const jourIdx=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])).getDay();
                 const jourIdxISO=jourIdx===0?6:jourIdx-1;
                 const sourceJF=getVersionActive(c,new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])));
+                // 17/08/2026 (Sophie) : utiliser le type ACTIF à cette date (sourceJF.th/tc/planType),
+                // pas le type D'ORIGINE du contrat (c.th/c.tc/c.planType) — un contrat ayant changé de
+                // type via avenant (ex. Constance, fixe→sem) ne rentrait jamais dans la bonne branche,
+                // donc un férié tombant dans une semaine de congés (non pointée, sans type assigné,
+                // repli sur l'union des types) ne comptait ni comme normal ni comme congé. Même bug
+                // systémique que celui déjà corrigé ailleurs cette nuit.
                 let estTravaille=false;
-                if(c.th==='fixe'&&sourceJF.joursFixe) estTravaille=!!(sourceJF.joursFixe[jourIdxISO]);
-                else if(c.th==='sem'&&sourceJF.semTypes){
-                  if(c.tc==='52'||sourceJF.tc==='52'){
+                if(sourceJF.th==='fixe'&&sourceJF.joursFixe) estTravaille=!!(sourceJF.joursFixe[jourIdxISO]);
+                else if(sourceJF.th==='sem'&&sourceJF.semTypes){
+                  if(sourceJF.tc==='52'){
                     const tousAgJF=[...(sourceJF.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
                     const dateJF=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
                     const semNumJF=getSemISO(j.date);const semAnJF=getSemAnnee(j.date);
@@ -8129,7 +8137,7 @@ function calcCongesContrat(c, dateRefOverride){
                     estTravaille=!!(typeSemActif46&&typeSemActif46.has&&typeSemActif46.has(jourIdxISO));
                   }
                 }
-                else if(c.th==='plan'&&c.planType==='min'&&sourceJF.joursMin) estTravaille=!!(sourceJF.joursMin[jourIdxISO]);
+                else if(sourceJF.th==='plan'&&sourceJF.planType==='min'&&sourceJF.joursMin) estTravaille=!!(sourceJF.joursMin[jourIdxISO]);
                 if(estTravaille&&gateMinOk) joursNormaux++;
               }
             });
