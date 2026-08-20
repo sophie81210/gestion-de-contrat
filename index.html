@@ -156,6 +156,19 @@ input[type=number]{-moz-appearance:textfield}
 .pastille-popup-corps{font-size:12px;color:var(--tx);line-height:1.6;}
 .pastille-popup-close{position:absolute;top:10px;right:12px;font-size:16px;cursor:pointer;color:var(--tx2);line-height:1;}
 .pastille-popup-close:hover{color:var(--m);}
+/* ── Aide (fichiers HTML externes) ────────────────────────────────────── */
+.aide-overlay{position:fixed;inset:0;z-index:9999;background:rgba(58,34,24,.35);display:flex;align-items:center;justify-content:center;padding:16px}
+.aide-modal{background:#fff;border-radius:var(--r);width:100%;max-width:388px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(58,34,24,.28);border:1px solid var(--mb);overflow:hidden}
+.aide-modal-head{display:flex;justify-content:flex-end;padding:8px 10px 0}
+.aide-modal-close{cursor:pointer;font-size:20px;color:var(--tx2);line-height:1;padding:4px 6px;border-radius:6px;transition:color .15s,background .15s}
+.aide-modal-close:hover{color:var(--m);background:var(--mp)}
+.aide-modal-body{flex:1;overflow-y:auto;padding:4px 16px 10px}
+.aide-modal-body iframe{width:100%;border:0;display:block}
+.aide-modal-foot{padding:8px 16px 16px;text-align:center;flex-shrink:0}
+/* Popup de choix du type de contrat avant ouverture de l'aide */
+.aide-choix-liste{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.aide-choix-btn{width:100%;text-align:left;background:#fff;border:1px solid var(--mb);border-radius:var(--rs);padding:10px 12px;font-size:13px;font-weight:600;color:var(--tx);cursor:pointer;font-family:Calibri,sans-serif;transition:all .15s}
+.aide-choix-btn:hover{background:var(--mp);border-color:var(--m);color:var(--m)}
 body{font-family:Calibri,'Segoe UI',sans-serif;color:var(--tx);min-height:100vh;background:var(--mp)}
 .bg{position:fixed;inset:0;z-index:0;background:linear-gradient(to bottom, #fcf6f2 0%, #ebddd3 100%)}
 .app{position:relative;z-index:1;min-height:100vh;display:flex;flex-direction:column;max-width:420px;margin:0 auto}
@@ -15915,7 +15928,7 @@ function buildCgAcquisEncarts(c, anneeAcq){
 
   const acquisPris=Math.max(0,(cg.pris||0)-nbAnticipes);
   html+=`<div style="background:${bg};border-radius:8px;padding:10px 12px;margin-bottom:8px">
-    <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:6px">${titre}</div>
+    <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:6px">${titre}${pastilleAide('acquisition-conges')}</div>
     <div style="${ls}"><span>Jours acquis</span><span style="${vs}">${cg.acquis||0} j</span></div>`;
   if(nbAnticipes>0){
     html+=`<div style="background:${bgAnticipe};border-radius:6px;padding:6px 8px;margin:4px 0">
@@ -19244,6 +19257,99 @@ function ouvrirPastille(titre, corps){
 function pastille(type,titre,corps){
   const label=type==='i'?'i':'?';
   return `<span class="pastille" onclick="ouvrirPastille('${titre.replace(/'/g,"&#39;")}','${corps.replace(/'/g,"&#39;")}')" title="${titre}">${label}</span>`;
+}
+
+// ── AIDE (fichiers HTML externes, dossier /aide) ─────────────────────────────
+// Chaque entrée : soit { titre, fichier } (un seul fichier d'aide),
+// soit { titre, choix:[{label, fichier}, ...] } (une pastille qui, avant
+// d'ouvrir l'aide, demande de choisir le type de contrat concerné).
+// Les chemins "fichier" sont relatifs au dossier aide/ à la racine.
+const AIDE_CONFIG = {
+  // Exemple à un seul fichier :
+  // 'preavis-rupture': { titre:'Préavis de rupture', fichier:'preavis-rupture.html' },
+
+  // Exemple avec choix du type de contrat (CDI / CDD) :
+  // 'periode-essai': { titre:'Période d\'essai', choix:[
+  //   { label:'CDI', fichier:'periode-essai-cdi.html' },
+  //   { label:'CDD', fichier:'periode-essai-cdd.html' }
+  // ] },
+
+  'acquisition-conges': { titre:'Type de contrat', choix:[
+    { label:'Horaires fixes', fichier:'acquisition-conges.html' },
+    { label:'Sur planning', fichier:'acquisition-conges-planning.html' }
+  ] },
+};
+
+// Génère le HTML d'une pastille d'aide reliée à une clé de AIDE_CONFIG
+function pastilleAide(cle){
+  const cfg=AIDE_CONFIG[cle];
+  const titre=cfg?cfg.titre:cle;
+  return `<span class="pastille" onclick="ouvrirAide('${cle}')" title="${(titre||'').replace(/"/g,'&quot;')}">?</span>`;
+}
+
+// Point d'entrée : ouvre soit directement le fichier d'aide, soit le choix du type de contrat
+function ouvrirAide(cle){
+  const cfg=AIDE_CONFIG[cle];
+  if(!cfg){console.error('Aide introuvable :',cle);return;}
+  if(cfg.choix&&cfg.choix.length){ouvrirAideChoix(cle,cfg);}
+  else if(cfg.fichier){ouvrirAideModal(cfg.fichier,cfg.titre);}
+}
+
+// Popup de sélection du type de contrat avant ouverture de l'aide correspondante
+function ouvrirAideChoix(cle,cfg){
+  const existing=document.getElementById('aide-choix-overlay');
+  if(existing){existing.remove();}
+  const overlay=document.createElement('div');
+  overlay.id='aide-choix-overlay';
+  overlay.className='pastille-popup-overlay';
+  const boutons=cfg.choix.map((o,i)=>
+    `<button type="button" class="aide-choix-btn" onclick="fermerAideChoix();ouvrirAideModal(AIDE_CONFIG['${cle}'].choix[${i}].fichier,AIDE_CONFIG['${cle}'].titre)">${o.label}</button>`
+  ).join('');
+  overlay.innerHTML=`<div class="pastille-popup">
+    <div class="pastille-popup-close" onclick="fermerAideChoix()">✕</div>
+    <div class="pastille-popup-titre">${(cfg.titre||'').replace(/</g,'&lt;')}</div>
+    <div class="pastille-popup-corps">Pour quel type de contrat souhaitez-vous l'information ?</div>
+    <div class="aide-choix-liste">${boutons}</div>
+  </div>`;
+  overlay.addEventListener('click',e=>{if(e.target===overlay) fermerAideChoix();});
+  overlay.addEventListener('touchstart',e=>{if(e.target===overlay) fermerAideChoix();},{passive:true});
+  document.body.appendChild(overlay);
+}
+function fermerAideChoix(){
+  const el=document.getElementById('aide-choix-overlay');
+  if(el) el.remove();
+}
+
+// Ouvre un fichier d'aide (dossier aide/) dans une fenêtre à la largeur de l'app,
+// avec une croix de fermeture en haut à droite et un bouton OK en bas.
+function ouvrirAideModal(fichier,titre){
+  const existing=document.getElementById('aide-overlay');
+  if(existing){existing.remove();}
+  const overlay=document.createElement('div');
+  overlay.id='aide-overlay';
+  overlay.className='aide-overlay';
+  overlay.innerHTML=`<div class="aide-modal">
+    <div class="aide-modal-head"><span class="aide-modal-close" onclick="fermerAideModal()" title="Fermer">✕</span></div>
+    <div class="aide-modal-body"><iframe id="aide-iframe" src="aide/${fichier}"></iframe></div>
+    <div class="aide-modal-foot"><button type="button" class="btn bp" onclick="fermerAideModal()">OK</button></div>
+  </div>`;
+  overlay.addEventListener('click',e=>{if(e.target===overlay) fermerAideModal();});
+  document.body.appendChild(overlay);
+  const ifr=document.getElementById('aide-iframe');
+  ifr.addEventListener('load',()=>{
+    // Ajuste la hauteur de l'iframe à son contenu (fonctionne car le fichier
+    // d'aide est servi depuis le même domaine que l'app)
+    try{
+      const h=ifr.contentWindow.document.documentElement.scrollHeight;
+      ifr.style.height=Math.min(h+4,window.innerHeight*0.7)+'px';
+    }catch(e){
+      ifr.style.height='60vh'; // repli si l'ajustement automatique échoue
+    }
+  });
+}
+function fermerAideModal(){
+  const el=document.getElementById('aide-overlay');
+  if(el) el.remove();
 }
 
 function afficherChargement(msg){
