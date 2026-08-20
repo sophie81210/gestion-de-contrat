@@ -11799,7 +11799,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             if(!f.valide) return;
             f.jours.forEach(j=>{
               if(j.date>=limiteMai||j.date<limiteJuinPrec) return;
-              if(j.statut==='conges-anticipe') nbAnticipe++;
+              if(j.statut!=='conges-anticipe') return;
+              // 20/08/2026 (Sophie) : ne compter que les anticipés pris alors que le régime actif
+              // ce jour-là n'était pas 52 — un anticipé pris sous 52 est déjà couvert par la
+              // mensu ; le repayer ici serait un double paiement (confirmé par Sophie, cas réel
+              // 52fixe→46var, les jours d'août pris sous 52 étaient repayés en juin).
+              const srcJourAnt=getVersionActive(c,parseDateLoc(j.date));
+              if(srcJourAnt.tc!=='52') nbAnticipe++;
             });
           });
           if(nbAnticipe>0){
@@ -12010,7 +12016,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   let nbCongesPayesMois=0;
   let montantCongesNonAcquis=0;
   let nbCongesNonAcquis=0;
-  if(c.tc==='52'){
+  if(sourceActif.tc==='52'){
     const hSemMoy52=hMensu*12/nbSemActif;
     const estPSV52=(sourceActif.th==='sem')||(sourceActif.th==='plan'&&sourceActif.planType==='var');
     // Heures de la semaine pour un jour donné (plan sem / plan var), sinon moyenne
@@ -17626,10 +17632,16 @@ function buildCgAmDetail(anneeDebut,data){
       // Verrouiller si fiche validée pour au moins un contrat actif
       const moisKey=dateStr.slice(0,7);
       const ficheValidee=S.contrats.some(ct=>ct.signe&&!ct.cloture&&ct.fiches?.[moisKey]?.valide);
-      const clickable=!isReposH&&!ficheValidee;
+      // 20/08/2026 (Sophie) : un férié pas encore coché ne peut pas devenir le 1er jour d'une pose
+      const feriePremierJourBloque=isFerNonTrav&&!isPose&&!feriePeutEtreCocheCommePremierJour(anneeDebut,dateStr,reposHebdo,data.jours);
+      const clickable=!isReposH&&!ficheValidee&&!feriePremierJourBloque;
       if(ficheValidee&&!isReposH){cursor='not-allowed';}
+      if(feriePremierJourBloque&&!ficheValidee){cursor='not-allowed';}
+      let titreJour='';
+      if(ficheValidee) titreJour='Feuille de présence validée — modification impossible';
+      else if(feriePremierJourBloque) titreJour='Un jour férié ne peut pas être le 1er jour d\'une pose';
       joursHtml+=`<div onclick="${clickable?`toggleCgAm(${anneeDebut},'${dateStr}')`:''}"
-        title="${ficheValidee?'Feuille de présence validée — modification impossible':''}"
+        title="${titreJour}"
         style="display:inline-flex;flex-direction:column;align-items:center;width:26px;margin:1px;padding:2px 0;border-radius:4px;cursor:${cursor};background:${bg};color:${color};border:${border};user-select:none;min-height:28px;justify-content:center;font-size:9px">
         <span style="font-weight:600;line-height:1">${JOURS_INIT[jourIdx]}</span>
         <span style="font-size:13px;font-weight:${isPose?'700':'400'};line-height:1.4">${d}</span>
@@ -17803,6 +17815,20 @@ function trouverDebutPeriode(dateStr, joursAM, reposHebdo) {
   return debutTrouve;
 }
 
+// 20/08/2026 (Sophie) : un jour férié ne doit jamais pouvoir être le 1er jour coché d'une pose —
+// on remonte au jour précédent en sautant un éventuel jour de repos hebdo, et on exige que CE
+// jour-là soit déjà coché. Le 1er mai est exclu d'office (toujours le tout premier jour du
+// calendrier congés AM, donc jamais de jour précédent disponible pour cette vérification).
+function feriePeutEtreCocheCommePremierJour(anneeDebut,dateStr,reposHebdo,joursData){
+  const [ay,am,ad]=dateStr.split('-').map(Number);
+  if(ay===anneeDebut&&am===5&&ad===1) return true;
+  const veille=new Date(ay,am-1,ad-1);
+  const veilleEstRepos=veille.getDay()===reposHebdo;
+  const veilleRef=veilleEstRepos?new Date(ay,am-1,ad-2):veille;
+  const veilleRefStr=veilleRef.getFullYear()+'-'+String(veilleRef.getMonth()+1).padStart(2,'0')+'-'+String(veilleRef.getDate()).padStart(2,'0');
+  return joursData[veilleRefStr]==='pose';
+}
+
 function toggleCgAm(anneeDebut,dateStr){
   if(!S.congesAM) S.congesAM={};
   if(!S.congesAM[anneeDebut]) S.congesAM[anneeDebut]={enfants:0,jours:{}};
@@ -17813,6 +17839,11 @@ function toggleCgAm(anneeDebut,dateStr){
     // Pas de limite au nombre de jours cochés (certains contrats peuvent avoir plus de jours restants)
     const parts=dateStr.split('-');
     const jourDate=new Date(parseInt(parts[0]),parseInt(parts[1])-1,parseInt(parts[2]));
+    // Un férié pas encore coché ne peut pas devenir le 1er jour d'une pose (règle Sophie 20/08)
+    if(isFerie(dateStr,{})){
+      const reposHebdoToggle=S.contrats.filter(x=>x.signe&&!estContratCloture(x))[0]?.reposHebdo||0;
+      if(!feriePeutEtreCocheCommePremierJour(anneeDebut,dateStr,reposHebdoToggle,data.jours)) return;
+    }
     // Pas de blocage sur les samedis : conges-6j est géré par contrat dans majFichesCgAm
     data.jours[dateStr]='pose';
   }
