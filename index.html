@@ -7990,12 +7990,18 @@ function calcCongesContrat(c, dateRefOverride){
             const totalJAnnuelPV=(c.planVar||[]).reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
             const nbSemAnnuelPV=(c.planVar||[]).reduce((t,v)=>t+(v.s||0),0);
             const moyenneJourSemPV=nbSemAnnuelPV>0?totalJAnnuelPV/nbSemAnnuelPV:jMaxSem;
-            const jourExtraPV=Math.max(0,compteEffectifPV-jMaxSemAjustePV)+joursTravaillePV;
-            const contribNormPV=(Math.min(compteEffectifPV,jMaxSemAjustePV)/jMaxSem)+(moyenneJourSemPV>0?jourExtraPV/moyenneJourSemPV:0);
+            // 20/08/2026 (Sophie) : même principe que calcContribSemaineFSMPV — normaux et congés
+            // partagent la même garantie hebdo (jMaxSemAjustePV), plafonnés ENSEMBLE plutôt que
+            // séparément puis additionnés. compteEffectifPV vaut déjà joursNormauxPV tel quel dès
+            // que joursConges16PV>0 (garde-fou plus haut non appliqué dans ce cas), donc l'addition
+            // reste correcte sans double-compter le plancher garanti.
+            const baseComptePV=compteEffectifPV+joursConges16PV;
+            const jourExtraPV=Math.max(0,baseComptePV-jMaxSemAjustePV)+joursTravaillePV;
+            const contribNormPV=(Math.min(baseComptePV,jMaxSemAjustePV)/jMaxSem)+(moyenneJourSemPV>0?jourExtraPV/moyenneJourSemPV:0);
             // 20/08/2026 (Sophie) : même principe que calcContribSemaineFSMPV — plafonner au max de
             // la semaine (jMaxSem) avant division, par cohérence, même si joursActifs limite déjà
             // normalement le compte aux jours du volume actif.
-            const contribCgPV=Math.min(joursConges16PV,jMaxSem)*(1/jMaxSem);
+            const contribCgPV=0;
             const contribArretPV=absArretSub*(0.8)/jMaxSem;
             const prorata=Math.max(0,contribNormPV+contribCgPV);
             const estSemUniquementCongesFeriePV=joursSub.every(jCapPV=>{
@@ -8195,7 +8201,7 @@ function calcCongesContrat(c, dateRefOverride){
               if(joursMaxSemAjusteMin>0) joursNormaux=Math.max(joursNormaux,joursMaxSemAjusteMin);
             }
 
-            let contributionNormale;
+            let contributionNormale, contributionConges;
             if(sourceSem.th==='sem'&&sourceSem.semTypes){
               const semTypesContribSem=sourceSem.semTypes;
               const totalJAnnuelSem=semTypesContribSem.reduce((t,st)=>t+(st.jours||[]).filter(j=>j&&j.d).length*parseFloat(st.nb||0),0);
@@ -8203,17 +8209,22 @@ function calcCongesContrat(c, dateRefOverride){
               const moyenneJourSemSem=nbSemAnnuelSem>0?totalJAnnuelSem/nbSemAnnuelSem:joursMaxSem;
               const jourExtraSem=Math.max(0,joursNormaux-joursMaxSem)+joursTravailleFSM;
               contributionNormale=(Math.min(joursNormaux,joursMaxSem)/joursMaxSem)+(moyenneJourSemSem>0?jourExtraSem/moyenneJourSemSem:0);
+              // sem : un seul motif par type de semaine, jamais plus large que joursMaxSem — normaux
+              // et congés ne peuvent déjà pas dépasser la garantie ensemble, formule d'origine gardée.
+              contributionConges=joursConges16*(1/joursMaxSem);
             } else {
+              // 20/08/2026 (Sophie) : jours normaux et jours de congés partagent la MÊME garantie
+              // hebdo (jours max) — ce n'est pas chaque catégorie plafonnée séparément puis
+              // additionnée, c'est le TOTAL des deux qui vaut 1 semaine pleine une fois la semaine
+              // terminée, sauf absence non rémunérée (réduit) ou jour travaillé en plus du motif
+              // (augmente, jourExtraFM). Pertinent surtout pour le plan min, où le motif "possible"
+              // peut dépasser le max garanti (5 possibles pour 3 max) ; fixe n'a qu'un seul motif,
+              // jamais concerné en pratique (normaux+congés ne peuvent déjà pas dépasser le max).
+              const baseCompte=joursNormaux+joursConges16;
               const jourExtraFM=Math.max(0,joursNormaux-joursMaxSem)+joursTravailleFSM;
-              contributionNormale=(Math.min(joursNormaux,joursMaxSem)/joursMaxSem)+(joursMaxSem>0?jourExtraFM/joursMaxSem:0);
+              contributionNormale=(Math.min(baseCompte,joursMaxSem)/joursMaxSem)+(joursMaxSem>0?jourExtraFM/joursMaxSem:0);
+              contributionConges=0;
             }
-            // 20/08/2026 (Sophie) : le diviseur reste bien jours max (garantie hebdo) — c'est le
-            // nombre de jours de congés compté qui doit être plafonné à ce même jours max avant
-            // division, exactement comme joursNormaux l'est déjà. Sans ce plafond, une semaine
-            // entièrement posée sur un plan min (motif possible plus large que le max garanti, ex.
-            // 5 jours possibles pour 3 jours max) comptait 5 jours à 1/3 de semaine chacun au lieu
-            // de 3 — bien plus qu'une semaine pleine.
-            const contributionConges=Math.min(joursConges16,joursMaxSem)*(1/joursMaxSem);
             const contributionArret=absArretSub*(0.8)/joursMaxSem;
             const prorata=Math.max(0,contributionNormale+contributionConges);
             const estSemUniquementCongesFerie=(c.th==='sem'||(c.th==='plan'&&c.planType==='min'))&&
