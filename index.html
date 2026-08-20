@@ -9567,6 +9567,15 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const srcAvant=getVersionActive(c,veille);
       return srcAvant.tc!=='52';
     })();
+  // 20/08/2026 (Sophie) : symétrique, pour le cas 2 (congés) — avenant de ce mois qui fait passer VERS
+  // 46/occ depuis un régime qui était 52 la veille.
+  const estPassage52vers46=avenantDuMois&&avenantDuMois.tc!=='52'&&
+    (()=>{
+      const [ay2,am2,ad2]=avenantDuMois.dateAvenant.split('-').map(Number);
+      const veille2=new Date(ay2,am2-1,ad2-1);
+      const srcAvant2=getVersionActive(c,veille2);
+      return srcAvant2.tc==='52';
+    })();
   const txBrut=sourceActif.txBrut||0;
   const dateStr=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0')+'-01';
   const coeff=getParamAt('coefficients',dateStr);
@@ -11750,13 +11759,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // Indemnité de congés payés (contrats 46 sem ou moins)
   let indemCongeMois=0;
   let indemCongeNbJours=0;
-  if(c.tc!=='52'&&c.tc!=='occ'&&c.dateCg&&periodeAv!=='avant'){
+  if(sourceActif.tc!=='52'&&sourceActif.tc!=='occ'&&sourceActif.dateCg&&periodeAv!=='avant'){
     const moisKey=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0');
     const anneeAm=getAnneeAmPourDate(moisKey);
     const anneeAcq=anneeAm-1;
     const ind=calcIndemniteConges(c,anneeAcq);
     if(ind){
-      if(c.dateCg==='chaque'){
+      if(sourceActif.dateCg==='chaque'){
         // Compter les jours acquis déjà payés dans les fiches précédentes validées
         let dejaPayesAcq=0;
         const moisKeyCur=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0');
@@ -11769,7 +11778,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const nbAcqMois=Math.min(fiche.jours.filter(j=>j.statut==='conges-acq').length, resteAPayer);
         if(nbAcqMois>0){
           indemCongeNbJours=nbAcqMois;
-          if(fiche.mois===4&&c.tc!=='52'){
+          if(fiche.mois===4&&sourceActif.tc!=='52'){
             // Mai pour 46 sem : paiement en maintien de salaire (taux mai × hSemMoy/6)
             const nbSemContrat=getNbSemReel(sourceActif,c);
             const hSemMoy=parseFloat(hMensu||0)*12/nbSemContrat;
@@ -11798,10 +11807,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             indemCongeMois=parseFloat((indemCongeMois+ind.montantJournalierNet*nbAnticipe).toFixed(2));
           }
         }
-      } else if(c.dateCg==='juin'&&fiche.mois===5){
+      } else if(sourceActif.dateCg==='juin'&&fiche.mois===5){
         indemCongeNbJours=ind.acquis;
         indemCongeMois=ind.meilleurNet;
-      } else if(c.dateCg==='principale'){
+      } else if(sourceActif.dateCg==='principale'){
         // Prise principale = première prise avec ≥12 jours consécutifs entre mai et octobre
         // Indemnité versée sur le mois de début de la prise principale
         // Si début en mai → reporter en juin
@@ -11887,6 +11896,107 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           const nbAcqMai=fiche.jours.filter(j=>j.statut==='conges-acq').length;
           if(nbAcqMai>0 && !indemCongeMois){
             // Ajouter note dans le recap (géré dans buildRecapHtml)
+          }
+        }
+      }
+    }
+  }
+
+  // 20/08/2026 (Sophie) : Cas 1 — avenant 46→52 en cours d'année d'acquisition. Règlement immédiat, au
+  // mois de l'avenant, des jours pris en anticipé sur l'année en cours AVANT l'avenant, jamais payés
+  // jusque-là (en 46 rien n'est payé avant l'échéance normale). Le reliquat (jours acquis non pris)
+  // bascule intégralement dans le suivi du contrat 52 sans paiement supplémentaire : rien d'autre à
+  // faire, le socle de calcIndemniteConges (plus haut dans le fichier) empêche déjà toute indemnité
+  // sur cette année une fois close sous 52. Valorisé au taux en vigueur À LA DATE DE L'AVENANT
+  // (confirmé Sophie 20/08). Garde contre double-déclenchement : seulement sur l'appel "entier" du
+  // mois, pas un sous-appel de découpage dateDebPeriode/dateFinPeriode.
+  if(estPassage46vers52&&!dateDebPeriode&&!dateFinPeriode){
+    const moisKeyAv=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0');
+    const anneeAcqOuverte=getAnneeAmPourDate(moisKeyAv);
+    const debutAnneeOuverte=anneeAcqOuverte+'-06-01';
+    let nbAnticipeAvantAv=0;
+    Object.entries(c.fiches||{}).forEach(([,f])=>{
+      f.jours.forEach(j=>{
+        if(j.date<debutAnneeOuverte||j.date>=avenantDuMois.dateAvenant) return;
+        if(j.statut==='conges-anticipe') nbAnticipeAvantAv++;
+      });
+    });
+    if(nbAnticipeAvantAv>0){
+      const nbSemAvSettle=getNbSemReel(sourceActif,c);
+      const hSemMoyAvSettle=parseFloat(hMensu||0)*12/(nbSemAvSettle||1);
+      const hJourAvSettle=hSemMoyAvSettle/6;
+      const montantSettlement46vers52=parseFloat((hJourAvSettle*txNet*nbAnticipeAvantAv).toFixed(2));
+      indemCongeMois=parseFloat((indemCongeMois+montantSettlement46vers52).toFixed(2));
+      indemCongeNbJours+=nbAnticipeAvantAv;
+    }
+  }
+
+  // 20/08/2026 (Sophie) : Cas 2 — avenant 52→46, reliquat d'une année déjà terminée SOUS 52. Le socle
+  // de calcIndemniteConges ne la reconnaît jamais (année close en 52 = pas d'indemnité par défaut) :
+  // il faut donc régler ce reliquat séparément ici, une fois l'avenant vers 46 arrivé. Reliquat =
+  // jours acquis moins tout ce qui a déjà été pris (anticipé sous 52 inclus), borné à la SEULE année
+  // concernée (celle qui vient de se terminer juste avant cet avenant — pas de gestion d'un
+  // empilement sur plusieurs années non soldées, hors scope pour l'instant). Valorisé au taux en
+  // vigueur à la date de l'avenant, même logique que le cas 1.
+  // ⚠️ Mode "chaque prise" NON câblé ici volontairement : le bloc dateCg==='chaque' existant (plus
+  // haut) ne sait lire que des années que calcIndemniteConges accepte, or celle-ci ne le sera jamais
+  // avec le socle actuel. Un circuit séparé serait nécessaire pour payer ce reliquat progressivement
+  // au fil des prises — laissé de côté pour l'instant, voir message, PAS réglé pour ce mode précis.
+  // ⚠️ Mode "prise principale" : seulement couvert si la prise principale a DÉJÀ eu lieu au moment de
+  // l'avenant (détectée via le calendrier congés AM). Si elle n'a pas encore eu lieu à ce moment-là,
+  // rien n'est déclenché ici et ce reliquat n'est PAS repris ailleurs non plus — même limite que
+  // "chaque prise", à traiter séparément si ce cas se présente.
+  if(estPassage52vers46&&!dateDebPeriode&&!dateFinPeriode){
+    const moisKeyAv2=avenantDuMois.dateAvenant.slice(0,7);
+    const anneeAcqCloseAvant=getAnneeAmPourDate(moisKeyAv2)-1;
+    const cgReliquat=c.conges?.[anneeAcqCloseAvant];
+    if(cgReliquat?.estTerminee){
+      const dateMaiReliquat=new Date(anneeAcqCloseAvant+1,4,31);
+      const srcCloture=getVersionActive(c,dateMaiReliquat);
+      if(srcCloture.tc==='52'){
+        const debutAnneeReliquat=anneeAcqCloseAvant+'-06-01';
+        const finAnneeReliquat=(anneeAcqCloseAvant+1)+'-05-31';
+        let joursPrisReliquat=0;
+        Object.entries(c.fiches||{}).forEach(([,f])=>{
+          if(!f.valide) return;
+          f.jours.forEach(j=>{
+            if(j.date<debutAnneeReliquat||j.date>finAnneeReliquat) return;
+            if(j.statut==='conges-acq'||j.statut==='conges-anticipe') joursPrisReliquat++;
+          });
+        });
+        const reliquatJours=Math.max(0,(cgReliquat.acquis||0)-joursPrisReliquat);
+        if(reliquatJours>0){
+          const nbSemReliq=getNbSemReel(sourceActif,c);
+          const hSemMoyReliq=parseFloat(hMensu||0)*12/(nbSemReliq||1);
+          const montantJournalierReliq=parseFloat((hSemMoyReliq/6*txNet).toFixed(4));
+          if(sourceActif.dateCg==='juin'){
+            // Toujours dépassé pour une année déjà close : payé intégralement au mois de l'avenant.
+            indemCongeMois=parseFloat((indemCongeMois+montantJournalierReliq*reliquatJours).toFixed(2));
+            indemCongeNbJours+=reliquatJours;
+          } else if(sourceActif.dateCg==='principale'){
+            const debutFenPrinc=new Date(anneeAcqCloseAvant+1,4,1);
+            const [ayAv,amAv,adAv]=avenantDuMois.dateAvenant.split('-').map(Number);
+            const dateAvJS=new Date(ayAv,amAv-1,adAv);
+            const joursPoseReliq=[];
+            Object.entries(S.congesAM||{}).forEach(([,amEntry])=>{
+              Object.entries(amEntry.jours||{}).forEach(([ds,st])=>{
+                if(st!=='pose') return;
+                const [py,pm,pd]=ds.split('-').map(Number);
+                const dj=new Date(py,pm-1,pd);
+                if(dj>=debutFenPrinc&&dj<dateAvJS) joursPoseReliq.push(ds);
+              });
+            });
+            joursPoseReliq.sort();
+            let principaleDejaPassee=false;
+            for(let ip=0;ip+11<joursPoseReliq.length;ip++){
+              const d1r=new Date(joursPoseReliq[ip].split('-')[0],parseInt(joursPoseReliq[ip].split('-')[1])-1,parseInt(joursPoseReliq[ip].split('-')[2]));
+              const d12r=new Date(joursPoseReliq[ip+11].split('-')[0],parseInt(joursPoseReliq[ip+11].split('-')[1])-1,parseInt(joursPoseReliq[ip+11].split('-')[2]));
+              if((d12r-d1r)/(1000*60*60*24)<=14){ principaleDejaPassee=true; break; }
+            }
+            if(principaleDejaPassee){
+              indemCongeMois=parseFloat((indemCongeMois+montantJournalierReliq*reliquatJours).toFixed(2));
+              indemCongeNbJours+=reliquatJours;
+            }
           }
         }
       }
@@ -15716,7 +15826,6 @@ function renderRupture(c, cont){
 
 function calcIndemniteConges(c, anneeRef){
   // Retourne null si conditions non remplies
-  if(c.tc==='52'||c.tc==='occ') return null;
   const cg=c.conges?.[anneeRef];
   if(!cg?.estTerminee) return null;
   const keyMai=(anneeRef+1)+'-05';
@@ -15724,6 +15833,14 @@ function calcIndemniteConges(c, anneeRef){
 
   const dateMai=new Date(anneeRef+1,4,31);
   const sourceM=getVersionActive(c,dateMai);
+  // 20/08/2026 (Sophie) : le régime qui détermine si CETTE année doit une indemnité, c'est celui actif
+  // à SA propre clôture (dateMai) — jamais c.tc (origine, jamais mis à jour par un avenant) ni le
+  // régime d'aujourd'hui. Une année close en 46 reste due même après un avenant vers 52 plus tard
+  // (cas 1) ; une année close en 52 n'est normalement pas due (cas 2 "année en cours", se règle
+  // naturellement une fois close sous 46 si l'avenant est déjà actif à dateMai). Le cas 2 "année déjà
+  // terminée sous 52 + avenant vers 46 après coup" (reliquat) est géré séparément dans calcRecapFiche,
+  // pas ici.
+  if(sourceM.tc==='52'||sourceM.tc==='occ') return null;
   const txBrutM=sourceM.txBrut||c.txBrut||0;
 
   // Moyenne hebdo
