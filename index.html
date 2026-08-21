@@ -136,11 +136,6 @@ document.addEventListener('DOMContentLoaded',()=>{
 </script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-/* 17/08/2026 (Sophie) : retirer les flèches natives de tous les champs numériques (majorations,
-   taux...) — Chrome/Safari (::-webkit-*) et Firefox (-moz-appearance). */
-input[type=number]::-webkit-inner-spin-button,
-input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
-input[type=number]{-moz-appearance:textfield}
 :root{
   --m:#6B4C3B;--m2:#9B7264;--mp:#f5ede8;--mb:#d4b8ad;
   --tx:#3a2218;--tx2:#7a5c50;--tx3:#b09080;
@@ -623,17 +618,9 @@ input[type=time].fi{width:auto;min-width:92px}
         }
       }
       S.enAvenant=null;
-      S.enEd=null;
       S.enCours=cid;S.detTab='contrat';goTo('det');
     }
   } else if(!S.enEd&&!S.dernierContratId||confirm('Les modifications non enregistrées seront perdues.')){
-    // 17/08/2026 (Sophie) : S.enEd n'était JAMAIS remis à zéro ici — goTo('det') ne le fait pas non
-    // plus exprès (pour ne pas casser une navigation de sauvegarde réussie). En annulant (pas en
-    // sauvegardant), l'ancien contrat édité restait donc "actif" en mémoire et pouvait ressurgir dans
-    // le prochain formulaire ouvert, même pour un contrat sans rapport (repéré par Sophie : édition
-    // annulée sur un contrat, formulaire d'avenant d'un AUTRE contrat pré-rempli avec les données
-    // annulées).
-    S.enEd=null;
     if(S.dernierContratId){S.enCours=S.dernierContratId;S.detTab='contrat';goTo('det');}
     else goTo('cont');
   }">Retour</button>
@@ -1979,7 +1966,7 @@ function buildFicheContenu(source, c){
       return mb.toFixed(2)+' €';
     })()],
     ['Congés anticipés',source.cgAnticipe==='oui'?'Oui':'Non'],
-    ...(source.tc!=='52'&&source.tc!=='occ'?[['Paiement congés',{juin:'En juin',principale:'Prise principale',chaque:'Chaque prise'}[source.dateCg]||'—']]:[]),
+    ['Paiement congés',{juin:'En juin',principale:'Prise principale',chaque:'Chaque prise'}[source.dateCg]||'—'],
     ['Indem. entretien',source.indemType==='legal'?'Légale':source.indemType==='nego'?(()=>{
       // 27/07/2026 (décision Sophie) : montant négocié modifiable directement ici (cadenas), pour
       // le remonter sans avenant quand le légal le dépasse — n'affecte que les fiches pas encore
@@ -2674,15 +2661,7 @@ function renderDetTab(id,tab){
             // rétrécis par une portion anniversaire) — sinon la moitié du mois qui ne contient pas
             // physiquement l'avenant ne le détecte jamais, alors que les deux portions ont besoin de le
             // savoir (anniversaire + avenant le même mois, cf. partage plus bas).
-            // 17/08/2026 (Sophie) : >= au lieu de > — un avenant tombant EXACTEMENT le 1er du mois
-            // (aucune portion "avant" dans CE mois, donc pas de découpage propre à l'avenant lui-même)
-            // doit quand même être détecté ici. Sinon, un mois anniversaire où l'avenant tombe le 1er
-            // retombait à tort sur le calcul "anniversaire seul" (théorique, garde la valeur pleine
-            // d'une semaine sans rien de prévu) au lieu de "anniversaire+avenant" (prévu, restreint à
-            // la zone régularisable) — repéré par Sophie sur Constance (avenant 01/09/2025, anniversaire
-            // le 04/09) : la portion avant l'anniversaire (1-3 septembre, semaine sans heures prévues)
-            // recevait une part au théorique au lieu de 0.
-            const avenantDuMoisReg=tousAvenantsSignes.find(av=>av.dateAvenant>=debutMoisComplet&&av.dateAvenant<=finMoisComplet)||null;
+            const avenantDuMoisReg=tousAvenantsSignes.find(av=>av.dateAvenant>debutMoisComplet&&av.dateAvenant<=finMoisComplet)||null;
             const veilleAvenantReg=avenantDuMoisReg?(()=>{
               const [avy,avm,avd]=avenantDuMoisReg.dateAvenant.split('-').map(Number);
               const dV=new Date(avy,avm-1,avd-1);
@@ -3634,17 +3613,9 @@ function quitterFicheSansEnregistrer(contratId,key){
 function ouvrirFiche(contratId,key){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c)return;
-  // 17/08/2026 (Sophie) : _regulDiffEuros n'est LU, à l'affichage, QUE si le contrat a un avenant 46→52
-  // en cours (`recap.estPassage46vers52`, vérifié aux 4 seuls endroits qui le consomment) — jamais
-  // ailleurs. L'ancienne condition ("c.tc!=='52'" OU avenant 52) se déclenchait pour la quasi-totalité
-  // des contrats 46, avenant 52 ou pas, faisant tourner ce calcul lourd (parcourt tout l'historique,
-  // rappelle calcRecapFiche/calcIndemniteConges en boucle) sans que son résultat soit jamais affiché.
-  // Repéré via un profil de performance (Constance : aucun avenant en 52, plusieurs secondes à chaque
-  // ouverture de feuille pour un calcul dont le résultat n'était lu nulle part).
-  if((c.avenants||[]).some(av=>av.signe&&av.tc==='52')){
+  // Calculer _regulDiffEuros (pour affichage régularisation sur fiche) — toujours recalculé pour rester à jour
+  if(c.tc!=='52'||((c.avenants||[]).some(av=>av.signe&&av.tc==='52'))){
     calcRegulDiffEurosAuto(c);
-  } else {
-    c._regulDiffEuros=0;
   }
   // Créer les fiches si nécessaire
   if(!c.fiches) c.fiches={};
@@ -4361,29 +4332,8 @@ function ouvrirFiche(contratId,key){
 
   // Détecter les poses de congés dans la fiche
   const aDesConges=fiche.jours.some(j=>['conges-acq','conges-non','conges-anticipe'].includes(j.statut));
-  // 17/08/2026 (Sophie) : tentative de verrou (case non décochable si le mois précédent avait déjà
-  // posé de l'anticipé) essayée puis ANNULÉE — bloquait un usage réel de Sophie (décocher/recocher
-  // pour forcer un recalcul sur un jour resté coincé en congés non-acquis). Retour à une case
-  // librement décochable ; seul le correctif d'affichage ci-dessous (ne plus cocher par défaut) reste.
-  // 17/08/2026 (Sophie) : la case ne doit JAMAIS se cocher toute seule sur la base du seul "contrat
-  // autorise l'anticipation en général" — sans choix explicite pour CE mois, elle doit s'afficher
-  // décochée, pour rester alignée avec ce que le calcul réel voit (!!fiche.anticipeActif, jamais ce
-  // repli). Sinon la case peut sembler cochée à l'écran sans qu'aucun anticipé ne soit réellement pris
-  // en compte, sans aucun signe visible en dehors du texte au survol.
-  const anticipeActif=!!fiche.anticipeActif;
+  const anticipeActif=fiche.anticipeActif!==undefined?fiche.anticipeActif:(c.cgAnticipe==='oui');
   const anticipeAutorise=c.cgAnticipe==='oui';
-  // 17/08/2026 (Sophie) : avertissement (pas un verrou, essayé puis annulé) — si le mois précédent
-  // (pose continue d'un mois sur l'autre) a réellement posé des jours en anticipé et que la case de
-  // CE mois n'est pas cochée, prévenir l'utilisatrice à l'ouverture plutôt que la laisser découvrir
-  // le décalage seulement au survol de la case (ce qui s'est produit avant ce correctif).
-  const [keyAnneeAntW,keyMoisAntW]=key.split('-').map(Number);
-  const moisPrecAntDateW=new Date(keyAnneeAntW,keyMoisAntW-2,1);
-  const moisPrecAntKeyW=moisPrecAntDateW.getFullYear()+'-'+String(moisPrecAntDateW.getMonth()+1).padStart(2,'0');
-  const fichePrecAntW=c.fiches?.[moisPrecAntKeyW];
-  const premierJourMoisEstCongeW=fiche.jours[0]&&['conges-acq','conges-non','conges-anticipe'].includes(fiche.jours[0].statut);
-  const dernierJourPrecEstCongeW=!!(fichePrecAntW&&fichePrecAntW.jours&&fichePrecAntW.jours.length&&['conges-acq','conges-non','conges-anticipe'].includes(fichePrecAntW.jours[fichePrecAntW.jours.length-1].statut));
-  const posePrecedenteADejaAnticipeW=!!(fichePrecAntW&&fichePrecAntW.jours&&fichePrecAntW.jours.some(j=>j.statut==='conges-anticipe'||j.statut==='decompte-anticipe'));
-  const avertirAnticipeManquant=premierJourMoisEstCongeW&&dernierJourPrecEstCongeW&&posePrecedenteADejaAnticipeW&&!anticipeActif;
   // 06/08/2026 (Sophie) : case affichée sur TOUS les mois ayant des congés, plus seulement le
   // premier mois de la pose — le calcul (majFichesCgAmPasse) ne consulte de toute façon plus que
   // la case du mois où l'anticipé devient réellement nécessaire pour une pose donnée (décidée une
@@ -4403,7 +4353,6 @@ function ouvrirFiche(contratId,key){
     ${(!fiche.valide&&!estLectureSeuleEmployeur())?`<button class="btn bs bsm" style="margin-left:auto" onclick="enregistrerFiche(${contratId},'${key}')">💾</button>`:''}
     </div>
     ${planningNonEnregistrePourMois(c,key)?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">⚠ Le planning de ce mois a des modifications non enregistrées — retournez sur l'onglet Planning et cliquez sur 💾 Enregistrer avant de continuer, sinon cette feuille ne reflète pas vos derniers changements.</div>`:''}
-    ${avertirAnticipeManquant?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">⚠ Cette pose de congés a commencé par de l'anticipé le mois précédent — pensez à cocher « Prise de congés par anticipation » plus bas si elle doit continuer sur ce mois-ci.</div>`:''}
     <div style="width:100%;overflow:hidden">
       <table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed">
         <colgroup>
@@ -4550,34 +4499,6 @@ function getAnneeAmPourDate(key){
   const [ay,am]=key.split('-').map(Number);
   // Année AM : juin → mai suivant
   return am>=6?ay:ay-1;
-}
-
-// 17/08/2026 (Sophie) : report manuel de jours perdus pour arrêt maladie (onglet congés du contrat)
-function toggleArretReporte(contratId,anneeAcq,checked){
-  const c=S.contrats.find(x=>x.id==contratId);
-  if(!c||estLectureSeuleEmployeur()) return;
-  if(!c.conges||!c.conges[anneeAcq]) return;
-  c.conges[anneeAcq].arretReporte=checked;
-  if(!checked) c.conges[anneeAcq].arretReporteJours=0;
-  const cidx=S.contrats.findIndex(x=>x.id==contratId);
-  if(cidx!==-1) S.contrats[cidx]=c;
-  _contratsModifies.add(contratId);
-  saveToFirestore();
-  if(S.enCours==contratId) renderDetTab(contratId,'conges');
-}
-function modifierArretReporteJours(contratId,anneeAcq,val,maxJours){
-  const c=S.contrats.find(x=>x.id==contratId);
-  if(!c||estLectureSeuleEmployeur()) return;
-  if(!c.conges||!c.conges[anneeAcq]) return;
-  let nb=parseInt(val);
-  if(isNaN(nb)||nb<0) nb=0;
-  nb=Math.min(nb,maxJours||0);
-  c.conges[anneeAcq].arretReporteJours=nb;
-  const cidx=S.contrats.findIndex(x=>x.id==contratId);
-  if(cidx!==-1) S.contrats[cidx]=c;
-  _contratsModifies.add(contratId);
-  saveToFirestore();
-  if(S.enCours==contratId) renderDetTab(contratId,'conges');
 }
          
 function confirmerHeuresPrevues(contratId,key,idx){
@@ -5423,22 +5344,9 @@ function planningNonEnregistrePourMois(c, moisKey){
   // 06/08/2026 (Sophie) : ajout de la case "modifications autorisées" à cette même comparaison —
   // avant, un changement de cette case n'était jamais détecté ici (seuls les jours cochés
   // l'étaient), donc jamais compté comme "en attente" lors d'un rafraîchissement de tuile.
-  // 17/08/2026 (Sophie) : `_planningSauvegarde`/`_modifAutoriseesSauvegarde` ne sont JAMAIS persistés
-  // sur Firestore (exclus volontairement de la sauvegarde compressée, `getContratsCompresses`) — ils
-  // n'existent qu'en mémoire, initialisés seulement quand l'onglet Planning est ouvert pour ce
-  // contrat (voir plus bas dans le fichier). Juste après un rechargement complet (F5), avant d'avoir
-  // visité Planning, ils sont donc undefined pour TOUS les mois — les comparer à {} (vide) déclenchait
-  // un faux "à enregistrer" dès qu'une case "modifications autorisées" était réellement cochée, sans
-  // rien de réellement en attente. Ce garde-fou existait déjà plus bas pour la boucle jour par jour,
-  // pas pour la comparaison de la case ci-dessous, exécutée avant. Ne touche PAS au signalement d'une
-  // vraie modification (quand le cache EST initialisé) ni à l'obligation de 1er enregistrement
-  // var/min (plus bas, appuyée sur `planningConfirmeMois`, un champ persisté à part).
-  const cacheNonInitialisePNE=c._planningSauvegarde===undefined||c._modifAutoriseesSauvegarde===undefined;
-  if(!cacheNonInitialisePNE){
-    const modifVive=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey]);
-    const modifSauve=!!((c._modifAutoriseesSauvegarde||{})[moisKey]);
-    if(modifVive!==modifSauve) return true;
-  }
+  const modifVive=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey]);
+  const modifSauve=!!((c._modifAutoriseesSauvegarde||{})[moisKey]);
+  if(modifVive!==modifSauve) return true;
   // 06/08/2026 (Sophie) : un mois jamais confirmé via le bouton Enregistrer (même vide, même sans
   // rien modifié depuis l'ouverture) compte toujours comme "en attente" — sinon le bouton s'affiche
   // par défaut "Enregistré ✓" dès l'ouverture (la comparaison ci-dessous ne voit aucune différence,
@@ -5457,7 +5365,7 @@ function planningNonEnregistrePourMois(c, moisKey){
   const estPlanVarMinPNE=(srcDebutPNE.th==='plan'&&(srcDebutPNE.planType==='min'||srcDebutPNE.planType==='var'))
     ||(srcFinPNE.th==='plan'&&(srcFinPNE.planType==='min'||srcFinPNE.planType==='var'));
   if(estPlanVarMinPNE&&!(c.planningConfirmeMois&&c.planningConfirmeMois[moisKey])) return true;
-  if(cacheNonInitialisePNE||!c.planning) return false;
+  if(!c.planning||c._planningSauvegarde===undefined) return false;
   const [ay,am]=moisKey.split('-').map(Number);
   const dernierJour=new Date(ay,am,0).getDate();
   for(let d=1; d<=dernierJour; d++){
@@ -7414,23 +7322,6 @@ function validerFiche(contratId,key){
       return;
     }
   }
-  // 17/08/2026 (Sophie) : même principe que le contrôle planning ci-dessus — bloquer la validation si
-  // cette pose de congés a commencé par de l'anticipé le mois précédent et que la case de CE mois
-  // n'est pas cochée, plutôt qu'une simple bannière qu'on peut valider sans l'avoir traitée.
-  {
-    const ficheCourAntV=c.fiches[key];
-    const [keyAnneeAntV,keyMoisAntV]=key.split('-').map(Number);
-    const moisPrecAntDateV=new Date(keyAnneeAntV,keyMoisAntV-2,1);
-    const moisPrecAntKeyV=moisPrecAntDateV.getFullYear()+'-'+String(moisPrecAntDateV.getMonth()+1).padStart(2,'0');
-    const fichePrecAntV=c.fiches?.[moisPrecAntKeyV];
-    const premierJourMoisEstCongeV=ficheCourAntV.jours[0]&&['conges-acq','conges-non','conges-anticipe'].includes(ficheCourAntV.jours[0].statut);
-    const dernierJourPrecEstCongeV=!!(fichePrecAntV&&fichePrecAntV.jours&&fichePrecAntV.jours.length&&['conges-acq','conges-non','conges-anticipe'].includes(fichePrecAntV.jours[fichePrecAntV.jours.length-1].statut));
-    const posePrecedenteADejaAnticipeV=!!(fichePrecAntV&&fichePrecAntV.jours&&fichePrecAntV.jours.some(j=>j.statut==='conges-anticipe'||j.statut==='decompte-anticipe'));
-    if(premierJourMoisEstCongeV&&dernierJourPrecEstCongeV&&posePrecedenteADejaAnticipeV&&!ficheCourAntV.anticipeActif){
-      alerte('Cette pose de congés a commencé par de l\u2019anticipé le mois précédent — cochez « Prise de congés par anticipation » sur cette feuille avant de valider.');
-      return;
-    }
-  }
   // Bloquer si un jour est en statut "reprise" non résolu
   const joursReprise=c.fiches[key].jours.filter(j=>j.statut==='reprise');
   if(joursReprise.length>0){
@@ -7835,15 +7726,7 @@ function calcCongesContrat(c, dateRefOverride){
     let totalSemainesArret=0;
 
     Object.entries(semaines).forEach(([semKey,sem])=>{
-      // 17/08/2026 (Sophie) : trié par date — Firestore ne garantit PAS l'ordre d'insertion des clés
-      // d'un objet (ici les mois de c.fiches), donc les jours d'un mois "plus récent" peuvent arriver
-      // AVANT ceux d'un mois antérieur dans ce tableau. Repéré sur une semaine à cheval sur un avenant
-      // (fin août/1er septembre, Constance) : le jour du 1er septembre arrivait en premier, faussant
-      // la recherche du point de bascule (jours.slice(1) cherchait la coupure à partir du MAUVAIS jour
-      // de référence) et regroupant tous les jours du mauvais côté — jours travaillés d'août comptés
-      // avec le plafond hebdomadaire du contrat de septembre. Tri explicite : plus rien dans cette
-      // fonction ne dépend de l'ordre d'arrivée des fiches.
-      const jours=sem.jours.slice().sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+      const jours=sem.jours;
       if(!jours.length) return;
 
       // La semaine est-elle terminée ? Basé sur le dernier jour RÉELLEMENT recueilli pour cette
@@ -7949,9 +7832,7 @@ function calcCongesContrat(c, dateRefOverride){
               } else if(sj==='ferie'){
                 const jourIdx=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])).getDay();
                 const jourIdxISO=jourIdx===0?6:jourIdx-1;
-                // 17/08/2026 (Sophie) : sourcePV.planVar (version ACTIVE), pas c.planVar (origine) —
-                // même bug systémique que fixe/sem/min, trouvé en creusant le cas Constance.
-                const volActif=sourcePV.planVar?sourcePV.planVar.find(v=>v.jours&&v.jours[jourIdxISO]):null;
+                const volActif=c.planVar?c.planVar.find(v=>v.jours&&v.jours[jourIdxISO]):null;
                 if(volActif&&(semaineCompleteCgPV||cocheCgPV)) joursNormauxPV++;
               }
             });
@@ -8058,9 +7939,6 @@ function calcCongesContrat(c, dateRefOverride){
                   typeSemActif46=joursUnionIdx46;
                   joursMaxSem=joursUnionIdx46.size||joursMax;
                 }
-                if(window.DEBUG_CGAM&&c.nom==='Constance'){
-                  console.log('[CGAM-typeSemFerie]','semaine',joursSub[0]?.date,'| agKeySemAcq46:',agKeySemAcq46,'| typeSemAcq46 trouvé:',typeSemAcq46,'| stSemAcq46 trouvé:',!!stSemAcq46,'| typeSemActif46 (indices jour, 0=lundi):',typeSemActif46?[...typeSemActif46]:null,'| joursMaxSem:',joursMaxSem);
-                }
               }
             }
 
@@ -8128,16 +8006,10 @@ function calcCongesContrat(c, dateRefOverride){
                 const jourIdx=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])).getDay();
                 const jourIdxISO=jourIdx===0?6:jourIdx-1;
                 const sourceJF=getVersionActive(c,new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])));
-                // 17/08/2026 (Sophie) : utiliser le type ACTIF à cette date (sourceJF.th/tc/planType),
-                // pas le type D'ORIGINE du contrat (c.th/c.tc/c.planType) — un contrat ayant changé de
-                // type via avenant (ex. Constance, fixe→sem) ne rentrait jamais dans la bonne branche,
-                // donc un férié tombant dans une semaine de congés (non pointée, sans type assigné,
-                // repli sur l'union des types) ne comptait ni comme normal ni comme congé. Même bug
-                // systémique que celui déjà corrigé ailleurs cette nuit.
                 let estTravaille=false;
-                if(sourceJF.th==='fixe'&&sourceJF.joursFixe) estTravaille=!!(sourceJF.joursFixe[jourIdxISO]);
-                else if(sourceJF.th==='sem'&&sourceJF.semTypes){
-                  if(sourceJF.tc==='52'){
+                if(c.th==='fixe'&&sourceJF.joursFixe) estTravaille=!!(sourceJF.joursFixe[jourIdxISO]);
+                else if(c.th==='sem'&&sourceJF.semTypes){
+                  if(c.tc==='52'||sourceJF.tc==='52'){
                     const tousAgJF=[...(sourceJF.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
                     const dateJF=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
                     const semNumJF=getSemISO(j.date);const semAnJF=getSemAnnee(j.date);
@@ -8150,7 +8022,7 @@ function calcCongesContrat(c, dateRefOverride){
                     estTravaille=!!(typeSemActif46&&typeSemActif46.has&&typeSemActif46.has(jourIdxISO));
                   }
                 }
-                else if(sourceJF.th==='plan'&&sourceJF.planType==='min'&&sourceJF.joursMin) estTravaille=!!(sourceJF.joursMin[jourIdxISO]);
+                else if(c.th==='plan'&&c.planType==='min'&&sourceJF.joursMin) estTravaille=!!(sourceJF.joursMin[jourIdxISO]);
                 if(estTravaille&&gateMinOk) joursNormaux++;
               }
             });
@@ -8405,17 +8277,7 @@ function calcCongesContrat(c, dateRefOverride){
 
   // Recalculer les restants
   anneesRef.forEach(ar=>{
-    // 17/08/2026 (Sophie) : report de jours perdus pour arrêt maladie (saisie manuelle, case
-    // optionnelle sur l'année d'où ils viennent — aucun suivi du délai légal de 15 mois côté app,
-    // à la charge de l'utilisatrice). Ajouté au solde de l'année SUIVANTE seulement une fois la
-    // période de prise de l'année précédente terminée (30 avril suivant), jamais avant.
-    const cgPrecAr=c.conges[ar-1];
-    let reportArretIn=0;
-    if(cgPrecAr&&cgPrecAr.arretReporteJours){
-      const finPosePrecAr=new Date(ar+1,3,30);
-      if(new Date()>=finPosePrecAr) reportArretIn=cgPrecAr.arretReporteJours;
-    }
-    c.conges[ar].restants=Math.max(0,(c.conges[ar].acquis||0)+reportArretIn-c.conges[ar].pris);
+    c.conges[ar].restants=Math.max(0,(c.conges[ar].acquis||0)-c.conges[ar].pris);
   });
 
   c.congesCourants=c.conges[anneeRefDebut]||{acquis:0,pris:0,restants:0};
@@ -11766,16 +11628,12 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           }
         }
         if(fiche.mois===5){
-          // 17/08/2026 (Sophie) : bornée depuis le 1er juin de l'ANNÉE PRÉCÉDENTE — sans cette borne
-          // basse, des jours anticipés bien plus anciens (déjà payés lors d'un juin précédent) étaient
-          // resommés et repayés une seconde fois, faute de limite inférieure.
           let nbAnticipe=0;
           const limiteMai=fiche.annee+'-05-01';
-          const limiteJuinPrec=(fiche.annee-1)+'-06-01';
           Object.entries(c.fiches||{}).forEach(([k,f])=>{
             if(!f.valide) return;
             f.jours.forEach(j=>{
-              if(j.date>=limiteMai||j.date<limiteJuinPrec) return;
+              if(j.date>=limiteMai) return;
               if(j.statut==='conges-anticipe') nbAnticipe++;
             });
           });
@@ -11794,14 +11652,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const moisKeyP=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0');
         const debutMaip=new Date(fiche.annee,4,1);  // 1er mai
         const finOctp=new Date(fiche.annee,9,31);   // 31 octobre
-        // Jours acquis décomptés (pour CE contrat) sur mai-oct — sert au montant ET à situer le
-        // mois de paiement (déplacé avant la détection, voir plus bas)
+        // Chercher la prise principale : ≥12 jours conges-acq consécutifs entre mai-oct
         const joursAcqValides=[];
         Object.entries(c.fiches||{}).forEach(([k,f])=>{
-          // 17/08/2026 (Sophie) : le mois affiché (moisKey) peut contribuer ses propres jours même
-          // non validé — comme "chaque prise" le fait déjà (lit fiche.jours directement). Seuls les
-          // AUTRES mois (avant/après) exigent la validation, pour ne compter que du définitif.
-          if(!f.valide&&k!==moisKey) return;
+          if(!f.valide) return;
           f.jours.forEach(j=>{
             if(j.statut!=='conges-acq') return;
             const dj=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
@@ -11809,32 +11663,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           });
         });
         joursAcqValides.sort();
-        // 17/08/2026 (Sophie) : la prise principale se DÉTECTE sur la DURÉE DE LA POSE (calendrier
-        // congés AM, commun à tous les contrats, y compris les jours non travaillés pour CE contrat)
-        // — un contrat à faible volume peut avoir une pose qui s'étend sur ≥12 jours ouvrables sans
-        // jamais décompter 12 jours (ex. 6 jours acquis seulement). MAIS le mois de PAIEMENT doit se
-        // baser sur le 1er jour RÉELLEMENT DÉCOMPTÉ (conges-acq) à l'intérieur de cette fenêtre, pas
-        // sur le 1er jour de pose sur le calendrier (qui peut être un jour non prévu pour ce contrat,
-        // ex. lundi non travaillé en tête de pose) — précisé par Sophie après un premier essai où le
-        // paiement se retrouvait rattaché à un mois sans aucun jour décompté du tout.
-        const joursPoseValides=[];
-        for(let annAmP=getAnneeAmPourDate(debutMaip.getFullYear()+'-05'); annAmP<=getAnneeAmPourDate(finOctp.getFullYear()+'-10'); annAmP++){
-          const joursAmP=(S.congesAM[annAmP]||{}).jours||{};
-          Object.entries(joursAmP).forEach(([ds,st])=>{
-            if(st!=='pose') return;
-            const [py,pm,pd]=ds.split('-').map(Number);
-            const dj=new Date(py,pm-1,pd);
-            if(dj>=debutMaip&&dj<=finOctp) joursPoseValides.push(ds);
-          });
-        }
-        joursPoseValides.sort();
         // Trouver séquence de 12 jours consécutifs
         let debutPrincipale=null;
-        for(let i=0;i<joursPoseValides.length;i++){
+        for(let i=0;i<joursAcqValides.length;i++){
           // Vérifier si 12 jours consécutifs à partir de i (consécutifs = jours calendaires sans trou > 2j)
-          if(i+11<joursPoseValides.length){
-            const d1=new Date(joursPoseValides[i].split('-')[0],parseInt(joursPoseValides[i].split('-')[1])-1,parseInt(joursPoseValides[i].split('-')[2]));
-            const d12=new Date(joursPoseValides[i+11].split('-')[0],parseInt(joursPoseValides[i+11].split('-')[1])-1,parseInt(joursPoseValides[i+11].split('-')[2]));
+          if(i+11<joursAcqValides.length){
+            const d1=new Date(joursAcqValides[i].split('-')[0],parseInt(joursAcqValides[i].split('-')[1])-1,parseInt(joursAcqValides[i].split('-')[2]));
+            const d12=new Date(joursAcqValides[i+11].split('-')[0],parseInt(joursAcqValides[i+11].split('-')[1])-1,parseInt(joursAcqValides[i+11].split('-')[2]));
             // 29/07/2026 (précision Sophie) : 12 jours = 2 semaines calendaires (14j) ; chaque férié
             // chômé rencontré dans la séquence élargit la fenêtre d'un jour supplémentaire (il prend
             // une place dans le calendrier sans compter comme un jour de congé posé).
@@ -11846,10 +11681,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
               curFer.setDate(curFer.getDate()+1);
             }
             if((d12-d1)/(1000*60*60*24)<=14+nbFeriesDansFenetre){
-              // Premier jour RÉELLEMENT décompté (conges-acq) à partir du début de cette fenêtre —
-              // pas forcément joursPoseValides[i] lui-même (peut être un jour non prévu pour ce contrat).
-              const premierJourDecompte=joursAcqValides.find(d=>d>=joursPoseValides[i]);
-              debutPrincipale=premierJourDecompte||joursPoseValides[i];
+              debutPrincipale=joursAcqValides[i];
               break;
             }
           }
@@ -15988,28 +15820,6 @@ function buildCgAcquisEncarts(c, anneeAcq){
     if(nbAcqProg>0) html+=`<div style="${ls};border-bottom:none;color:#aa8ea4;opacity:0.85"><span>Pose acquise programmée</span><span style="${vs}">${nbAcqProg} j</span></div>`;
     html+=`</div>`;
   }
-  if(estTerminee){
-    // 17/08/2026 (Sophie) : report manuel de jours perdus pour arrêt maladie — l'app ne peut pas le
-    // détecter elle-même (les jours de congés pendant un arrêt sont décochés du calendrier AM), donc
-    // saisie par l'utilisatrice, plafonnée au solde de CETTE année, sans suivi du délai légal de 15
-    // mois (à la charge de l'utilisatrice). Ajouté au solde de l'année suivante uniquement une fois le
-    // 30 avril de fin de prise passé (voir la recalculation de `restants`).
-    const arretReporteVal=cg.arretReporteJours||0;
-    const soldeMaxReport=cg.restants||0;
-    html+=`<div style="border-top:1px solid rgba(0,0,0,0.08);margin-top:6px;padding-top:6px">
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;font-weight:600">
-        <input type="checkbox" ${cg.arretReporte?'checked':''} style="width:15px;height:15px;accent-color:var(--m)"
-          onchange="toggleArretReporte(${c.id},${anneeAcq},this.checked)">
-        Jours perdus reportés pour arrêt maladie
-      </label>
-      ${cg.arretReporte?`<div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
-        <input type="number" min="0" max="${soldeMaxReport}" step="1" value="${arretReporteVal}"
-          style="width:60px;padding:3px 6px;border:1px solid var(--mb);border-radius:4px;font-size:12px"
-          onchange="modifierArretReporteJours(${c.id},${anneeAcq},this.value,${soldeMaxReport})">
-        <span style="font-size:11px;color:var(--tx2)">j (plafonné au solde au 30/04/${anneeAcq+2} : ${soldeMaxReport} j) — ajoutés au compteur ${anneeAcq+1}/${anneeAcq+2} le 30/04/${anneeAcq+2}</span>
-      </div>`:''}
-    </div>`;
-  }
   html+=`</div>`;
 
   // Case fractionnement
@@ -16536,12 +16346,6 @@ async function signerContrat(){
   // Vérifications complétude
   const manquants=[];
   if(!c.dateDeb) manquants.push("date de début");
-  // 17/08/2026 (Sophie) : plage d'année raisonnable — évite une signature avec une faute de frappe
-  // sur l'année (ex. "32023" au lieu de "2023").
-  if(c.dateDeb){
-    const anneeDebC=parseInt(c.dateDeb.split('-')[0]);
-    if(anneeDebC<2000||anneeDebC>2100) manquants.push("date de début : année invalide ("+anneeDebC+")");
-  }
   // 11/08/2026 (Sophie) : garde-fou — pas de signature possible si la date de début tombe sur un
   // jour posé congés dans le calendrier AM.
   if(c.dateDeb&&S.congesAM&&Object.values(S.congesAM).some(am=>am.jours&&am.jours[c.dateDeb]==='pose')){
@@ -16559,11 +16363,7 @@ async function signerContrat(){
          if(c.majRepos===null||c.majRepos===undefined) manquants.push("majoration jour de repos");
 if(c.majFerie===null||c.majFerie===undefined) manquants.push("majoration jours fériés");
 if(c.maj1erMai===null||c.maj1erMai===undefined) manquants.push("majoration 1er mai");
-  if(c.th==='fixe'&&(!c.joursFixe||!c.joursFixe.some(j=>j&&j.d))) manquants.push("horaires (aucun jour coché)");
-  // 17/08/2026 (Sophie) : vérifier que CHAQUE jour coché a bien ses DEUX heures (début ET fin), pas
-  // seulement qu'au moins un jour existe — un jour avec une seule des deux heures remplies passait
-  // jusqu'ici la signature sans être détecté.
-  if(c.th==='fixe'&&c.joursFixe&&c.joursFixe.some(j=>j&&((j.d&&!j.f)||(!j.d&&j.f)))) manquants.push("horaires incomplets (un jour a une heure de début ou de fin manquante)");
+  if(c.th==='fixe'&&(!c.joursFixe||!c.joursFixe.some(j=>j))) manquants.push("horaires (aucun jour coché)");
   if(c.th==='sem'&&(!c.semTypes||!c.semTypes.length)) manquants.push("semaines types");
 if(c.th==='plan'&&!c.planType) manquants.push("type de planning");
 if(c.th==='plan'&&c.planType==='min'&&!c.hMin) manquants.push("heures minimales hebdomadaires");
@@ -16743,17 +16543,14 @@ function creerAvenant(id){
   // Créer un nouvel avenant brouillon
   if(!c.avenants)c.avenants=[];
   const num=(c.avenants.length)+1;
-  // 17/08/2026 (Sophie) : plus de pré-remplissage automatique depuis getDonneesActives(c) — source
-  // d'une fuite de données entre formulaires sans rapport (ex. avenant d'un contrat pré-rempli avec
-  // les données d'une édition annulée sur un AUTRE contrat). Seuls les verrouillages (date de début,
-  // période d'essai) restent — gérés séparément dans le rendu du formulaire, pas par une copie ici.
   const newAv={
     id:Date.now(),
     num,
     dateAvenant:null,
     signe:false,
     dateSigne:null,
-    agendas:[]
+    // Copier toutes les données modifiables du dernier avenant signé ou du contrat
+    ...getDonneesActives(c)
   };
   c.avenants.push(newAv);
   const cidx=S.contrats.findIndex(x=>x.id==id);
@@ -17024,14 +16821,6 @@ function signerAvenant(){
 
   // Vérifier date d'effet
   if(!av.dateAvenant){toast('Veuillez d\'abord enregistrer l\'avenant avec une date d\'effet');return;}
-  // 17/08/2026 (Sophie) : même garde-fou que le contrat initial — plage d'année raisonnable.
-  {
-    const anneeAvC=parseInt(av.dateAvenant.split('-')[0]);
-    if(anneeAvC<2000||anneeAvC>2100){
-      toast('⚠ Date d\'effet invalide : année incohérente ('+anneeAvC+')');
-      return;
-    }
-  }
   // 11/08/2026 (Sophie) : garde-fou — pas de signature possible si la date d'effet tombe sur un jour
   // posé congés dans le calendrier AM.
   if(S.congesAM&&Object.values(S.congesAM).some(am=>am.jours&&am.jours[av.dateAvenant]==='pose')){
@@ -17052,10 +16841,7 @@ function signerAvenant(){
   if(av.majRepos===null||av.majRepos===undefined) manquantsAv.push("majoration jour de repos");
   if(av.majFerie===null||av.majFerie===undefined) manquantsAv.push("majoration jours fériés");
   if(av.maj1erMai===null||av.maj1erMai===undefined) manquantsAv.push("majoration 1er mai");
-  if(av.th==='fixe'&&(!av.joursFixe||!av.joursFixe.some(j=>j&&j.d))) manquantsAv.push("horaires (aucun jour coché)");
-  // 17/08/2026 (Sophie) : même correctif que le contrat initial — chaque jour coché doit avoir ses
-  // deux heures.
-  if(av.th==='fixe'&&av.joursFixe&&av.joursFixe.some(j=>j&&((j.d&&!j.f)||(!j.d&&j.f)))) manquantsAv.push("horaires incomplets (un jour a une heure de début ou de fin manquante)");
+  if(av.th==='fixe'&&(!av.joursFixe||!av.joursFixe.some(j=>j))) manquantsAv.push("horaires (aucun jour coché)");
   if(av.th==='sem'&&(!av.semTypes||!av.semTypes.length)) manquantsAv.push("semaines types");
   if(av.th==='plan'&&!av.planType) manquantsAv.push("type de planning");
   if(av.th==='plan'&&av.planType==='min'&&!av.hMin) manquantsAv.push("heures minimales hebdomadaires");
@@ -17178,50 +16964,6 @@ function signerAvenant(){
       _semFin:{sem:getSemISO(finStr),annee:getSemAnnee(finStr)},
       semaines:{}
     }];
-  }
-
-  // 17/08/2026 (Sophie) : combler aussi un éventuel trou de couverture sur les agendas du CONTRAT DE
-  // BASE jusqu'à aujourd'hui — sinon un avenant signé avec une date d'effet future, sans que l'agenda
-  // suivant du contrat de base ait été créé manuellement au préalable, laisse un trou entre la fin du
-  // dernier agenda existant et aujourd'hui, avec plus aucun moyen de le créer ensuite (repéré par
-  // Sophie : contrat var 46, avenant 52 sem signé avant la création de l'agenda suivant). Même
-  // logique que `creerAgenda`, en boucle jusqu'à couvrir aujourd'hui, jamais au-delà de l'avenant.
-  if(contratNeedAgenda(c)){
-    let gardeAgC=0;
-    while(gardeAgC<12){
-      gardeAgC++;
-      const aujourdBoucle=new Date();
-      const dernierAgC=c.agendas&&c.agendas.length?c.agendas[c.agendas.length-1]:null;
-      if(dernierAgC&&new Date(dernierAgC.dateFin)>=aujourdBoucle) break;
-      if(dernierAgC&&new Date(dernierAgC.dateDebut)>aujourdBoucle) break;
-      let dateDebutC;
-      if(dernierAgC){
-        const dFinPrecC=new Date(dernierAgC.dateFin+'T00:00:00');
-        dFinPrecC.setDate(dFinPrecC.getDate()+1);
-        dateDebutC=dFinPrecC.getFullYear()+'-'+String(dFinPrecC.getMonth()+1).padStart(2,'0')+'-'+String(dFinPrecC.getDate()).padStart(2,'0');
-      } else {
-        dateDebutC=c.dateDeb;
-      }
-      if(dateDebutC>=av.dateAvenant) break;
-      const partsC=dateDebutC.split('-').map(Number);
-      const dRefC=new Date(partsC[0],partsC[1]-1,partsC[2]);
-      const dernierJourC=new Date(dRefC.getFullYear()+1,dRefC.getMonth(),dRefC.getDate()-1);
-      const finStrC=dernierJourC.getFullYear()+'-'+String(dernierJourC.getMonth()+1).padStart(2,'0')+'-'+String(dernierJourC.getDate()).padStart(2,'0');
-      const agC={
-        id:Date.now()+gardeAgC,
-        dateDebut:dateDebutC,
-        dateFin:finStrC,
-        _semDebut:{sem:getSemISO(dRefC),annee:getSemAnnee(dRefC)},
-        _semFin:{sem:getSemISO(finStrC),annee:getSemAnnee(finStrC)},
-        semaines:{}
-      };
-      if(dernierAgC){
-        const agKeyDebC=getKeyAgenda(agC._semDebut.sem,agC._semDebut.annee);
-        const typeLimiteC=dernierAgC.semaines&&dernierAgC.semaines[agKeyDebC];
-        if(typeLimiteC) agC.semaines[agKeyDebC]=typeLimiteC;
-      }
-      c.agendas.push(agC);
-    }
   }
 
   const cidx=S.contrats.findIndex(x=>x.id==cid);
