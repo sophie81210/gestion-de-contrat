@@ -7848,6 +7848,32 @@ function calcCongesContrat(c, dateRefOverride){
     let totalSemaines=0;
     let totalSemainesArret=0;
 
+    // 20/08/2026 (Sophie) : pour une semaine à cheval sur 2 mois calendaires (pas un avenant, déjà
+    // géré à part plus bas), le nombre de jours qui comptent suit le même principe que
+    // calcEnveloppeMoisVar (paie) — jours réellement utilisés comptés d'abord des deux côtés, le
+    // reste jusqu'au max réparti en priorité au mois le PLUS TARDIF — plutôt que de regarder le
+    // motif possible combiné des deux mois, qui gonflait la garantie même sans usage réel côté du
+    // mois qui se termine (confirmé Sophie sur un cas réel : 4 possibles/2 cochés en mars + 1
+    // possible/1 coché en avril → doit rester à 3 au total, pas 4).
+    function calcJoursGarantieCheval(joursSub,joursMax,isPossibleFn){
+      const moisTouches=[...new Set(joursSub.map(j=>j.date.slice(0,7)))].sort();
+      if(moisTouches.length<2) return null;
+      const isUtiliseFn=j=>['prevu','abs-partielle','abs-rem','travaille','reprise','conges-acq','conges-anticipe'].includes(j.statut);
+      const moisA=moisTouches[0], moisB=moisTouches[moisTouches.length-1];
+      const joursA=joursSub.filter(j=>j.date.slice(0,7)===moisA);
+      const joursB=joursSub.filter(j=>j.date.slice(0,7)===moisB);
+      const possiblesA=joursA.filter(j=>isPossibleFn(j.date)).length;
+      const possiblesB=joursB.filter(j=>isPossibleFn(j.date)).length;
+      const cochesA=joursA.filter(j=>isPossibleFn(j.date)&&isUtiliseFn(j)).length;
+      const cochesB=joursB.filter(j=>isPossibleFn(j.date)&&isUtiliseFn(j)).length;
+      const reste=Math.max(0,joursMax-cochesA-cochesB);
+      const bPrend=Math.min(reste,Math.max(0,possiblesB-cochesB));
+      const aRecoitDuReste=Math.max(0,reste-bPrend);
+      const donneA=Math.min(possiblesA,cochesA+aRecoitDuReste);
+      const donneB=Math.min(possiblesB,cochesB+bPrend);
+      return donneA+donneB;
+    }
+
     Object.entries(semaines).forEach(([semKey,sem])=>{
       // 17/08/2026 (Sophie) : trié par date — Firestore ne garantit PAS l'ordre d'insertion des clés
       // d'un objet (ici les mois de c.fiches), donc les jours d'un mois "plus récent" peuvent arriver
@@ -7969,23 +7995,34 @@ function calcCongesContrat(c, dateRefOverride){
                 if(volActif&&(semaineCompleteCgPV||cocheCgPV)) joursNormauxPV++;
               }
             });
-            let joursPossiblesEnContratPV=jMaxSem;
-            if(joursPatternPV){
-              joursPossiblesEnContratPV=0;
-              for(let dpv=0;dpv<7;dpv++){
-                if(!joursPatternPV[dpv]) continue;
-                const jourMatchPV=joursSub.find(jj=>{
-                  const dJpv=new Date(jj.date.split('-')[0],parseInt(jj.date.split('-')[1])-1,parseInt(jj.date.split('-')[2]));
-                  return (dJpv.getDay()===0?6:dJpv.getDay()-1)===dpv;
-                });
-                if(!jourMatchPV) continue;
-                const stMatchPV=jourMatchPV.statut||getStatutPrevu(c,jourMatchPV);
-                const estHCPV=stMatchPV==='hors-contrat'||(c.dateDeb&&jourMatchPV.date<c.dateDeb);
-                const estAbsNonPayeePV=['abs-non','abs-enfant'].includes(stMatchPV);
-                if(!estHCPV&&!estAbsNonPayeePV) joursPossiblesEnContratPV++;
+            const moisTouchesPVG=[...new Set(joursSub.map(j=>j.date.slice(0,7)))];
+            let jMaxSemAjustePV;
+            if(moisTouchesPVG.length>1&&joursPatternPV){
+              jMaxSemAjustePV=calcJoursGarantieCheval(joursSub,jMaxSem,(dateStr)=>{
+                const [py2,pm2,pd2]=dateStr.split('-').map(Number);
+                const idxPoss2=new Date(py2,pm2-1,pd2).getDay();
+                const idxPossISO2=idxPoss2===0?6:idxPoss2-1;
+                return !!(joursPatternPV&&joursPatternPV[idxPossISO2]);
+              });
+            } else {
+              let joursPossiblesEnContratPV=jMaxSem;
+              if(joursPatternPV){
+                joursPossiblesEnContratPV=0;
+                for(let dpv=0;dpv<7;dpv++){
+                  if(!joursPatternPV[dpv]) continue;
+                  const jourMatchPV=joursSub.find(jj=>{
+                    const dJpv=new Date(jj.date.split('-')[0],parseInt(jj.date.split('-')[1])-1,parseInt(jj.date.split('-')[2]));
+                    return (dJpv.getDay()===0?6:dJpv.getDay()-1)===dpv;
+                  });
+                  if(!jourMatchPV) continue;
+                  const stMatchPV=jourMatchPV.statut||getStatutPrevu(c,jourMatchPV);
+                  const estHCPV=stMatchPV==='hors-contrat'||(c.dateDeb&&jourMatchPV.date<c.dateDeb);
+                  const estAbsNonPayeePV=['abs-non','abs-enfant'].includes(stMatchPV);
+                  if(!estHCPV&&!estAbsNonPayeePV) joursPossiblesEnContratPV++;
+                }
               }
+              jMaxSemAjustePV=Math.min(jMaxSem,joursPossiblesEnContratPV);
             }
-            const jMaxSemAjustePV=Math.min(jMaxSem,joursPossiblesEnContratPV);
             const compteEffectifPV=(joursConges16PV===0&&absArretSub===0&&jMaxSemAjustePV>0)?Math.max(jMaxSemAjustePV,joursNormauxPV):joursNormauxPV;
             const totalJAnnuelPV=(c.planVar||[]).reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
             const nbSemAnnuelPV=(c.planVar||[]).reduce((t,v)=>t+(v.s||0),0);
@@ -8179,23 +8216,34 @@ function calcCongesContrat(c, dateRefOverride){
             if(c.th==='plan'&&c.planType==='min'&&joursConges16===0&&absArretSub===0){
               const sourceMinPl=getVersionActive(c,new Date(joursSub[0].date.split('-')[0],parseInt(joursSub[0].date.split('-')[1])-1,parseInt(joursSub[0].date.split('-')[2])));
               const joursPatternMinPl=sourceMinPl.joursMin||c.joursMin;
-              let joursPossiblesEnContratMin=joursMaxSem;
-              if(joursPatternMinPl){
-                joursPossiblesEnContratMin=0;
-                for(let dpm=0;dpm<7;dpm++){
-                  if(!joursPatternMinPl[dpm]) continue;
-                  const jourMatchMin=joursSub.find(jj=>{
-                    const dJpm=new Date(jj.date.split('-')[0],parseInt(jj.date.split('-')[1])-1,parseInt(jj.date.split('-')[2]));
-                    return (dJpm.getDay()===0?6:dJpm.getDay()-1)===dpm;
-                  });
-                  if(!jourMatchMin) continue;
-                  const stMatchMin=jourMatchMin.statut||getStatutPrevu(c,jourMatchMin);
-                  const estHCMin=stMatchMin==='hors-contrat'||(c.dateDeb&&jourMatchMin.date<c.dateDeb);
-                  const estAbsNonPayeeMin=['abs-non','abs-enfant'].includes(stMatchMin);
-                  if(!estHCMin&&!estAbsNonPayeeMin) joursPossiblesEnContratMin++;
+              const moisTouchesMinG=[...new Set(joursSub.map(j=>j.date.slice(0,7)))];
+              let joursMaxSemAjusteMin;
+              if(moisTouchesMinG.length>1&&joursPatternMinPl){
+                joursMaxSemAjusteMin=calcJoursGarantieCheval(joursSub,joursMaxSem,(dateStr)=>{
+                  const [py,pm,pd]=dateStr.split('-').map(Number);
+                  const idxPoss=new Date(py,pm-1,pd).getDay();
+                  const idxPossISO=idxPoss===0?6:idxPoss-1;
+                  return !!(joursPatternMinPl&&joursPatternMinPl[idxPossISO]);
+                });
+              } else {
+                let joursPossiblesEnContratMin=joursMaxSem;
+                if(joursPatternMinPl){
+                  joursPossiblesEnContratMin=0;
+                  for(let dpm=0;dpm<7;dpm++){
+                    if(!joursPatternMinPl[dpm]) continue;
+                    const jourMatchMin=joursSub.find(jj=>{
+                      const dJpm=new Date(jj.date.split('-')[0],parseInt(jj.date.split('-')[1])-1,parseInt(jj.date.split('-')[2]));
+                      return (dJpm.getDay()===0?6:dJpm.getDay()-1)===dpm;
+                    });
+                    if(!jourMatchMin) continue;
+                    const stMatchMin=jourMatchMin.statut||getStatutPrevu(c,jourMatchMin);
+                    const estHCMin=stMatchMin==='hors-contrat'||(c.dateDeb&&jourMatchMin.date<c.dateDeb);
+                    const estAbsNonPayeeMin=['abs-non','abs-enfant'].includes(stMatchMin);
+                    if(!estHCMin&&!estAbsNonPayeeMin) joursPossiblesEnContratMin++;
+                  }
                 }
+                joursMaxSemAjusteMin=Math.min(joursMaxSem,joursPossiblesEnContratMin);
               }
-              const joursMaxSemAjusteMin=Math.min(joursMaxSem,joursPossiblesEnContratMin);
               if(joursMaxSemAjusteMin>0) joursNormaux=Math.max(joursNormaux,joursMaxSemAjusteMin);
             }
 
