@@ -7859,11 +7859,14 @@ function calcCongesContrat(c, dateRefOverride){
       const moisTouches=[...new Set(joursSub.map(j=>j.date.slice(0,7)))].sort();
       if(moisTouches.length<2) return null;
       const isUtiliseFn=j=>['prevu','abs-partielle','abs-rem','travaille','reprise','conges-acq','conges-anticipe'].includes(j.statut);
+      // Un jour possible mais en absence non rémunérée ne doit jamais recevoir de part du reste —
+      // même exclusion que le garde-fou non-cheval (estAbsNonPayeeMin/PV).
+      const estAbsNonPayeeFn=j=>['abs-non','abs-enfant'].includes(j.statut);
       const moisA=moisTouches[0], moisB=moisTouches[moisTouches.length-1];
       const joursA=joursSub.filter(j=>j.date.slice(0,7)===moisA);
       const joursB=joursSub.filter(j=>j.date.slice(0,7)===moisB);
-      const possiblesA=joursA.filter(j=>isPossibleFn(j.date)).length;
-      const possiblesB=joursB.filter(j=>isPossibleFn(j.date)).length;
+      const possiblesA=joursA.filter(j=>isPossibleFn(j.date)&&!estAbsNonPayeeFn(j)).length;
+      const possiblesB=joursB.filter(j=>isPossibleFn(j.date)&&!estAbsNonPayeeFn(j)).length;
       const cochesA=joursA.filter(j=>isPossibleFn(j.date)&&isUtiliseFn(j)).length;
       const cochesB=joursB.filter(j=>isPossibleFn(j.date)&&isUtiliseFn(j)).length;
       const reste=Math.max(0,joursMax-cochesA-cochesB);
@@ -8083,6 +8086,17 @@ function calcCongesContrat(c, dateRefOverride){
             if(!joursSub.length) return {contrib:0,contribArret:0};
             const dateRepSem=new Date(joursSub[0].date.split('-')[0],parseInt(joursSub[0].date.split('-')[1])-1,parseInt(joursSub[0].date.split('-')[2]));
             const sourceSem=getVersionActive(c,dateRepSem);
+            // 20/08/2026 (Sophie) : plan min (hors 52, qui contourne déjà l'agenda comme fixe 52 —
+            // voir estMin52Planning ailleurs dans le fichier) doit exclure une semaine marquée "off"
+            // sur l'agenda, comme le fait déjà var (typeSemPV==='off') — absent jusqu'ici, une semaine
+            // off comptait à tort comme une semaine normale pour l'acquisition.
+            if(sourceSem.th==='plan'&&sourceSem.planType==='min'&&(sourceSem.tc||c.tc)!=='52'){
+              const agendasMinOff=sourceSem.agendas||c.agendas||[];
+              const agMinOff=agendasMinOff.find(a=>parseDateLoc(a.dateDebut)<=dateRepSem&&parseDateLoc(a.dateFin)>=dateRepSem);
+              const agKeyMinOff=getKeyAgenda(getSemISO(joursSub[0].date),getSemAnnee(joursSub[0].date));
+              const typeSemMinOff=agMinOff&&agMinOff.semaines&&agMinOff.semaines[agKeyMinOff];
+              if(typeSemMinOff==='off') return {contrib:0,contribArret:0};
+            }
             let joursMaxSem=joursMax;
             let typeSemActif46=null;
             if(sourceSem.joursFixe) joursMaxSem=sourceSem.joursFixe.filter(j=>j).length||joursMax;
