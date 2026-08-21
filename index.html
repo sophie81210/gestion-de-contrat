@@ -18053,6 +18053,11 @@ function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
         if(j.date<periodeDebut||j.date>periodeFin)return;
         const statutsConges=['conges-acq','conges-non','conges-am','conges-anticipe','conges-6j','conges-6j-fin','decompte-acq','decompte-anticipe','decompte-conges','ferie-non'];
         if(statutsConges.includes(j.statut)) j.statut=null;
+        // 20/08/2026 (Sophie) : nettoyer aussi un 'ferie' déjà écrit avant dateDeb par une exécution
+        // antérieure au correctif ci-dessous — sinon la valeur reste figée sur une fiche non validée
+        // tant que rien ne la réécrit. Uniquement avant dateDeb : un ferie normal en cours de contrat
+        // reste intact.
+        if(j.statut==='ferie'&&c.dateDeb&&j.date<c.dateDeb) j.statut=null;
         // reprise reste intact (comme travaille)
         // Pour plan min/var : remettre ferie sur les jours fériés possibles
         // 20/08/2026 (Sophie) : dateDeb doit être vérifié ici comme le fait déjà creerFiche — sinon un
@@ -18081,7 +18086,12 @@ function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
   }
 
   // Identifier les périodes continues de jours cochés
-  function getPeriodes(jours){
+  // 20/08/2026 (Sophie) : un écart entre deux jours cochés n'est une VRAIE coupure que s'il contient
+  // au moins un jour qui aurait été PRÉVU (au sens getStatutPrevu — travaillé pour ce contrat) —
+  // sinon la même période continue à travers un week-end, un jour férié, ou tout jour jamais prévu
+  // dans le motif du contrat. Un seul jour normalement prévu dans l'écart suffit à garder la
+  // coupure, donc deux poses réellement distinctes séparées par du travail restent bien séparées.
+  function getPeriodes(jours,c){
     const periodes=[];
     let debut=null,fin=null;
     jours.forEach((d,i)=>{
@@ -18089,7 +18099,22 @@ function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
       const prev=new Date(jours[i-1]);
       const cur=new Date(d);
       const diff=(cur-prev)/(86400000);
-      if(diff<=1){fin=d;}
+      let ecartBridgeable=diff<=1;
+      if(diff>1&&c){
+        ecartBridgeable=true;
+        const dt=new Date(prev);dt.setDate(dt.getDate()+1);
+        while(dt<cur){
+          const dsEcart=dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
+          // 20/08/2026 (Sophie) : plan sem n'a pas de champ heure prévue exploitable sur un jour de
+          // congés via getHeuresPrevues — utiliser le VRAI jour de fiche existant (déjà rempli
+          // correctement par creerFiche à la création de la fiche), pas une reconstruction.
+          const jEcartReel=c.fiches?.[dsEcart.slice(0,7)]?.jours?.find(jj=>jj.date===dsEcart);
+          const stEcart=jEcartReel?getStatutPrevu(c,jEcartReel):null;
+          if(stEcart==='prevu'){ecartBridgeable=false;break;}
+          dt.setDate(dt.getDate()+1);
+        }
+      }
+      if(diff<=1||ecartBridgeable){fin=d;}
       else{periodes.push({debut,fin});debut=d;fin=d;}
     });
     if(debut)periodes.push({debut,fin});
@@ -18430,7 +18455,7 @@ if(tousNonPrevus){
 
   S.contrats.forEach(c=>{
     if(!c.signe||!c.fiches||estContratCloture(c))return;
-    const periodes=getPeriodes(joursPoses);
+    const periodes=getPeriodes(joursPoses,c);
     if(window.DEBUG_CGAM)console.log('[CGAM] contrat',c.nom||c.prenom||c.id,'—',periodes.length,'période(s) de pose trouvée(s) pour',anneeDebut);
 
     // Calculer le quota acquis jusqu'à fin du mois précédant chaque pose
@@ -18454,6 +18479,8 @@ if(tousNonPrevus){
         if(j.date<periodeDebut||j.date>periodeFin)return;
         const statutsConges=['conges-acq','conges-non','conges-am','conges-anticipe','conges-6j','conges-6j-fin','decompte-acq','decompte-anticipe','decompte-conges','ferie-non'];
         if(statutsConges.includes(j.statut)) j.statut=null;
+        // 20/08/2026 (Sophie) : même nettoyage que dans majFichesCgAmPasse (résidu d'avant correctif).
+        if(j.statut==='ferie'&&c.dateDeb&&j.date<c.dateDeb) j.statut=null;
         // Pour plan min/var : remettre à null les fériés dans une période de pose (seront recalculés)
         if(j.statut==='ferie'&&j.planVarPrevu&&c.th==='plan'&&(c.planType==='min'||c.planType==='var')&&isFerie(j.date,c)){
           const posesReset=Object.keys(data?.jours||{}).filter(d=>data.jours[d]==='pose').sort();
