@@ -1157,18 +1157,13 @@ function getContratsCompresses(){
       });
       fichesClean[k]={...f,jours:joursClean};
     });
-    const {_regulHtml:_, _regulDirty:__, _planningSauvegarde:planningSauve, _modifAutoriseesSauvegarde:modifSauve, ...cClean}=c;
+    const {_regulHtml:_, _regulDirty:__, _planningSauvegarde:planningSauve, ...cClean}=c;
     // Si un planning "brouillon" (non encore validé via le bouton Enregistrer) existe en mémoire, ne
     // jamais l'enregistrer — utiliser la dernière version réellement validée à la place, pour qu'une
     // sauvegarde déclenchée ailleurs (ex. la feuille de présence) ne fige pas accidentellement des
     // heures en cours de saisie qui dépassent le volume ou n'ont pas encore été vérifiées
     const planningAEnregistrer=planningSauve!==undefined?planningSauve:c.planning;
-    // 06/08/2026 (Sophie) : même principe pour la case "modifications autorisées", qui passe
-    // maintenant par ce même circuit (voir toggleModifPlanningAutorisees) — sinon une sauvegarde
-    // déclenchée ailleurs persisterait quand même une case tout juste cochée/décochée sans être
-    // passée par le bouton Enregistrer.
-    const modifAutoriseesAEnregistrer=modifSauve!==undefined?modifSauve:c.modifPlanningAutoriseesMois;
-    return {...cClean,fiches:fichesClean,planning:planningAEnregistrer,modifPlanningAutoriseesMois:modifAutoriseesAEnregistrer};
+    return {...cClean,fiches:fichesClean,planning:planningAEnregistrer};
   });
 }
 
@@ -1967,27 +1962,8 @@ function buildFicheContenu(source, c){
         <input id="${idU}-inp" type="number" step="0.001" value="${source.indemMontant||''}" style="display:none;width:70px;padding:2px 4px;border:1px solid var(--mb);border-radius:3px;font-size:12px" onchange="modifierIndemNego(${c.id},this.value)">
         <button class="btn bs" style="padding:1px 6px;font-size:10px;margin-left:4px" onclick="document.getElementById('${idU}-aff').style.display='none';document.getElementById('${idU}-inp').style.display='inline-block';document.getElementById('${idU}-inp').focus();this.style.display='none'" title="Modifier sans avenant (fiches pas encore validées seulement)">🔒 modifier</button>`;
     })():'—'],
-    ['Indem. repas',(()=>{
-      // 11/08/2026 (Sophie) : même principe que l'indemnité d'entretien négociée ci-dessus — montants
-      // modifiables/ajoutables/supprimables directement ici, sans avenant. Modifie toujours le contrat
-      // de base (c) ; une fiche déjà validée reste figée à son montant du moment de la validation.
-      return repasLbl.map((l,i)=>{
-        const idR='repas-'+i+'-'+c.id;
-        const valR=source.repas&&source.repas[i]?source.repas[i]:'';
-        return `<div style="margin-bottom:3px">${l} :
-          <span id="${idR}-aff">${valR?valR+'€':'—'}</span>
-          <input id="${idR}-inp" type="number" step="0.01" min="0" value="${valR}" style="display:none;width:60px;padding:2px 4px;border:1px solid var(--mb);border-radius:3px;font-size:12px" onchange="modifierRepasDirect(${c.id},${i},this.value)">
-          <button class="btn bs" style="padding:1px 6px;font-size:10px;margin-left:4px" onclick="document.getElementById('${idR}-aff').style.display='none';document.getElementById('${idR}-inp').style.display='inline-block';document.getElementById('${idR}-inp').focus();this.style.display='none'" title="Modifier/ajouter/supprimer (laisser vide pour supprimer)">🔒 modifier</button>
-        </div>`;
-      }).join('');
-    })()],
-    ['Indem. km',(()=>{
-      const idK='km-'+c.id;
-      const valK=source.km||'';
-      return `<span id="${idK}-aff">${valK?valK+' €/km':'—'}</span>
-        <input id="${idK}-inp" type="number" step="0.01" min="0" value="${valK}" style="display:none;width:70px;padding:2px 4px;border:1px solid var(--mb);border-radius:3px;font-size:12px" onchange="modifierKmDirect(${c.id},this.value)">
-        <button class="btn bs" style="padding:1px 6px;font-size:10px;margin-left:4px" onclick="document.getElementById('${idK}-aff').style.display='none';document.getElementById('${idK}-inp').style.display='inline-block';document.getElementById('${idK}-inp').focus();this.style.display='none'" title="Modifier/ajouter/supprimer (laisser vide pour supprimer)">🔒 modifier</button>`;
-    })()],
+    ['Indem. repas',repasStr],
+    ['Indem. km',source.km?(source.km+' €/km'):'—'],
     ['Jours fériés travaillés',feriesHtml],
   ].map(([k,v])=>`<tr style="border-bottom:1px solid var(--mb)">
     <td style="padding:8px 4px;color:var(--tx2);font-size:13px;width:52%">${k}</td>
@@ -2048,59 +2024,12 @@ function buildFicheContenu(source, c){
     ${cddBoutonsHtml}`;
 }
 
-function getCibleEditionDirecte(c){
-  // 11/08/2026 (Sophie) : la récap affiche la version ACTIVE (getVersionActive(c), sans date =
-  // aujourd'hui) — si un avenant est en vigueur, éditer c directement n'a aucun effet visible, la
-  // valeur affichée revient toujours à celle de l'avenant. Retrouve le MÊME objet cible que
-  // getVersionActive pour que l'édition modifie ce que l'écran montre réellement.
-  if(!c.avenants||!c.avenants.length) return c;
-  const now=new Date();
-  const dateStr=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
-  const avsEffectifs=c.avenants.filter(a=>a.signe&&a.dateAvenant<=dateStr).sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant));
-  if(!avsEffectifs.length) return c;
-  return avsEffectifs[avsEffectifs.length-1];
-}
 function modifierIndemNego(contratId, val){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c||estLectureSeuleEmployeur()) return;
   const montant=parseFloat(val);
   if(isNaN(montant)||montant<0) return;
-  getCibleEditionDirecte(c).indemMontant=montant;
-  const cidx=S.contrats.findIndex(x=>x.id==contratId);
-  if(cidx!==-1) S.contrats[cidx]=c;
-  _contratsModifies.add(contratId);
-  saveToFirestore();
-  if(S.enCours==contratId) renderDetTab(contratId, S.detTab||'contrat');
-}
-function modifierRepasDirect(contratId, idx, val){
-  const c=S.contrats.find(x=>x.id==contratId);
-  if(!c||estLectureSeuleEmployeur()) return;
-  const cible=getCibleEditionDirecte(c);
-  if(!cible.repas) cible.repas=[null,null,null,null,null];
-  if(val===''){
-    cible.repas[idx]=null;
-  } else {
-    const montant=parseFloat(val);
-    if(isNaN(montant)||montant<0) return;
-    cible.repas[idx]=montant;
-  }
-  const cidx=S.contrats.findIndex(x=>x.id==contratId);
-  if(cidx!==-1) S.contrats[cidx]=c;
-  _contratsModifies.add(contratId);
-  saveToFirestore();
-  if(S.enCours==contratId) renderDetTab(contratId, S.detTab||'contrat');
-}
-function modifierKmDirect(contratId, val){
-  const c=S.contrats.find(x=>x.id==contratId);
-  if(!c||estLectureSeuleEmployeur()) return;
-  const cible=getCibleEditionDirecte(c);
-  if(val===''){
-    cible.km=null;
-  } else {
-    const montant=parseFloat(val);
-    if(isNaN(montant)||montant<0) return;
-    cible.km=montant;
-  }
+  c.indemMontant=montant;
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
   _contratsModifies.add(contratId);
@@ -2717,7 +2646,7 @@ function renderDetTab(id,tab){
               hReel=calcHPrevuReg(debutMoisRegul, finMoisRegul);
             } else if(ficheMois){
               const statutsExclus=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-conges',
-                'abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat','travaille','reprise'];
+                'abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat'];
               ficheMois.jours.forEach(j=>{
                 if(j.date<debutMoisRegul||j.date>finMoisRegul) return;
                 const statut=j.statut||getStatutPrevu(c,j);
@@ -2893,10 +2822,7 @@ function voirAvenant(cid,avid){
   if(!avsEffectifs.length) return c;
   const dernierAv=avsEffectifs[avsEffectifs.length-1];
   // Fusionner avec le contrat de base (garder id, nom, dateDeb, fiches...)
-  // 11/08/2026 (Sophie) : protection contre un planType résiduel sur un avenant déjà existant
-  // (créé avant le correctif à la sauvegarde) — un avenant fixe/sem ne doit JAMAIS transmettre de
-  // planType, quelle que soit la donnée réellement stockée dessus.
-  return {...c,...dernierAv,planType:dernierAv.th==='plan'?dernierAv.planType:null,id:c.id,nom:c.nom,dateDeb:c.dateDeb,fiches:c.fiches,avenants:c.avenants};
+  return {...c,...dernierAv,id:c.id,nom:c.nom,dateDeb:c.dateDeb,fiches:c.fiches,avenants:c.avenants};
 }       
 
          
@@ -3301,8 +3227,7 @@ function ouvrirFicheSolde(contratId){
 
 function getStatutPrevu(c,j){
   if(c.dateDeb&&j.date<c.dateDeb) return 'hors-contrat';
-  const srcRepos=getVersionActive(c,new Date(j.date));
-  const reposHebdo=srcRepos.reposHebdo||0;
+  const reposHebdo=c.reposHebdo||0;
   if(j.jourSemaine===reposHebdo) return 'repos';
   // Semaine off → non-prevu (sauf contrats 52 sem)
   if(c.tc!=='52'){
@@ -3518,7 +3443,7 @@ function ouvrirFiche(contratId,key){
   // enregistrer malgré l'avertissement (voir le bouton "← Retour").
   if(fiche._anticipeActifSauvegarde===undefined) fiche._anticipeActifSauvegarde=fiche.anticipeActif||false;
   // Vérifier que l'agenda est complet à l'ouverture (contrats avec agenda, non validés)
-  if(!fiche.valide&&(c.tc!=='52'||c.th==='plan'||c.th==='sem')&&!(c.tc==='52'&&(c.th==='fixe'||c.planType==='min'))){
+  if(!fiche.valide&&(c.tc!=='52'||c.th==='plan'||c.th==='sem')&&!(c.tc==='52'&&(c.th==='fixe'||c.th==='min'))){
     const [ky,km]=key.split('-').map(Number);
     const debutMoisV=new Date(ky,km-1,1);
     const finMoisV=new Date(ky,km,0);
@@ -3566,8 +3491,6 @@ function ouvrirFiche(contratId,key){
         const jourDeCetteSem=fiche.jours.find(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))===sk&&!(c.dateDeb&&j.date<c.dateDeb)&&j.statut!=='hors-contrat');
         if(!jourDeCetteSem) return false;
         const dateJourSem=new Date(jourDeCetteSem.date);
-        const srcCetteSem=getVersionActive(c,dateJourSem);
-        if(srcCetteSem.th==='fixe'||(srcCetteSem.th==='plan'&&srcCetteSem.planType==='min'&&srcCetteSem.tc==='52')) return false;
         const agPourCetteSem=tousAgendasV.find(ag=>new Date(ag.dateDebut)<=dateJourSem&&new Date(ag.dateFin)>=dateJourSem);
         if(!agPourCetteSem) return true; // aucun agenda ne couvre cette semaine : non pointée
         return !agPourCetteSem.semaines?.[sk];
@@ -3597,15 +3520,6 @@ function ouvrirFiche(contratId,key){
   }
   // Recalculer les heures prévues depuis l'agenda (au cas où l'agenda a été modifié)
   fiche.jours.forEach(j=>{
-    // 11/08/2026 (Sophie) : un jour en statut congés/absence ne devrait jamais garder d'heures
-    // RÉELLES (peu importe comment il est arrivé à ce statut — dropdown, pose de congés, calendrier
-    // AM...) — un résidu bloquait la validation ("heure de début doit être avant l'heure de fin").
-    // Ne touche JAMAIS les heures PRÉVUES : les contrats 52 sem en ont besoin sur les jours de congés.
-    const statutsEffacerHeuresReellesOF=['non-prevu','repos','ferie','ferie-non','abs-enfant','abs-rem','abs-non','abs-am','arret','conges-acq','conges-non','conges-am','conges-anticipe'];
-    if(statutsEffacerHeuresReellesOF.includes(j.statut)&&(j.heureDebReel||j.heureFinReel)){
-      j.heureDebReel=null;
-      j.heureFinReel=null;
-    }
     // Recalculer semKey si manquant
     if(!j.semKey) j.semKey=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
     const d=new Date(j.date);
@@ -3820,8 +3734,7 @@ function ouvrirFiche(contratId,key){
   const cont=document.getElementById('det-content');
   if(!cont)return;
 
-  const srcRepasMois=getVersionActive(c,new Date(parseInt(annee),mois+1,0));
-  const aRepas=srcRepasMois.repas&&srcRepasMois.repas.some(r=>r>0);
+  const aRepas=c.repas&&c.repas.some(r=>r>0);
   const aKm=!!(c.km>0);
   const JOURS_ABR=['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
   const REPAS_SYM=['🍼','🍲','🍎','🌙'];
@@ -3915,12 +3828,7 @@ function ouvrirFiche(contratId,key){
     const numJour=parseInt(j.date.split('-')[2]);
     const nomJour=JOURS_ABR[j.jourSemaine===0?6:j.jourSemaine-1];
     const statutPrevu=j.statutPrevu||getStatutPrevu(c,j);
-    // 11/08/2026 (Sophie) : correction d'AFFICHAGE uniquement (jamais la donnée stockée) — un vieux
-    // statut "non prévu" enregistré sur le vrai jour de repos (fixe/sem) doit s'afficher "Repos",
-    // sans toucher à j.statut ni à aucun autre statut (prévu, travaillé, etc. restent inchangés).
-    const srcJourAff3837=getVersionActive(c,new Date(j.date));
-    const estVraiReposAff3837=(srcJourAff3837.th==='fixe'||srcJourAff3837.th==='sem')&&j.jourSemaine===(srcJourAff3837.reposHebdo||0);
-    const statutActuel=(estVraiReposAff3837&&j.statut==='non-prevu')?'repos':(j.statut||statutPrevu);
+    const statutActuel=j.statut||statutPrevu;
     const bg=getStatutBg(statutActuel);
     const border=statutActuel!==statutPrevu?'border-left:3px solid var(--m)':'';
     const manquant=statutPrevu==='prevu'&&!j.heureDebReel&&!j.heureFinReel&&statutActuel==='prevu'&&c.th!=='plan';
@@ -3928,12 +3836,6 @@ function ouvrirFiche(contratId,key){
 
     // Calcul h. comp/sup et heures déduites
     let hComp='', hSup='', hDeduit='';
-    // 11/08/2026 (Sophie) : même correctif que la couleur "semaine off" — agenda de la version
-    // active à CE jour précis, jamais celui du mois entier (agendaMois, qui reste sur l'ancien
-    // contrat pour tout le mois dès qu'un avenant change de type en cours de route). Pas de repli
-    // vers agendaMois si rien n'est trouvé : pas d'agenda propre à cette version = jamais off.
-    const srcJourAgHD=getVersionActive(c,new Date(j.date));
-    const agendaJourHD=(srcJourAgHD.agendas||c.agendas||[]).find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date));
     if(j.heureDebReel&&j.heureFinReel){
       const reel=toM(j.heureFinReel)-toM(j.heureDebReel);
       // Férié non prévu au contrat ou repos passé en travaillé : afficher + sans comparer aux prévues
@@ -3951,7 +3853,7 @@ function ouvrirFiche(contratId,key){
         const diff=reel-prev;
         if(diff>0) hComp='+'+fmtH(diff);
         // Si diff<=0 : rien à afficher
-      } else if(j.heureDebPrev&&j.heureFinPrev&&!isAbsenceEmployeur(agendaJourHD,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))&&statutActuel!=='travaille'&&statutActuel!=='reprise'){
+      } else if(j.heureDebPrev&&j.heureFinPrev&&!isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))&&statutActuel!=='travaille'&&statutActuel!=='reprise'){
         const debReelAff=toM(j.heureDebReel);
         const finReelAff=toM(j.heureFinReel);
         const debPrevAff=toM(j.heureDebPrev);
@@ -3969,7 +3871,7 @@ function ouvrirFiche(contratId,key){
     } else if(statutActuel==='arret'&&!j.heureDebPrev){
       // Arrêt sans heures prévues : vérifier si semaine off avec jour possible
       const agKeyAff2=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
-      if(isAbsenceEmployeur(agendaJourHD,agKeyAff2)){
+      if(isAbsenceEmployeur(agendaMois,agKeyAff2)){
         const srcAff2=getVersionActive(c,new Date(j.date));
         const jourIdxAff2=j.jourSemaine===0?6:j.jourSemaine-1;
         const estPossibleAff2=srcAff2.th==='sem'&&srcAff2.semTypes&&srcAff2.semTypes.some(st=>st.jours&&st.jours[jourIdxAff2]?.d);
@@ -3980,7 +3882,7 @@ function ouvrirFiche(contratId,key){
           if(hPrevAff2>0) hDeduit='−'+fmtH(Math.round(hPrevAff2*60));
         }
       }
-    } else if(['conges-non','decompte-conges'].includes(statutActuel)&&getVersionActive(c,new Date(j.date)).tc==='52'){
+    } else if(['conges-non','decompte-conges'].includes(statutActuel)&&(c.tc==='52'||getVersionActive(c,new Date(j.date)).tc==='52')){
       // Congé non acquis / décompte au-delà du quota (52) : même valeur que le moteur de
       // déduction — une seule source de vérité (getHJourCongesNonDeduit). La colonne H±
       // affiche exactement ce qui sera déduit ; 0 h (jour non prévu) → rien d'affiché.
@@ -3989,7 +3891,7 @@ function ouvrirFiche(contratId,key){
     } else if(['abs-non','abs-am','arret','conges-non','abs-enfant'].includes(statutActuel)&&j.heureDebPrev&&j.heureFinPrev){
       // En semaine off : utiliser hSemMoy/nbJoursPossibles au lieu des heures prévues
       const agKeyAff=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
-      const estSemOffAff=isAbsenceEmployeur(agendaJourHD,agKeyAff);
+      const estSemOffAff=isAbsenceEmployeur(agendaMois,agKeyAff);
       if(estSemOffAff&&statutActuel==='arret'){
         const srcAff=getVersionActive(c,new Date(j.date));
         if(srcAff.th==='sem'&&srcAff.semTypes){
@@ -4010,9 +3912,8 @@ function ouvrirFiche(contratId,key){
     // Cases repas uniquement pour jours prévus et absences partielles
     const jourStatut=j.statut||getStatutPrevu(c,j);
     const repasVisible=aRepas&&(estStatutPrevu(jourStatut)||jourStatut==='travaille'||jourStatut==='reprise'||jourStatut==='abs-partielle');
-    const srcRepasJourFP=getVersionActive(c,new Date(j.date));
     const repasCell=repasVisible?`<td style="padding:2px 4px;font-size:13px;min-width:90px">${
-      '<div style="display:flex;gap:4px;flex-wrap:wrap">'+REPAS_SYM.map((sym,ri)=>srcRepasJourFP.repas&&srcRepasJourFP.repas[ri]?
+      '<div style="display:flex;gap:4px;flex-wrap:wrap">'+REPAS_SYM.map((sym,ri)=>c.repas&&c.repas[ri]?
         `<label style="cursor:pointer;display:inline-flex;align-items:center;gap:1px" title="${REPAS_NOM[ri]}">
           <input type="checkbox" ${j.repas&&j.repas[ri]?'checked':''}
             ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`onchange="majFicheRepas(${contratId},'${key}',${idx},${ri},this.checked)"`}
@@ -4048,15 +3949,8 @@ function ouvrirFiche(contratId,key){
     {
       const srcJour=getVersionActive(c,new Date(j.date));
       const agendasJour=(srcJour.agendas||c.agendas||[]);
-      const agendaJour=agendasJour.find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date))
-        ||agendasJour.find(ag=>{
-          // Repli semaine ISO à cheval sur 2 mois (même principe que getHeuresPrevues)
-          const premierMoisJ=new Date(new Date(j.date).getFullYear(),new Date(j.date).getMonth(),1);
-          const dernierMoisJ=new Date(new Date(j.date).getFullYear(),new Date(j.date).getMonth()+1,0);
-          return new Date(ag.dateDebut)<=dernierMoisJ&&new Date(ag.dateFin)>=premierMoisJ;
-        });
+      const agendaJour=agendasJour.find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date))||agendaMois;
       const typeSemJour=agendaJour&&agendaJour.semaines&&agendaJour.semaines[j.semKey];
-      if(window.DEBUG_CGAM&&srcJour.th==='sem')console.log('[CGAM-couleurSem]',j.date,'| semKey:',j.semKey,'| agendaJour trouvé:',!!agendaJour,'| typeSemJour:',typeSemJour,'| srcJour.th:',srcJour.th,'| srcJour.semTypes noms:',(srcJour.semTypes||[]).map(st=>st.nom));
       const COULEUR_TRAVAILLEE={bg:eclaircir('#6B8060',0.5),brd:'#4E5F46'};
       const COULEUR_OFF={bg:eclaircir('#C99B9B',0.5),brd:'#A87878'};
       if(typeSemJour==='off'){
@@ -4068,19 +3962,18 @@ function ouvrirFiche(contratId,key){
         couleurVolumeBrd=COULEUR_TRAVAILLEE.brd;
       } else if(srcJour.planType==='var'||srcJour.th==='sem'){
         let volIdx=-1;
-        if(srcJour.th==='sem'){
-          const semTypesSrc=srcJour.semTypes||c.semTypes||[];
-          volIdx=typeSemJour?semTypesSrc.findIndex(st=>st.nom===typeSemJour):-1;
-        } else if(srcJour.planType==='var'){
+        if(srcJour.planType==='var'){
           const planVarSrc=srcJour.planVar||c.planVar||[];
           volIdx=typeSemJour?planVarSrc.findIndex((v,i)=>(v.nom||'Volume '+(i+1))===typeSemJour):-1;
+        } else if(srcJour.th==='sem'){
+          const semTypesSrc=srcJour.semTypes||c.semTypes||[];
+          volIdx=typeSemJour?semTypesSrc.findIndex(st=>st.nom===typeSemJour):-1;
         }
         if(volIdx>=0){
           const cc=PLAN_COULEURS[volIdx%PLAN_COULEURS.length];
           couleurVolume=eclaircir(cc.bg,0.5);
           couleurVolumeBrd=cc.brd;
         }
-        if(window.DEBUG_CGAM&&srcJour.th==='sem')console.log('[CGAM-couleurSemResultat]',j.date,'| volIdx:',volIdx,'| couleurVolume:',couleurVolume);
       }
     }
     {
@@ -4101,14 +3994,7 @@ function ouvrirFiche(contratId,key){
         ?`<button onclick="confirmerHeuresPrevues(${contratId},'${key}',${idx})"
             style="width:20px;height:36px;background:#6B8060;color:#fff;border:none;border-radius:3px;font-size:12px;cursor:pointer;margin-left:3px;flex-shrink:0"
             title="Confirmer les heures pr\u00E9vues">\u2713</button>`:'';
-      // 11/08/2026 (Sophie) : agendaMois est déterminé UNE FOIS pour tout le mois, au 1er du mois —
-      // pour un mois où un avenant change de type en cours de route, ça reste sur l'agenda de
-      // l'ANCIEN contrat même pour les jours après l'avenant, d'où une semaine affichée "off" à
-      // tort. Même correctif que la couleur de volume juste au-dessus : agenda de la version
-      // active à CE jour précis, pas celle du 1er du mois.
-      const srcJourOffJ=getVersionActive(c,new Date(j.date));
-      const agendaJourOffJ=(srcJourOffJ.agendas||c.agendas||[]).find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date));
-      const estSemaineOff=agendaJourOffJ&&agendaJourOffJ.semaines&&agendaJourOffJ.semaines[j.semKey]==='off';
+      const estSemaineOff=agendaMois&&agendaMois.semaines&&agendaMois.semaines[j.semKey]==='off';
       const estCongesJour=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat'].includes(j.statut||statutPrevuJ);
       const couleurPrev=(estSemaineOff||estCongesJour)?'transparent':'var(--tx)';
       prevuCell=`<td style="padding:3px 4px;font-size:12px;color:var(--tx);white-space:nowrap">
@@ -4150,7 +4036,7 @@ function ouvrirFiche(contratId,key){
       ${!isPlanVar?`<td id="hpm-${contratId}-${key}-${idx}" style="padding:3px 4px;font-size:11px;font-weight:600">
         ${(()=>{
           const srcActifJ=getVersionActive(c,new Date(j.date));
-          const estCongesNon46=statutActuel==='conges-non'&&srcActifJ.tc!=='52';
+          const estCongesNon46=statutActuel==='conges-non'&&c.tc!=='52'&&srcActifJ.tc!=='52';
           if(estCongesNon46) return '—';
           if(hComp) return '<span style="color:var(--vt)">'+hComp+'</span>';
           if(hSup) return '<span style="color:var(--vt)">'+hSup+'</span>';
@@ -4187,7 +4073,7 @@ function ouvrirFiche(contratId,key){
           ${selectedOpts}
         </select>
         ${(repasVisible||kmVisible)?`<div style="display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap;margin-top:3px">
-          ${repasVisible?'<div style="display:flex;gap:2px">'+REPAS_SYM.map((sym,ri)=>srcRepasJourFP.repas&&srcRepasJourFP.repas[ri]?
+          ${repasVisible?'<div style="display:flex;gap:2px">'+REPAS_SYM.map((sym,ri)=>c.repas&&c.repas[ri]?
             `<label style="cursor:pointer;display:inline-flex;align-items:center;gap:1px" title="${REPAS_NOM[ri]}">
               <input type="checkbox" ${j.repas&&j.repas[ri]?'checked':''}
                 ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`onchange="majFicheRepas(${contratId},'${key}',${idx},${ri},this.checked)"`}
@@ -4209,13 +4095,19 @@ function ouvrirFiche(contratId,key){
   const aDesConges=fiche.jours.some(j=>['conges-acq','conges-non','conges-anticipe'].includes(j.statut));
   const anticipeActif=fiche.anticipeActif!==undefined?fiche.anticipeActif:(c.cgAnticipe==='oui');
   const anticipeAutorise=c.cgAnticipe==='oui';
-  // 06/08/2026 (Sophie) : case affichée sur TOUS les mois ayant des congés, plus seulement le
-  // premier mois de la pose — le calcul (majFichesCgAmPasse) ne consulte de toute façon plus que
-  // la case du mois où l'anticipé devient réellement nécessaire pour une pose donnée (décidée une
-  // fois pour toute la pose, voir anticipeDecidePose) ; cocher la case d'un mois qui ne sera pas
-  // consulté pour cette pose précise ne fait rien de mal — plus besoin de deviner à l'avance lequel
-  // sera consulté, ni de verrouiller les mois suivants d'une même pose.
-  const afficherCaseAnticipe=aDesConges;
+  // Case anticipe : visible seulement si premier jour décompté est dans ce mois
+  // Verrouillée si décompte commencé le mois précédent (prise à cheval)
+  const moisPrecKeyAntic=parseInt(key.split('-')[1])===1
+    ?(parseInt(key.split('-')[0])-1)+'-12'
+    :key.split('-')[0]+'-'+String(parseInt(key.split('-')[1])-1).padStart(2,'0');
+  const fichePrecAntic=c.fiches?.[moisPrecKeyAntic];
+  const moisPrecADesConges=fichePrecAntic?.jours?.some(j=>['conges-acq','conges-non','conges-anticipe'].includes(j.statut));
+  // Premier jour décompté dans ce mois = ce mois a des congés ET le mois précédent n'en a pas (ou pas de fiche)
+  const estPremierMoisPose=aDesConges&&!moisPrecADesConges;
+  // Verrouillé si décompte commencé le mois précédent
+  const anticipeVerrouille=aDesConges&&moisPrecADesConges;
+  // Case visible seulement si premier mois de la pose
+  const afficherCaseAnticipe=estPremierMoisPose;
 
   // Récap
   cont.innerHTML=
@@ -4251,12 +4143,13 @@ function ouvrirFiche(contratId,key){
     ${afficherCaseAnticipe&&!fiche.valide?`
     <div class="card" style="margin-top:10px;background:${anticipeActif?'#fef3eb':'#fff'}">
       <div style="display:flex;align-items:center;gap:10px">
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600">
+        <label style="display:flex;align-items:center;gap:8px;cursor:${anticipeVerrouille?'not-allowed':'pointer'};font-size:13px;font-weight:600">
           <input type="checkbox" ${anticipeActif?'checked':''} 
             style="width:16px;height:16px;accent-color:var(--m)"
-            ${estLectureSeuleEmployeur()?'disabled title="Lecture seule"':''}
+            ${(anticipeVerrouille||estLectureSeuleEmployeur())?'disabled title="'+(anticipeVerrouille?'Option verrouillée : la prise a commencé le mois précédent':'Lecture seule')+'"':''}
             onchange="toggleAnticipe(${contratId},'${key}',this.checked)">
           Prise de congés par anticipation
+          ${anticipeVerrouille?'<span style="font-size:11px;color:var(--tx2);font-weight:400"> — défini sur le mois précédent</span>':''}
         </label>
         ${!anticipeAutorise?`<span style="font-size:11px;color:var(--al)">(non autorisé au contrat)</span>`:''}
       </div>
@@ -4663,22 +4556,13 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
   const moisKeyTile=annee+'-'+String(moisIdx+1).padStart(2,'0');
   const ficheTile=c.fiches&&c.fiches[moisKeyTile];
   const moisVerrouille=!!(ficheTile&&ficheTile.valide)||estLectureSeuleEmployeur();
-  const nbJoursTileP=new Date(annee, moisIdx+1, 0).getDate();
-  // 06/08/2026 (Sophie) : le type du mois (fixe/sem/var/min, donc le style d'affichage — case à
-  // cocher ou bouton Échanger) était déterminé UNE SEULE FOIS pour toute la tuile, à partir du seul
-  // 1er jour du mois — avec un avenant en cours de mois, tout le mois héritait à tort du style de
-  // l'ANCIEN type, y compris les jours après l'avenant qui doivent utiliser le nouveau. Chaque jour
-  // recalcule maintenant son propre type plus bas (voir estFixeOuSemTile/estVarTile dans la boucle
-  // par jour) ; ici on garde seulement une visibilité de la case "modifications autorisées" basée
-  // sur N'IMPORTE QUEL jour éligible du mois, pour qu'elle ne disparaisse pas à tort selon le 1er jour.
-  let estCaseModifTile=false;
-  for(let dCM=1;dCM<=nbJoursTileP&&!estCaseModifTile;dCM++){
-    const srcCM=getVersionActive(c, new Date(annee,moisIdx,dCM));
-    if((srcCM.th==='fixe'||srcCM.th==='sem')||(srcCM.th==='plan'&&(srcCM.planType==='var'||srcCM.planType==='min'))) estCaseModifTile=true;
-  }
+  const srcTileModif=getVersionActive(c, new Date(annee,moisIdx,1));
+  const estFixeOuSemTile=srcTileModif.th==='fixe'||srcTileModif.th==='sem';
+  const estVarTile=srcTileModif.th==='plan'&&(srcTileModif.planType==='var'||srcTileModif.planType==='min');
+  const estCaseModifTile=estFixeOuSemTile||estVarTile;
   const modifMoisActive=estCaseModifTile&&!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeyTile]);
   const modifMoisChecked=modifMoisActive?'checked':'';
-  const nbJours=nbJoursTileP;
+  const nbJours=new Date(annee, moisIdx+1, 0).getDate();
   const jours=[];
   for(let d=1; d<=nbJours; d++){
     const dt=new Date(annee, moisIdx, d);
@@ -4742,12 +4626,6 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
     }
     const joursHtml=sem.jours.map((j,ji)=>{
       const infos=infosSemaine[ji];
-      // 06/08/2026 (Sophie) : recalculé pour CE jour précis (avant : une seule fois pour tout le mois,
-      // au 1er jour — cassait tout le style d'affichage après un avenant en cours de mois, y compris
-      // au sein d'une semaine qui contient elle-même l'avenant).
-      const srcJourTile=getVersionActive(c, j.dt);
-      const estFixeOuSemTile=srcJourTile.th==='fixe'||srcJourTile.th==='sem';
-      const estVarTile=srcJourTile.th==='plan'&&(srcJourTile.planType==='var'||srcJourTile.planType==='min');
       if(infos.jMax>jMaxSem){ jMaxSem=infos.jMax; volHSem=infos.volH; }
       if(infos.couleur&&!couleurSem) couleurSem=infos.couleur;
       const nomJourAbr=JOURS_ABR_P[j.dt.getDay()===0?6:j.dt.getDay()-1];
@@ -4801,15 +4679,9 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
           });
         }
         if(joursPossiblesIdxPln){
-          // 06/08/2026 (Sophie) : même correctif que ferieDansConges juste en dessous — calculer la
-          // vraie date de chaque jour de la semaine plutôt que de présumer congé un jour invisible
-          // depuis le mois affiché (semaine à cheval sur deux mois).
-          const lundiSemPln=new Date(j.dt); lundiSemPln.setDate(j.dt.getDate()-(j.dt.getDay()||7)+1);
           const estComplete=joursPossiblesIdxPln.every(jourSem=>{
-            const offsetPln=jourSem===0?6:jourSem-1;
-            const dateCandPln=new Date(lundiSemPln); dateCandPln.setDate(lundiSemPln.getDate()+offsetPln);
-            const dateCandStrPln=dateCandPln.getFullYear()+'-'+String(dateCandPln.getMonth()+1).padStart(2,'0')+'-'+String(dateCandPln.getDate()).padStart(2,'0');
-            return isJourCongeAM(dateCandStrPln)||isFerie(dateCandStrPln,c);
+            const jourMatch=sem.jours.find(jj=>jj.dt.getDay()===jourSem);
+            return jourMatch?(isJourCongeAM(jourMatch.date)||isFerie(jourMatch.date,c)):true;
           });
           estSemCongesPartiellePln=!estComplete;
         }
@@ -4836,16 +4708,9 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
         }
         if(joursPossiblesIdxF){
           const jourFerieDow=j.dt.getDay();
-          // 06/08/2026 (Sophie) : calculer la vraie date de chaque jour de cette semaine, plutôt que de
-          // chercher dans sem.jours (limité au mois affiché à l'écran) — une semaine à cheval sur deux
-          // mois n'a qu'une partie de ses jours visibles depuis un mois donné ; le jour manquant n'est
-          // pas forcément en congé pour autant, il faut vérifier son vrai statut, pas le présumer.
-          const lundiSemF=new Date(j.dt); lundiSemF.setDate(j.dt.getDate()-(j.dt.getDay()||7)+1);
           ferieDansConges=joursPossiblesIdxF.filter(dow=>dow!==jourFerieDow).every(jourSem=>{
-            const offsetF=jourSem===0?6:jourSem-1;
-            const dateCandF=new Date(lundiSemF); dateCandF.setDate(lundiSemF.getDate()+offsetF);
-            const dateCandStrF=dateCandF.getFullYear()+'-'+String(dateCandF.getMonth()+1).padStart(2,'0')+'-'+String(dateCandF.getDate()).padStart(2,'0');
-            return isJourCongeAM(dateCandStrF)||isFerie(dateCandStrF,c);
+            const jourMatch=sem.jours.find(jj=>jj.dt.getDay()===jourSem);
+            return jourMatch?(isJourCongeAM(jourMatch.date)||isFerie(jourMatch.date,c)):true;
           });
         }
       }
@@ -4893,11 +4758,11 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
           } else if(infos.ferieChome){
             contenu=`<span style="color:var(--tx3);font-size:12px">Férié</span>`;
           } else {
-            // 11/08/2026 (Sophie) : correction du 18/07 — mal interprétée à l'époque. Le vrai jour
-            // de repos hebdomadaire (infos.estReposHebdo) est un vrai jour de repos pour fixe/sem
-            // aussi, comme pour var/min. Seul un jour hors motif qui N'EST PAS le jour de repos
-            // déclaré reste "non prévu" ordinaire.
-            contenu=`<span style="color:var(--tx3);font-size:12px">${infos.estReposHebdo?'Repos hebdomadaire':'Jour non prévu au contrat'}</span>`;
+            // Fixe/sem : "repos hebdomadaire" n'est pas un vrai concept ici — précision Sophie
+            // 18/07/2026 ("le samedi n'est pas un jour de repos hebdomadaire, ni les jours de
+            // semaine") — un jour hors du motif prévu est simplement "non prévu", jamais
+            // présumé être un repos structurel.
+            contenu=`<span style="color:var(--tx3);font-size:12px">Jour non prévu au contrat</span>`;
           }
         } else if(infos.ferieChome){
         // Tout jour férié chômé (fixe/sem), prévu au contrat ou non : jamais cochable via la case
@@ -4928,9 +4793,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
           // avaient déjà été déplacées ailleurs via un échange — les deux jours se retrouvaient
           // alors occupés en même temps. La case modifications autorisées décochée puis recochée
           // suffit à nettoyer un état hérité de l'ancien système, sans ce risque.
-          // 11/08/2026 (Sophie) : même correctif que la branche sans modifications autorisées —
-          // reconnaître le vrai jour de repos hebdomadaire, pas juste "non prévu".
-          contenu=`<span style="color:var(--tx3);font-size:12px">${infos.estReposHebdo?'Repos hebdomadaire':'Non prévu'}</span>`;
+          contenu=`<span style="color:var(--tx3);font-size:12px">Non prévu</span>`;
         }
         }
       } else if(!infos.jourPossible&&!infos.ferieChome&&(infos.estReposHebdo||!(estVarTile&&modifMoisActive))){
@@ -4980,12 +4843,6 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
     totalMoisMin+=totalSemMin;
     const bgSem=couleurSem?couleurSem.bg+'40':'var(--mp)';
     const brdSem=couleurSem?couleurSem.brd+'88':'var(--mb)';
-    // 06/08/2026 (Sophie) : type au niveau de l'EN-TÊTE de semaine (hors de la boucle par jour ci-dessus)
-    // — basé sur le dernier jour présent dans ce mois pour cette semaine, pour qu'une semaine à cheval
-    // sur un avenant en cours de semaine affiche l'en-tête cohérent avec sa portion la plus récente.
-    const srcSemTile=getVersionActive(c, sem.jours[sem.jours.length-1].dt);
-    const estFixeOuSemTile=srcSemTile.th==='fixe'||srcSemTile.th==='sem';
-    const estVarTile=srcSemTile.th==='plan'&&(srcSemTile.planType==='var'||srcSemTile.planType==='min');
     return `<div class="pln-sem" data-semkey="${semKeyDom}" data-contrat="${c.id}" data-jmax="${jMaxSem}"
       style="border:1px solid ${brdSem};border-radius:var(--rs);margin-bottom:8px;overflow:hidden">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:${bgSem};font-size:11px;font-weight:600;color:var(--tx2)">
@@ -5070,12 +4927,6 @@ function renderPlanning(c, cont){
   if(c._planningSauvegarde===undefined){
     c._planningSauvegarde=JSON.parse(JSON.stringify(c.planning||{}));
   }
-  // 06/08/2026 (Sophie) : même principe que _planningSauvegarde juste au-dessus, mais pour l'état
-  // de la case "modifications autorisées" par mois — nécessaire pour que le bouton Enregistrer la
-  // détecte désormais comme une modification en attente (voir toggleModifPlanningAutorisees).
-  if(c._modifAutoriseesSauvegarde===undefined){
-    c._modifAutoriseesSauvegarde=JSON.parse(JSON.stringify(c.modifPlanningAutoriseesMois||{}));
-  }
   const debut=new Date(c.dateDeb);
   const dateFinC=getDateFinContrat(c);
   const now=new Date();
@@ -5133,11 +4984,10 @@ function toggleModifPlanningAutorisees(contratId, moisKey, checked){
   }
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
-  // 06/08/2026 (Sophie) : ce changement passe désormais par le même circuit d'enregistrement que
-  // le reste du planning (bouton Enregistrer), au lieu d'être sauvegardé tout de suite en
-  // contournant les contrôles de volume hebdomadaire — Sophie a signalé que ça permettait de
-  // décocher la case et de laisser une semaine en dépassement sans aucun avertissement ni blocage.
-  marquerPlanningNonEnregistre(contratId, moisKey);
+  // Sauvegarde via le mécanisme établi (localStorage immédiat + Firestore débouncé 2s + filet
+  // de sécurité à la fermeture de l'onglet), comme le reste de l'app.
+  _contratsModifies.add(contratId);
+  saveToFirestore();
   // Rafraîchissement CIBLÉ de cette seule tuile (pas un redessin complet, qui refermerait tous
   // les mois — même bug déjà corrigé une fois sur le cadenas par jour). Nécessaire maintenant
   // que l'étape 3 fait dépendre l'affichage du formulaire de cet état — bug confirmé Sophie
@@ -5213,30 +5063,6 @@ function planningNonEnregistrePourMois(c, moisKey){
   // enregistrement réel). Ajouté 22/07/2026 pour un rappel fiable à l'ouverture de la feuille de
   // présence : l'astérisque du bouton n'est jamais recréé lors d'un rafraîchissement de tuile
   // déclenché depuis un autre mois (semaine à cheval), donc pas fiable comme seul indicateur.
-  // 06/08/2026 (Sophie) : ajout de la case "modifications autorisées" à cette même comparaison —
-  // avant, un changement de cette case n'était jamais détecté ici (seuls les jours cochés
-  // l'étaient), donc jamais compté comme "en attente" lors d'un rafraîchissement de tuile.
-  const modifVive=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey]);
-  const modifSauve=!!((c._modifAutoriseesSauvegarde||{})[moisKey]);
-  if(modifVive!==modifSauve) return true;
-  // 06/08/2026 (Sophie) : un mois jamais confirmé via le bouton Enregistrer (même vide, même sans
-  // rien modifié depuis l'ouverture) compte toujours comme "en attente" — sinon le bouton s'affiche
-  // par défaut "Enregistré ✓" dès l'ouverture (la comparaison ci-dessous ne voit aucune différence,
-  // faute d'un vrai enregistrement de référence), ce qui laisse croire à tort qu'un planning jamais
-  // rempli est à jour. S'applique à tous les types (fixe/sem compris) — affichage seulement, pas un
-  // blocage.
-  // 11/08/2026 (Sophie) : l'obligation de confirmation (même sans modification) ne concerne QUE
-  // plan min/var — les autres types n'en ont besoin que s'il y a une vraie modification en attente
-  // (couverte par les vérifications ci-dessus/dessous). Vérifier le type ACTUEL du mois, jamais le
-  // type D'ORIGINE du contrat (`c.th`, jamais mis à jour par avenant) — sinon un contrat qui était
-  // en var/min avant un avenant reste bloqué sur cette obligation même après passage en fixe/sem.
-  // Vérifie début ET fin de mois pour couvrir un avenant tombant en cours de mois.
-  const [ayPNE,amPNE]=moisKey.split('-').map(Number);
-  const srcDebutPNE=getVersionActive(c,new Date(ayPNE,amPNE-1,1));
-  const srcFinPNE=getVersionActive(c,new Date(ayPNE,amPNE,0));
-  const estPlanVarMinPNE=(srcDebutPNE.th==='plan'&&(srcDebutPNE.planType==='min'||srcDebutPNE.planType==='var'))
-    ||(srcFinPNE.th==='plan'&&(srcFinPNE.planType==='min'||srcFinPNE.planType==='var'));
-  if(estPlanVarMinPNE&&!(c.planningConfirmeMois&&c.planningConfirmeMois[moisKey])) return true;
   if(!c.planning||c._planningSauvegarde===undefined) return false;
   const [ay,am]=moisKey.split('-').map(Number);
   const dernierJour=new Date(ay,am,0).getDate();
@@ -5414,9 +5240,7 @@ function enregistrerPlanningMois(contratId, moisKey){
       else totalSemaine+=volH/jMaxVol; // férié coché (pas de champs d'heures) : compte pour volume/jMax
     });
     if(window.DEBUG_CGAM)console.log('[CGAM-totalSemaine]',semKeyISO,'| totalSemaine:',totalSemaine,'| volH:',volH,'| jMaxVol:',jMaxVol);
-    // 06/08/2026 (Sophie) : oubliait "min" — le blocage "volume de la semaine dépassé" n'était donc
-    // jamais levé pour min même case "modifications autorisées" cochée, contrairement à var.
-    const modifActiveSemV=(source.planType==='var'||source.planType==='min')&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey];
+    const modifActiveSemV=source.planType==='var'&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey];
     if(semACheval){
       if(totalSemaineCeMois>volHCeMois+0.01&&!modifActiveSemV){ // modèle libre 22/07 : var+case → plus de refus
         erreurs.push(`Semaine ${getSemISO(dateStr)} à cheval sur deux mois : ${fmtH(totalSemaineCeMois*60)} prévues pour ${fmtH(volHCeMois*60)} possibles dans ce mois (prorata du volume hebdomadaire selon les jours de la semaine qui tombent dans ce mois)`);
@@ -5483,14 +5307,9 @@ function enregistrerPlanningMois(contratId, moisKey){
         minReelV+=(pd3.d&&pd3.f)?(toM(pd3.f)-toM(pd3.d)):((infosReel3.volH||0)/(infosReel3.jMax||1))*60;
       }
     }
-    // 06/08/2026 (Sophie) : le modèle libre du 22/07 est abandonné pour le dépassement de l'enveloppe
-    // mensuelle — exemple concret de Sophie montrant que laisser dépasser puis absorber l'écart via la
-    // feuille de présence casse le calcul (une absence posée sur un jour prévu déduit à tort des heures
-    // complémentaires, sans savoir de quelle semaine elles proviennent réellement — jusqu'à une double
-    // déduction si plusieurs jours sont concernés). Redevient un refus, comme le contrôle hebdomadaire
-    // quand la case n'est pas cochée. Les heures sup (>45h/semaine, art. 109) restent informatives :
-    // ce sont des heures réellement travaillées cette semaine-là, pas un dépassement du volume du
-    // contrat à répartir — rien d'ambigu à corriger après coup pour celles-ci.
+    // MODÈLE LIBRE (décision Sophie 22/07/2026) : plus aucun refus var — l'enveloppe informe, la
+    // paie arbitre. Complémentaires = excédent de l'ENVELOPPE MENSUELLE ; supplémentaires =
+    // tranches hebdo au-delà de 45h, semaine rattachée au mois de son DERNIER jour (règle art. 109).
     const excedentMinV=Math.max(0,minReelV-minBaseV);
     let hSupMoisV=0;
     for(let d6=1; d6<=finMoisDate.getDate(); d6++){
@@ -5508,10 +5327,10 @@ function enregistrerPlanningMois(contratId, moisKey){
       }
       hSupMoisV+=Math.max(0,totSem6-45);
     }
-    if(excedentMinV>1){
-      erreurs.push(`Ce mois totalise ${fmtH(minReelV)} pour une enveloppe de ${fmtH(minBaseV)} — limitez le nombre d'heures à celui prévu au contrat (les heures complémentaires seront à ajouter sur la feuille de présence)`);
-    } else if(hSupMoisV>0.001){
-      complSupInfoV=`, dont ${fmtH(Math.round(hSupMoisV))} heures supplémentaires`;
+    if(excedentMinV>1||hSupMoisV>0.001){
+      // 22/07/2026 : un seul montant — les Yh supplémentaires (>45h/sem) sont déjà COMPRISES dans
+      // les Xh d'excédent, pas un ajout distinct (le texte précédent laissait croire à une somme X+Y).
+      complSupInfoV=`, dont ${fmtH(Math.round(excedentMinV))} heures complémentaires / supplémentaires`;
     }
   }
   if(erreurs.length){
@@ -5585,9 +5404,6 @@ function enregistrerPlanningMois(contratId, moisKey){
     if(anneeAmPlnSuivante!==anneeAmPln&&S.congesAM[anneeAmPlnSuivante]) majFichesCgAm(anneeAmPlnSuivante,false);
   }
   c._planningSauvegarde=JSON.parse(JSON.stringify(c.planning||{}));
-  // 06/08/2026 (Sophie) : snapshot de la case au même moment que le planning lui-même, puisqu'elle
-  // passe maintenant par ce même bouton Enregistrer (voir toggleModifPlanningAutorisees).
-  c._modifAutoriseesSauvegarde=JSON.parse(JSON.stringify(c.modifPlanningAutoriseesMois||{}));
   if(!c.planningConfirmeMois) c.planningConfirmeMois={};
   c.planningConfirmeMois[moisKey]=true;
   saveToFirestore();
@@ -5854,8 +5670,7 @@ function imprimerFiche(contratId,key){
   const label=MOIS[mois]+' '+annee;
   const recap=calcRecapFiche(c,fiche);
   const JOURS_ABR=['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
-  const srcRepasMoisPrint=getVersionActive(c,new Date(parseInt(annee),mois+1,0));
-  const aRepas=srcRepasMoisPrint.repas&&srcRepasMoisPrint.repas.some(r=>r>0);
+  const aRepas=c.repas&&c.repas.some(r=>r>0);
   const aKm=!!(c.km>0);
   const REPAS_NOM=['Petit-déj','Déjeuner','Goûter','Dîner'];
 
@@ -6054,51 +5869,6 @@ function calcEnveloppeMoisVar(c,ay,am){
           // compte son jMax/volume COMPLET au lieu de sa seule portion (bug confirmé Sophie
           // 18/07/2026 par un test chiffré précis).
           const lundiSem3=new Date(dCur3); lundiSem3.setDate(dCur3.getDate()-(dCur3.getDay()||7)+1);
-          const dimancheSem3=new Date(lundiSem3); dimancheSem3.setDate(lundiSem3.getDate()+6);
-          const fmtSem3=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
-          // 06/08/2026 (Sophie) : un avenant qui tombe EN COURS de semaine (pas le lundi) coupe la
-          // semaine en deux motifs différents — "au plus favorable" appliqué séparément à chacune des
-          // deux portions paierait deux fois trop de jours (jusqu'à jMax de CHAQUE côté pour une seule
-          // semaine). Dans ce cas précis, et seulement celui-là, chaque portion est valorisée en jours
-          // possibles (comme avant "au plus favorable"), jamais en jours max — les deux portions
-          // s'additionnent simplement, chacune ne comptant que ses propres jours tombant dans LE MOIS
-          // demandé. Gère aussi une semaine à cheval sur un mois calendaire ET un avenant en même
-          // temps sans mécanisme séparé : chaque jour n'est compté qu'une fois, par la portion à
-          // laquelle il appartient, pour le mois auquel il appartient — pas de plafond partagé à
-          // négocier avec l'autre mois, contrairement au cas "jours max" ci-dessous.
-          const avenantSemaine3=(c.avenants||[]).find(av=>{
-            if(!av.signe||!av.dateAvenant) return false;
-            const dAv3=parseDateLoc(av.dateAvenant);
-            return dAv3>lundiSem3&&dAv3<=dimancheSem3;
-          });
-          if(avenantSemaine3){
-            const dateDebC3b=c.dateDeb, dateFinC3b=getDateFinContrat(c);
-            const dAvenant3=parseDateLoc(avenantSemaine3.dateAvenant);
-            const veilleAvenant3=new Date(dAvenant3); veilleAvenant3.setDate(dAvenant3.getDate()-1);
-            [{depuis:lundiSem3, jusqua:veilleAvenant3, version:getVersionActive(c,lundiSem3)},
-             {depuis:dAvenant3, jusqua:dimancheSem3, version:getVersionActive(c,dAvenant3)}]
-            .forEach(portion=>{
-              const srcP=portion.version;
-              const estMinPlanP=srcP.planType==='min';
-              const agendasP=srcP.agendas||c.agendas||[];
-              const agP=agendasP.find(a=>parseDateLoc(a.dateDebut)<=portion.depuis&&parseDateLoc(a.dateFin)>=portion.depuis);
-              const agKeyP=getKeyAgenda(getSemISO(fmtSem3(portion.depuis)),getSemAnnee(fmtSem3(portion.depuis)));
-              const typeSemP=agP&&agP.semaines&&agP.semaines[agKeyP];
-              const volP=estMinPlanP?{h:srcP.hMin||0,j:srcP.jMaxMin||1,jours:srcP.joursMin||[]}:(srcP.planVar||[]).find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemP);
-              if(!volP||!volP.jours) return;
-              const nbJoursPossiblesP=volP.jours.filter(Boolean).length||1;
-              for(let cur=new Date(portion.depuis); cur<=portion.jusqua; cur.setDate(cur.getDate()+1)){
-                const curStr=fmtSem3(cur);
-                const idxP=cur.getDay()===0?6:cur.getDay()-1;
-                if(!volP.jours[idxP]) continue;
-                const horsContratP=(dateDebC3b&&curStr<dateDebC3b)||(dateFinC3b&&cur>dateFinC3b);
-                if(horsContratP) continue;
-                if(cur.getMonth()!==am-1||cur.getFullYear()!==ay) continue;
-                joursBaseV++;
-                minBaseV+=(volP.h/nbJoursPossiblesP)*60;
-              }
-            });
-          } else {
           // Conscience de dateDeb/dateFin (correctif 21/07/2026) : jMax réduit sur le motif PROPRE à cette
           // semaine, le volume d'heures réduit au taux MOYEN (motif union / moyenne annuelle) — même
           // formule que calcHTheoriquesPlanVar pour ce même cas, pour rester aligné avec la paie.
@@ -6162,18 +5932,8 @@ function calcEnveloppeMoisVar(c,ay,am){
               heuresDejaUtiliseesAutreMois+=(pd5.d&&pd5.f)?(toM(pd5.f)-toM(pd5.d))/60:(vol3.h||0)/(vol3.j||1);
             }
           }
-          // 06/08/2026 (Sophie) : cet endroit n'avait jamais reçu la mise à jour "au plus favorable"
-          // du 05/08 (déjà faite côté paie dans calcRecapFiche) — il valorisait encore le hors-contrat
-          // à l'ancienne (jours possibles du type / moyenne annuelle union), d'où un quota mensuel
-          // "modifications autorisées" trop bas d'un jour ET une majoration heures comp parasite sur
-          // la feuille de présence (même cause pour les deux symptômes constatés par Sophie). Corrigé :
-          // la partie travaillée récupère d'abord tous les jours max qu'elle peut vraiment prendre
-          // cette semaine (joursPossiblesSemaine3, déjà calculé ci-dessus), le hors-contrat n'hérite
-          // que du reste — jours ET heures valorisés sur le volume/jMax PROPRE à cette semaine, jamais
-          // la moyenne annuelle/jours union. horsContrat4 couvre déjà début ET fin de contrat, donc ce
-          // correctif s'applique symétriquement aux deux cas.
-          const jMaxSemaine3=Math.min(vol3.j||1, joursPossiblesSemaine3);
-          const volHSemaine3=(vol3.h||0)*jMaxSemaine3/(vol3.j||1);
+          const jMaxSemaine3=Math.max(0,(vol3.j||1)-joursHCPropres3);
+          const volHSemaine3=Math.max(0,(vol3.h||0)-joursHCUnion3*(hSemMoy3/nbJoursPossiblesUnion3));
           let jMaxRestant3, volHRestant3;
           if(joursApresCeMoisV>0){
             // Ce mois est celui du DÉBUT de la semaine à cheval (elle continue sur un mois plus
@@ -6190,7 +5950,6 @@ function calcEnveloppeMoisVar(c,ay,am){
             joursBaseV+=Math.min(joursDansCeMois3,jMaxRestant3);
           }
           minBaseV+=volHRestant3*60;
-          }
         }
       }
     }
@@ -6230,11 +5989,13 @@ function calcEnveloppeMoisFixeSem(c,ay,am,ficheRef){
   return {jours:jours4, minutes:minutes4, heures:minutes4/60};
 }
 
-function calcDateFinContratBrute(c){
-  // 06/08/2026 (Sophie) : cœur du calcul, sans le contrôle "confirmee" ci-dessous — nécessaire pour
-  // confirmerRupture, qui doit savoir si une date SERAIT déterminable avant même d'avoir confirmé
-  // (avec getDateFinContrat seul, la question est sans issue : il répond toujours "non déterminable"
-  // tant qu'on n'a pas confirmé, alors que confirmer est justement ce qu'on cherche à valider).
+function getDateFinContrat(c){
+  // Une simulation de rupture ENREGISTRÉE MAIS PAS CONFIRMÉE ne doit jamais être traitée comme
+  // une vraie date de fin de contrat — bug confirmé Sophie 18/07/2026 (une simulation coupait
+  // à tort l'affichage des mois futurs du planning). Toutes les autres fonctions du code qui
+  // lisent c.rupture vérifient déjà `confirmee` en premier (ex. L4960 juste plus bas) ; cette
+  // fonction-ci était la seule à ne pas le faire.
+  if(!c.rupture||!c.rupture.confirmee) return null;
   const rp=c.rupture||{};
   const motif=rp.motif||'';
   const aPreavis=motif==='retrait-enfant'||motif==='demission';
@@ -6259,15 +6020,6 @@ function calcDateFinContratBrute(c){
     return new Date(rp.dateSignif);
   }
   return null;
-}
-function getDateFinContrat(c){
-  // Une simulation de rupture ENREGISTRÉE MAIS PAS CONFIRMÉE ne doit jamais être traitée comme
-  // une vraie date de fin de contrat — bug confirmé Sophie 18/07/2026 (une simulation coupait
-  // à tort l'affichage des mois futurs du planning). Toutes les autres fonctions du code qui
-  // lisent c.rupture vérifient déjà `confirmee` en premier (ex. L4960 juste plus bas) ; cette
-  // fonction-ci était la seule à ne pas le faire.
-  if(!c.rupture||!c.rupture.confirmee) return null;
-  return calcDateFinContratBrute(c);
 }
 
 function calcSoldeToutCompte(c, key){
@@ -6326,7 +6078,7 @@ function calcSoldeToutCompte(c, key){
     if(totalNet>0) indemConges={montantNet:totalNet,montantBrut:totalBrut,
       label:`Indemnité compensatrice de congés (${s.joursAcquisRestants+s.joursEnCoursRestants} j)`};
   } else if(srcActifSolde.tc!=='occ'){
-    const s=calcSoldeConges46(c,dateFinContrat);
+    const s=calcSoldeConges46(c);
     const totalNet=(s.montantNonVersesNet||0)+(s.montantEnCoursNet||0);
     const totalBrut=(s.montantNonVersesBrut||0)+(s.montantEnCoursBrut||0);
     if(totalNet>0) indemConges={montantNet:totalNet,montantBrut:totalBrut,
@@ -6353,7 +6105,7 @@ function calcSoldeToutCompte(c, key){
   // Indemnité de rupture
   let indemRupture=null;
   if(aIndemniteRupture){
-    const ir=calcIndemniteRupture(c,dateFinContrat,indemConges?.montantBrut||0);
+    const ir=calcIndemniteRupture(c,dateFinContrat);
     if(ir) indemRupture={montantBrut:ir.montantBrut};
   }
   
@@ -6367,7 +6119,7 @@ function buildSoldeToutCompteHtml(c, recap, solde, ficheValide){
   const vs='font-weight:600';
   let html='<div class="card" style="margin-top:10px;background:var(--mp);border:2px solid var(--m)">';
   html+='<div class="ctitle" style="color:var(--m)">Solde de tout compte</div>';
-  if(!ficheValide) html+='<div style="font-size:12px;color:var(--tx2);font-style:italic;margin-bottom:8px">Les montants seront mis à jour après validation de la feuille de présence.</div>';
+  html+='<div style="font-size:12px;color:var(--tx2);font-style:italic;margin-bottom:8px">Les montants seront mis à jour après validation de la feuille de présence.</div>';
   let totalSoldeNet=0, totalSoldeBrut=0;
   if(solde.regul){
     html+=`<div style="${ls}"><span>Régularisation (${solde.regul.hRegul.toFixed(2)}h — ${solde.regul.joursRegul} j)</span><span style="${vs};color:var(--vt)">${solde.regul.montantNet.toFixed(2)} € net</span></div>`;
@@ -7180,19 +6932,9 @@ function validerFiche(contratId,key){
   // au moins une fois pour ce mois (même vide) avant de valider la feuille — pour que l'utilisateur
   // prenne conscience que le planning ne contient rien plutôt que de valider une fiche à 0h sans s'en
   // rendre compte.
-  if(c.th==='plan'&&(c.planType==='var'||c.planType==='min')){
-    if(!(c.planningConfirmeMois&&c.planningConfirmeMois[key])){
-      alerte('Le planning de ce mois n\u2019a jamais été enregistré — retournez sur l\u2019onglet Planning et cliquez sur 💾 Enregistrer (même s\u2019il est vide) avant de valider cette feuille.');
-      return;
-    }
-    // 06/08/2026 (Sophie) : le contrôle ci-dessus ne couvrait que "jamais enregistré" — une fois un
-    // premier enregistrement fait, il restait satisfait pour toujours, même avec des modifications
-    // ensuite jamais réenregistrées (case modifications autorisées ou jours modifiés). Sophie a pu
-    // valider une feuille dans cet état — ajout de ce même contrôle utilisé pour le bouton Enregistrer.
-    if(planningNonEnregistrePourMois(c,key)){
-      alerte('Le planning de ce mois a des modifications non enregistrées — retournez sur l\u2019onglet Planning et cliquez sur 💾 Enregistrer avant de valider cette feuille.');
-      return;
-    }
+  if(c.th==='plan'&&(c.planType==='var'||c.planType==='min')&&!(c.planningConfirmeMois&&c.planningConfirmeMois[key])){
+    alerte('Le planning de ce mois n\u2019a jamais été enregistré — retournez sur l\u2019onglet Planning et cliquez sur 💾 Enregistrer (même s\u2019il est vide) avant de valider cette feuille.');
+    return;
   }
   // Bloquer si un jour est en statut "reprise" non résolu
   const joursReprise=c.fiches[key].jours.filter(j=>j.statut==='reprise');
@@ -7210,7 +6952,6 @@ function validerFiche(contratId,key){
     return false;
   });
   if(joursInvalides.length>0){
-    if(window.DEBUG_CGAM)console.log('[CGAM-heuresInvalides]',joursInvalides.map(j=>({date:j.date,statut:j.statut,heureDebPrev:j.heureDebPrev,heureFinPrev:j.heureFinPrev,heureDebReel:j.heureDebReel,heureFinReel:j.heureFinReel})));
     alerte('Heures invalides sur '+joursInvalides.length+' jour(s) — l\'heure de début doit être avant l\'heure de fin.');
     return;
   }
@@ -7498,7 +7239,7 @@ function deverrouillerFiche(contratId,key){
   return lundi;
 }
          
-function calcCongesContrat(c, dateRefOverride){
+function calcCongesContrat(c){
   if(!c.fiches||!c.dateDeb) return;
   if(!c.conges) c.conges={};
   const [ddy,ddm,ddd]=c.dateDeb.split('-').map(Number);
@@ -7513,12 +7254,7 @@ function calcCongesContrat(c, dateRefOverride){
       dateDebAcquisition=new Date(say,sam-1,sad);
     }
   }
-  // 06/08/2026 (Sophie) : par défaut la vraie date du jour, comme avant — sinon "semaine terminée" ne
-  // pourrait jamais reconnaître une semaine future non encore arrivée, ce qui reste le bon principe
-  // pour un contrat actif normal. Réservé au calcul de solde de rupture (et son simulateur) : une date
-  // de référence différente peut être fournie pour anticiper le montant à payer avant la fin réelle du
-  // mois de rupture, à partir du moment où la feuille de ce mois est déjà validée dans le test/simulation.
-  const now=dateRefOverride||new Date();
+  const now=new Date();
   // Déterminer la date de la dernière fiche validée
   const fichesValideesKeys=Object.keys(c.fiches).filter(k=>c.fiches[k].valide).sort();
   const dernierMoisValide=fichesValideesKeys.length?fichesValideesKeys[fichesValideesKeys.length-1]:null;
@@ -7820,21 +7556,7 @@ function calcCongesContrat(c, dateRefOverride){
               const gateMinOk=!(c.th==='plan'&&c.planType==='min')||semaineCompleteCgMin||cocheCgMin;
               const [jpy,jpm,jpd]=j.date.split('-').map(Number);
               const sourceCgProt=getVersionActive(c,new Date(jpy,jpm-1,jpd));
-              // 11/08/2026 (Sophie) : une "semaine employeur" (off) pour fixe/sem n'a jamais de statut
-              // enregistré (rien à enregistrer) — le calcul retombait alors sur le motif hebdomadaire
-              // habituel du contrat, qui ignore que cette semaine précise est "off", et comptait le
-              // jour comme normal/travaillé à tort. Var/min a déjà cette protection plus haut
-              // (`typeSemPV==='off'`) ; fixe/sem ne l'avait pas.
-              const estSemaineOffCg=(sourceCgProt.th==='fixe'||sourceCgProt.th==='sem')&&(()=>{
-                const agendasCgProt=sourceCgProt.agendas||c.agendas||[];
-                const dateJCgProt=new Date(jpy,jpm-1,jpd);
-                const agCgProt=agendasCgProt.find(ag=>parseDateLoc(ag.dateDebut)<=dateJCgProt&&parseDateLoc(ag.dateFin)>=dateJCgProt);
-                return !!(agCgProt&&agCgProt.semaines&&agCgProt.semaines[j.semKey]==='off');
-              })();
-              if(estSemaineOffCg&&!j.heureDebReel&&statutJ!=='travaille'&&statutJ!=='reprise'){
-                // rien à compter cette semaine-là (sauf un jour réellement travaillé malgré tout,
-                // qui garde son heureDebReel et passe par les branches normales ci-dessous)
-              } else if(['travaille','reprise'].includes(statutJ)){
+              if(['travaille','reprise'].includes(statutJ)){
                 joursTravailleFSM++;
               } else if(['prevu','abs-partielle','abs-rem'].includes(statutJ)){
                 joursNormaux++;
@@ -7906,10 +7628,9 @@ function calcCongesContrat(c, dateRefOverride){
             }
 
             let contributionNormale;
-            if(sourceSem.th==='sem'&&sourceSem.semTypes){
-              const semTypesContribSem=sourceSem.semTypes;
-              const totalJAnnuelSem=semTypesContribSem.reduce((t,st)=>t+(st.jours||[]).filter(j=>j&&j.d).length*parseFloat(st.nb||0),0);
-              const nbSemAnnuelSem=semTypesContribSem.reduce((t,st)=>t+parseFloat(st.nb||0),0);
+            if(c.th==='sem'&&c.semTypes){
+              const totalJAnnuelSem=c.semTypes.reduce((t,st)=>t+(st.jours||[]).filter(j=>j&&j.d).length*parseFloat(st.nb||0),0);
+              const nbSemAnnuelSem=c.semTypes.reduce((t,st)=>t+parseFloat(st.nb||0),0);
               const moyenneJourSemSem=nbSemAnnuelSem>0?totalJAnnuelSem/nbSemAnnuelSem:joursMaxSem;
               const jourExtraSem=Math.max(0,joursNormaux-joursMaxSem)+joursTravailleFSM;
               contributionNormale=(Math.min(joursNormaux,joursMaxSem)/joursMaxSem)+(moyenneJourSemSem>0?jourExtraSem/moyenneJourSemSem:0);
@@ -7926,7 +7647,6 @@ function calcCongesContrat(c, dateRefOverride){
                 return ['conges-acq','conges-anticipe','conges-non','conges-am','ferie','ferie-non','repos'].includes(stCap);
               });
             const prorataPlafonne=estSemUniquementCongesFerie?Math.min(prorata,1):prorata;
-            if(window.DEBUG_CGAM&&c.nom==='Constance')console.log('[CGAM-contribSemaine]',joursSub[0]?.date,'-',joursSub[joursSub.length-1]?.date,'| joursNormaux:',joursNormaux,'| joursMaxSem:',joursMaxSem,'| joursTravailleFSM:',joursTravailleFSM,'| contributionNormale:',contributionNormale,'| contrib final:',prorataPlafonne);
             return {contrib:prorataPlafonne,contribArret:contributionArret};
           };
 
@@ -8343,7 +8063,6 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
     const semNum=parseInt(semNumStr);
     const joursDesSem=fiche.jours.filter(jj=>getSemISO(jj.date)===semNum&&getSemAnnee(jj.date)===parseInt(semAn));
     if(!joursDesSem.length) return;
-    if(window.DEBUG_CGAM)console.log('[CGAM-semEntree]',joursDesSem[0].date,'| joursHCExclus tous:',!!(joursHCExclus&&joursDesSem.every(jj=>joursHCExclus.has(jj.date))),'| nb jours:',joursDesSem.length);
     if(joursHCExclus&&joursDesSem.every(jj=>joursHCExclus.has(jj.date))) return;
     const dateEx=joursDesSem[0].date;
     const semKey=semAn+'-S'+String(semNum).padStart(2,'0');
@@ -8403,12 +8122,16 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
     // Heures de la semaine selon le semType
     if(!semTheoriquesVues.has(semKey)){
       semTheoriquesVues.add(semKey);
-      // 06/08/2026 (Sophie) : le bloc qui ajoutait ici les heures d'un jour férié de la semaine, en plus
-      // de hSemType plus bas, a été retiré — hSemType inclut déjà systématiquement les heures normales
-      // de CHAQUE jour du motif, férié ou non (il ne sait même pas qu'un jour est férié, il additionne
-      // le motif tel quel). Les ajouter une deuxième fois ici doublait leurs heures théoriques. Même
-      // principe que la règle finale déjà appliquée à var/min : le volume complet du motif s'ajoute une
-      // seule fois, sans condition, jamais retouché ensuite pour un jour particulier.
+      // Fériés dans semaine travaillée
+      // Pour 52 sem plan sem : heures déjà incluses dans hSemType, ne pas ajouter
+      if(c.tc!=='52'&&sourceActif.tc!=='52'){
+        joursDesSem.forEach(jj=>{
+          if(jj.statut==='ferie'||(!jj.statut&&isFerie(jj.date,c))){
+            const hF=getHJourFerie(c,sourceActif,jj.date,agendaMois,false);
+            hTheoriques+=hF;
+          }
+        });
+      }
       if(stTh){
         // Heures du type de semaine exact
         const hSemType=(stTh.jours||[]).reduce((s,j)=>j&&j.d&&j.f?s+(toM(j.f)-toM(j.d))/60:s,0);
@@ -8423,20 +8146,6 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
         const dimStr=dimSem.getFullYear()+'-'+String(dimSem.getMonth()+1).padStart(2,'0')+'-'+String(dimSem.getDate()).padStart(2,'0');
         const estCheval=lundiStr<debutMoisStr||dimStr>finMoisStr||(c.dateDeb&&lundiStr<c.dateDeb&&dimStr>=c.dateDeb)||((c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&lundiStr<=av.dateAvenant&&dimStr>=av.dateAvenant));
         if(estCheval){
-          const avenantDeCetteSemCh=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&lundiStr<=av.dateAvenant&&dimStr>=av.dateAvenant);
-          const statsCongésChevalDetect=['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe','conges-am'];
-          const contientJourCongesCh=avenantDeCetteSemCh&&joursDesSem.some(jj=>{
-            const st=jj.statut||getStatutPrevu(sourceActif||c,jj);
-            return statsCongésChevalDetect.includes(st);
-          });
-          if(contientJourCongesCh){
-            // 11/08/2026 (Sophie) : une semaine à cheval sur un AVENANT qui contient un jour congés
-            // compte simplement pour le volume complet du type de semaine — rien d'autre (pas de détail
-            // jour par jour, qui mélangeait à tort heures hors-contrat réelles et heures congés).
-            if(window.DEBUG_CGAM)console.log('[CGAM-chevalSemVolume]',dateEx,'| semaine à cheval avenant + congés | hSemType (volume complet):',hSemType);
-            hTheoriques+=hSemType;
-            return;
-          }
           // Jours présents dans le mois : travaillés → heures du semType, congés → hSemMoy/6, hors
           // contrat → moyenne pondérée / jours possibles (comme pour une semaine sans type connu —
           // avant l'embauche, aucun horaire précis ne peut légalement s'appliquer, même si le type de
@@ -8456,17 +8165,6 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
               // pas la moyenne — contrairement aux jours hors contrat de semaines entièrement hors
               // contrat plus tôt (traitées séparément, ailleurs, toujours à la moyenne).
               hCheval+=hJourReelChHC;
-              if(window.DEBUG_CGAM)console.log('[CGAM-chevalSemJour]',jourStr,'| branche: joursHCExclus | ajouté:',hJourReelChHC,'| hCheval cumulé:',hCheval);
-              continue;
-            }
-            if(avenantDeCetteSemCh&&jourStr<avenantDeCetteSemCh.dateAvenant){
-              // 11/08/2026 (Sophie, corrigé après calcul précis) : sem ne participe pas au fabricant
-              // var/min (joursHCExclus), donc un jour avant l'avenant dans la semaine à cheval n'y est
-              // jamais marqué — sans ce traitement, il ne recevait rien du tout. MÊME traitement que la
-              // branche joursHCExclus juste au-dessus (heures RÉELLES du motif), pas la moyenne
-              // jours-union — un jour non prévu par le motif (ex. lundi) reste à 0h, pas 7h de moyenne.
-              hCheval+=hJourReelChHC;
-              if(window.DEBUG_CGAM)console.log('[CGAM-chevalSemJour]',jourStr,'| branche: avant avenant (non fabriqué) | ajouté:',hJourReelChHC,'| hCheval cumulé:',hCheval);
               continue;
             }
             // Trouver le jour dans la fiche
@@ -8481,9 +8179,7 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
             } else if(statsCongésCheval.includes(stJour)){
               // 52 sem : heures réelles du jour selon le type de semaine réel (agenda)
               // 46 sem : aucune donnée de planning sur ces semaines de congés, hSemMoyPS/6 reste nécessaire
-              const ajoutCongesCheval=est52Ch?hJourReelCh:hSemMoyPS/nbJoursPossiblesSem;
-              hCheval+=ajoutCongesCheval;
-              if(window.DEBUG_CGAM)console.log('[CGAM-chevalSemJour]',jourStr,'| branche: congés (stJour='+stJour+') | ajouté:',ajoutCongesCheval,'| hCheval cumulé:',hCheval);
+              hCheval+=est52Ch?hJourReelCh:hSemMoyPS/nbJoursPossiblesSem;
             } else if(est52Ch&&['conges-6j','conges-6j-fin','non-prevu'].includes(stJour)){
               // 0h plan-sem 52
             } else {
@@ -8493,7 +8189,6 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
           // Plan sem : le planning est connu (contrairement à plan var/min), donc on déduit simplement
           // les heures prévues qui tombent hors contrat — pas de notion de "volume/jours possibles"
           // comme pour plan var, puisqu'ici les heures exactes de chaque jour prévu sont connues.
-          if(window.DEBUG_CGAM)console.log('[CGAM-chevalSemDetail]',dateEx,'| hCheval:',hCheval,'| joursHCExclus:',joursHCExclus?[...joursHCExclus]:null);
           hTheoriques+=hCheval;
         } else {
           if(c.tc==='52'||sourceActif.tc==='52'){
@@ -8526,11 +8221,25 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
             hTheoriques+=hSemType;
           }
         }
-        // 06/08/2026 (Sophie) : le bloc qui retirait ici les heures d'un jour de congé issues du type
-        // pour les remplacer par la moyenne/jours union a été retiré — même défaut que celui déjà banni
-        // pour var/min (jours union à la place de jours max), et contraire à la règle finale : une fois
-        // le volume complet du type ajouté sans condition (hSemType ci-dessus), rien ne doit plus venir
-        // le retoucher pour un jour de congé en particulier.
+        // Pour les semaines non à cheval plan-sem 46 : correction jours décomptés
+        if(!estCheval&&(c.tc!=='52'&&sourceActif.tc!=='52')){
+          const statsCongésTypee=['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe'];
+          const reposHPST=sourceActif.reposHebdo||c.reposHebdo||0;
+          joursDesSem.forEach(jj=>{
+            if(jj.jourSemaine===reposHPST) return;
+            const stJJ=jj.statut||getStatutPrevu(sourceActif||c,jj);
+            if(statsCongésTypee.includes(stJJ)){
+              const jourIdx=jj.jourSemaine===0?6:jj.jourSemaine-1;
+              const stJourSem=stTh?.jours&&stTh.jours[jourIdx];
+              if(!stJourSem||!stJourSem.d){
+                // Jour non cochable dans le type de semaine : pas dans hSemType initialement, rien à ajouter
+                return;
+              }
+              const hJourType=(toM(stJourSem.f)-toM(stJourSem.d))/60;
+              hTheoriques+=hSemMoyPS/nbJoursPossiblesSem-hJourType;
+            }
+          });
+        }
       } else {
         // Type inconnu → hSemMoy
         hTheoriques+=hSemMoyPS;
@@ -8658,16 +8367,11 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
       const dateFinContratMinThStr=dateFinContratMinTh?(dateFinContratMinTh.getFullYear()+'-'+String(dateFinContratMinTh.getMonth()+1).padStart(2,'0')+'-'+String(dateFinContratMinTh.getDate()).padStart(2,'0')):null;
       const estChevalFinContrat=dateFinContratMinThStr&&dimStr>dateFinContratMinThStr&&lundiStr<=dateFinContratMinThStr;
       const estCheval=estChevalMoisSeul||estChevalDebutContrat||estChevalFinContrat||((dateAvenant)&&lundiStr<=dateAvenant&&dimStr>=dateAvenant);
-      const estChevalAvenantSeul=dateAvenant&&lundiStr<=dateAvenant&&dimStr>=dateAvenant;
-      if((estChevalDebutContrat||estChevalFinContrat||estChevalAvenantSeul)&&!estChevalMoisSeul){
+      if((estChevalDebutContrat||estChevalFinContrat)&&!estChevalMoisSeul){
         // 05/08/2026 (Sophie, même erreur que var corrigée juste avant) : la semaine de début OU fin de
         // contrat reçoit les heures théoriques COMPLÈTES, inconditionnellement — la réduction "jours
         // max moins jours possibles côté contrat" ne concerne QUE la déduction hors-contrat, calculée
         // à part dans calcRecapFiche, jamais les théoriques elles-mêmes.
-        // 11/08/2026 (Sophie, confirmé par test comparatif var/min) : même principe étendu à la semaine
-        // de l'avenant elle-même — la logique "coupure de mois" ci-dessous (jours empruntés au mois
-        // suivant) ne s'applique qu'à un vrai chevauchement de mois, jamais à un avenant en cours de
-        // mois, où les jours fabriqués hors-contrat sont exclus du décompte au lieu d'être crédités.
         hTheoriques+=hMinTh;
       } else if(estCheval){
         // Coupure de MOIS (jamais de contrat ici) : reste le plancher jours max + jours cochés,
@@ -8682,37 +8386,7 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
           const idx=jj.jourSemaine===0?6:jj.jourSemaine-1;
           return joursMinTh[idx]&&c.planning&&c.planning[jj.date]&&c.planning[jj.date].coche;
         }).length;
-        const joursSemaineComplete=[0,1,2,3,4,5,6].map(off=>{const d=new Date(lundiSem);d.setDate(lundiSem.getDate()+off);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');});
-        const joursDesSemDates=new Set(joursDesSem.map(jj=>jj.date));
-        const nbJoursPossiblesAutrePortion=joursSemaineComplete.filter(dStr=>{
-          if(joursDesSemDates.has(dStr)) return false; // fait partie de CE mois, pas de l'autre portion
-          const dObj=new Date(dStr);
-          const idx=dObj.getDay()===0?6:dObj.getDay()-1;
-          return joursMinTh[idx];
-        }).length;
-        const nbJoursCochesAutrePortion=joursSemaineComplete.filter(dStr=>{
-          if(joursDesSemDates.has(dStr)) return false;
-          const dObj=new Date(dStr);
-          const idx=dObj.getDay()===0?6:dObj.getDay()-1;
-          return joursMinTh[idx]&&c.planning&&c.planning[dStr]&&c.planning[dStr].coche;
-        }).length;
-        // 06/08/2026 (Sophie, reformulé après ses précisions — pas symétrique) : c'est la portion de
-        // FIN de mois qui cède la place à celle du mois SUIVANT (jamais l'inverse), et un jour
-        // réellement coché (n'importe où dans la semaine) prend toujours le pas sur un jour seulement
-        // théorique. Sur les jMax jours de la semaine : ceux réellement cochés (des deux côtés) sont
-        // comptés d'abord ; sur ce qui reste, priorité au mois suivant (jusqu'à sa propre capacité en
-        // jours possibles), la fin de mois ne récupérant que ce qu'il en reste, jamais plus.
-        const estPortionFinDeMois=joursDesSemDates.has(joursSemaineComplete[0]); // contient le lundi = portion qui commence la semaine = celle qui SE TERMINE ce mois-ci
-        const resteApresCoches=Math.max(0,jMaxMinTh-nbJoursCochesMoisCourant-nbJoursCochesAutrePortion);
-        let joursDonnesMoisCourant;
-        if(estPortionFinDeMois){
-          const suivantPrendDuReste=Math.min(resteApresCoches,Math.max(0,nbJoursPossiblesAutrePortion-nbJoursCochesAutrePortion));
-          const finDeMoisRecoitDuReste=Math.max(0,resteApresCoches-suivantPrendDuReste);
-          joursDonnesMoisCourant=Math.min(nbJoursPossiblesMoisCourant,nbJoursCochesMoisCourant+finDeMoisRecoitDuReste);
-        } else {
-          const prendDuReste=Math.min(resteApresCoches,Math.max(0,nbJoursPossiblesMoisCourant-nbJoursCochesMoisCourant));
-          joursDonnesMoisCourant=Math.min(nbJoursPossiblesMoisCourant,nbJoursCochesMoisCourant+prendDuReste);
-        }
+        const joursDonnesMoisCourant=Math.min(jMaxMinTh,Math.max(nbJoursPossiblesMoisCourant,nbJoursCochesMoisCourant));
         hTheoriques+=hMinTh*(joursDonnesMoisCourant/jMaxMinTh);
       } else {
         hTheoriques+=hMinTh;
@@ -8734,7 +8408,7 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
     if(!joursHCExclus||!joursHCExclus.has(jjHC.date)) return;
     const semHC=getSemISO(jjHC.date);
     const joursDeCetteSemHC=fiche.jours.filter(jj2=>getSemISO(jj2.date)===semHC);
-    const estSemaineEntierementHC=joursDeCetteSemHC.every(jj2=>joursHCExclus.has(jj2.date)||(c.dateDeb&&jj2.date<c.dateDeb));
+    const estSemaineEntierementHC=c.dateDeb?joursDeCetteSemHC.every(jj2=>jj2.date<c.dateDeb):joursDeCetteSemHC.every(jj2=>joursHCExclus.has(jj2.date));
     if(!estSemaineEntierementHC) return;
     const idxHC=jjHC.jourSemaine===0?6:jjHC.jourSemaine-1;
     if(joursMinTh[idxHC]){
@@ -8748,7 +8422,6 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
 }
 
 function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, semTheoriquesVues, joursHCExclus){
-  if(window.DEBUG_CGAM)console.log('[CGAM-planVarEntree]','fiche.jours: du',fiche.jours[0]?.date,'au',fiche.jours[fiche.jours.length-1]?.date,'| nb:',fiche.jours.length,'| joursHCExclus taille:',joursHCExclus?joursHCExclus.size:null);
   // Calcule les heures théoriques pour un contrat plan var 46 sem
   // Logique : par semaine, selon le volume de l'agenda. Semaines off = moyenne. Décompte congés = hSemMoy/6
   const planVarTh=sourceActif.planVar||c.planVar||[];
@@ -9044,7 +8717,6 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
   // donne que le "reste" (quota disponible), et cette moyenne s'y ajoute pour reconstituer le volume
   // complet de la semaine (moyenne hors contrat + reste en contrat = volume).
   fiche.jours.forEach(jj=>{
-    if(window.DEBUG_CGAM&&jj.statut==='hors-contrat')console.log('[CGAM-jourHCVar]',jj.date,'| dans joursHCExclus:',!!(joursHCExclus&&joursHCExclus.has(jj.date)),'| semaine déjà vue:',semTheoriquesVues.has(getSemAnnee(jj.date)+'-S'+String(getSemISO(jj.date)).padStart(2,'0')),'| joursPossiblesSem:',joursPossiblesSem,'| hSemMoyPV:',hSemMoyPV,'| nbJoursPossiblesSem:',nbJoursPossiblesSem);
     if(!joursHCExclus||!joursHCExclus.has(jj.date)) return;
     if(semTheoriquesVues.has(getSemAnnee(jj.date)+'-S'+String(getSemISO(jj.date)).padStart(2,'0'))) return; // déjà comptée en entier par la semaine à cheval ci-dessus
     const idx=jj.jourSemaine===0?6:jj.jourSemaine-1;
@@ -9053,7 +8725,6 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
     }
   });
 
-  if(window.DEBUG_CGAM)console.log('[CGAM-planVarSortie]','hTheoriques retourné:',hTheoriques,'| fiche.jours du',fiche.jours[0]?.date,'au',fiche.jours[fiche.jours.length-1]?.date);
   return hTheoriques; // en heures
 }
 
@@ -9180,49 +8851,26 @@ function getHJourCongesNonDeduit(c, dateStr, jourSemaine){
 function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAvenantStr,periodeAv,ficheComplete){
   // Filtrer les jours si une période est spécifiée
  if(dateDebPeriode||dateFinPeriode){
-    // 11/08/2026 (Sophie) : type ACTUEL à la date de référence de cet appel, pas le type D'ORIGINE du
-    // contrat (sourceActif pas encore calculé à ce point de la fonction) — sinon ce bloc entier ne se
-    // déclenche jamais pour un avenant qui change le type VERS var/min (contrat d'origine fixe/sem).
-    const srcPourIsPlanMinVar=getVersionActive(c,dateRefStr?parseDateLoc(dateRefStr):new Date());
-    const isPlanMinVar=srcPourIsPlanMinVar.th==='plan'&&(srcPourIsPlanMinVar.planType==='min'||srcPourIsPlanMinVar.planType==='var');
+    const isPlanMinVar=c.th==='plan'&&(c.planType==='min'||c.planType==='var');
     const joursFiltre=fiche.jours.filter(j=>{
       if(dateDebPeriode&&j.date<dateDebPeriode) return false;
       if(dateFinPeriode&&j.date>dateFinPeriode) return false;
       return true;
     });
     let joursHorsPeriode=[];
-    if(isPlanMinVar&&(periodeAv==='apres'||periodeAv==='avant')){
-      // 11/08/2026 (Sophie) : étendu au côté "avant" — la logique interne (jours hors période,
-      // quel que soit le côté) est déjà symétrique, seule cette garde limitait à "après" jusqu'ici.
+    if(isPlanMinVar&&periodeAv==='apres'){
       // Pour l'encart après avenant : inclure les jours avant avenant comme hors-contrat
       // pour que le calcul d'absence les déduise
       joursHorsPeriode=fiche.jours.filter(j=>{
         const dansPeriode=(!dateDebPeriode||j.date>=dateDebPeriode)&&(!dateFinPeriode||j.date<=dateFinPeriode);
         if(dansPeriode) return false;
-        // 11/08/2026 (Sophie) : ne jamais fabriquer un jour de la semaine de l'avenant elle-même —
-        // cette semaine a son propre traitement dédié ("quota restant") dans calcHTheoriquesPlanVar —
-        // mais UNIQUEMENT pour var : min détecte sa propre semaine à cheval directement dans sa boucle
-        // principale à partir des jours présents dans fiche.jours, et a donc besoin que ces jours
-        // soient fabriqués pour fonctionner (confirmé par Sophie, 11/08 — semaine de l'avenant
-        // manquante pour min quand exclue du fabricant).
-        const dateAvenantJHP=(srcPourIsPlanMinVar.planType==='var')?dateAvenantStr:null;
-        if(dateAvenantJHP){
-          const semAvJHP=getKeyAgenda(getSemISO(dateAvenantJHP),getSemAnnee(dateAvenantJHP));
-          const semJourJHP=j.semKey||getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
-          if(semJourJHP===semAvJHP) return false;
-        }
+        const srcJ=getVersionActive(c,new Date(j.date));
         const jourIdx=j.jourSemaine===0?6:j.jourSemaine-1;
-        // 11/08/2026 (Sophie) : le motif réel de l'AUTRE côté (qu'il soit fixe/sem OU même var/min)
-        // n'a jamais aucun rapport avec ce calcul — seul compte le motif "jours union" du plan var/min
-        // ACTUEL. Une vérification du motif de l'autre côté existait ici quand cet autre côté était
-        // lui-même var/min (ex. min→var), faisant à tort manquer des jours comme le lundi quand le
-        // motif min de l'ancien contrat ne travaillait pas ce jour-là.
-        if(srcPourIsPlanMinVar.planType==='min'&&srcPourIsPlanMinVar.joursMin) return !!srcPourIsPlanMinVar.joursMin[jourIdx];
-        if(srcPourIsPlanMinVar.planType==='var'&&srcPourIsPlanMinVar.planVar) return srcPourIsPlanMinVar.planVar.some(v=>v.jours&&v.jours[jourIdx]);
+        if(srcJ.planType==='min') return !!(srcJ.joursMin&&srcJ.joursMin[jourIdx]);
+        if(srcJ.planType==='var'&&srcJ.planVar) return srcJ.planVar.some(v=>v.jours&&v.jours[jourIdx]);
         return false;
       }).map(j=>({...j,statut:'hors-contrat',_horsContratAvenant:true,heureDebReel:null,heureFinReel:null}));
     }
-    if(window.DEBUG_CGAM&&isPlanMinVar&&(periodeAv==='apres'||periodeAv==='avant'))console.log('[CGAM-fabricantHC]','periodeAv:',periodeAv,'| dateDebPeriode:',dateDebPeriode,'| dateFinPeriode:',dateFinPeriode,'| joursHorsPeriode fabriqués:',joursHorsPeriode.map(j=>j.date),'| nb:',joursHorsPeriode.length);
     const ficheFiltre={...fiche,jours:[...joursHorsPeriode,...joursFiltre]};
     return calcRecapFiche(c,ficheFiltre,null,null,dateRefStr||dateDebPeriode,dateAvenantStr,periodeAv,ficheComplete||fiche);
   }
@@ -9488,19 +9136,21 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         if(dateDebC2&&lundiVStr2<dateDebC2&&dimVStr2>=dateDebC2) limiteCheval2=dateDebC2;
         else if(dateAvenant2&&lundiVStr2<=dateAvenant2&&dimVStr2>=dateAvenant2) limiteCheval2=dateAvenant2;
         if(limiteCheval2&&vol.jours){
-          // 06/08/2026 (Sophie) : même défaut que calcEnveloppeMoisVar (corrigé plus tôt aujourd'hui) —
-          // comptait les jours hors-contrat sur la moyenne annuelle/jours union de TOUS les volumes du
-          // contrat, jamais le volume/jMax propre à CETTE semaine précise. Corrigé pareil : la partie
-          // travaillée récupère d'abord tous les jours max qu'elle peut vraiment prendre cette semaine.
-          let joursDansContrat2=0;
+          const planVarUnion=sourceActif.planVar||c.planVar;
+          const totJUn=planVarUnion.reduce((t,v)=>t+(v.h||0)*(v.s||0),0);
+          const totSUn=planVarUnion.reduce((t,v)=>t+(v.s||0),0);
+          const hSemMoyUn=totSUn>0?totJUn/totSUn:0;
+          const joursPossiblesUn=Array.from({length:7},(_,idx)=>planVarUnion.some(v=>v.jours&&v.jours[idx]));
+          const nbJoursPossiblesUn=joursPossiblesUn.filter(Boolean).length||1;
+          let joursHorsContrat=0;
           for(let d=0;d<7;d++){
             const cur=new Date(lundiV2); cur.setDate(lundiV2.getDate()+d);
             const curStr=fmtV2(cur);
-            if(vol.jours[d]&&curStr>=limiteCheval2) joursDansContrat2++;
+            if(joursPossiblesUn[d]&&curStr<limiteCheval2) joursHorsContrat++;
           }
-          const jMaxSemaine2=Math.min(vol.j||1,joursDansContrat2);
-          hPrevuParSemaine[semKey]=(vol.h||0)*jMaxSemaine2/(vol.j||1);
-          hAbsHorsContratParSemaine[semKey]=(vol.h||0)-hPrevuParSemaine[semKey];
+          const hAbsHorsContratSem=joursHorsContrat*(hSemMoyUn/nbJoursPossiblesUn);
+          hPrevuParSemaine[semKey]=Math.max(0,vol.h-hAbsHorsContratSem);
+          hAbsHorsContratParSemaine[semKey]=hAbsHorsContratSem;
         } else {
           hPrevuParSemaine[semKey]=vol.h;
         }
@@ -9520,17 +9170,16 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       if(dateDebM&&lundiVMStr<dateDebM&&dimVMStr>=dateDebM) limiteChevalM=dateDebM;
       else if(dateAvenantM&&lundiVMStr<=dateAvenantM&&dimVMStr>=dateAvenantM) limiteChevalM=dateAvenantM;
       if(limiteChevalM){
-        // 06/08/2026 (Sophie) : même correctif que le bloc var juste au-dessus — jours max de la
-        // semaine plutôt que jours possibles du motif/moyenne.
-        let joursDansContratM=0;
+        const joursCochesM=joursMinRef.filter(Boolean).length||jMaxMinRef;
+        let joursHorsContratM=0;
         for(let d=0;d<7;d++){
           const cur=new Date(lundiVM); cur.setDate(lundiVM.getDate()+d);
           const curStr=fmtVM(cur);
-          if(joursMinRef[d]&&curStr>=limiteChevalM) joursDansContratM++;
+          if(joursMinRef[d]&&curStr<limiteChevalM) joursHorsContratM++;
         }
-        const jMaxSemaineM=Math.min(jMaxMinRef||1,joursDansContratM);
-        hPrevuParSemaine[semKey]=hMinRef*jMaxSemaineM/(jMaxMinRef||1);
-        hAbsHorsContratParSemaine[semKey]=hMinRef-hPrevuParSemaine[semKey];
+        const hAbsHorsContratM=joursHorsContratM*(hMinRef/joursCochesM);
+        hPrevuParSemaine[semKey]=Math.max(0,hMinRef-hAbsHorsContratM);
+        hAbsHorsContratParSemaine[semKey]=hAbsHorsContratM;
       } else {
         hPrevuParSemaine[semKey]=hMinRef;
       }
@@ -9631,15 +9280,14 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       if(jourPossibleTh) joursHCExclus.add(j.date);
     });
   }
-  if(sourceActif.th==='plan'&&(sourceActif.planType==='min'||sourceActif.planType==='var')){
+  if(c.th==='plan'&&(c.planType==='min'||c.planType==='var')){
     fiche.jours.forEach(j=>{
       const estHorsContrat=(j.statut||'')==='hors-contrat';
       const estAvantDebut=!!(c.dateDeb&&j.date<c.dateDeb);
       if(!estHorsContrat&&!estAvantDebut) return;
       const jourIdxTh2=j.jourSemaine===0?6:j.jourSemaine-1;
-      // 11/08/2026 (Sophie) : motif du plan var/min ACTUEL (sourceActif), jamais celui de l'ancien
-      // contrat (srcTh) — même principe que la correction déjà faite dans le fabricant plus haut.
-      const jourPossibleTh=sourceActif.planType==='var'?sourceActif.planVar?.some(v=>v.jours&&v.jours[jourIdxTh2]):(sourceActif.joursMin&&sourceActif.joursMin[jourIdxTh2]);
+      const srcTh=getVersionActive(c,new Date(j.date));
+      const jourPossibleTh=srcTh.planType==='var'?srcTh.planVar?.some(v=>v.jours&&v.jours[jourIdxTh2]):(srcTh.joursMin&&srcTh.joursMin[jourIdxTh2]);
       if(jourPossibleTh) joursHCExclus.add(j.date);
     });
   }
@@ -9682,15 +9330,12 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       return 0;
     }
     if(sourceActif.th==='fixe'&&sourceActif.joursFixe&&c.tc!=='52'){
-      // 11/08/2026 (Sophie) : fixe (46 ou 52) doit toujours utiliser ses heures réelles exactes du
-      // motif, jamais une moyenne de repli — la distinction 46/52 n'a de sens que pour sem/var (qui
-      // dépendent d'un agenda pour savoir quel type de semaine s'applique), jamais pour fixe dont le
-      // motif est unique et sans ambiguïté, identique qu'il soit 46 ou 52.
+      // Fixe 46 : ce jour doit être cochable dans le planning fixe, sinon 0 (jour non prévu)
       const dJF46=new Date(dateStr);
       const jourIdxF46=dJF46.getDay()===0?6:dJF46.getDay()-1;
       const jf46=sourceActif.joursFixe[jourIdxF46];
-      if(jf46&&jf46.d&&jf46.f) return toM(jf46.f)-toM(jf46.d);
-      return 0;
+      if(!jf46||!jf46.d) return 0;
+      return hJourCgTh;
     }
     if(estMinTh){
       // Plan min : volume hebdo / jours possibles prévus au contrat, uniquement si le jour est cochable
@@ -9730,38 +9375,14 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     }
     return hJourCgTh;
   };
-  let hTheoriquesPrevJ=hTheoriques;
-  let dateThPrevJ=null;
   fiche.jours.forEach(j=>{
-    if(window.DEBUG_CGAM&&sourceActif.th==='fixe'&&hTheoriques!==hTheoriquesPrevJ){
-      console.log('[CGAM-fixeThDelta]',dateThPrevJ,'| delta ajouté:',hTheoriques-hTheoriquesPrevJ,'| hTheoriques maintenant:',hTheoriques);
-    }
-    hTheoriquesPrevJ=hTheoriques;
-    dateThPrevJ=j.date;
-    if(window.DEBUG_CGAM&&sourceActif.th==='fixe')console.log('[CGAM-fixeThJour]',j.date,'| statut:',j.statut,'| heureDebPrev/Fin:',j.heureDebPrev,j.heureFinPrev,'| hTheoriques AVANT:',hTheoriques);
-    // 06/08/2026 (Sophie) : jour "hors-contrat" (mois de l'avenant, côté fixe) ne correspondait à
-    // AUCUNE des branches suivantes — contribution théorique silencieusement nulle, alors que
-    // hAbsHorsPeriode (la déduction, plus bas) traitait bien ces mêmes jours de son côté. Même
-    // principe que le "volume garanti inconditionnel" déjà établi ailleurs : heures exactes du jour
-    // selon le motif fixe, jamais une moyenne — même formule que le fixe confirmé le 05/08.
-    if(j.statut==='hors-contrat'&&sourceActif.th==='fixe'&&sourceActif.joursFixe){
-      const jourIdxHCTh=j.jourSemaine===0?6:j.jourSemaine-1;
-      const jfHCTh=sourceActif.joursFixe[jourIdxHCTh];
-      if(jfHCTh&&jfHCTh.d&&jfHCTh.f) hTheoriques+=toM(jfHCTh.f)-toM(jfHCTh.d);
-      return;
-    }
-    if(['conges-am','decompte-acq','decompte-anticipe','decompte-conges'].includes(j.statut)){
-      // 11/08/2026 (Sophie) : ces statuts ne concernent que des jours déjà NON PRÉVUS au contrat à
-      // la base (le décompte les traverse simplement) — aucune heure théorique, contrairement aux
-      // vrais jours congés (conges-non/acq/anticipe, ci-dessous) qui reçoivent les heures du motif.
-    } else if(['conges-non','conges-acq','conges-anticipe'].includes(j.statut)){
+    if(j.statut==='conges-non'||j.statut==='conges-acq'||j.statut==='conges-anticipe'){
       // Pour plan sem 46 : géré par calcHTheoriquesPlanSem, pas ici
-      const estPlanSem46=sourceActif.th==='sem'&&sourceActif.tc!=='52';
-      if(window.DEBUG_CGAM)console.log('[CGAM-congesThFixe]',j.date,'| statut:',j.statut,'| sourceActif.th:',sourceActif.th,'| estPlanSem46:',estPlanSem46,'| getHJourCgTh:',getHJourCgTh(j.date),'| hTheoriques avant:',hTheoriques);
+      const estPlanSem46=(sourceActif.th==='sem'||c.th==='sem')&&(sourceActif.tc!=='52'||c.tc!=='52');
       if(!estPlanSem46){
         hTheoriques+=getHJourCgTh(j.date);
       }
-    } else if(!(sourceActif.th==='plan'&&(sourceActif.planType==='min'||sourceActif.planType==='var'))&&!(sourceActif.th==='sem'&&sourceActif.tc!=='52')&&getInfosJourPlanning(c,j.date).jourPossible){
+    } else if(!(c.th==='plan'&&(c.planType==='min'||c.planType==='var'))&&!(sourceActif.th==='plan'&&(sourceActif.planType==='min'||sourceActif.planType==='var'))&&!((sourceActif.th==='sem'||c.th==='sem')&&(sourceActif.tc!=='52'||c.tc!=='52'))&&getInfosJourPlanning(c,j.date).jourPossible){
       // Heures théoriques protégées du contrat, jamais gonflées par un jour ajouté en plus via
       // modifications autorisées, ni par un jour normal aux heures modifiées (bug confirmé Sophie
       // 23/07/2026) : utiliser l'horaire STRUCTUREL du contrat pour ce jour (getInfosJourPlanning),
@@ -9860,15 +9481,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // Plan var : délégué à calcHTheoriquesPlanVar (appelé après le forEach)
   });
   // Plan var, plan min, plan sem : calcul séparé par semaine
-  if(sourceActif.th==='plan'&&sourceActif.planType==='var'&&sourceActif.planVar){
-    if(window.DEBUG_CGAM)console.log('[CGAM-appelPlanVar]','appelé, fiche.jours nb:',fiche.jours.length,'| jours hors-contrat dedans:',fiche.jours.filter(j=>j.statut==='hors-contrat').map(j=>j.date),'| joursHCExclus taille:',joursHCExclus?joursHCExclus.size:null,'| joursHCExclus contenu:',joursHCExclus?[...joursHCExclus]:null);
+  if((sourceActif.th==='plan'||c.th==='plan')&&(sourceActif.planType==='var'||c.planType==='var')&&(sourceActif.planVar||c.planVar)){
     hTheoriques=calcHTheoriquesPlanVar(c,sourceActif,fiche,agendaMois,semJoursCpt,semTheoriquesVues,joursHCExclus);
-  } else if(sourceActif.th==='plan'&&sourceActif.planType==='min'){
+  } else if((sourceActif.th==='plan'||c.th==='plan')&&(sourceActif.planType==='min'||c.planType==='min')){
     hTheoriques=calcHTheoriquesPlanMin(c,sourceActif,fiche,agendaMois,semJoursCpt,semTheoriquesVues,joursHCExclus);
-  } else if(sourceActif.th==='sem'){
+  } else if(sourceActif.th==='sem'||(c.th==='sem')){
     hTheoriques=calcHTheoriquesPlanSem(c,sourceActif,fiche,agendaMois,semTheoriquesVues,joursHCExclus);
   } else {
-    if(window.DEBUG_CGAM&&sourceActif.th==='fixe')console.log('[CGAM-fixeAvantDiv]','hTheoriques en minutes (avant /60):',hTheoriques,'| soit en heures:',hTheoriques/60);
     hTheoriques=hTheoriques/60;
   }
   // Calculer hTheoriquesMaj : pour chaque semaine visible dans la fiche, max(0, hSemaineTh - 45)
@@ -10102,158 +9721,46 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // Le calcul de hTheoriquesMois ci-dessus reste en place (semJoursCptM est réutilisé plus bas pour
     // autre chose, sous des clés préfixées "hp_"), mais son résultat n'écrase plus hTheoriques.
     let hAbsHorsPeriode=0;
-    let hAbsHorsPeriodeTheoSem=0; // 11/08/2026 : comme hAbsHorsPeriode, mais sans la semaine de l'avenant (sem) — évite le double comptage théoriques tout en gardant la déduction complète
-    // 06/08/2026 (Sophie) : pour une semaine ENTIÈREMENT hors contrat (pas celle qui contient
-    // l'avenant lui-même), la règle voulue est moyenne hebdo/jours union du contrat — jamais le
-    // volume précis pointé dans l'agenda cette semaine-là (l'ancien calcul allait chercher un volume
-    // exact, ignorant silencieusement toute semaine dont le type ne correspondait à aucun volume).
-    let hSemMoyAbsHP=0, nbJoursPossiblesAbsHP=1, joursPossiblesAbsHPArr=null;
-    if(sourceActif.th==='plan'&&sourceActif.planType==='var'&&sourceActif.planVar){
-      let totalHAnnuelHP=0, totalSHP=0;
-      sourceActif.planVar.forEach(v=>{ totalHAnnuelHP+=(v.h||0)*(v.s||0); totalSHP+=(v.s||0); });
-      hSemMoyAbsHP=totalSHP>0?(totalHAnnuelHP/totalSHP):0;
-      joursPossiblesAbsHPArr=Array.from({length:7},(_,idx)=>sourceActif.planVar.some(v=>v.jours&&v.jours[idx]));
-      nbJoursPossiblesAbsHP=joursPossiblesAbsHPArr.filter(Boolean).length||1;
-    }
-    // 11/08/2026 (Sophie) : même règle "semaine sans type identifiable → moyenne hebdo/jours union",
-    // jamais étendue à sem jusqu'ici — une semaine hors-période dont l'agenda du nouveau contrat ne
-    // couvre pas encore la date (typiquement les semaines bien avant un avenant) contribuait zéro,
-    // au lieu de la moyenne pondérée des types de semaine sur les jours "union" (n'importe quel jour
-    // travaillé dans au moins un type).
-    let hSemMoyAbsHPSem=0, nbJoursPossiblesAbsHPSem=1, joursPossiblesAbsHPArrSem=null;
-    if(sourceActif.th==='sem'&&sourceActif.semTypes){
-      let totalHAnnuelHPSem=0, totalSHPSem=0;
-      sourceActif.semTypes.forEach(st=>{
-        const hType=(st.jours||[]).reduce((sum,jj)=>sum+(jj&&jj.d&&jj.f?(toM(jj.f)-toM(jj.d))/60:0),0);
-        totalHAnnuelHPSem+=hType*(st.nb||0);
-        totalSHPSem+=(st.nb||0);
-      });
-      hSemMoyAbsHPSem=totalSHPSem>0?(totalHAnnuelHPSem/totalSHPSem):0;
-      joursPossiblesAbsHPArrSem=Array.from({length:7},(_,idx)=>sourceActif.semTypes.some(st=>st.jours&&st.jours[idx]));
-      nbJoursPossiblesAbsHPSem=joursPossiblesAbsHPArrSem.filter(Boolean).length||1;
-      if(window.DEBUG_CGAM)console.log('[CGAM-joursUnionSem]','joursPossiblesAbsHPArrSem:',joursPossiblesAbsHPArrSem,'| nbJoursPossiblesAbsHPSem:',nbJoursPossiblesAbsHPSem,'| hSemMoyAbsHPSem:',hSemMoyAbsHPSem,'| semTypes bruts:',JSON.stringify(sourceActif.semTypes));
-    }
     for(let d=new Date(premierJourMois);d<=dernierJourMois;d.setDate(d.getDate()+1)){
       const dateStr=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
       const horsperiode=(periodeAv==='avant'&&dateStr>=dateAvenantStr)||(periodeAv==='apres'&&dateStr<dateAvenantStr);
       if(!horsperiode) continue;
-      // 11/08/2026 (Sophie) : pour sem, la semaine ISO qui contient la date de l'avenant lui-même est
-      // déjà intégralement traitée pour les THÉORIQUES par la gestion "semaine à cheval" de
-      // calcHTheoriquesPlanSem (heures réelles de chaque jour hors-période de cette semaine précise) —
-      // compter aussi ces jours ici, pour les théoriques, les comptait deux fois. La déduction
-      // (hAbs), elle, doit rester complète : cette semaine n'est traitée nulle part ailleurs pour la
-      // déduction, donc hAbsHorsPeriode doit continuer à la couvrir pour hAbs, juste pas pour
-      // l'ajout aux théoriques plus bas.
-      let dansSemaineAvenantHP=false;
-      if(sourceActif.th==='sem'&&dateAvenantStr){
-        const lundiAvHP=parseDateLoc(dateAvenantStr);lundiAvHP.setDate(lundiAvHP.getDate()-(lundiAvHP.getDay()||7)+1);
-        const dimAvHP=new Date(lundiAvHP);dimAvHP.setDate(lundiAvHP.getDate()+6);
-        dansSemaineAvenantHP=d>=lundiAvHP&&d<=dimAvHP;
-      }
-      const hAbsHorsPeriodeAvantIter=hAbsHorsPeriode;
-      // 11/08/2026 (Sophie) : pour sem, seule la semaine de l'avenant elle-même (dansSemaineAvenantHP)
-      // doit consulter l'agenda/heures réelles (mécanisme cheval de calcHTheoriquesPlanSem). Toute
-      // autre semaine hors-période — pleine ou partielle — doit systématiquement passer par la
-      // moyenne jours-union, jamais par un agenda "fantôme" qui ne représente plus le contrat réel.
-      const dansHorsSemNormaleSem=sourceActif.th==='sem'&&sourceActif.semTypes&&!dansSemaineAvenantHP;
-      const prevusHP=dansHorsSemNormaleSem?{debut:null,fin:null}:getHeuresPrevues(c,new Date(d),sourceActif);
-      if(dansHorsSemNormaleSem){
-        const jourIdxHPSemDirect=d.getDay()===0?6:d.getDay()-1;
-        const semKeyHPSemDirect=getSemISO(dateStr);
-        if(joursPossiblesAbsHPArrSem&&joursPossiblesAbsHPArrSem[jourIdxHPSemDirect]){
-          if(!semJoursCptM['hp_'+semKeyHPSemDirect]) semJoursCptM['hp_'+semKeyHPSemDirect]=0;
-          if(semJoursCptM['hp_'+semKeyHPSemDirect]<nbJoursPossiblesAbsHPSem){
-            hAbsHorsPeriode+=hSemMoyAbsHPSem/nbJoursPossiblesAbsHPSem;
-            semJoursCptM['hp_'+semKeyHPSemDirect]++;
-          }
-        }
-      } else if(prevusHP.debut&&prevusHP.fin){
+      const prevusHP=getHeuresPrevues(c,new Date(d),sourceActif);
+      if(prevusHP.debut&&prevusHP.fin){
         const contribHP=(toM(prevusHP.fin)-toM(prevusHP.debut))/60;
         hAbsHorsPeriode+=contribHP;
-        if(window.DEBUG_CGAM&&sourceActif.th==='fixe')console.log('[CGAM-fixeHPBranche]',dateStr,'| branche: 1 (prevusHP)','| contrib:',contribHP,'| prevusHP:',prevusHP);
-        if(window.DEBUG_CGAM&&sourceActif.planType==='min')console.log('[CGAM-minHPBranche1]',dateStr,'| branche: 1 (prevusHP, PAS la branche min dédiée) | contrib:',contribHP,'| prevusHP:',prevusHP);
       } else if(isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr)))){
         // CORRECTION : semaine 'off' dans hAbsHorsPeriode
         const jourIdxHP=d.getDay()===0?6:d.getDay()-1;
         if(sourceActif.th==='fixe'&&sourceActif.joursFixe&&sourceActif.joursFixe[jourIdxHP]){
           const jfHP=sourceActif.joursFixe[jourIdxHP];
           if(jfHP&&jfHP.d&&jfHP.f) hAbsHorsPeriode+=(toM(jfHP.f)-toM(jfHP.d))/60;
-          if(window.DEBUG_CGAM)console.log('[CGAM-fixeHPBranche]',dateStr,'| branche: 2 (isAbsenceEmployeur/fixe)','| jfHP:',jfHP);
         } else if(sourceActif.th==='sem'){
-          // 11/08/2026 (Sophie) : ne compter que les jours "union" (jamais le week-end) — cette
-          // branche appliquait la contribution à TOUS les jours de la semaine sans distinction.
-          if(joursPossiblesAbsHPArrSem&&joursPossiblesAbsHPArrSem[jourIdxHP]){
-            hAbsHorsPeriode+=hSemMoyAbsHPSem/nbJoursPossiblesAbsHPSem;
-          }
+          hAbsHorsPeriode+=(hMensu*12/nbSemActif)/joursMaxMoyen;
         }
       } else if(sourceActif.th==='plan'&&sourceActif.planType==='var'&&sourceActif.planVar){
+        // Toujours utiliser sourceActif (avenant) pour les calculs hors-période
         const semKeyHP=getSemISO(dateStr);
-        const lundiHP=new Date(d);lundiHP.setDate(lundiHP.getDate()-(lundiHP.getDay()||7)+1);
-        const dimHP=new Date(lundiHP);dimHP.setDate(dimHP.getDate()+6);
-        const estChevalHP=dateAvenantStr&&lundiHP<=new Date(dateAvenantStr)&&dimHP>=new Date(dateAvenantStr);
-        if(estChevalHP){
-          // Semaine qui contient l'avenant lui-même : calcul précis au volume exact pointé dans
-          // l'agenda, diviseur = jours possibles (confirmé correct par Sophie, inchangé).
-          const agKeyHP=getKeyAgenda(semKeyHP,getSemAnnee(dateStr));
-          const agendasSrcHP=sourceActif.agendas||c.agendas||[];
-          const agendaSrcHP=agendasSrcHP.find(ag=>new Date(ag.dateDebut)<=new Date(dateStr)&&new Date(ag.dateFin)>=new Date(dateStr))||agendaMois;
-          const typeSemHP=agendaSrcHP&&agendaSrcHP.semaines&&agendaSrcHP.semaines[agKeyHP];
-          if(typeSemHP&&typeSemHP!=='off'){
-            const volHP=sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemHP);
-            const jourIdxHP=d.getDay()===0?6:d.getDay()-1;
-            if(volHP&&volHP.jours&&volHP.jours[jourIdxHP]){
-              if(!semJoursCptM['hp_'+semKeyHP]) semJoursCptM['hp_'+semKeyHP]=0;
-              const jouchesCochesHP=volHP.jours.filter(Boolean).length||volHP.j||1;
-              if(semJoursCptM['hp_'+semKeyHP]<jouchesCochesHP){
-                hAbsHorsPeriode+=volHP.h/jouchesCochesHP;
-                semJoursCptM['hp_'+semKeyHP]++;
-              }
-            }
-          }
-        } else if(joursPossiblesAbsHPArr){
-          // 06/08/2026 (Sophie) : semaine ENTIÈREMENT hors contrat — moyenne hebdo/jours union du
-          // contrat, jamais le volume précis de cette semaine (peu importe si un type y est pointé ou
-          // reconnu) — même règle que "semaine sans type identifiable" ailleurs dans le calcul.
+        const agKeyHP=getKeyAgenda(semKeyHP,getSemAnnee(dateStr));
+        // Utiliser l'agenda de sourceActif
+        const agendasSrcHP=sourceActif.agendas||c.agendas||[];
+        const agendaSrcHP=agendasSrcHP.find(ag=>new Date(ag.dateDebut)<=new Date(dateStr)&&new Date(ag.dateFin)>=new Date(dateStr))||agendaMois;
+        const typeSemHP=agendaSrcHP&&agendaSrcHP.semaines&&agendaSrcHP.semaines[agKeyHP];
+        if(typeSemHP&&typeSemHP!=='off'){
+          const volHP=sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemHP);
           const jourIdxHP=d.getDay()===0?6:d.getDay()-1;
-          if(joursPossiblesAbsHPArr[jourIdxHP]){
+          if(volHP&&volHP.jours&&volHP.jours[jourIdxHP]){
             if(!semJoursCptM['hp_'+semKeyHP]) semJoursCptM['hp_'+semKeyHP]=0;
-            if(semJoursCptM['hp_'+semKeyHP]<nbJoursPossiblesAbsHP){
-              hAbsHorsPeriode+=hSemMoyAbsHP/nbJoursPossiblesAbsHP;
+            // Semaine à cheval sur dateAvenantStr : diviseur = jours possibles
+            const lundiHP=new Date(d);lundiHP.setDate(lundiHP.getDate()-(lundiHP.getDay()||7)+1);
+            const dimHP=new Date(lundiHP);dimHP.setDate(dimHP.getDate()+6);
+            const estChevalHP=dateAvenantStr&&lundiHP<=new Date(dateAvenantStr)&&dimHP>=new Date(dateAvenantStr);
+            const jouchesCochesHP=volHP.jours.filter(Boolean).length||volHP.j||1;
+            const diviseurHP=estChevalHP?jouchesCochesHP:(volHP.j||1);
+            const limiteHP=estChevalHP?jouchesCochesHP:(volHP.j||1);
+            if(semJoursCptM['hp_'+semKeyHP]<limiteHP){
+              hAbsHorsPeriode+=volHP.h/diviseurHP;
               semJoursCptM['hp_'+semKeyHP]++;
-            }
-          }
-        }
-      } else if(sourceActif.th==='sem'&&joursPossiblesAbsHPArrSem){
-        // 11/08/2026 (Sophie) : même règle que var ci-dessus, étendue à sem — semaine sans type
-        // identifiable (agenda du nouveau contrat ne couvrant pas encore cette date) → moyenne
-        // hebdo/jours union, jamais zéro. Vérifier que la semaine n'a VRAIMENT aucun type reconnu
-        // (pas d'agenda pour cette semaine) — sinon un jour normal non-travaillé d'un type par
-        // ailleurs identifié (ex. lundi d'une "Semaine type 1" qui ne travaille pas le lundi) se
-        // ferait à tort attribuer la moyenne, en plus des jours réellement comptés cette semaine-là
-        // (double comptage confirmé par Sophie).
-        const agKeyHPSem=getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr));
-        const agendasHPSem=sourceActif.agendas||c.agendas||[];
-        const agendaHPSem=agendasHPSem.find(ag=>parseDateLoc(ag.dateDebut)<=d&&parseDateLoc(ag.dateFin)>=d)
-          ||agendasHPSem.find(ag=>{
-            // Repli semaine à cheval sur le mois (même principe que getHeuresPrevues)
-            const premierMoisHPSem=new Date(d.getFullYear(),d.getMonth(),1);
-            const dernierMoisHPSem=new Date(d.getFullYear(),d.getMonth()+1,0);
-            return parseDateLoc(ag.dateDebut)<=dernierMoisHPSem&&parseDateLoc(ag.dateFin)>=premierMoisHPSem;
-          });
-        const typeSemHPSem=agendaHPSem&&agendaHPSem.semaines&&agendaHPSem.semaines[agKeyHPSem];
-        if(window.DEBUG_CGAM)console.log('[CGAM-brancheSemDetail]',dateStr,'| agKeyHPSem:',agKeyHPSem,'| agendaHPSem trouvé:',!!agendaHPSem,'| agendaHPSem.dateDebut/dateFin:',agendaHPSem?.dateDebut,agendaHPSem?.dateFin,'| typeSemHPSem:',typeSemHPSem,'| clés semaines disponibles:',agendaHPSem?.semaines?Object.keys(agendaHPSem.semaines):null);
-        // 11/08/2026 (Sophie) : la nuance "type trouvé → jamais la moyenne" ne doit s'appliquer QUE
-        // pour la semaine de l'avenant elle-même (déjà comptée par calcHTheoriquesPlanSem/Var) — une
-        // semaine hors-période NORMALE (ni cheval, ni avenant) dont le type trouvé par l'agenda ne
-        // travaille pas ce jour précis doit quand même recevoir la moyenne jours-union.
-        if(!typeSemHPSem||!dansSemaineAvenantHP){
-          const jourIdxHPSem=d.getDay()===0?6:d.getDay()-1;
-          const semKeyHPSem=getSemISO(dateStr);
-          if(joursPossiblesAbsHPArrSem[jourIdxHPSem]){
-            if(!semJoursCptM['hp_'+semKeyHPSem]) semJoursCptM['hp_'+semKeyHPSem]=0;
-            if(semJoursCptM['hp_'+semKeyHPSem]<nbJoursPossiblesAbsHPSem){
-              hAbsHorsPeriode+=hSemMoyAbsHPSem/nbJoursPossiblesAbsHPSem;
-              semJoursCptM['hp_'+semKeyHPSem]++;
             }
           }
         }
@@ -10267,7 +9774,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const lundiHPM=new Date(d);lundiHPM.setDate(lundiHPM.getDate()-(lundiHPM.getDay()||7)+1);
         const dimHPM=new Date(lundiHPM);dimHPM.setDate(dimHPM.getDate()+6);
         const estChevalHPM=dateAvenantStr&&lundiHPM<=new Date(dateAvenantStr)&&dimHPM>=new Date(dateAvenantStr);
-        const limiteHPM=joursCoches;
+        const limiteHPM=estChevalHPM?joursCoches:jMaxMinHP;
         if(joursMinHP[jourIdxHP]){
           if(!semJoursCptM['hp_'+semKeyHPM]) semJoursCptM['hp_'+semKeyHPM]=0;
           if(semJoursCptM['hp_'+semKeyHPM]<limiteHPM){
@@ -10275,45 +9782,15 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             semJoursCptM['hp_'+semKeyHPM]++;
           }
         }
-        if(window.DEBUG_CGAM)console.log('[CGAM-minHPBranche]',dateStr,'| estChevalHPM:',estChevalHPM,'| joursMinHP[idx]:',joursMinHP[jourIdxHP],'| joursCoches:',joursCoches,'| limiteHPM:',limiteHPM,'| hMinHP:',hMinHP,'| compteur:',semJoursCptM['hp_'+semKeyHPM]);
       }
-      // 11/08/2026 : ajouter le delta de cette itération à l'accumulateur théoriques séparé, sauf
-      // dans la semaine de l'avenant pour sem (déjà comptée par calcHTheoriquesPlanSem, voir plus haut)
-      if(window.DEBUG_CGAM&&sourceActif.th==='sem'){
-        const deltaJourHP=hAbsHorsPeriode-hAbsHorsPeriodeAvantIter;
-        if(deltaJourHP>0)console.log('[CGAM-hAbsHorsPeriodeJour]',dateStr,'| delta:',deltaJourHP,'| dansSemaineAvenantHP:',dansSemaineAvenantHP,'| semKey:',getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr)));
-      }
-      if(!dansSemaineAvenantHP) hAbsHorsPeriodeTheoSem+=(hAbsHorsPeriode-hAbsHorsPeriodeAvantIter);
     }
-    if(window.DEBUG_CGAM&&sourceActif.planType==='min')console.log('[CGAM-minAbsFinal]','hAbs AVANT addition:',hAbs,'| hAbsHorsPeriode:',hAbsHorsPeriode,'| total après:',hAbs+hAbsHorsPeriode);
     hAbs+=hAbsHorsPeriode;
-    // 11/08/2026 (suggestion Sophie, vérifiée) : pour fixe, aucune autre branche n'ajoute les heures
-    // théoriques de l'autre côté de l'avenant (le fabricant de jours hors-contrat est réservé à
-    // var/min) — hAbsHorsPeriode représente exactement ces heures manquantes, déjà calculées
-    // correctement pour la déduction ; on les réutilise ici pour les théoriques. Ne dépend que du
-    // côté chronologique du jour par rapport à l'avenant, jamais d'une absence réelle saisie dans la
-    // période — aucune interaction avec les absences normales. Scope fixe uniquement : var/min a déjà
-    // sa propre gestion (calcHTheoriquesPlanVar/Min via joursHCExclus), ne pas dupliquer ici.
-    if(window.DEBUG_CGAM&&sourceActif.th==='sem')console.log('[CGAM-theoSemDetail]','hTheoriques AVANT ajout:',hTheoriques,'| hAbsHorsPeriode (complet, pour hAbs):',hAbsHorsPeriode,'| hAbsHorsPeriodeTheoSem (sans semaine avenant, pour théoriques):',hAbsHorsPeriodeTheoSem,'| periodeAv:',periodeAv,'| dateAvenantStr:',dateAvenantStr);
-    if(window.DEBUG_CGAM&&sourceActif.th==='fixe')console.log('[CGAM-fixeThFinal]','hTheoriques base (avant addition):',hTheoriques,'| hAbsHorsPeriode:',hAbsHorsPeriode,'| periodeAv:',periodeAv,'| dateAvenantStr:',dateAvenantStr);
-    if(sourceActif.th==='fixe') hTheoriques+=hAbsHorsPeriode;
-    if(sourceActif.th==='sem') hTheoriques+=hAbsHorsPeriodeTheoSem;
-    if(window.DEBUG_CGAM&&sourceActif.th==='sem')console.log('[CGAM-theoSemDetail]','hTheoriques APRÈS:',hTheoriques);
   }
   // Pour th='sem' ou th='plan' non-var : utiliser la méthode alternative (moyenne par jour)
   // hTheoriques = totalHeuresAnnuelles / totalJoursAnnuels × nbJoursMois
   const isPlanVar=sourceActif.th==='plan'&&sourceActif.planType==='var';
-  const isPlanSem=sourceActif.th==='sem';
+  const isPlanSem=sourceActif.th==='sem'||(c.th==='sem');
   if(!isPlanVar&&!isPlanSem&&sourceActif.planType!=='min'&&c.planType!=='min'&&(hTheoriques<=0||sourceActif.th==='sem'||(sourceActif.th==='plan'&&sourceActif.planType!=='min'))){
-    // 11/08/2026 (Sophie) : pour fixe, ce calcul de secours ne devrait JAMAIS servir — s'il s'active,
-    // c'est toujours le signe que le calcul normal a échoué avant. Avertissement visible plutôt
-    // qu'un chiffre faux silencieux.
-    if(sourceActif.th==='fixe'){
-      console.warn('[CGAM-secours-fixe] Calcul de secours activé pour un contrat fixe — ne devrait jamais arriver.',
-        'hTheoriques avant secours:',hTheoriques,'| dateAvenantStr:',dateAvenantStr,'| periodeAv:',periodeAv,
-        '| c.th (origine):',c.th,'| c.planType (origine):',c.planType,
-        '| sourceActif.th (actif):',sourceActif.th,'| fiche.jours dates:',fiche.jours.map(j=>j.date+':'+j.statut).join(', '));
-    }
     // Calculer le total heures et jours annuels depuis le contrat
     let totalHAnnuel=0;
     let totalJAnnuel=0;
@@ -10541,7 +10018,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         }
       } else if(j.heureDebPrev&&j.heureFinPrev&&!estStatutPrevu(statut)&&statut!=='travaille'&&statut!=='reprise'&&!(j._horsContratAvenant&&periodeAv==='apres')){
         horsContratDeduit=true;
-      } else if(sourceActif.th==='plan'&&(sourceActif.planVar||sourceActif.planType==='min')){
+      } else if(c.th==='plan'&&(c.planVar||c.planType==='min')){
         // Les jours hors-période (avenant) sont couverts par hAbsHorsPeriode → pas de double comptage
         if(j._horsContratAvenant&&dateAvenantStr){
           // déjà compté dans hAbsHorsPeriode
@@ -11131,16 +10608,12 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       } else {
         hPrev=hMensu/(nbJoursMoisContrat||20);
       }
-      const estCongesNon52Regr=statut==='conges-non'&&getVersionActive(c,new Date(j.date)).tc==='52';
-      if((statut==='hors-contrat'&&j._horsContratAvenant)||['conges-acq','conges-anticipe','conges-am'].includes(statut)||(statut==='conges-non'&&!estCongesNon52Regr)){
-        hAbsJour=0; // jour hors-contrat fabriqué pour un avenant (déjà compté par hAbsHorsPeriode) OU congés acquis/anticipé/AM (couverts par la mensualisation, jamais via cette déduction) OU congés non-acquis pour un contrat 46 (géré séparément) — jamais recompter ici. congés non-acquis en 52 reste déduit normalement (ci-dessous), la mensualisation ne couvre que l'acquis.
-      } else if(j.heureDebReel&&j.heureFinReel){
+      if(statut!=='hors-contrat'&&j.heureDebReel&&j.heureFinReel){
         const hReel2=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
         hAbsJour=Math.max(0,hPrev-hReel2);
       } else {
         hAbsJour=hPrev;
       }
-      if(window.DEBUG_CGAM&&sourceActif.planType==='min'&&hAbsJour>0)console.log('[CGAM-minAbsJour]',j.date,'| statut:',statut,'| hPrev:',hPrev,'| hAbsJour:',hAbsJour);
       hAbs+=hAbsJour;
     }
     if(estPresent&&(j.heureDebReel||j.heureDebPrev)){
@@ -12649,7 +12122,6 @@ function renderAgendas(c){
       return r?r.source:c;
     })();
     const est52TjrsPointe=agSource2.tc==='52';
-    if(window.DEBUG_CGAM)console.log('[CGAM-agendaViolet]',ag.id,'| agSource2.tc:',agSource2.tc,'| agSource2.th:',agSource2.th,'| agSource2.planType:',agSource2.planType,'| est52TjrsPointe:',est52TjrsPointe);
     // Semaines congés : calcul global depuis le calendrier AM (identique pour tous les agendas)
     // Utiliser la période du calendrier AM (mai N → avril N+1) qui couvre l'agenda
     // Utiliser la date du mois affiché (agendaMois si disponible, sinon date actuelle)
@@ -12975,8 +12447,7 @@ function getAgendaWarnings(c,ag,semaines,semsCongesSet){
     warnings.push('Calendrier des congés Ass\'Mat incomplet pour l\'année : '+anneesAmIncompletesWarn.map(x=>x.annee+'/'+(x.annee+1)+' ('+x.jPoses+'/30 jours posés)').join(', ')+' — les semaines de congés risquent de ne pas s\'afficher correctement.');
   }
   // Avertir si des semaines ne sont pas pointées (ni off, ni colorées en congés)
-  const srcPSV52Warn=getVersionActive(c,ag.dateDebut?parseDateLoc(ag.dateDebut):new Date());
-  const estPSV52Warn=(srcPSV52Warn.tc==='52')&&((srcPSV52Warn.th==='sem')||(srcPSV52Warn.th==='plan'&&(srcPSV52Warn.planType==='var'||srcPSV52Warn.planType==='sem')));
+  const estPSV52Warn=(c.tc==='52')&&((c.th==='sem')||(c.th==='plan'&&(c.planType==='var'||c.planType==='sem')));
   const jourReposWarn=(c&&(c.reposHebdo||0));
   const jourReposISOWarn=jourReposWarn===0?7:jourReposWarn;
   const dDebAgWarn=ag.dateDebut?new Date(ag.dateDebut):null;
@@ -13141,7 +12612,7 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
         return false;
       });
       // Semaine complète : tous les jours possibles sont cochés AM ou fériés
-      const estSemCongesComplete=source.tc!=='52'&&nbJoursCochesAM>0&&joursPossiblesIdx.every(jourSem=>{
+      const estSemCongesComplete=source.tc!=='52'&&c.tc!=='52'&&nbJoursCochesAM>0&&joursPossiblesIdx.every(jourSem=>{
         for(let d=0;d<7;d++){
           const cur=new Date(semLundi);cur.setDate(semLundi.getDate()+d);
           if(cur.getDay()===jourSem){
@@ -13154,7 +12625,7 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
       });
       // Semaine partielle : au moins 1 jour coché AM mais pas tous les jours possibles couverts
       const estSemConges=estSemCongesComplete; // rétrocompat
-      const estSemCongesPartielle=nbJoursCochesAM>0&&!estSemCongesComplete&&source.tc!=='52';
+      const estSemCongesPartielle=nbJoursCochesAM>0&&!estSemCongesComplete&&source.tc!=='52'&&c.tc!=='52';
 
       let bg='var(--mp)',brd='var(--mb)',txt='var(--tx3)';
       if(estSemCongesComplete){
@@ -13219,7 +12690,6 @@ function peindreAgenda(key,cid,agid){
   // semaines, qui doivent toujours être pointés (règle confirmée Sophie 18/07/2026 : le
   // critère est le nombre de semaines du contrat, jamais le type de plan sem/var)
   const est52TjrsPointeToggle=source.tc==='52';
-  if(window.DEBUG_CGAM)console.log('[CGAM-peindreViolet]',agid,'| key:',key,'| source.tc:',source.tc,'| source.th:',source.th,'| est52TjrsPointeToggle:',est52TjrsPointeToggle,'| cache présent:',!!(window._semsCongesSet&&window._semsCongesSet[agid]));
   if(!est52TjrsPointeToggle){
     const semsCongesCheck=window._semsCongesSet&&window._semsCongesSet[agid];
     // key = clé agenda (ex: '2025-S32'), extraire semNum et lundi
@@ -13822,7 +13292,7 @@ function validerAvenant(){
 
   // Mettre à jour l'avenant
   av.dateAvenant=dateAvenant;
-  av.tc=S.tc;av.th=S.th;av.planType=S.th==='plan'?S.planType:null;
+  av.tc=S.tc;av.th=S.th;av.planType=S.planType;
   av.nbSem=parseFloat(document.getElementById('f-nbsem')?.value)||null;
   av.hMin=parseFloat(document.getElementById('f-hmin')?.value)||null;
   av.jMaxMin=parseFloat(document.getElementById('f-jmax-min')?.value)||null;
@@ -13942,38 +13412,12 @@ function calcSoldeConges52(c, dateRupture){
   const nbSem=sourcePrecRupture.nbSem||52;
   const hHebdo=(sourcePrecRupture.hMensu||0)*12/nbSem;
   const hJour=hHebdo/6;
-  calcCongesContrat(c,dateRefIccp);
+  calcCongesContrat(c);
   let joursAcquisRestants=0, joursEnCoursRestants=0;
   Object.values(c.conges||{}).forEach(cg=>{
     if(cg.estTerminee) joursAcquisRestants+=cg.restants||0;
-    // 06/08/2026 (Sophie) : contrairement aux années déjà terminées (qui soustraient bien "restants"),
-    // l'année en cours prenait le brut accumulé tel quel, sans jamais soustraire ce qui a déjà été
-    // pris cette même année — comptant ces jours-là une fois via le salaire normal du mois où ils sont
-    // pris, et une deuxième fois ici. Même principe que pour une année terminée : brut moins pris.
-    else joursEnCoursRestants+=Math.max(0,(cg.acqBrut||0)-(cg.pris||0));
+    else joursEnCoursRestants+=cg.acqBrut||0;
   });
-  // 06/08/2026 (Sophie) : reformulé complètement — ce n'est pas seulement le dernier mois pas encore
-  // validé qui compte, ni seulement les jours "acquis" : TOUS les jours de congé posés ce mois (acquis
-  // ET anticipé/en cours, peu importe la validation) sont de toute façon déjà payés via le salaire
-  // normal du mois (voir "dont congés payés" sur la fiche, même logique/mêmes statuts réutilisés ici)
-  // — ils ne doivent donc plus compter comme "encore dus". Priorité de déduction : d'abord le solde le
-  // plus ancien (années déjà terminées), puis l'année en cours pour le reste si besoin.
-  const keyRuptSC52=dateRefIccp.getFullYear()+'-'+String(dateRefIccp.getMonth()+1).padStart(2,'0');
-  const ficheRuptSC52=c.fiches?.[keyRuptSC52];
-  if(ficheRuptSC52){
-    const statsCongesTypeSC52=['conges-acq','conges-anticipe','decompte-acq','decompte-anticipe'];
-    const nbCongesPoseSC52=(ficheRuptSC52.jours||[]).filter(j=>statsCongesTypeSC52.includes(j.statut)).length;
-    const deduitAnciennesSC52=Math.min(joursAcquisRestants,nbCongesPoseSC52);
-    joursAcquisRestants=Math.max(0,joursAcquisRestants-deduitAnciennesSC52);
-    const resteADeduirSC52=nbCongesPoseSC52-deduitAnciennesSC52;
-    if(!ficheRuptSC52.valide){
-      // Mois pas encore validé : "pris" (qui gère normalement l'année en cours une fois validée, voir
-      // plus haut) ne reflète pas encore ces jours — les déduire ici pour ne pas les compter en double.
-      joursEnCoursRestants=Math.max(0,joursEnCoursRestants-resteADeduirSC52);
-    }
-    // Si déjà validée : "pris" a déjà normalement pris en compte la part de l'année en cours — ne pas
-    // soustraire une deuxième fois ici.
-  }
   const montantAcquisBrut=parseFloat((joursAcquisRestants*hJour*txBrut).toFixed(2));
   const montantAcquisNet=parseFloat((montantAcquisBrut*coefNet).toFixed(2));
   joursEnCoursRestants=Math.ceil(joursEnCoursRestants);
@@ -13982,9 +13426,9 @@ function calcSoldeConges52(c, dateRupture){
   return {joursAcquisRestants, montantAcquisBrut, montantAcquisNet, joursEnCoursRestants:parseFloat(joursEnCoursRestants.toFixed(2)), montantEnCoursBrut, montantEnCoursNet};
 }
 
-function calcSoldeConges46(c, dateRupture){
+function calcSoldeConges46(c){
   const params=S.params||{};
-  calcCongesContrat(c,dateRupture);
+  calcCongesContrat(c);
   let joursNonVerses=0, montantNonVersesBrut=0, montantNonVersesNet=0;
   let joursEnCours=0, montantEnCoursBrut=0, montantEnCoursNet=0;
   Object.entries(c.conges||{}).forEach(([anneeRef,cg])=>{
@@ -14023,27 +13467,9 @@ function calcSoldeConges46(c, dateRupture){
   });
   // Jours en cours d'acquisition
   const cgEnCours=Object.values(c.conges||{}).find(cg=>!cg.estTerminee);
-  // 06/08/2026 (Sophie) : même défaut que pour 52 sem juste au-dessus — le brut accumulé de l'année en
-  // cours ne soustrayait jamais ce qui a déjà été pris cette même année, comptant ces jours en double
-  // (salaire normal du mois où ils sont pris + indemnité de fin de contrat). Brut moins pris, comme
-  // pour une année déjà terminée.
-  if(cgEnCours) joursEnCours=Math.ceil(Math.max(0,(cgEnCours.acqBrut||0)-(cgEnCours.pris||0)));
-  const dateSit=dateRupture||getDateSituationAu(c)||new Date();
-  // 06/08/2026 (Sophie) : corrigé — utilisait auparavant uniquement le dernier mois VALIDÉ
-  // (`getDateSituationAu`), qui par construction ne peut jamais être le mois cherché ici
-  // (justement celui qui n'est PAS encore validé) : ce contrôle ne se déclenchait donc jamais.
-  const keyRuptSC46=dateSit.getFullYear()+'-'+String(dateSit.getMonth()+1).padStart(2,'0');
-  const ficheRuptSC46=c.fiches?.[keyRuptSC46];
-  // 06/08/2026 (Sophie) : le principe "jours posés ce mois déjà payés via le salaire normal" ne
-  // s'applique PAS à 46 — contrairement à 52, les congés y sont payés séparément (mode dateCg :
-  // juin/principale/chaque), jamais mensualisés dans le salaire de base. Retour à la version qui ne
-  // déduit que les jours acquis prévus sur un mois pas encore validé (l'autre correctif "mode chaque"
-  // reste en pause, sujet distinct).
-  if(ficheRuptSC46&&!ficheRuptSC46.valide){
-    const nbAcqPrevuSC46=(ficheRuptSC46.jours||[]).filter(j=>j.statut==='conges-acq').length;
-    joursEnCours=Math.max(0,joursEnCours-nbAcqPrevuSC46);
-  }
+  if(cgEnCours) joursEnCours=Math.ceil(cgEnCours.acqBrut||0);
   // Calcul montant en cours : meilleur entre 10ème et maintien
+  const dateSit=getDateSituationAu(c)||new Date();
   const anneeRefDebut=dateSit.getMonth()>=5?dateSit.getFullYear():dateSit.getFullYear()-1;
   const dateJuin=new Date(anneeRefDebut,5,1);
   const totalBrutDepuisJuin=calcBrutTotal(c,dateJuin,dateSit);
@@ -14289,15 +13715,12 @@ function calcSemainesEquivalentesPreavis(c, dateDebutNonEffectue, dateFinPreavis
   return semainesEq;
 }
 
-function calcIndemniteRupture(c, dateFin, indemCongesBrut=0){
+function calcIndemniteRupture(c, dateFin){
   const [ddy,ddm,ddd]=c.dateDeb.split('-').map(Number);
   const dateDebContrat=new Date(ddy,ddm-1,ddd);
   const diffMois=(dateFin-dateDebContrat)/(1000*60*60*24*30.44);
   if(diffMois<9) return null;
-  // 06/08/2026 (Sophie) : la base du 1/80ème inclut aussi l'indemnité compensatrice de congés payés
-  // (pas de détail à part dans le calcul lui-même — un seul montant global), pas seulement les
-  // salaires bruts déjà versés pendant le contrat.
-  const totalBrut=calcBrutTotal(c,null,dateFin)+(indemCongesBrut||0);
+  const totalBrut=calcBrutTotal(c,null,dateFin);
   const montantBrut=parseFloat((totalBrut/80).toFixed(2));
   const params=S.params||{};
   const coefNet=getParamAt('coefficients',dateToStr(dateFin)).valeur||0.7811975; // 27/07/2026 (correctif Sophie)
@@ -14345,22 +13768,11 @@ function dateISOversTexte(val){
 
 // Formate un input date-texte à la saisie (ajoute les / automatiquement)
 function formaterSaisieDate(input){
-  // 06/08/2026 (Sophie) : remettre le curseur au bon endroit après reformatage — sinon il saute par
-  // défaut à la fin du champ à chaque frappe (réécrire .value fait ça), ce qui peut faire atterrir la
-  // frappe suivante au mauvais endroit et mélanger les chiffres d'une date modifiée en son milieu.
-  const posAvant=input.selectionStart;
-  const chiffresAvant=input.value.slice(0,posAvant).replace(/[^\d]/g,'').length;
   let v=input.value.replace(/[^\d]/g,'');
   if(v.length>2) v=v.slice(0,2)+'/'+v.slice(2);
   if(v.length>5) v=v.slice(0,5)+'/'+v.slice(5);
   if(v.length>10) v=v.slice(0,10);
   input.value=v;
-  let nouveauPos=0, chiffresComptes=0;
-  while(nouveauPos<v.length&&chiffresComptes<chiffresAvant){
-    if(/\d/.test(v[nouveauPos])) chiffresComptes++;
-    nouveauPos++;
-  }
-  input.setSelectionRange(nouveauPos,nouveauPos);
   // Vérifier la validité quand la date est complète (10 chars)
   const errId=input.id+'-err';
   let errEl=document.getElementById(errId);
@@ -14417,29 +13829,14 @@ function rafraichirRupture(cid){
     }
     return d;
   };
-  const statutPreavisPrecedent=(c._ruptureTemp||c.rupture||{}).statutPreavis||'';
   const motif=document.getElementById('rp-motif-'+cid)?.value||c.rupture.motif||'';
   const initiative=document.querySelector(`input[name="rp-init-${cid}"]:checked`)?.value||c.rupture.initiative||'';
-  // 06/08/2026 (Sophie) : quand le champ existe dans la page mais contient une saisie non reconnue
-  // comme une date valide, ne plus retomber silencieusement sur l'ancienne valeur enregistrée — ça
-  // donnait l'impression que la saisie n'avait servi à rien, sans jamais prévenir que c'est parce
-  // qu'elle était invalide. Le repli sur l'ancienne valeur ne sert plus que si le champ n'existe pas
-  // du tout dans cette page (cas légitime).
-  const elSignif=document.getElementById('rp-date-signif-'+cid);
-  const dateSignif=elSignif?dateTexteVersISO(elSignif.value||''):fixDate(c.rupture.dateSignif||'');
-  const elNotif=document.getElementById('rp-date-notif-'+cid);
-  const dateNotif=elNotif?dateTexteVersISO(elNotif.value||''):fixDate(c.rupture.dateNotif||'');
+  const dateSignif=dateTexteVersISO(document.getElementById('rp-date-signif-'+cid)?.value||'')||fixDate(c.rupture.dateSignif||'');
+  const dateNotif=dateTexteVersISO(document.getElementById('rp-date-notif-'+cid)?.value||'')||fixDate(c.rupture.dateNotif||'');
   const delaiPrev=Math.min(8,parseInt(document.getElementById('rp-delai-prev-'+cid)?.value||c.rupture.delaiPrev||'0')||0);
   const statutPreavis=document.querySelector(`input[name="rp-statut-preavis-${cid}"]:checked`)?.value||c.rupture.statutPreavis||'';
-  const changementStatutPreavis=statutPreavis!==statutPreavisPrecedent;
   const initiativePreavis=document.getElementById('rp-initiative-'+cid)?.value||c.rupture.initiativePreavis||'';
-  const elFinPreavis=document.getElementById('rp-fin-preavis-'+cid);
-  // 06/08/2026 (Sophie) : au changement de statut du préavis, le champ de destination n'existe pas
-  // encore dans la page au moment où cette fonction s'exécute (il apparaît seulement une fois la
-  // page redessinée juste après) — sans ce contrôle, le repli "champ absent" ci-dessous allait
-  // chercher l'ancienne date enregistrée pour un AUTRE statut (ex. calculée automatiquement pour
-  // "effectué"), et l'affichait comme si elle avait toujours été là pour "partiel".
-  const dateFinPreavis=elFinPreavis?dateTexteVersISO(elFinPreavis.value||''):(changementStatutPreavis?'':fixDate(c.rupture.dateFinPreavis||''));
+  const dateFinPreavis=dateTexteVersISO(document.getElementById('rp-fin-preavis-'+cid)?.value||'')||fixDate(c.rupture.dateFinPreavis||'');
   const dateFinContrat=fixDate(c.rupture.dateFinContrat||'');
   const cumulConges=document.getElementById('rp-cumul-conges-'+cid)?.checked??c.rupture.cumulConges??false;
   // Bloquer date de signification antérieure au début de contrat ou > 1 an dans le futur
@@ -14495,7 +13892,7 @@ function rafraichirRupture(cid){
   renderRupture(c,cont);
 }
 
-async function sauvegarderRupture(cid){
+function sauvegarderRupture(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c) return;
   if(c.rupture?.confirmee){
@@ -14508,11 +13905,7 @@ async function sauvegarderRupture(cid){
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
-  // 06/08/2026 (Sophie) : cet enregistrement n'attendait jamais la fin réelle de la sauvegarde
-  // distante — un rechargement de page juste après pouvait retomber sur d'anciennes données pas
-  // encore à jour côté serveur et effacer ce qui venait d'être saisi. On attend maintenant la
-  // confirmation avant d'afficher "Rupture enregistrée".
-  await fbSaveData(window.FB_USER?.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}});
+  fbSaveData(window.FB_USER?.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}});
   const cont=document.getElementById('det-content');
   renderRupture(c,cont);
   toast('Rupture enregistrée');
@@ -14586,16 +13979,11 @@ function confirmerRupture(cid){
     if(dateFinLegaleR&&new Date(rp.dateFinPreavis)>dateFinLegaleR){
       // Corriger automatiquement à la date légale
       rp.dateFinPreavis=dateFinLegaleR.getFullYear()+'-'+String(dateFinLegaleR.getMonth()+1).padStart(2,'0')+'-'+String(dateFinLegaleR.getDate()).padStart(2,'0');
-      c.rupture.dateFinPreavis=rp.dateFinPreavis;
     }
   }
   // 4. Date de fin de contrat dans une fiche validée
   const motifsAvecDateFin=['retrait-enfant','demission','retrait-force','fin-essai','fin-essai-am'];
-  // 06/08/2026 (Sophie) : calcDateFinContratBrute (pas getDateFinContrat) — cette dernière refuse
-  // toujours de répondre tant que c.rupture.confirmee n'est pas déjà vrai, ce qui rendait ce contrôle
-  // impossible à passer dans TOUS les cas, quels que soient les champs remplis (le message d'erreur
-  // se déclenchait systématiquement, jamais lié aux données de Sophie).
-  const dateFinR=calcDateFinContratBrute(c);
+  const dateFinR=getDateFinContrat(c);
   if(motifsAvecDateFin.includes(rp.motif)&&!dateFinR){
     alerte('Impossible de déterminer la date de fin de contrat. Vérifiez que tous les champs requis sont bien renseignés (date de signification, statut du préavis...).');
     return;
@@ -14607,21 +13995,13 @@ function confirmerRupture(cid){
       return;
     }
   }
-  confirmerRuptureSuite(cid);
-}
-async function confirmerRuptureSuite(cid){
-  const c=S.contrats.find(x=>x.id==cid);
-  if(!c) return;
   c.rupture.confirmee=true;
   c._regulDirty=true;
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
   const cCleanR=JSON.parse(JSON.stringify(c));
-  // 06/08/2026 (Sophie) : même correctif que sauvegarderRupture — attendre la vraie fin de la
-  // sauvegarde distante avant d'afficher "Rupture confirmée", pour éviter qu'un rechargement rapide
-  // retombe sur d'anciennes données pas encore à jour côté serveur.
-  await fbSaveData(window.FB_USER?.uid,{contrats:[cCleanR],params:{},congesAM:S.congesAM||{}});
+  fbSaveData(window.FB_USER?.uid,{contrats:[cCleanR],params:{},congesAM:S.congesAM||{}});
   const cont=document.getElementById('det-content');
   renderRupture(c,cont);
   toast('Rupture confirmée');
@@ -14844,7 +14224,8 @@ function renderRuptureCDD(c, cont){
   }
 
   const confirmeeHtml=rp.confirmee?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px">
-    ✓ Rupture confirmée${estLectureSeuleEmployeur()?'':` — <button class="btn bd bsm" style="margin-left:8px" onclick="annulerRupture(${cid})">✕ Annuler</button>`}
+    ✓ Rupture confirmée${estLectureSeuleEmployeur()?'':` — <button class="btn bd bsm" style="margin-left:8px" onclick="annulerRupture(${cid})">✕ Annuler</button>
+    <button class="btn bp bsm" style="margin-left:8px" onclick="sauvegarderRupture(${cid})">💾 Enregistrer</button>`}
   </div>`:'' ;
 
   cont.innerHTML=`
@@ -14866,7 +14247,7 @@ function renderRuptureCDD(c, cont){
       </div>
       ${initiative?`<div style="margin-top:10px">
         <label style="font-size:12px;color:var(--tx2)">Motif</label>
-        <select id="rp-motif-${cid}" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+        <select id="rp-motif-${cid}" oninput="corrigerDateRupture(this)" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
           <option value="">— Choisir —</option>
           ${motifsList.map(m=>{
             // Désactiver fin-essai si la période d'essai est dépassée
@@ -14999,7 +14380,7 @@ function renderRupture(c, cont){
           <span>Total bruts versés</span><span>${ir.totalBrut.toFixed(2)} €</span>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;margin-top:6px">
-          <span>Indemnité</span><span>${ir.montantBrut.toFixed(2)} € brut</span>
+          <span>Indemnité</span><span>${ir.montantNet.toFixed(2)} € net (${ir.montantBrut.toFixed(2)} € brut)</span>
         </div></div>`;
     } else {
       indemRuptureEncartHtml=`<div class="card" style="margin-bottom:10px">
@@ -15063,7 +14444,7 @@ function renderRupture(c, cont){
     if(statutPreavis==='partiel'||statutPreavis==='non-effectue'){
       initiativeHtml=`<div style="margin-top:8px">
         <label style="font-size:12px;color:var(--tx2)">À l'initiative de</label>
-        <select id="rp-initiative-${cid}" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+        <select id="rp-initiative-${cid}" oninput="corrigerDateRupture(this)" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
           <option value="">— Choisir —</option>
           <option value="employeur" ${rp.initiativePreavis==='employeur'?'selected':''}>À l'initiative de l'employeur</option>
           <option value="assmat" ${rp.initiativePreavis==='assmat'?'selected':''}>À l'initiative de l'Ass'Mat</option>
@@ -15174,7 +14555,7 @@ function renderRupture(c, cont){
     essaiHtml=`<div style="margin-top:10px;display:grid;gap:8px">
       <div>
         <label style="font-size:12px;color:var(--tx2)">Délai de prévenance si prévu au contrat (max 8 jours)</label>
-        <input type="number" id="rp-delai-prev-${cid}" value="${rp.delaiPrev||''}" min="0" max="8" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+        <input type="number" id="rp-delai-prev-${cid}" value="${rp.delaiPrev||''}" min="0" max="8" oninput="corrigerDateRupture(this)" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
       </div>
       <div>
         <label style="font-size:12px;color:var(--tx2)">Date de notification${dateFinPeriodeEssai?' (fin période d\'essai : '+dateFinPeriodeEssai.toLocaleDateString('fr-FR')+')':''}</label>
@@ -15207,7 +14588,7 @@ function renderRupture(c, cont){
       if(s.montantAcquisBrut>0){lignes.push({label:'Solde congés acquis',net:s.montantAcquisNet,brut:s.montantAcquisBrut});totalNet+=s.montantAcquisNet;totalBrut+=s.montantAcquisBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
     } else {
-      const s=calcSoldeConges46(c,dateFinContrat||dateSit);
+      const s=calcSoldeConges46(c);
       if(s.montantNonVersesBrut>0){lignes.push({label:'Congés acquis non versés',net:s.montantNonVersesNet,brut:s.montantNonVersesBrut});totalNet+=s.montantNonVersesNet;totalBrut+=s.montantNonVersesBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
       if(srcActifSim.tc!=='52'){
@@ -15289,7 +14670,7 @@ function renderRupture(c, cont){
   </div>`:'';
 
   cont.innerHTML=`
-    <div style="font-size:15px;color:var(--tx2);margin-bottom:12px">Situation au <strong>${dateSitStr}</strong></div>
+    <div style="font-size:12px;color:var(--tx2);margin-bottom:12px">Situation au <strong>${dateSitStr}</strong></div>
     ${confirmeeHtml}
     ${soldeCongesHtml}
     ${indemRuptureEncartHtml}
@@ -15298,7 +14679,7 @@ function renderRupture(c, cont){
       <div class="ctitle">Simulation de rupture</div>
       <div>
         <label style="font-size:12px;color:var(--tx2)">Motif de la rupture</label>
-        <select id="rp-motif-${cid}" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+        <select id="rp-motif-${cid}" oninput="corrigerDateRupture(this)" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
           <option value="">— Choisir —</option>
           <option value="retrait-enfant" ${motif==='retrait-enfant'?'selected':''}>Retrait d'enfant</option>
           <option value="demission" ${motif==='demission'?'selected':''}>Démission</option>
@@ -15320,7 +14701,7 @@ function renderRupture(c, cont){
     </div>
     ${soldeHtml}
     <div style="display:flex;gap:8px;margin-top:12px">
-      ${(!rp.confirmee&&!estLectureSeuleEmployeur())?`<button class="btn bs" onclick="sauvegarderRupture(${cid})">💾 Enregistrer</button>`:''}
+      ${estLectureSeuleEmployeur()?'':`<button class="btn bs" onclick="sauvegarderRupture(${cid})">💾 Enregistrer</button>`}
       ${(!rp.confirmee&&!estLectureSeuleEmployeur())?`<button class="btn bpurple" onclick="confirmerRupture(${cid})">✓ Confirmer la rupture</button>`:''}
       ${(!rp.confirmee&&!estLectureSeuleEmployeur()&&(rp.motif||rp.dateSignif))?`<button class="btn bs" onclick="reinitialiserSimulationRupture(${cid})">↺ Réinitialiser</button>`:''}
     </div>`;
@@ -16060,12 +15441,6 @@ async function signerContrat(){
   // Vérifications complétude
   const manquants=[];
   if(!c.dateDeb) manquants.push("date de début");
-  // 11/08/2026 (Sophie) : garde-fou — pas de signature possible si la date de début tombe sur un
-  // jour posé congés dans le calendrier AM.
-  if(c.dateDeb&&S.congesAM&&Object.values(S.congesAM).some(am=>am.jours&&am.jours[c.dateDeb]==='pose')){
-    toast('⚠ Impossible de signer : la date de début ('+c.dateDeb+') tombe sur un jour de congés posé.');
-    return;
-  }
   if(c.tc!=='occ'&&(c.periodeEssai===null||c.periodeEssai===undefined)) manquants.push("durée de la période d'essai (mettre 0 si aucune)");
   if(c.tc!=='52'&&c.tc!=='occ'&&!c.dateCg) manquants.push("mode de paiement des congés");
   if(!c.tc) manquants.push("type de contrat");
@@ -16533,12 +15908,6 @@ function signerAvenant(){
 
   // Vérifier date d'effet
   if(!av.dateAvenant){toast('Veuillez d\'abord enregistrer l\'avenant avec une date d\'effet');return;}
-  // 11/08/2026 (Sophie) : garde-fou — pas de signature possible si la date d'effet tombe sur un jour
-  // posé congés dans le calendrier AM.
-  if(S.congesAM&&Object.values(S.congesAM).some(am=>am.jours&&am.jours[av.dateAvenant]==='pose')){
-    toast('⚠ Impossible de signer : la date d\'effet ('+av.dateAvenant+') tombe sur un jour de congés posé.');
-    return;
-  }
 
   // Vérifications complétude — mêmes contrôles que la signature du contrat initial, sauf les champs
   // non éditables via avenant (date de début, période d'essai)
@@ -16624,17 +15993,6 @@ function signerAvenant(){
   av.signe=true;
   av.dateSigne=new Date().toISOString().slice(0,10);
   c._regulDirty=true;
-  // 11/08/2026 (Sophie) : les modifications de planning jour par jour (échanges, jours modifiés)
-  // enregistrées AVANT cet avenant appartiennent à l'ancien type de contrat — les garder au-delà de
-  // la date de l'avenant fait ressurgir d'anciens horaires qui n'ont plus de sens (ex. un contrat
-  // passé en "1 jour/semaine" qui affiche encore les jours modifiés de l'ancien planning complet).
-  ['planning','_planningSauvegarde'].forEach(champPlanningAv=>{
-    if(c[champPlanningAv]){
-      Object.keys(c[champPlanningAv]).forEach(dateKeyAv=>{
-        if(dateKeyAv>=av.dateAvenant) delete c[champPlanningAv][dateKeyAv];
-      });
-    }
-  });
   // Forcer nbSem=52 si passage vers contrat 52 sem
   if(av.tc==='52') av.nbSem=52;
   // Passage CDD → CDI : ce champ ne vit que sur le contrat (pas par avenant), donc le reporter ici
@@ -17262,22 +16620,6 @@ function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
     return periodes;
   }
 
-  // 06/08/2026 (Sophie) : deux fragments de pose (coupés par getPeriodes à cause d'un jour de repos
-  // hebdo non "posé" entre les deux, puisqu'on ne pose pas un jour où l'on ne travaille pas)
-  // appartiennent à la MÊME pose continue si tous les jours entre les deux sont des jours non
-  // travaillés (repos hebdo ou férié chômé) — sinon c'est une pose SÉPARÉE, sans lien (ex. un jour de
-  // pont isolé suivi, bien plus tard, d'une autre prise). Sert à savoir si le choix "anticipé
-  // autorisé" doit continuer de s'appliquer ou être redemandé pour la nouvelle pose.
-  function memePoseCgAm(c, finPrec, debutSuiv){
-    const d1=new Date(finPrec); d1.setDate(d1.getDate()+1);
-    const d2=new Date(debutSuiv);
-    for(let cur=new Date(d1); cur<d2; cur.setDate(cur.getDate()+1)){
-      const curStr=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
-      if(cur.getDay()!==(c.reposHebdo||0)&&!isFerie(curStr,c)) return false;
-    }
-    return true;
-  }
-
   // Type de semaine / volume pointé dans l'agenda pour la semaine d'une date donnée.
   // Retourne l'objet semType (plan sem) ou volume (plan var), ou null si la semaine n'a
   // pas de type connu (non pointée, off, ou pointage ne correspondant à aucun type/volume).
@@ -17383,7 +16725,7 @@ function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
           }
         }
         const srcPT=getVersionActive(c,d);
-        if(srcPT.th==='plan'){
+        if(c.th==='plan'||srcPT.th==='plan'){
           let jourPossible=false;
           const planTypePT=srcPT.planType||c.planType;
           if(planTypePT==='var'&&(srcPT.planVar||c.planVar)){
@@ -17399,38 +16741,24 @@ function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
               // qui trouvait "premier jour travaillé" un jour non coché du seul fait qu'il est
               // structurellement possible) : pour la détection "décompte commencé" (pas la reprise),
               // vérifier directement si CE jour précis est coché sur le planning, quel que soit tc.
-              // 11/08/2026 (Sophie) : EXCEPTION — un jour de congés n'est JAMAIS coché individuellement
-              // par construction (ni var 46 ni var 52), donc exiger le cochage bloque à tort tout
-              // jour de congés. Dans ce cas, utiliser directement le motif jours-union/possibles.
               const dsPT52=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-              const estJourCongesPT52=!!(S.congesAM&&Object.values(S.congesAM).some(am=>am.jours&&am.jours[dsPT52]==='pose'));
+              const cochePT52=!!(c.planning&&c.planning[dsPT52]&&c.planning[dsPT52].coche===true);
               const volPointePT52=typeSemainePointe(c,d);
               const motifPossiblePT52=volPointePT52?!!(volPointePT52.jours&&volPointePT52.jours[jourIdx])
                                                     :(srcPT.planVar||c.planVar).some(v=>v.jours&&v.jours[jourIdx]);
-              if(estJourCongesPT52){
-                jourPossible=motifPossiblePT52;
-              } else {
-                const cochePT52=!!(c.planning&&c.planning[dsPT52]&&c.planning[dsPT52].coche===true);
-                jourPossible=!!(cochePT52&&motifPossiblePT52);
-              }
+              jourPossible=!!(cochePT52&&motifPossiblePT52);
             }
           } else if(planTypePT==='min'&&(srcPT.joursMin||c.joursMin)){
             // 04/08/2026 (restauré — écrasé par erreur lors d'une modification suivante) : un jour
             // structurellement possible mais jamais coché ne doit pas déclencher le décompte.
-            // 11/08/2026 (Sophie) : même exception congés que var — jamais coché par construction.
             const dsMinPT=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-            const estJourCongesMinPT=!!(S.congesAM&&Object.values(S.congesAM).some(am=>am.jours&&am.jours[dsMinPT]==='pose'));
-            if(estJourCongesMinPT){
-              jourPossible=!!(srcPT.joursMin||c.joursMin)[jourIdx];
-            } else {
-              const cocheMinPT=!!(c.planning&&c.planning[dsMinPT]&&c.planning[dsMinPT].coche===true);
-              jourPossible=!!((srcPT.joursMin||c.joursMin)[jourIdx]&&cocheMinPT);
-            }
+            const cocheMinPT=!!(c.planning&&c.planning[dsMinPT]&&c.planning[dsMinPT].coche===true);
+            jourPossible=!!((srcPT.joursMin||c.joursMin)[jourIdx]&&cocheMinPT);
           }
           if(jourPossible) return dateStr;
         } else if(srcPT.th==='sem'&&srcPT.semTypes){
           let jourPossibleSem=false;
-          if(pourReprise||srcPT.tc==='52'){
+          if(pourReprise||c.tc==='52'||srcPT.tc==='52'){
             // Reprise (et contrats 52) : selon le type pointé de la semaine dans l'agenda —
             // même résolution que getHeuresPrevues/dernierJourDecompte. Une semaine sans
             // type connu n'offre aucun jour possible.
@@ -17609,11 +16937,6 @@ if(tousNonPrevus){
 
     // compteurTotal sera calculé par période (voir ci-dessous)
     let compteurTotal=0;
-    // 06/08/2026 (Sophie) : décision "anticipé autorisé" figée UNE FOIS par pose (au moment précis où
-    // elle devient nécessaire, voir plus bas), pas remise en cause ensuite pour cette même pose même
-    // en changeant de mois — remise à null à chaque nouvelle pose (voir memePoseCgAm juste au-dessus).
-    let anticipeDecidePose=null;
-    let finPosePrecedenteCgAm=null;
     Object.values(c.fiches).forEach(fiche=>{
       if(fiche.valide) return;
       fiche.jours.forEach(j=>{
@@ -17663,12 +16986,7 @@ if(tousNonPrevus){
       });
     }
     periodes.forEach(({debut,fin})=>{
-      // 06/08/2026 (Sophie) : nouvelle pose (pas la continuation de la précédente, malgré la coupure
-      // artificielle de getPeriodes sur les jours de repos) → la décision "anticipé" se redemande.
-      if(finPosePrecedenteCgAm&&!memePoseCgAm(c,finPosePrecedenteCgAm,debut)) anticipeDecidePose=null;
-      finPosePrecedenteCgAm=fin;
       const premierTrav=premierJourTravaille(c,debut,fin);
-      if(window.DEBUG_CGAM)console.log('[CGAM-premierTrav]','période:',debut,'à',fin,'| premierTrav trouvé:',premierTrav);
       const finDate=new Date(fin);
       const apresFinDate=new Date(finDate);apresFinDate.setDate(apresFinDate.getDate()+1);
       const apresFinStr=apresFinDate.getFullYear()+'-'+String(apresFinDate.getMonth()+1).padStart(2,'0')+'-'+String(apresFinDate.getDate()).padStart(2,'0');
@@ -17902,19 +17220,11 @@ if(tousNonPrevus){
       // s'il tombe sur un jour possible" déjà établie pour le férié et la déduction.
       if(!decompteCommence){
         const sourceC2=getVersionActive(c,cur);
-        if(sourceC2&&(sourceC2.th==='sem'||(sourceC2.th==='plan'&&(sourceC2.planType==='var'||sourceC2.planType==='min')))){
+        if(sourceC2&&sourceC2.th==='plan'&&(sourceC2.planType==='var'||sourceC2.planType==='min')){
         const jourIdxDCsem=jourSem===0?6:jourSem-1;
         let motifDCsem=null;
         if(sourceC2.planType==='min') motifDCsem=sourceC2.joursMin||c.joursMin;
-        else if(sourceC2.th==='sem'){
-          const semKeyDCsemS=getSemISO(dateStr);
-          const agKeyDCsemS=getKeyAgenda(semKeyDCsemS,getSemAnnee(dateStr));
-          const agendasDCsemS=sourceC2.agendas||c.agendas||[];
-          const agDCsemS=agendasDCsemS.find(a=>new Date(a.dateDebut)<=new Date(dateStr)&&new Date(a.dateFin)>=new Date(dateStr));
-          const typeSemDCsemS=agDCsemS&&agDCsemS.semaines&&agDCsemS.semaines[agKeyDCsemS];
-          const stDCsemS=typeSemDCsemS&&sourceC2.semTypes?sourceC2.semTypes.find(st=>st.nom===typeSemDCsemS):null;
-          motifDCsem=stDCsemS?stDCsemS.jours.map(j=>!!(j&&j.d)):null;
-        } else {
+        else {
           const semKeyDCsem=getSemISO(dateStr);
           const agKeyDCsem=getKeyAgenda(semKeyDCsem,getSemAnnee(dateStr));
           const agendasDCsem=sourceC2.agendas||c.agendas||[];
@@ -18041,6 +17351,19 @@ if(tousNonPrevus){
           if(jour.statut==='travaille') break;
 
           if(!fiche.valide){
+            // anticipeOk : réglage du contrat ET case mensuelle anticipeActif (précision
+            // Sophie 15/07/2026) — même logique que les autres branches
+            const debutMoisKeyPP=new Date(debut).getFullYear()+'-'+String(new Date(debut).getMonth()+1).padStart(2,'0');
+            const ficheDebutPP=c.fiches?.[debutMoisKeyPP];
+            let anticipeOkPP=c.cgAnticipe==='oui';
+            if(ficheDebutPP&&ficheDebutPP.anticipeActif!==undefined){
+              anticipeOkPP=c.cgAnticipe==='oui'&&ficheDebutPP.anticipeActif!==false;
+            } else {
+              const [dbYPP,dbMPP]=debutMoisKeyPP.split('-').map(Number);
+              const moisAvDebKeyPP=dbMPP===1?(dbYPP-1)+'-12':dbYPP+'-'+String(dbMPP-1).padStart(2,'0');
+              const ficheAvDebPP=c.fiches?.[moisAvDebKeyPP];
+              if(ficheAvDebPP?.anticipeActif!==undefined) anticipeOkPP=c.cgAnticipe==='oui'&&ficheAvDebPP.anticipeActif!==false;
+            }
             // Le compteur n'avance QUE si le jour devient réellement acquis ou anticipé —
             // jamais pour un jour qui finit non-acquis (règle Sophie 15/07/2026 : un jour
             // "gâché" ne doit jamais grignoter le quota disponible pour une pose différente,
@@ -18048,21 +17371,11 @@ if(tousNonPrevus){
             if(compteurTotal+1<=quotaAcquis){
               compteurTotal++;
               jour.statut='decompte-acq';
+            } else if(anticipeOkPP&&compteurTotal+1<=quotaAnticipeTotal){
+              compteurTotal++;
+              jour.statut='decompte-anticipe';
             } else {
-              // 06/08/2026 (Sophie) : la case consultée est celle du mois où CE JOUR précis a lieu
-              // (pas celui du début de la pose) — décidé une seule fois par pose, au moment exact où
-              // l'anticipé devient nécessaire, puis réutilisé tel quel jusqu'à la fin de cette même
-              // pose (anticipeDecidePose, remis à null à chaque nouvelle pose — voir memePoseCgAm).
-              if(anticipeDecidePose===null){
-                const ficheDecisionPP=c.fiches?.[dateStr.slice(0,7)];
-                anticipeDecidePose=c.cgAnticipe==='oui'&&!!(ficheDecisionPP&&ficheDecisionPP.anticipeActif);
-              }
-              if(anticipeDecidePose&&compteurTotal+1<=quotaAnticipeTotal){
-                compteurTotal++;
-                jour.statut='decompte-anticipe';
-              } else {
-                jour.statut='decompte-conges'; // hors quota — ne consomme pas le compteur
-              }
+              jour.statut='decompte-conges'; // hors quota — ne consomme pas le compteur
             }
           } else {
             compteurTotal++; // fiche validée : incrément conservé tel quel (cf. bug #5, 14/07)
@@ -18128,7 +17441,7 @@ if(tousNonPrevus){
             // Sophie 17/07/2026 : "autant débuter la pose après le férié et ne pas perdre le
             // férié" plutôt que de vérifier arrêt précédent/congé suivant. Le décompte démarre
             // simplement le jour d'après ; ce férié reste "Férié", ne consomme rien.
-            if(premierTrav&&dateStr===premierTrav&&(!premierTravReprise||dateStr!==premierTravReprise)&&!decompteCommence){
+            if(premierTrav&&dateStr===premierTrav&&(!premierTravReprise||dateStr!==premierTravReprise)){
               if(window.DEBUG_CGAM)console.log('[CGAM]',dateStr,'| férié=premier jour de pose | décompte décalé au lendemain');
               if(!fiche.valide) jour.statut='ferie';
               cur.setDate(cur.getDate()+1);continue;
@@ -18210,14 +17523,22 @@ if(tousNonPrevus){
             // même quand le lendemain réel allait légitimement devenir anticipé.
             const debutPoseDateFerLend=new Date(anneeAcqPose+1,4,1);
             const estEnPeriodePoseFerLend=lendStr>=debutPoseDateFerLend;
-            // 06/08/2026 (Sophie) : même mécanisme que les autres branches — décision unique par
-            // pose, prise au moment précis où elle devient nécessaire, réutilisée telle quelle
-            // jusqu'à la fin de la pose (anticipeDecidePose, voir plus haut).
-            if(anticipeDecidePose===null){
-              const ficheDecisionFerLend=c.fiches?.[dateStr.slice(0,7)];
-              anticipeDecidePose=c.cgAnticipe==='oui'&&!!(ficheDecisionFerLend&&ficheDecisionFerLend.anticipeActif);
+            // anticipeOk : le réglage du contrat NE SUFFIT PAS — il faut EN PLUS que la case
+            // mensuelle de la feuille de présence (anticipeActif, cochée par défaut) soit
+            // active pour le mois de la pose — précision Sophie 15/07/2026. Même logique que
+            // les autres branches (pose normale, post-pose) : chercher d'abord le mois de
+            // début de la période, sinon le mois précédent.
+            const debutMoisKeyFerLend=new Date(debut).getFullYear()+'-'+String(new Date(debut).getMonth()+1).padStart(2,'0');
+            const ficheDebutFerLend=c.fiches?.[debutMoisKeyFerLend];
+            let anticipeOkFerLend=c.cgAnticipe==='oui';
+            if(ficheDebutFerLend&&ficheDebutFerLend.anticipeActif!==undefined){
+              anticipeOkFerLend=c.cgAnticipe==='oui'&&ficheDebutFerLend.anticipeActif!==false;
+            } else {
+              const [dbYFerLend,dbMFerLend]=debutMoisKeyFerLend.split('-').map(Number);
+              const moisAvDebKeyFerLend=dbMFerLend===1?(dbYFerLend-1)+'-12':dbYFerLend+'-'+String(dbMFerLend-1).padStart(2,'0');
+              const ficheAvDebFerLend=c.fiches?.[moisAvDebKeyFerLend];
+              if(ficheAvDebFerLend?.anticipeActif!==undefined) anticipeOkFerLend=c.cgAnticipe==='oui'&&ficheAvDebFerLend.anticipeActif!==false;
             }
-            const anticipeOkFerLend=anticipeDecidePose;
             const lendAcquis=lendConges&&((estEnPeriodePoseFerLend&&compteurTotal+1<=quotaAcquis)||(anticipeOkFerLend&&compteurTotal+1<=quotaAnticipeTotal));
             if(veilleAcquis&&lendAcquis){
               // Reste férié (entouré de jours acquis ou anticipés) — confirmer explicitement
@@ -18280,16 +17601,19 @@ if(tousNonPrevus){
               // compteur n'avance que si le jour devient acquis ou anticipé (2e correctif du
               // même jour : jamais pour un non-acquis).
               if(!fiche.valide){
+                const debutMoisKeyHP=new Date(debut).getFullYear()+'-'+String(new Date(debut).getMonth()+1).padStart(2,'0');
+                const ficheDebutHP=c.fiches?.[debutMoisKeyHP];
+                let anticipeOkHP;
+                if(ficheDebutHP&&ficheDebutHP.anticipeActif!==undefined){
+                  anticipeOkHP=c.cgAnticipe==='oui'&&ficheDebutHP.anticipeActif!==false;
+                } else {
+                  const [dbYHP,dbMHP]=debutMoisKeyHP.split('-').map(Number);
+                  const moisAvDebKeyHP=dbMHP===1?(dbYHP-1)+'-12':dbYHP+'-'+String(dbMHP-1).padStart(2,'0');
+                  const ficheAvDebHP=c.fiches?.[moisAvDebKeyHP];
+                  anticipeOkHP=c.cgAnticipe==='oui'&&(ficheAvDebHP?.anticipeActif!==false);
+                }
                 const debutPoseDateHP=new Date(anneeAcqPose+1,4,1);
                 const estEnPeriodePoseHP=cur>=debutPoseDateHP;
-                // 06/08/2026 (Sophie) : décision unique par pose (anticipeDecidePose, voir plus
-                // haut) — consultée seulement si ce jour a vraiment besoin d'anticipé (l'acquis ne
-                // suffit pas), au moment précis où c'est le cas, jamais avant.
-                if(!(estEnPeriodePoseHP&&compteurTotal+1<=quotaAcquis)&&anticipeDecidePose===null){
-                  const ficheDecisionHP=c.fiches?.[dateStr.slice(0,7)];
-                  anticipeDecidePose=c.cgAnticipe==='oui'&&!!(ficheDecisionHP&&ficheDecisionHP.anticipeActif);
-                }
-                const anticipeOkHP=anticipeDecidePose;
                 if(window.DEBUG_CGAM)console.log('[CGAM]',dateStr,'| post-pose non prévu | compteur',compteurTotal,'/ quota',quotaAcquis,'/ anticipé total',quotaAnticipeTotal,'| enPériodePose',estEnPeriodePoseHP,'| anticipéOk',anticipeOkHP);
                 if(estEnPeriodePoseHP&&compteurTotal+1<=quotaAcquis){
                   compteurTotal++;
@@ -18306,16 +17630,19 @@ if(tousNonPrevus){
             } else {
               // Jour prévu ou dans la période : pose normale
               if(!fiche.valide){
+                const debutMoisKey2=new Date(debut).getFullYear()+'-'+String(new Date(debut).getMonth()+1).padStart(2,'0');
+                const ficheDebut2=c.fiches?.[debutMoisKey2];
+                let anticipeOk;
+                if(ficheDebut2&&ficheDebut2.anticipeActif!==undefined){
+                  anticipeOk=c.cgAnticipe==='oui'&&ficheDebut2.anticipeActif!==false;
+                } else {
+                  const [dbY2,dbM2]=debutMoisKey2.split('-').map(Number);
+                  const moisAvDebKey2=dbM2===1?(dbY2-1)+'-12':dbY2+'-'+String(dbM2-1).padStart(2,'0');
+                  const ficheAvDeb2=c.fiches?.[moisAvDebKey2];
+                  anticipeOk=c.cgAnticipe==='oui'&&(ficheAvDeb2?.anticipeActif!==false);
+                }
                 const debutPoseDate2=new Date(anneeAcqPose+1,4,1);
                 const estEnPeriodePose2=cur>=debutPoseDate2;
-                // 06/08/2026 (Sophie) : décision unique par pose (anticipeDecidePose, voir plus
-                // haut) — consultée seulement si ce jour a vraiment besoin d'anticipé (l'acquis ne
-                // suffit pas), au moment précis où c'est le cas, jamais avant.
-                if(!(estEnPeriodePose2&&compteurTotal+1<=quotaAcquis)&&anticipeDecidePose===null){
-                  const ficheDecision2=c.fiches?.[dateStr.slice(0,7)];
-                  anticipeDecidePose=c.cgAnticipe==='oui'&&!!(ficheDecision2&&ficheDecision2.anticipeActif);
-                }
-                const anticipeOk=anticipeDecidePose;
                 if(window.DEBUG_CGAM)console.log('[CGAM]',dateStr,'| pose | compteur',compteurTotal,'/ quota',quotaAcquis,'/ anticipé total',quotaAnticipeTotal,'| enPériodePose',estEnPeriodePose2,'| anticipéOk',anticipeOk);
                 // Le compteur n'avance que si le jour devient acquis ou anticipé — jamais pour
                 // un non-acquis ni pour une semaine off (règle Sophie 15/07/2026)
