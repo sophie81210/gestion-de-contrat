@@ -8186,7 +8186,6 @@ function calcCongesContrat(c, dateRefOverride){
 
             joursSub.forEach(j=>{
               const statutJ=j.statut||getStatutPrevu(c,j);
-              if(window.DEBUG_CGAM)console.log('[CGAM-jourDetail]',c.nom||c.prenom||c.id,'|',j.date,'| j.statut (stocké):',j.statut,'| statutJ (utilisé):',statutJ,'| heureDebReel:',j.heureDebReel);
               const cocheCgMin=!!(c.planning&&c.planning[j.date]&&c.planning[j.date].coche);
               const gateMinOk=!(c.th==='plan'&&c.planType==='min')||semaineCompleteCgMin||cocheCgMin;
               const [jpy,jpm,jpd]=j.date.split('-').map(Number);
@@ -8282,9 +8281,16 @@ function calcCongesContrat(c, dateRefOverride){
                   return !!(joursPatternMinPl&&joursPatternMinPl[idxPossISO]);
                 });
               } else {
-                let joursPossiblesEnContratMin=joursMaxSem;
+                // 24/08/2026 (Sophie) : corrigé — partir du plafond (jours du motif en contrat cette
+                // semaine, plafonné à joursMaxSem) puis retirer UNIQUEMENT les jours abs-non/abs-enfant
+                // — au lieu de "compter chaque jour du motif non explicitement exclu", qui incluait à
+                // tort les jours restés 'non-prevu' comme s'ils normalisaient la semaine (bug confirmé
+                // Sophie : semaine de 5 jours possibles, 1 prévu + 2 abs-non + 2 non-prevu comptait 3
+                // au lieu de 2 = plafond 4 − 2 abs-non).
+                let joursMaxSemAjusteMinBase=joursMaxSem;
+                let reductionAbsNonMin=0;
                 if(joursPatternMinPl){
-                  joursPossiblesEnContratMin=0;
+                  joursMaxSemAjusteMinBase=0;
                   for(let dpm=0;dpm<7;dpm++){
                     if(!joursPatternMinPl[dpm]) continue;
                     const jourMatchMin=joursSub.find(jj=>{
@@ -8294,11 +8300,13 @@ function calcCongesContrat(c, dateRefOverride){
                     if(!jourMatchMin) continue;
                     const stMatchMin=jourMatchMin.statut||getStatutPrevu(c,jourMatchMin);
                     const estHCMin=stMatchMin==='hors-contrat'||(c.dateDeb&&jourMatchMin.date<c.dateDeb);
+                    if(estHCMin) continue;
+                    joursMaxSemAjusteMinBase++;
                     const estAbsNonPayeeMin=['abs-non','abs-enfant'].includes(stMatchMin);
-                    if(!estHCMin&&!estAbsNonPayeeMin) joursPossiblesEnContratMin++;
+                    if(estAbsNonPayeeMin) reductionAbsNonMin++;
                   }
                 }
-                joursMaxSemAjusteMin=Math.min(joursMaxSem,joursPossiblesEnContratMin);
+                joursMaxSemAjusteMin=Math.max(0,Math.min(joursMaxSem,joursMaxSemAjusteMinBase)-reductionAbsNonMin);
               }
               if(joursMaxSemAjusteMin>0) joursNormaux=Math.max(joursNormaux,joursMaxSemAjusteMin);
             }
