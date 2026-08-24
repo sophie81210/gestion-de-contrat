@@ -7793,7 +7793,13 @@ function calcCongesContrat(c, dateRefOverride){
   // anneeRefDebut basé sur la dernière fiche validée pour éviter de créer des années fictives
   const nowRef=dateFinDerniereValide||now;
   const anneeRefDebut=nowRef.getMonth()>=5?nowRef.getFullYear():nowRef.getFullYear()-1;
-  const anneeContratDebut=dateDebContrat.getFullYear();
+  // 24/08/2026 (Sophie) : même règle que anneeRefDebut juste au-dessus (>=5 = juin ou après) — un
+  // contrat débuté entre juin et décembre appartient déjà à SA bonne année de référence, sans -1
+  // supplémentaire. L'ancien calcul (année civile brute, -1 appliqué systématiquement dans la boucle
+  // plus bas) créait une année de référence fantôme antérieure au vrai début du contrat pour tout
+  // contrat débuté entre juin et décembre — bug confirmé Sophie (contrat débuté octobre 2025,
+  // année fantôme 2024/2025 créée alors que le contrat n'existait pas encore).
+  const anneeContratDebut=dateDebContrat.getMonth()>=5?dateDebContrat.getFullYear():dateDebContrat.getFullYear()-1;
 
   // Calculer jours max par semaine selon type de contrat
   function getJoursMax(){
@@ -7826,7 +7832,7 @@ function calcCongesContrat(c, dateRefOverride){
     if(!aFicheValidee) delete c.conges[ar];
   });
 
-  for(let anneeRef=anneeContratDebut-1; anneeRef<=anneeRefDebut; anneeRef++){
+  for(let anneeRef=anneeContratDebut; anneeRef<=anneeRefDebut; anneeRef++){
     const debutRef=new Date(anneeRef,5,1);
     const finRef=new Date(anneeRef+1,4,31);
     const estTerminee=dateFinDerniereValide?finRef<=dateFinDerniereValide:finRef<now;
@@ -8328,7 +8334,7 @@ function calcCongesContrat(c, dateRefOverride){
                 return ['conges-acq','conges-anticipe','conges-non','conges-am','ferie','ferie-non','repos'].includes(stCap);
               });
             const prorataPlafonne=estSemUniquementCongesFerie?Math.min(prorata,1):prorata;
-            if(window.DEBUG_CGAM&&c.nom==='Constance')console.log('[CGAM-contribSemaine]',joursSub[0]?.date,'-',joursSub[joursSub.length-1]?.date,'| joursNormaux:',joursNormaux,'| joursMaxSem:',joursMaxSem,'| joursTravailleFSM:',joursTravailleFSM,'| contributionNormale:',contributionNormale,'| contrib final:',prorataPlafonne);
+            if(window.DEBUG_CGAM)console.log('[CGAM-contribSemaine]',c.nom||c.prenom||c.id,'|',joursSub[0]?.date,'-',joursSub[joursSub.length-1]?.date,'| joursNormaux:',joursNormaux,'| joursMaxSem:',joursMaxSem,'| joursMaxSemAjusteMin:',typeof joursMaxSemAjusteMin!=='undefined'?joursMaxSemAjusteMin:'(n/a)','| joursTravailleFSM:',joursTravailleFSM,'| joursConges16:',joursConges16,'| contributionNormale:',contributionNormale,'| contrib final:',prorataPlafonne);
             return {contrib:prorataPlafonne,contribArret:contributionArret};
           };
 
@@ -8416,7 +8422,16 @@ function calcCongesContrat(c, dateRefOverride){
     // Arrondi supérieur seulement si on est après la fin de l'année de référence
     // ET toutes les fiches existantes de l'année sont validées
     const apresFinRef=nowRef>=finRef;
-    const toutesValidees=apresFinRef&&Object.entries(c.fiches).every(([k,f])=>{
+    // 24/08/2026 (Sophie) : une année SANS AUCUNE fiche dans sa période ne doit jamais être
+    // considérée "toutes validées" — sinon le .every() ci-dessous est vrai par défaut (aucune fiche
+    // à mettre en échec), ce qui déclenchait à tort le bonus "enfants à charge" plus bas sur une
+    // année fantôme (cf. correctif anneeContratDebut ci-dessus, même bug).
+    const aFicheDansPeriode=Object.entries(c.fiches).some(([k])=>{
+      const [ay,am]=k.split('-').map(Number);
+      const dateF=new Date(ay,am-1,1);
+      return dateF>=debutRef&&dateF<dernierMoisRef;
+    });
+    const toutesValidees=apresFinRef&&aFicheDansPeriode&&Object.entries(c.fiches).every(([k,f])=>{
       const [ay,am]=k.split('-').map(Number);
       const dateF=new Date(ay,am-1,1);
       if(dateF<debutRef||dateF>=dernierMoisRef) return true;
@@ -11824,9 +11839,18 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // ── Rétrocompat retour (pour calcBrutTotal et régularisation) ──
   const montantCompBrutMaj=(hComp*(1+majCompPct)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))*txBrut;
   const montantSupBrutMaj=hSup*(1+majSup)*txBrut;
-  const denomExoNet=(hComp*(1+majCompPct)+hSup*(1+majSup)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))||1;
+  // 24/08/2026 (Sophie) : dénominateur corrigé pour inclure hMensuMajExo (heures sup mensualisées),
+  // comme hExoBrut ci-dessus — il en manquait avant, ce qui faisait retomber toute la part
+  // d'exonération des heures sup mensualisées dans exoCompPart (mélangée à tort avec les heures
+  // complémentaires, jamais isolée). exoMensuSupPart l'isole maintenant correctement à part.
+  const denomExoNet=(hComp*(1+majCompPct)+hSup*(1+majSup)+hMensuMajExo*(1+majSup)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))||1;
   const exoSupPart=parseFloat((montantExo*(hSup*(1+majSup)/denomExoNet)).toFixed(2));
-  const exoCompPart=parseFloat((montantExo-exoSupPart).toFixed(2)); // reste exact, évite l'écart d'arrondi
+  const exoMensuSupPart=parseFloat((montantExo*(hMensuMajExo*(1+majSup)/denomExoNet)).toFixed(2));
+  // 24/08/2026 (Sophie) : brut des heures sup mensualisées (absence déduite), exposé séparément pour
+  // le calcul de la part "heures sup" de l'indemnité de congés (méthode 10ème) — même heures que
+  // celles utilisées ci-dessus pour l'exonération, avant sa conversion en montant net à 11,31%.
+  const hMensuMajExoBrut=parseFloat((hMensuMajExo*(1+majSup)*txBrut).toFixed(2));
+  const exoCompPart=parseFloat((montantExo-exoSupPart-exoMensuSupPart).toFixed(2)); // reste exact, évite l'écart d'arrondi
   const montantCompNet=parseFloat((montantTotalComp+exoCompPart).toFixed(2));
   const montantSupNet=parseFloat((montantTotalSup+exoSupPart).toFixed(2));
   const montantCompBrut=parseFloat(montantCompBrutMaj.toFixed(2));
@@ -12230,7 +12254,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     montantBaseComp, montantBaseSup, montantBaseFerieNP, montantBaseRepos, montantBase1erMai,
     hCompMaj:hCompMaj.toFixed(2),
     montantMajComp, montantMajSup, montantMajFerieNP, montantMajFeriePrevu2, montantMajRepos, montantMaj1erMai,
-    montantExo, hTotalComp:hTotalComp.toFixed(2), montantTotalComp, montantTotalSup, hBaseComp:hBaseComp.toFixed(2),
+    montantExo, exoSupPart, exoMensuSupPart, hMensuMajExoBrut, hTotalComp:hTotalComp.toFixed(2), montantTotalComp, montantTotalSup, hBaseComp:hBaseComp.toFixed(2),
     hAbs:hAbs.toFixed(2), hAbsDeduit, hAbsDeduitHS, montantAbsences, montantAbsMaj:montantAbsMajStored, hAbsHS:typeof hAbsHS!=='undefined'?hAbsHS:0, hAbsNorm:typeof hAbsNorm!=='undefined'?hAbsNorm:0,
     nbJoursTrav:Math.max(0,parseFloat(nbJoursTrav.toFixed(1))),
     th:sourceActif.th, planType:sourceActif.planType, nbJoursMoisContrat, nbJoursMoisCalc, joursEnPlus, joursEnMoins:parseFloat(joursEnMoins.toFixed(1)),
@@ -14538,6 +14562,41 @@ function calcBrutTotal(c, dateDebut, dateFin){
   return parseFloat(total.toFixed(2));
 }
 
+// 24/08/2026 (Sophie) : miroir de calcBrutTotal, mais somme le brut des heures sup mensualisées
+// (hMensuMajExoBrut, absence déduite) au lieu du salaire — sert à isoler la part de l'indemnité
+// congés (méthode 10ème) attribuable aux heures sup mensualisées, éligibles à l'exonération de
+// charges au même titre que le salaire normal (texte BOSS, réduction sur heures sup, §240 : réputées
+// réalisées pendant un congé payé avec maintien intégral de la rémunération).
+function calcHeuresSupMensuBrutTotal(c, dateDebut, dateFin){
+  let total=0;
+  Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
+    if(!fiche.valide) return;
+    const [y,m]=key.split('-').map(Number);
+    const debutMois=new Date(y,m-1,1);
+    const finMois=new Date(y,m,0);
+    if(dateDebut&&finMois<dateDebut) return;
+    if(dateFin&&debutMois>dateFin) return;
+    const avenantDuMoisHS=(c.avenants||[]).find(a=>{
+      if(!a.signe||!a.dateAvenant) return false;
+      return a.dateAvenant>key+'-01'&&a.dateAvenant<=key+'-31';
+    });
+    if(avenantDuMoisHS){
+      const moisAvHS=avenantDuMoisHS.dateAvenant;
+      const veilleHS=new Date(moisAvHS);
+      veilleHS.setDate(veilleHS.getDate()-1);
+      const veilleHSStr=veilleHS.getFullYear()+'-'+String(veilleHS.getMonth()+1).padStart(2,'0')+'-'+String(veilleHS.getDate()).padStart(2,'0');
+      const debutMoisHSStr=key+'-01';
+      const rAvantHS=calcRecapFiche(c,fiche,debutMoisHSStr,veilleHSStr,debutMoisHSStr,moisAvHS,'avant');
+      const rApresHS=calcRecapFiche(c,fiche,moisAvHS,finMois.getFullYear()+'-'+String(finMois.getMonth()+1).padStart(2,'0')+'-'+String(finMois.getDate()).padStart(2,'0'),debutMoisHSStr,moisAvHS,'apres');
+      total+=parseFloat(rAvantHS.hMensuMajExoBrut||0)+parseFloat(rApresHS.hMensuMajExoBrut||0);
+    } else {
+      const r=calcRecapFiche(c,fiche);
+      total+=parseFloat(r.hMensuMajExoBrut||0);
+    }
+  });
+  return parseFloat(total.toFixed(2));
+}
+
 function calcSoldeConges52(c, dateRupture){
   const params=S.params||{};
   const dateRefIccp=dateRupture||new Date();
@@ -15987,6 +16046,16 @@ function calcIndemniteConges(c, anneeRef){
 
   // Méthode du maintien
   const maintien=parseFloat((hHebdo/6*cg.acquis*txBrutM).toFixed(2));
+  // 24/08/2026 (Sophie) : exonération de charges sur les heures sup mensualisées — texte BOSS
+  // (réduction de cotisations salariales sur heures sup, §240) : en cas d'absence avec maintien
+  // intégral de la rémunération (un congé payé en est un), les heures sup structurelles sont
+  // réputées réalisées et ouvrent droit à l'exonération. Part de l'indemnité (brute) attribuable aux
+  // heures sup mensualisées, au taux majoré (comme hExoBrut plus haut, pas le taux de base) :
+  const hMensuMajM=sourceM.hMensuMaj||0;
+  const majSupM=(sourceM.majSup||c.majSup||0)/100;
+  const hHebdoSup=hMensuMajM>0?parseFloat((hMensuMajM*12/getNbSemReel(sourceM,c)).toFixed(2)):0;
+  const maintienSupBrut=parseFloat((hHebdoSup/6*cg.acquis*txBrutM*(1+majSupM)).toFixed(2));
+  const maintienExo=parseFloat((maintienSupBrut*0.1131).toFixed(2));
 
   // Méthode du 10ème
   // 24/08/2026 (Sophie) : reprend calcBrutTotal (déjà fiable, utilisée par ailleurs pour l'indemnité
@@ -15995,15 +16064,24 @@ function calcIndemniteConges(c, anneeRef){
   // cours de mois (scindé avant/après), que le recalcul manuel ne gérait pas.
   const totalBrut=calcBrutTotal(c,new Date(anneeRef,5,1),dateMai);
   const dixieme=parseFloat((totalBrut*0.1).toFixed(2));
+  // Part du 10ème (brut) attribuable aux heures sup mensualisées, au prorata de leur poids dans le
+  // brut total de la période — même principe que le maintien ci-dessus, mais à partir de vrais
+  // montants mensuels plutôt qu'une moyenne théorique.
+  const totalHeuresSupBrut=calcHeuresSupMensuBrutTotal(c,new Date(anneeRef,5,1),dateMai);
+  const dixiemeSupBrut=totalBrut>0?parseFloat((dixieme*(totalHeuresSupBrut/totalBrut)).toFixed(2)):0;
+  const dixiemeExo=parseFloat((dixiemeSupBrut*0.1131).toFixed(2));
 
   const params=S.params||{};
   const coefNet=getParamAt('coefficients',dateToStr(dateMai)).valeur||0.7811975; // 27/07/2026 (correctif Sophie)
   const meilleur=Math.max(maintien,dixieme);
-  const meilleurNet=parseFloat((meilleur*coefNet).toFixed(2));
+  // Exonération ajoutée après coup, selon la méthode retenue (jamais les deux) — montant déjà net,
+  // pas de coefficient à appliquer dessus.
+  const exoRetenue=maintien>=dixieme?maintienExo:dixiemeExo;
+  const meilleurNet=parseFloat((meilleur*coefNet+exoRetenue).toFixed(2));
   const nomMethode=maintien>=dixieme?'Méthode du maintien de salaire':'Méthode du 10ème';
   const montantJournalierBrut=cg.acquis>0?parseFloat((meilleur/cg.acquis).toFixed(4)):0;
   const montantJournalierNet=parseFloat((montantJournalierBrut*coefNet).toFixed(4));
-  return{maintien,dixieme,meilleurBrut:meilleur,meilleurNet,nomMethode,montantJournalierBrut,montantJournalierNet,acquis:cg.acquis};
+  return{maintien,dixieme,meilleurBrut:meilleur,meilleurNet,nomMethode,montantJournalierBrut,montantJournalierNet,acquis:cg.acquis,exoRetenue};
 }
 function genOngletCongesContrat(c){
   const annees=[];
