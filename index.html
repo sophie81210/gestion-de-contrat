@@ -17747,29 +17747,6 @@ function buildCgAmDetail(anneeDebut,data){
   // férié ne sert qu'à garantir la continuité de la période, pas à consommer un jour de pose)
   const joursCoches=Object.keys(data.jours||{}).filter(k=>data.jours[k]==='pose'&&!isFerie(k,{}));
   const nb=joursCoches.length;
-  const nbSamedisCoches=joursCoches.filter(d=>{
-    const p=d.split('-');
-    return new Date(parseInt(p[0]),parseInt(p[1])-1,parseInt(p[2])).getDay()===6;
-  }).length;
-  // Compter aussi les samedis fériés acquis (non cochables car couverts par les congés)
-  const contratsActifsAm=S.contrats.filter(c=>c.signe&&!estContratCloture(c));
-  let nbSamedisFeriesAcquis=0;
-  // Parcourir tous les samedis de l'année AM (1er mai → 30 avril)
-  const dDebAm=new Date(anneeDebut,4,1);
-  const dFinAm=new Date(anneeDebut+1,3,30);
-  for(let d=new Date(dDebAm);d<=dFinAm;d.setDate(d.getDate()+1)){
-    if(d.getDay()!==6) continue; // seulement les samedis
-    const dsAm=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-    if(joursCoches.includes(dsAm)) continue; // déjà compté
-    // Vérifier si c'est un férié acquis pour tous les contrats
-    const isFerNonTravAm=contratsActifsAm.length>0&&contratsActifsAm.every(c=>{
-      if(!isFerie(dsAm,c)) return false;
-      const mmddAm=dsAm.slice(5);
-      return !(c.feriesTravailles||[]).includes(mmddAm);
-    });
-    if(isFerNonTravAm&&ferieCouvretParAcquis(dsAm,anneeDebut,data)) nbSamedisFeriesAcquis++;
-  }
-  const nbSamedis=nbSamedisCoches+nbSamedisFeriesAcquis;
 
   // Précalcul des jours restants par contrat pour la bordure pointillée
   const anneeAcqPose=anneeDebut; // pose de anneeDebut = acquisition anneeDebut-1
@@ -17903,16 +17880,9 @@ function buildCgAmDetail(anneeDebut,data){
     });
   }
   const joursMax=30+joursFragMax;
-  // Règle des 5 samedis : uniquement si aucun contrat ne prévoit le samedi comme travaillé
-  const samediTravaille=S.contrats.filter(c=>c.signe&&!estContratCloture(c)).some(c=>{
-    const src=getVersionActive(c,new Date());
-    if(src.th==='fixe'&&src.joursFixe) return src.joursFixe[5]&&(src.joursFixe[5].d||src.joursFixe[5].f);
-    if(src.th==='sem'&&src.semTypes) return src.semTypes.some(st=>st.jours&&st.jours[5]);
-    return false;
-  });
-  const ok=nb===joursMax&&(samediTravaille||nbSamedis===5);
-  const alertHtml=ok?`<div style="background:var(--vtc);color:var(--vt);padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px">✓ ${joursMax} jours posés dont 5 samedis</div>`:
-    `<div style="font-size:15px;font-weight:600;color:var(--tx2);margin-bottom:10px">${nb}/${joursMax} jours cochés</div>`;
+  // 25/08/2026 (Sophie) : bannière "✓ X jours posés dont 5 samedis" supprimée (comptait à tort des
+  // samedis fériés comme si c'étaient des samedis "consommés") — toujours le simple compteur.
+  const alertHtml=`<div style="font-size:15px;font-weight:600;color:var(--tx2);margin-bottom:10px">${nb}/${joursMax} jours cochés</div>`;
 
   return `<div style="padding:14px">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
@@ -18659,7 +18629,7 @@ if(tousNonPrevus){
         if(!f.valide) return;
         (f.jours||[]).forEach(j=>{
           if(!j.date||j.date<debutPoseSamInit||j.date>finPoseSamInit) return;
-          if(new Date(j.date).getDay()===6&&statsSamediInit.includes(j.statut)) nbSamedisCumulatif++;
+          if(new Date(j.date).getDay()===6&&statsSamediInit.includes(j.statut)&&!isFerie(j.date,c)) nbSamedisCumulatif++;
         });
       });
     }
@@ -19274,7 +19244,9 @@ if(tousNonPrevus){
             }
             if(!fiche.valide){
               jour.statut='conges-non';
-              if(estSamedi) nbSamedisDecomptes++;
+              // 25/08/2026 (Sophie) : un férié tombant un samedi ne doit jamais compter dans le
+              // plafond des 5 samedis — retiré (incrément conservé partout ailleurs, samedis non
+              // fériés uniquement).
               if(window.DEBUG_CGAM)console.log('[CGAM]',dateStr,'| férié décompté | compteur',compteurTotal,'/ quota',quotaAcquis,'/ anticipé total',quotaAnticipeTotal,'→',jour.statut);
             } else {
               compteurTotal++; // fiche validée : incrément conservé tel quel
@@ -19380,7 +19352,7 @@ if(tousNonPrevus){
           const statsC=['conges-acq','conges-anticipe','conges-6j','conges-6j-fin','decompte-acq','decompte-anticipe'];
           if(statsC.includes(j.statut)) compteurCumulatif++;
           const statsSamediMaj=['conges-acq','conges-anticipe','conges-non','conges-6j','conges-6j-fin','decompte-acq','decompte-anticipe','decompte-conges'];
-          if(new Date(j.date).getDay()===6&&statsSamediMaj.includes(j.statut)) nbSamedisCumulatif++;
+          if(new Date(j.date).getDay()===6&&statsSamediMaj.includes(j.statut)&&!isFerie(j.date,c)) nbSamedisCumulatif++;
         });
       });
     });
