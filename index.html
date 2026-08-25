@@ -5689,6 +5689,29 @@ function enregistrerPlanningMois(contratId, moisKey){
       if(joursApresCeMoisEnr>0){
         const jMaxFinDeMoisEnr=Math.min(jMaxVol,joursQualifiantsFinDeMoisEnr);
         volHCeMois=jMaxFinDeMoisEnr*(volH/jMaxVol);
+        // 25/08/2026 (Sophie) : ce mois (le plus ancien de la semaine à cheval) vient peut-être de
+        // changer ses heures — si le mois suivant est déjà confirmé, vérifier que la combinaison des
+        // deux ne dépasse pas le volume total de la semaine ; sinon, invalider la confirmation du
+        // mois suivant pour forcer sa revalidation à la prochaine ouverture (sinon rien ne signale un
+        // dépassement devenu réel après coup, uniquement visible si on retouche ce mois suivant).
+        const moisSuivDateEnr=new Date(ay,am,1);
+        const moisSuivKeyEnr=moisSuivDateEnr.getFullYear()+'-'+String(moisSuivDateEnr.getMonth()+1).padStart(2,'0');
+        if(c.planningConfirmeMois&&c.planningConfirmeMois[moisSuivKeyEnr]){
+          const modifActiveSemEnr=(source.planType==='var'||source.planType==='min')&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey];
+          if(!modifActiveSemEnr){
+            let totalSemaineComplete=0;
+            Object.keys(c.planning).forEach(dtC=>{
+              if((getSemISO(dtC)+'-'+getSemAnnee(dtC))!==semKeyISO) return;
+              const pdC=c.planning[dtC];
+              if(!pdC||!pdC.coche||!jourComptePlanning(c,dtC,getInfosJourPlanning(c,dtC))) return;
+              totalSemaineComplete+=(pdC.d&&pdC.f)?(toM(pdC.f)-toM(pdC.d))/60:volH/jMaxVol;
+            });
+            if(totalSemaineComplete>volH+0.01){
+              delete c.planningConfirmeMois[moisSuivKeyEnr];
+              avertissementsInfo.push(`Le planning de ${moisSuivKeyEnr} devra être réenregistré : la semaine ${getSemISO(dateStr)}, combinée à ce mois, dépasse maintenant le volume prévu (${fmtH(totalSemaineComplete*60)} pour ${fmtH(volH*60)}).`);
+            }
+          }
+        }
       } else {
       let heuresAutreMois6=0;
       for(let dd6=0;dd6<7;dd6++){
