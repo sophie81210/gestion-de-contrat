@@ -3041,23 +3041,45 @@ function voirAvenant(cid,avid){
   `;
 }
 
+  // 25/08/2026 (Sophie) : cache temporaire pour getVersionActive — vidé automatiquement à la fin de
+  // CHAQUE bloc d'exécution synchrone (setTimeout 0), donc jamais entre deux actions séparées de
+  // l'utilisateur (clic, ouverture de feuille...) — élimine le risque de donnée périmée après une
+  // modification, tout en évitant de reconstruire l'objet contrat (spread coûteux) à chaque appel au
+  // sein d'un même calcul/rendu. Repéré via profil de performance (19/08) : getVersionActive = 38%
+  // du temps total sur un contrat à 4 avenants, appelée en cascade par getStatutPrevu,
+  // majFichesCgAmPasse, calcCongesContrat.
+  let _versionActiveCache=null;
+  let _versionActiveCacheClearScheduled=false;
   function getVersionActive(c, date){
   // Retourne le contrat ou l'avenant actif à la date donnée
   const now=new Date();
   const dateStr=date?date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0'):
     now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
   if(!c.avenants||!c.avenants.length) return c;
+  const _vaCacheKey=c.id+'|'+dateStr;
+  if(_versionActiveCache&&_versionActiveCache.has(_vaCacheKey)) return _versionActiveCache.get(_vaCacheKey);
   // Trouver le dernier avenant signé dont la date d'effet est <= dateStr
   const avsEffectifs=c.avenants
     .filter(a=>a.signe&&a.dateAvenant<=dateStr)
     .sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant));
-  if(!avsEffectifs.length) return c;
-  const dernierAv=avsEffectifs[avsEffectifs.length-1];
-  // Fusionner avec le contrat de base (garder id, nom, dateDeb, fiches...)
-  // 11/08/2026 (Sophie) : protection contre un planType résiduel sur un avenant déjà existant
-  // (créé avant le correctif à la sauvegarde) — un avenant fixe/sem ne doit JAMAIS transmettre de
-  // planType, quelle que soit la donnée réellement stockée dessus.
-  return {...c,...dernierAv,planType:dernierAv.th==='plan'?dernierAv.planType:null,id:c.id,nom:c.nom,dateDeb:c.dateDeb,fiches:c.fiches,avenants:c.avenants};
+  let _vaResult;
+  if(!avsEffectifs.length){
+    _vaResult=c;
+  } else {
+    const dernierAv=avsEffectifs[avsEffectifs.length-1];
+    // Fusionner avec le contrat de base (garder id, nom, dateDeb, fiches...)
+    // 11/08/2026 (Sophie) : protection contre un planType résiduel sur un avenant déjà existant
+    // (créé avant le correctif à la sauvegarde) — un avenant fixe/sem ne doit JAMAIS transmettre de
+    // planType, quelle que soit la donnée réellement stockée dessus.
+    _vaResult={...c,...dernierAv,planType:dernierAv.th==='plan'?dernierAv.planType:null,id:c.id,nom:c.nom,dateDeb:c.dateDeb,fiches:c.fiches,avenants:c.avenants};
+  }
+  if(!_versionActiveCache) _versionActiveCache=new Map();
+  _versionActiveCache.set(_vaCacheKey,_vaResult);
+  if(!_versionActiveCacheClearScheduled){
+    _versionActiveCacheClearScheduled=true;
+    setTimeout(()=>{_versionActiveCache=null;_versionActiveCacheClearScheduled=false;},0);
+  }
+  return _vaResult;
 }       
 
          
