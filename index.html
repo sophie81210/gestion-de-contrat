@@ -3041,14 +3041,17 @@ function voirAvenant(cid,avid){
   `;
 }
 
-  // 25/08/2026 (Sophie) : cache temporaire pour getVersionActive — vidé automatiquement à la fin de
-  // CHAQUE bloc d'exécution synchrone (setTimeout 0), donc jamais entre deux actions séparées de
-  // l'utilisateur (clic, ouverture de feuille...) — élimine le risque de donnée périmée après une
-  // modification, tout en évitant de reconstruire l'objet contrat (spread coûteux) à chaque appel au
-  // sein d'un même calcul/rendu. Repéré via profil de performance (19/08) : getVersionActive = 38%
-  // du temps total sur un contrat à 4 avenants, appelée en cascade par getStatutPrevu,
-  // majFichesCgAmPasse, calcCongesContrat.
-  let _versionActiveCache=null;
+  // 25/08/2026 (Sophie) : cache temporaire pour getVersionActive.
+  // Indexé sur l'OBJET contrat lui-même (WeakMap), pas sur son id — si le contrat est remplacé en
+  // bloc (rechargement Firestore différé, par exemple), le nouvel objet est automatiquement absent
+  // du cache : aucune dépendance à un minutage précis pour ce cas, contrairement à une 1ère version
+  // (bug confirmé Sophie 25/08 : un rechargement différé pouvait arriver APRÈS la mise en cache mais
+  // AVANT le vidage programmé au tick suivant, faisant lire une ancienne version figée du contrat —
+  // heures mensualisées à zéro alors que le contrat venait d'être rechargé). Le vidage au tick
+  // suivant reste en place en complément, pour le cas où LE MÊME objet contrat voit son tableau
+  // d'avenants modifié en place (édition d'avenant) dans le même rendu. Gain visé : profil de
+  // performance du 19/08, getVersionActive = 38% du temps total sur un contrat à 4 avenants.
+  let _versionActiveCache=new WeakMap();
   let _versionActiveCacheClearScheduled=false;
   function getVersionActive(c, date){
   // Retourne le contrat ou l'avenant actif à la date donnée
@@ -3056,8 +3059,8 @@ function voirAvenant(cid,avid){
   const dateStr=date?date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0'):
     now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
   if(!c.avenants||!c.avenants.length) return c;
-  const _vaCacheKey=c.id+'|'+dateStr;
-  if(_versionActiveCache&&_versionActiveCache.has(_vaCacheKey)) return _versionActiveCache.get(_vaCacheKey);
+  let _vaParContrat=_versionActiveCache.get(c);
+  if(_vaParContrat&&_vaParContrat.has(dateStr)) return _vaParContrat.get(dateStr);
   // Trouver le dernier avenant signé dont la date d'effet est <= dateStr
   const avsEffectifs=c.avenants
     .filter(a=>a.signe&&a.dateAvenant<=dateStr)
@@ -3073,11 +3076,11 @@ function voirAvenant(cid,avid){
     // planType, quelle que soit la donnée réellement stockée dessus.
     _vaResult={...c,...dernierAv,planType:dernierAv.th==='plan'?dernierAv.planType:null,id:c.id,nom:c.nom,dateDeb:c.dateDeb,fiches:c.fiches,avenants:c.avenants};
   }
-  if(!_versionActiveCache) _versionActiveCache=new Map();
-  _versionActiveCache.set(_vaCacheKey,_vaResult);
+  if(!_vaParContrat){ _vaParContrat=new Map(); _versionActiveCache.set(c,_vaParContrat); }
+  _vaParContrat.set(dateStr,_vaResult);
   if(!_versionActiveCacheClearScheduled){
     _versionActiveCacheClearScheduled=true;
-    setTimeout(()=>{_versionActiveCache=null;_versionActiveCacheClearScheduled=false;},0);
+    setTimeout(()=>{_versionActiveCache=new WeakMap();_versionActiveCacheClearScheduled=false;},0);
   }
   return _vaResult;
 }       
@@ -7763,6 +7766,11 @@ function deverrouillerFiche(contratId,key){
   }
   if(!confirm('Déverrouiller cette feuille pour la modifier ? Pensez à la revalider ensuite.')) return;
   c.fiches[key].valide=false;
+  // 25/08/2026 (Sophie) : vider le cache calcRecapFiche — sinon la fiche redevenue modifiable
+  // continuerait d'afficher un résultat figé de quand elle était encore validée.
+  delete c.fiches[key]._recapCache;
+  delete c.fiches[key]._recapCacheAvant;
+  delete c.fiches[key]._recapCacheApres;
   c._regulDirty=true;
   S.ficheModifiee=false;
   calcCongesContrat(c);
@@ -9657,6 +9665,14 @@ function getHJourCongesNonDeduit(c, dateStr, jourSemaine){
 }
 
 function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAvenantStr,periodeAv,ficheComplete){
+  // 25/08/2026 (Sophie) : une fiche validée ne peut plus changer (sauf déverrouillage explicite, qui
+  // vide ce cache — voir deverrouillerFiche) — son calcul complet est donc figé une fois pour toutes,
+  // au lieu d'être refait à chaque appel. Casse la cascade calcRecapFiche → calcIndemniteConges →
+  // calcBrutTotal → calcRecapFiche (× ~12 mois, potentiellement récursive sur plusieurs années de
+  // contrat) qui ralentissait sévèrement l'ouverture d'une fiche sur un contrat ancien. Le mois en
+  // cours (jamais validé) continue de tout recalculer à chaque appel, comme avant.
+  const _cacheKeyRecap=periodeAv==='avant'?'_recapCacheAvant':periodeAv==='apres'?'_recapCacheApres':'_recapCache';
+  if(fiche&&fiche.valide&&fiche[_cacheKeyRecap]) return fiche[_cacheKeyRecap];
   // Filtrer les jours si une période est spécifiée
  if(dateDebPeriode||dateFinPeriode){
     // 11/08/2026 (Sophie) : type ACTUEL à la date de référence de cet appel, pas le type D'ORIGINE du
@@ -12264,7 +12280,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     }
   }
 
-  return{
+  const _recapResult={
     donneesManquantes, hMensu, hComp:hComp.toFixed(2), hSup:hSup.toFixed(2),
     coefNetR, // 27/07/2026 (correctif Sophie) : coefficient daté déjà calculé ci-dessus, exposé pour
     // que l'affichage (buildRecapHtml etc.) le réutilise au lieu d'en recalculer un non daté
@@ -12335,6 +12351,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       return parseFloat((totalNet*0.1).toFixed(2));
     })()
   };
+  if(fiche&&fiche.valide) fiche[_cacheKeyRecap]=_recapResult;
+  return _recapResult;
 }
 
 
