@@ -5595,32 +5595,71 @@ function enregistrerPlanningMois(contratId, moisKey){
     const fmtSem=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
     const lundiSemStr=fmtSem(lundiSem), dimSemStr=fmtSem(dimSem);
     const dateDebC=c.dateDeb;
-    const dateAvenantC=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant)?.dateAvenant;
+    const dateAvenantC=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&av.dateAvenant>lundiSemStr&&av.dateAvenant<=dimSemStr)?.dateAvenant;
     const dateRuptureC=c.rupture&&c.rupture.confirmee?c.rupture.dateFinContrat:null;
-    let limiteDebut=null, limiteFin=null;
-    if(dateDebC&&lundiSemStr<dateDebC&&dimSemStr>=dateDebC) limiteDebut=dateDebC;
-    else if(dateAvenantC&&lundiSemStr<=dateAvenantC&&dimSemStr>=dateAvenantC) limiteDebut=dateAvenantC;
-    if(dateRuptureC&&lundiSemStr<=dateRuptureC&&dimSemStr>dateRuptureC) limiteFin=dateRuptureC;
-    if(limiteDebut||limiteFin){
-      // 04/08/2026 (confirmé Sophie, aligné sur le même principe que calcHTheoriquesPlanVar) : cette
-      // section utilisait jours UNION (structurel, plusieurs types confondus) comme diviseur — jamais
-      // jours max du type réellement pointé, jamais les jours cochés. Corrigé : jours max du type
-      // pointé (joursPattern/jMaxVol, déjà calculés plus haut) comme diviseur, et le plus grand entre
-      // (a) le plancher structurel des jours du motif côté SOUS CONTRAT et (b) les jours réellement
-      // cochés dans cette même portion, si plus nombreux — jamais moins que le plancher.
-      let joursPossiblesBonCoteEnr=0, joursCochesBonCoteEnr=0;
-      for(let dd2=0;dd2<7;dd2++){
-        const jd=new Date(lundiSem); jd.setDate(lundiSem.getDate()+dd2);
-        const jdStr=fmtSem(jd);
-        const estBonCote=(!limiteDebut||jdStr>=limiteDebut)&&(!limiteFin||jdStr<=limiteFin);
-        if(!estBonCote||!joursPattern[dd2]) continue;
-        joursPossiblesBonCoteEnr++;
-        if(c.planning&&c.planning[jdStr]&&c.planning[jdStr].coche) joursCochesBonCoteEnr++;
+    if(dateAvenantC){
+      // 25/08/2026 (Sophie) : même principe que calcEnveloppeMoisVar (avenant en cours de semaine,
+      // décision Sophie 06/08) — chaque portion (avant/après l'avenant) valorisée avec SA PROPRE
+      // version du contrat, divisée par SES PROPRES jours possibles (jamais jMax) — pas un plafond
+      // partagé sur toute la semaine. L'ancien mécanisme ("bon côté" unique, jMax partagé) ne gérait
+      // que le cas où le jour traité tombe APRÈS l'avenant ; un jour AVANT l'avenant se retrouvait
+      // sans aucun prorata, parfois masqué par coïncidence si les jours du motif d'origine tombaient
+      // tous après l'avenant (bug confirmé Sophie 25/08, exemple chiffré vérifié : min 52→fixe 46,
+      // 5h attendues sur le seul jour avant l'avenant, 20h laissées passer avant correctif).
+      const dAvenantObj=parseDateLoc(dateAvenantC);
+      const veilleAvenantObj=new Date(dAvenantObj); veilleAvenantObj.setDate(dAvenantObj.getDate()-1);
+      const portionsEnr=[
+        {depuis:lundiSem,jusqua:veilleAvenantObj,version:getVersionActive(c,lundiSem)},
+        {depuis:dAvenantObj,jusqua:dimSem,version:getVersionActive(c,dAvenantObj)}
+      ];
+      let volHTotalSemaine=0;
+      portionsEnr.forEach(portion=>{
+        if(portion.depuis>portion.jusqua) return;
+        const srcP=portion.version;
+        if(!(srcP.th==='plan'&&(srcP.planType==='min'||srcP.planType==='var'))) return;
+        const estMinPlanP=srcP.planType==='min';
+        let volP;
+        if(estMinPlanP){
+          volP={h:srcP.hMin||0,jours:srcP.joursMin||[]};
+        } else {
+          const agendasP=srcP.agendas||c.agendas||[];
+          const agP=agendasP.find(a=>parseDateLoc(a.dateDebut)<=portion.depuis&&parseDateLoc(a.dateFin)>=portion.depuis);
+          const agKeyP=getKeyAgenda(getSemISO(fmtSem(portion.depuis)),getSemAnnee(fmtSem(portion.depuis)));
+          const typeSemP=agP&&agP.semaines&&agP.semaines[agKeyP];
+          volP=(srcP.planVar||[]).find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemP);
+        }
+        if(!volP||!volP.jours) return;
+        const nbJoursPossiblesP=volP.jours.filter(Boolean).length||1;
+        for(let cur=new Date(portion.depuis);cur<=portion.jusqua;cur.setDate(cur.getDate()+1)){
+          const idxP=cur.getDay()===0?6:cur.getDay()-1;
+          if(volP.jours[idxP]) volHTotalSemaine+=volP.h/nbJoursPossiblesP;
+        }
+      });
+      volH=volHTotalSemaine;
+      jMaxVol=1; // prorata déjà fait par jour ci-dessus — totalSemaine (plus bas) se compare à volH directement
+    } else {
+      let limiteDebut=null, limiteFin=null;
+      if(dateDebC&&lundiSemStr<dateDebC&&dimSemStr>=dateDebC) limiteDebut=dateDebC;
+      if(dateRuptureC&&lundiSemStr<=dateRuptureC&&dimSemStr>dateRuptureC) limiteFin=dateRuptureC;
+      if(limiteDebut||limiteFin){
+        // 04/08/2026 (confirmé Sophie, aligné sur le même principe que calcHTheoriquesPlanVar) : cette
+        // section utilisait jours UNION (structurel, plusieurs types confondus) comme diviseur — jamais
+        // jours max du type réellement pointé, jamais les jours cochés. Corrigé : jours max du type
+        // pointé (joursPattern/jMaxVol, déjà calculés plus haut) comme diviseur, et le plus grand entre
+        // (a) le plancher structurel des jours du motif côté SOUS CONTRAT et (b) les jours réellement
+        // cochés dans cette même portion, si plus nombreux — jamais moins que le plancher.
+        let joursPossiblesBonCoteEnr=0, joursCochesBonCoteEnr=0;
+        for(let dd2=0;dd2<7;dd2++){
+          const jd=new Date(lundiSem); jd.setDate(lundiSem.getDate()+dd2);
+          const jdStr=fmtSem(jd);
+          const estBonCote=(!limiteDebut||jdStr>=limiteDebut)&&(!limiteFin||jdStr<=limiteFin);
+          if(!estBonCote||!joursPattern[dd2]) continue;
+          joursPossiblesBonCoteEnr++;
+          if(c.planning&&c.planning[jdStr]&&c.planning[jdStr].coche) joursCochesBonCoteEnr++;
+        }
+        const joursDonnesBonCoteEnr=Math.min(jMaxVol,Math.max(joursPossiblesBonCoteEnr,joursCochesBonCoteEnr));
+        volH=joursDonnesBonCoteEnr*(volH/jMaxVol);
       }
-      const joursDonnesBonCoteEnr=Math.min(jMaxVol,Math.max(joursPossiblesBonCoteEnr,joursCochesBonCoteEnr));
-      console.log('[TEMP-enr]',dateStr,'| dCur:',dCur.toDateString(),'| limiteDebut:',limiteDebut,'| limiteFin:',limiteFin,'| joursPattern:',joursPattern,'| jMaxVol:',jMaxVol,'| volH avant:',volH,'| joursPossiblesBonCoteEnr:',joursPossiblesBonCoteEnr,'| joursCochesBonCoteEnr:',joursCochesBonCoteEnr,'| joursDonnesBonCoteEnr:',joursDonnesBonCoteEnr);
-      volH=joursDonnesBonCoteEnr*(volH/jMaxVol);
-      console.log('[TEMP-enr]',dateStr,'| volH après prorata:',volH);
     }
     // Semaine à cheval sur un MOIS CALENDAIRE (différent du cas contrat/avenant ci-dessus) :
     // prorata au même principe que les heures théoriques (hebdo × joursPossiblesCeMois/joursPossiblesSemaine)
