@@ -6531,6 +6531,43 @@ function calcEnveloppeMoisVar(c,ay,am){
               heuresDejaUtiliseesAutreMois+=(pd5.d&&pd5.f)?(toM(pd5.f)-toM(pd5.d))/60:(vol3.h||0)/(vol3.j||1);
             }
           }
+          // 25/08/2026 (Sophie) : quand le mois précédent a "modifications autorisées" actif, sa part
+          // sur cette semaine (fairShareAutreMoisV) fait partie intégrante de SON enveloppe globale à
+          // lui — donc si cette enveloppe globale est épuisée (par d'autres semaines de ce mois-là,
+          // peu importe lesquelles), la part de CETTE semaine est nécessairement déjà consommée elle
+          // aussi, même si rien n'a été tapé ICI spécifiquement. L'ancien calcul (juste au-dessus) ne
+          // regardait que les heures tapées SUR cette semaine précise, jamais l'état global du mois
+          // précédent — laissant passer un dépassement quand ce mois avait déjà tout consommé
+          // ailleurs (bug confirmé Sophie 25/08, exemple chiffré : 22h avant correctif, 11h attendues).
+          const anneeAutreMoisV=lundiSem3.getFullYear(), moisAutreMoisV=lundiSem3.getMonth()+1;
+          const moisKeyAutreMoisV=anneeAutreMoisV+'-'+String(moisAutreMoisV).padStart(2,'0');
+          const modifActiveAutreMoisV=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeyAutreMoisV]);
+          if(modifActiveAutreMoisV&&joursDejaCochesAutreMois<joursPossiblesSemaine3){
+            // Part structurelle (pas seulement cochée) de l'autre mois sur cette semaine
+            let joursFairShareAutreMoisV=0;
+            for(let dd6=0;dd6<7;dd6++){
+              const jd6=new Date(lundiSem3); jd6.setDate(lundiSem3.getDate()+dd6);
+              if(jd6.getMonth()===am-1&&jd6.getFullYear()===ay) continue;
+              if(jd6.getFullYear()*12+jd6.getMonth()>ay*12+(am-1)) continue;
+              if(vol3.jours&&vol3.jours[dd6]) joursFairShareAutreMoisV++;
+            }
+            const fairShareAutreMoisV=joursFairShareAutreMoisV*((vol3.h||0)/(vol3.j||1));
+            if(fairShareAutreMoisV>0){
+              const envAutreMoisV=calcEnveloppeMoisVar(c,anneeAutreMoisV,moisAutreMoisV);
+              let totalPlanifieAutreMoisV=0;
+              Object.keys(c.planning||{}).forEach(dtAutre=>{
+                const [dtyA,dtmA]=dtAutre.split('-').map(Number);
+                if(dtyA!==anneeAutreMoisV||dtmA!==moisAutreMoisV) return;
+                const pdAutre=c.planning[dtAutre];
+                if(pdAutre&&pdAutre.coche&&jourComptePlanning(c,dtAutre,getInfosJourPlanning(c,dtAutre))){
+                  totalPlanifieAutreMoisV+=(pdAutre.d&&pdAutre.f)?(toM(pdAutre.f)-toM(pdAutre.d))/60:(vol3.h||0)/(vol3.j||1);
+                }
+              });
+              const placeRestanteAutreMoisV=Math.max(0,(envAutreMoisV.minutes/60)-totalPlanifieAutreMoisV);
+              const heuresDejaUtiliseesEnveloppeV=Math.min(fairShareAutreMoisV,Math.max(0,fairShareAutreMoisV-placeRestanteAutreMoisV));
+              heuresDejaUtiliseesAutreMois=Math.max(heuresDejaUtiliseesAutreMois,heuresDejaUtiliseesEnveloppeV);
+            }
+          }
           // 06/08/2026 (Sophie) : cet endroit n'avait jamais reçu la mise à jour "au plus favorable"
           // du 05/08 (déjà faite côté paie dans calcRecapFiche) — il valorisait encore le hors-contrat
           // à l'ancienne (jours possibles du type / moyenne annuelle union), d'où un quota mensuel
