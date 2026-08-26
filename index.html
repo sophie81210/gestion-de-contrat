@@ -3643,14 +3643,24 @@ function calcRegulDiffEurosAuto(c, moisMaxForce){
     (ficheMois.jours||[]).forEach(j=>{
       if(j.date<debutMoisRegul||j.date>finMoisRegul) return;
       const statut=j.statut||getStatutPrevu(c,j);
-      if(key==='2025-12'||key==='2026-05'){
-        console.log('[TEMP-regul]',j.date,'| statut brut (j.statut):',j.statut,'| statut retenu:',statut,'| férié ?',isFerie(j.date,c),'| heureDebPrev/Fin:',j.heureDebPrev,j.heureFinPrev,'| heureDebReel/Fin:',j.heureDebReel,j.heureFinReel,'| exclu ?',statutsExclus.includes(statut));
-      }
       if(statut==='travaille'&&isFerie(j.date,c)&&!(j.heureDebPrev&&j.heureFinPrev)){
         const prevusFerieHR=getHeuresPrevues(c,new Date(j.date));
         if(prevusFerieHR&&prevusFerieHR.debut&&prevusFerieHR.fin){
           hReel+=Math.max(0,(toMins(prevusFerieHR.fin)-toMins(prevusFerieHR.debut))/60);
         }
+        return;
+      }
+      // 25/08/2026 (Sophie) : un férié tombant DANS une pose de congés (statut "ferie", pas
+      // "travaille") reçoit le même traitement qu'un jour de congés ordinaire — moyenne hebdo /
+      // jours union, s'il tombe sur un jour union (getHJourCongesNonDeduit, déjà utilisée ailleurs
+      // pour ce même calcul). Auparavant ce cas ne bénéficiait d'aucun repli : les semaines "sem"
+      // sans horaires prévus déterminés (violettes) laissent heureDebPrev/heureFinPrev à null pour
+      // un jour férié — contrairement au plan fixe, où ils restaient renseignés — donc ce jour ne
+      // contribuait plus du tout à hPrevu, alors qu'il aurait dû (bug confirmé Sophie 25/08, exemple
+      // chiffré : 25 décembre 2025, un jeudi, jour union, tombé à zéro depuis le passage en plan sem).
+      if(statut==='ferie'&&!(j.heureDebPrev&&j.heureFinPrev)){
+        const hJourFerieCg=getHJourCongesNonDeduit(c,j.date,j.jourSemaine);
+        if(hJourFerieCg>0) hReel+=hJourFerieCg;
         return;
       }
       if(statutsExclus.includes(statut)) return;
@@ -11815,6 +11825,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         hAbsJour=hPrev;
       }
       if(window.DEBUG_CGAM&&sourceActif.planType==='min'&&hAbsJour>0)console.log('[CGAM-minAbsJour]',j.date,'| statut:',statut,'| hPrev:',hPrev,'| hAbsJour:',hAbsJour);
+      if(j.date==='2026-05-14')console.log('[TEMP-mai14]','statut:',statut,'| hPrev:',hPrev,'| hAbsJour:',hAbsJour,'| j.heureDebReel/Fin:',j.heureDebReel,j.heureFinReel,'| j.heureDebPrev/Fin:',j.heureDebPrev,j.heureFinPrev,'| férié ?',isFerie(j.date,c));
       hAbs+=hAbsJour;
     }
     if(estPresent&&(j.heureDebReel||j.heureDebPrev)){
