@@ -7039,23 +7039,36 @@ function calcRegul52(c, key){
         if(r52.regul52Fiche&&r52.regul52Fiche.diff>0) brutAnnuel+=r52.regul52Fiche.diff/coefNetBrut52;
       }
       (fiche2.jours||[]).forEach(j=>{
-        if(j.statut!=='conges-acq'&&j.statut!=='conges-anticipe') return;
+        if(j.statut!=='conges-acq'&&j.statut!=='conges-anticipe'&&j.statut!=='decompte-acq'&&j.statut!=='decompte-anticipe'&&j.statut!=='decompte-conges') return;
         tousAcq52.push({j,src,hMensuSrc});
       });
     });
-    tousAcq52.sort((a,b)=>a.j.date.localeCompare(b.j.date));
-    const cgData52=c.conges[anneeRef]||{};
-    let droitsRestants52=cgData52.acquis||0;
+    // 25/08/2026 (Sophie) : bornage par ordre chronologique + quota décrémenté remplacé par un
+    // bornage direct par date — mêmes fenêtres, éprouvées, que l'agenda congés du contrat (qui les
+    // calcule déjà correctement) : anticipés de juin anneeRef à fin avril anneeRef+1 (pendant
+    // l'acquisition), acquis (et decompte-acq/decompte-conges, jours qui continuent une pose déjà
+    // commencée) de mai anneeRef+1 à fin avril anneeRef+2 (l'année de pose, un an après). L'ancien
+    // bornage par ordre chronologique/quota ne vérifiait jamais la date réelle des jours, laissant
+    // passer des jours d'une autre année d'acquisition (bug confirmé Sophie 25/08). Reconstruction
+    // directe depuis fiche2.jours, sans passer par calcRecapFiche (cause du plantage précédent).
+    const debutAntStr2=anneeRef+'-06-01';
+    const finAntStr2=(anneeRef+1)+'-04-30';
+    const debutPoseStr=(anneeRef+1)+'-05-01';
+    const finPoseStr=(anneeRef+2)+'-04-30';
     tousAcq52.forEach(({j,src,hMensuSrc})=>{
       let appartient=false;
-      const [jy,jm,jd]=j.date.split('-').map(Number);
-      const dateJ=new Date(jy,jm-1,jd);
-      if(j.statut==='conges-anticipe'){
-        appartient=dateJ>=debutAppart52&&dateJ<=finAppart52;
+      if(j.statut==='conges-anticipe'||j.statut==='decompte-anticipe'){
+        appartient=j.date>=debutAntStr2&&j.date<=finAntStr2;
+      } else if(j.statut==='decompte-conges'){
+        // decompte-conges peut continuer une pose "anticipé" (posée pendant l'acquisition) OU une
+        // pose "acquis" (posée l'année suivante) — les deux fenêtres sont vérifiées, celle où sa
+        // date tombe réellement s'applique.
+        appartient=(j.date>=debutAntStr2&&j.date<=finAntStr2)||(j.date>=debutPoseStr&&j.date<=finPoseStr);
       } else {
-        if(droitsRestants52>0){appartient=true;droitsRestants52--;}
+        appartient=j.date>=debutPoseStr&&j.date<=finPoseStr;
       }
       if(!appartient) return;
+      const [jy,jm,jd]=j.date.split('-').map(Number);
       const hSemMoyF=hMensuSrc*12/(parseFloat(src.nbSem||52));
       const hJourCg=hSemMoyF/6;
       const dateVeille=new Date(jy,jm-1,jd);
@@ -11985,10 +11998,14 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       });
     }
     excedentEnv=Math.max(0,reelMoisPaie-envHeuresPaie);
-    if(estEnvMensuelleV){
-      hCompMaj=Math.max(0,excedentEnv-hSup);
-      hComp=hCompMaj;
-    }
+    // 25/08/2026 (Sophie) : écrasement de hComp par excedentEnv (mensuel, "modèle libre" du
+    // 22/07/2026) retiré pour var/min — même principe que fixe/sem ci-dessous (déjà en place depuis
+    // le 27/07) : garder le hComp déjà calculé jour par jour plus haut (compJour, réel vs prévu
+    // directement, sans attendre que l'enveloppe MENSUELLE entière soit dépassée). Symétrique au
+    // retrait de la Règle 1 fait plus tôt aujourd'hui sur le même principe, hors "modifications
+    // autorisées" cette fois-ci — les deux mécanismes (Règle 1 hebdo, et celui-ci mensuel) avaient
+    // la même conséquence : retarder le déclenchement des heures comp au lieu de compter dès le
+    // premier dépassement réel/prévu (bug confirmé Sophie 25/08 sur ce cas précis).
     // 27/07/2026 (décision Sophie) : fixe/sem garde le calcul jour par jour (compJour, déjà correct
     // — crédite par borne début/fin, jour "travaillé" toujours intégral, congés/absences déjà exclus
     // séparément) pour hComp ET hCompMaj (qui sert à la majoration), au lieu de les écraser par le
@@ -11997,9 +12014,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // de présence (derniers changements) doit générer du complémentaire, jamais le simple fait
     // d'avoir replanifié.
   }
-  const hBaseComp=(estEnvMensuelleV&&estEnvMensuelle)?excedentEnv:(hComp+hSup); // heures en plus ("sur jours ouvrables")
+  const hBaseComp=hComp+hSup; // heures en plus ("sur jours ouvrables")
   // Montants base (heures × txNet, sans majoration)
-  const montantBaseComp=parseFloat(((estEnvMensuelleV&&estEnvMensuelle)?(excedentEnv*txNet):(hComp*txNet+hSup*(1+majSup)*txNet)).toFixed(2)); // base sur jours ouvrables
+  const montantBaseComp=parseFloat((hComp*txNet+hSup*(1+majSup)*txNet).toFixed(2)); // base sur jours ouvrables
   const montantBaseSup=0; // déjà inclus dans montantBaseComp
   const montantBaseFerieNP=parseFloat((hMajFerie*txNet).toFixed(2));
   const montantBaseRepos=parseFloat((hMajRepos*txNet).toFixed(2));
