@@ -2882,18 +2882,9 @@ function renderDetTab(id,tab){
                   // séparées à corriger chacune (exemple chiffré Sophie : 25 décembre 2025, jeudi, jour
                   // union, tombé à zéro depuis le passage en plan sem — heureDebPrev/heureFinPrev
                   // restent null pour un jour férié en plan sem, contrairement au plan fixe).
-                  // Précision Sophie 25/08 : uniquement si la semaine n'est pas explicitement "off"
-                  // (contre-exemple : 1er janvier 2025, semaine "off", ne doit jamais compter — même
-                  // logique que dans calcRegulDiffEurosAuto, voir son commentaire pour le détail).
                   if(statut==='ferie'&&!(j.heureDebPrev&&j.heureFinPrev)){
-                    const agendasFerieReg=srcQ.agendas||c.agendas||[];
-                    const agFerieReg=agendasFerieReg.find(a=>new Date(a.dateDebut)<=new Date(j.date)&&new Date(a.dateFin)>=new Date(j.date));
-                    const agKeyFerieReg=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
-                    const typeSemFerieReg=agFerieReg&&agFerieReg.semaines&&agFerieReg.semaines[agKeyFerieReg];
-                    if(typeSemFerieReg!=='off'){
-                      const hJourFerieReg=getHJourCongesNonDeduit(c,j.date,j.jourSemaine);
-                      if(hJourFerieReg>0) hR+=hJourFerieReg;
-                    }
+                    const hJourFerieReg=getHJourCongesNonDeduit(c,j.date,j.jourSemaine);
+                    if(hJourFerieReg>0) hR+=hJourFerieReg;
                     return;
                   }
                   if(statutsExclus.includes(statut)) return;
@@ -3652,6 +3643,20 @@ function calcRegulDiffEurosAuto(c, moisMaxForce){
     })():null;
     const estPassageVers46Reg=avenantDuMoisReg&&avenantDuMoisReg.tc!=='52'&&avenantDuMoisReg.tc!=='occ';
     const estPassage46vers46Reg=estPassageVers46Reg&&(()=>{const srcAv=getVersionActive(c,new Date(debutMois));return srcAv.tc!=='occ';})();
+    // 25/08/2026 (Sophie) : résolution agendaMois, même schéma que le reste de l'app (parseDateLoc,
+    // comparaison sur le mois entier — pas juste une date précise, sinon mauvais agenda trouvé quand
+    // plusieurs se chevauchent). Utile pour détecter une semaine "off" (isAbsenceEmployeur) sur ce
+    // mois — nécessaire pour un jour "travaillé" qui tombe dans une semaine "off" : ce jour ne doit
+    // jamais compter, même s'il porte des heures prévues structurelles (bug confirmé Sophie 25/08 :
+    // 14 et 16 janvier 2025, jours "travaillé" dans une semaine "off", comptés à tort avec leurs
+    // heures prévues — 9h chacun, 18h en trop sur ce mois).
+    const srcAgReg=getVersionActive(c,new Date(debutMois));
+    const agendasAgReg=srcAgReg.agendas||c.agendas||[];
+    const agendaMoisReg=agendasAgReg.find(ag=>{
+      const pm=new Date(ay2,am2-1,1);
+      const dm=new Date(ay2,am2,0);
+      return parseDateLoc(ag.dateDebut)<=dm&&parseDateLoc(ag.dateFin)>=pm;
+    });
     let montantMensu=0, txNetMois=0, finMoisRegul=finMois, debutMoisRegul=debutMois;
     if(avenantDuMoisReg&&estPassage46vers46Reg){
       const rA=calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant');
@@ -3678,6 +3683,11 @@ function calcRegulDiffEurosAuto(c, moisMaxForce){
     (ficheMois.jours||[]).forEach(j=>{
       if(j.date<debutMoisRegul||j.date>finMoisRegul) return;
       const statut=j.statut||getStatutPrevu(c,j);
+      // 25/08/2026 (Sophie) : un jour "travaillé" qui tombe dans une semaine "off" ne doit jamais
+      // compter, même s'il porte des heures prévues structurelles (bug confirmé Sophie 25/08 : 14 et
+      // 16 janvier 2025, jours "travaillé" dans une semaine "off", comptés à tort avec leurs heures
+      // prévues — 9h chacun, 18h en trop sur ce mois).
+      if(statut==='travaille'&&isAbsenceEmployeur(agendaMoisReg,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))) return;
       if(statut==='travaille'&&isFerie(j.date,c)&&!(j.heureDebPrev&&j.heureFinPrev)){
         const prevusFerieHR=getHeuresPrevues(c,new Date(j.date));
         if(prevusFerieHR&&prevusFerieHR.debut&&prevusFerieHR.fin){
@@ -3685,31 +3695,15 @@ function calcRegulDiffEurosAuto(c, moisMaxForce){
         }
         return;
       }
-      // 25/08/2026 (Sophie) : un férié tombant DANS une pose de congés (statut "ferie", pas
-      // "travaille") reçoit le même traitement qu'un jour de congés ordinaire — moyenne hebdo /
-      // jours union, s'il tombe sur un jour union (getHJourCongesNonDeduit, déjà utilisée ailleurs
-      // pour ce même calcul). Auparavant ce cas ne bénéficiait d'aucun repli : les semaines "sem"
-      // sans horaires prévus déterminés (violettes) laissent heureDebPrev/heureFinPrev à null pour
-      // un jour férié — contrairement au plan fixe, où ils restaient renseignés — donc ce jour ne
-      // contribuait plus du tout à hPrevu, alors qu'il aurait dû (bug confirmé Sophie 25/08, exemple
-      // chiffré : 25 décembre 2025, un jeudi, jour union, tombé à zéro depuis le passage en plan sem).
-      // Précision Sophie 25/08 : uniquement si la semaine n'est pas explicitement "off" — une semaine
-      // "off" ne prévoit structurellement rien, quel que soit le jour (contre-exemple trouvé : 1er
-      // janvier 2025, dans une semaine "off", ne doit jamais compter — contrairement à une semaine de
-      // type réellement inconnu, la "violette", qui doit utiliser moyenne/jours union). Vérification
-      // faite ici, sans toucher à getHJourCongesNonDeduit elle-même (fonction partagée, risque
-      // d'effets de bord ailleurs si modifiée).
+      // Un férié tombant DANS une pose de congés (statut "ferie", pas "travaille") reçoit le même
+      // traitement qu'un jour de congés ordinaire — moyenne hebdo / jours union, s'il tombe sur un
+      // jour union (getHJourCongesNonDeduit, déjà utilisée ailleurs pour ce même calcul) — 25/08/2026
+      // (Sophie), exemple chiffré : 25 décembre 2025, un jeudi, jour union, tombé à zéro depuis le
+      // passage en plan sem (heureDebPrev/heureFinPrev restent null pour un jour férié en plan sem,
+      // contrairement au plan fixe, où ils restaient renseignés).
       if(statut==='ferie'&&!(j.heureDebPrev&&j.heureFinPrev)){
-        const srcFerieCg=getVersionActive(c,new Date(j.date));
-        const agendasFerieCg=srcFerieCg.agendas||c.agendas||[];
-        const agFerieCg=agendasFerieCg.find(a=>new Date(a.dateDebut)<=new Date(j.date)&&new Date(a.dateFin)>=new Date(j.date));
-        const agKeyFerieCg=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
-        const typeSemFerieCg=agFerieCg&&agFerieCg.semaines&&agFerieCg.semaines[agKeyFerieCg];
-        if(j.date==='2025-01-01')console.log('[TEMP-off-check]','agFerieCg trouvé ?',!!agFerieCg,'| agKeyFerieCg:',agKeyFerieCg,'| typeSemFerieCg:',typeSemFerieCg,'| agendasFerieCg (nb):',agendasFerieCg.length);
-        if(typeSemFerieCg!=='off'){
-          const hJourFerieCg=getHJourCongesNonDeduit(c,j.date,j.jourSemaine);
-          if(hJourFerieCg>0) hReel+=hJourFerieCg;
-        }
+        const hJourFerieCg=getHJourCongesNonDeduit(c,j.date,j.jourSemaine);
+        if(hJourFerieCg>0) hReel+=hJourFerieCg;
         return;
       }
       if(statutsExclus.includes(statut)) return;
