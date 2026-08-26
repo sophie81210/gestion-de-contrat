@@ -6984,35 +6984,65 @@ function calcRegul52(c, key){
     // Calculer maintien et 10ème
     let maintienVerse=0;
     const brutAnnuel=calcBrutTotal(c, debutRef, finRef);
-    // 25/08/2026 (Sophie) : fenêtre de POSE de cette année d'acquisition — mai anneeRef+1 à avril
-    // anneeRef+2, un an après l'acquisition (juin anneeRef à mai anneeRef+1) — jamais confondre les
-    // deux. Même bornage que celui déjà utilisé, éprouvé, dans l'agenda congés du contrat.
-    const debutPoseRegul52=new Date(anneeRef+1,4,1);
-    const finPoseRegul52=new Date(anneeRef+2,3,30);
+    const debutAppart52=new Date(anneeRef,4,1);
+    const finAppart52=new Date(anneeRef+1,3,30);
+    const tousAcq52=[];
     Object.entries(c.fiches||{}).forEach(([k2,fiche2])=>{
-      if(!fiche2.valide) return;
       const [ay,am]=k2.split('-').map(Number);
       const dateF=new Date(ay,am-1,1);
+      const src=getVersionActive(c,dateF);
+      const hMensuSrc=parseFloat(src.hMensu||c.hMensu||0);
+      const txBrutSrc=parseFloat(src.txBrut||c.txBrut||0);
+      // brutAnnuel calculé via calcBrutTotal
       // Ajouter régularisation 52 versée ce mois au brutAnnuel (pour futur 10ème)
-      if(dateF>=debutRef&&dateF<=finRef){
+      if(fiche2.valide&&dateF>=debutRef&&dateF<=finRef){
         const coefNetBrut52=getParamAt('coefficients',dateToStr(dateF)).valeur||0.7811975; // 27/07/2026
         // (correctif Sophie) : coefficient du mois de cette fiche, pas celui d'aujourd'hui
         const r52=calcRecapFiche(c,fiche2);
         if(r52.regul52Fiche&&r52.regul52Fiche.diff>0) brutAnnuel+=r52.regul52Fiche.diff/coefNetBrut52;
       }
-      // 25/08/2026 (Sophie) : maintien = somme du montant "acquis seul" déjà calculé sur chaque
-      // fiche (montantCongesPayesAcqSeul, même heures hebdo/6 × taux, mais borné au bon mois par
-      // construction) — remplace l'ancienne reconstruction jour par jour, qui prenait à tort les
-      // 26 premiers jours "conges-acq" dans l'ordre chronologique du contrat entier, sans jamais
-      // vérifier leur date de pose réelle (bug confirmé Sophie 25/08 : jours d'une autre année
-      // d'acquisition comptés à tort, faute de bornage — ex. jours posés en mai, avant le début de
-      // la fenêtre de pose, ou en août de l'année suivante, après sa fin).
-      if(dateF>=debutPoseRegul52&&dateF<=finPoseRegul52){
-        const rPose=calcRecapFiche(c,fiche2);
-        maintienVerse+=rPose.montantCongesPayesAcqSeul||0;
+      (fiche2.jours||[]).forEach(j=>{
+        if(j.statut!=='conges-acq'&&j.statut!=='conges-anticipe') return;
+        tousAcq52.push({j,src,hMensuSrc});
+      });
+    });
+    tousAcq52.sort((a,b)=>a.j.date.localeCompare(b.j.date));
+    const cgData52=c.conges[anneeRef]||{};
+    let droitsRestants52=cgData52.acquis||0;
+    tousAcq52.forEach(({j,src,hMensuSrc})=>{
+      let appartient=false;
+      const [jy,jm,jd]=j.date.split('-').map(Number);
+      const dateJ=new Date(jy,jm-1,jd);
+      if(j.statut==='conges-anticipe'){
+        appartient=dateJ>=debutAppart52&&dateJ<=finAppart52;
+      } else {
+        if(droitsRestants52>0){appartient=true;droitsRestants52--;}
       }
+      if(!appartient) return;
+      const hSemMoyF=hMensuSrc*12/(parseFloat(src.nbSem||52));
+      const hJourCg=hSemMoyF/6;
+      const dateVeille=new Date(jy,jm-1,jd);
+      dateVeille.setDate(dateVeille.getDate()-1);
+      const srcV=getVersionActive(c,dateVeille);
+      const coefNetV52=getParamAt('coefficients',dateToStr(dateVeille)).valeur||0.7811975; // 27/07/2026
+      // (correctif Sophie) : coefficient du jour concerné (veille du congé), pas celui d'aujourd'hui —
+      // recalculé pour chaque jour de congé plutôt que figé une fois pour toute la régularisation
+      const hMensuMajV=parseFloat(srcV.hMensuMaj||0);
+      const hMensuTotV=parseFloat(srcV.hMensu||hMensuSrc||0);
+      const majSupV=(srcV.majSup||0)/100;
+      const partMaj=hMensuTotV>0?hMensuMajV/hMensuTotV:0;
+      const txNetNormV=parseFloat(srcV.txBrut||0)*coefNetV52;
+      const txNetMajV=parseFloat(srcV.txBrut||0)*(1+majSupV)*coefNetV52;
+      maintienVerse+=hJourCg*((1-partMaj)*txNetNormV+partMaj*txNetMajV);
     });
     maintienVerse=parseFloat(maintienVerse.toFixed(2));
+    // 25/08/2026 (Sophie) : tentative de remplacement par la somme de montantCongesPayesAcqSeul sur
+    // la fenêtre de pose (mai anneeRef+1 à avril anneeRef+2) annulée — provoquait une boucle infinie
+    // (calcRecapFiche appelle déjà calcRegul52 pour le mois précédent ; le nouveau code faisait
+    // l'inverse, les deux s'appelant en cascade sans fin). Reconstruction jour par jour restaurée
+    // telle quelle. Le vrai problème (jours d'une année d'acquisition différente comptés à tort,
+    // faute de bornage par date) reste entier et non corrigé — à reprendre séparément, sans jamais
+    // passer par calcRecapFiche depuis l'intérieur de calcRegul52.
     const coefNet=getParamAt('coefficients',key+'-01').valeur||0.7811975; // 27/07/2026 (correctif
     // Sophie) : coefficient du mois de régularisation traité (key), pas celui d'aujourd'hui
     const dixiemeNet=parseFloat((brutAnnuel/10*coefNet).toFixed(2));
@@ -11322,14 +11352,16 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         compJour=0;
       } else if(thActif==='plan'&&(sourceActif.planType==='var'||sourceActif.planType==='min')){
         const semKeyJ=getSemISO(j.date);
-        const hAbsS=Math.max(0,(hAbsParSemaine[semKeyJ]||0)-(hAbsHorsContratParSemaine[semKeyJ]||0));
-        // Règle 1 : dépassement hebdo (heures prévues saisies vs volume contrat) — inclut le prévu du
-        // mois précédent pour cette même semaine à cheval, sinon un dépassement réparti entre deux mois
-        // ne serait jamais détecté ni par l'un ni par l'autre pris isolément
-        const hPrevSaisieSem=((hPrevSaisieParSemaine||{})[semKeyJ]||0)+(hPrevSaisieParSemainePrecMois[semKeyJ]||0);
         const hVolContrat=hPrevuParSemaine[semKeyJ]||0;
-        const depassHebdo=Math.max(0,hPrevSaisieSem-hVolContrat);
-        // Règle 2 : dépassement journalier (réel > prévu saisi)
+        // 25/08/2026 (Sophie) : l'ancienne "Règle 1" (dépassement hebdo — n'importe quel dépassement
+        // journalier ne comptait que si le prévu SAISI de la semaine entière dépassait déjà le volume
+        // contractuel) retirée pour plan var/min. Elle datait d'avant l'instauration du planning comme
+        // source de vérité : la fiche n'a plus à reconstruire un volume contractuel hebdomadaire pour
+        // savoir si un dépassement journalier compte — elle compare réel et prévu directement, jour
+        // par jour (l'ancien mécanisme retardait aussi le déclenchement quand un jour prévu contenait
+        // des heures non comptées dans son propre total, ex. un férié). hVolContrat reste nécessaire
+        // pour la Règle 3 ci-dessous (jour "travaillé"), seule à en avoir encore besoin.
+        // Dépassement journalier (réel > prévu saisi)
         let depassJour=0;
         if(debPrev!==null&&finPrev!==null){
           if(debReel<debPrev) depassJour+=debPrev-debReel;
@@ -11352,12 +11384,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             compJour=hJourTrav*60;
           }
         } else {
-        compJour=(depassHebdo>0?(()=>{
-          const hPrevJour=j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:0;
-          const hPrevSaisieSemMois=hPrevSaisieSem-(hPrevSaisieParSemainePrecMois[semKeyJ]||0);
-          const ratioJour=hPrevSaisieSemMois>0?hPrevJour/hPrevSaisieSemMois:0;
-          return Math.max(0,hPrevSaisieSem-hAbsS-hVolContrat)*ratioJour*60;
-        })():0)+depassJour;
+          compJour=depassJour;
         }
       } else if(debPrev!==null&&finPrev!==null&&!isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))){
         if(debReel<debPrev) compJour+=debPrev-debReel;
