@@ -2312,8 +2312,14 @@ function renderDetTab(id,tab){
       // Tout le HTML des cycles (du plus récent au plus ancien)
       let allCyclesHtml='';
       let totGlobalMensu=0, totGlobalPrevu=0;
+      // 25/08/2026 (Sophie) : le total général en haut de l'onglet ne doit refléter que l'état à la
+      // dernière fiche validée — jamais les mois futurs/non validés, contrairement aux tableaux par
+      // année (qui, eux, gardent tous les mois, juste visuellement différenciés). Accumulateurs
+      // séparés, en parallèle des totaux existants, jamais à leur place.
+      let totGlobalMensuValide=0, totGlobalPrevuValide=0;
       [...cycles].reverse().forEach((cycle,cycleIdxRev)=>{
       cycleTotMensu=0; cycleTotPrevu=0; tableauxHtml='';
+      let cycleTotMensuValide=0, cycleTotPrevuValide=0;
       const moisTries=Object.keys(c.fiches||{}).filter(k=>k<=moisMax&&k>=cycle.moisMin&&k<=cycle.moisMax).sort();
       if(!moisTries.length){ return; } else {
         const [ddy,ddm,ddd]=c.dateDeb?c.dateDeb.split('-').map(Number):[new Date().getFullYear(),new Date().getMonth()+1,new Date().getDate()];
@@ -2895,12 +2901,14 @@ function renderDetTab(id,tab){
               return hR;
             }
             const montantPrevu=montantPrevuOverride!==null?montantPrevuOverride:parseFloat((hReelPortion(debutMoisRegul,finMoisRegul)*txNetMois).toFixed(2));
+            if(window.DEBUG_REGUL_COMPARE)console.log('[TEMP-fnB]',key,'| montantMensu:',montantMensu,'| montantPrevu:',montantPrevu,'| txNetMois:',txNetMois,'| debutMoisRegul/finMoisRegul:',debutMoisRegul,finMoisRegul);
             totMensu+=montantMensu; totPrevu+=montantPrevu;
             cycleTotMensu+=montantMensu; cycleTotPrevu+=montantPrevu;
+            if(ficheMois&&ficheMois.valide){ cycleTotMensuValide+=montantMensu; cycleTotPrevuValide+=montantPrevu; }
             const diff=montantPrevu-montantMensu;
             const dc=diff>0?'var(--vt)':diff<0?'var(--al)':'var(--tx2)';
             return `<tr style="border-bottom:1px solid var(--mb)">
-              <td style="padding:7px 4px;font-size:13px">${moisLabel}</td>
+              <td style="padding:7px 4px;font-size:13px">${ficheMois&&ficheMois.valide?'<span style="color:var(--vt)" title="Feuille validée">✓</span> ':''}${moisLabel}</td>
               <td style="padding:7px 4px;font-size:13px;text-align:center">${montantMensu.toFixed(2)} €</td>
               <td style="padding:7px 4px;font-size:13px;text-align:center">${montantPrevu.toFixed(2)} €</td>
             </tr>`;
@@ -2943,9 +2951,14 @@ function renderDetTab(id,tab){
         allCyclesHtml+=tableauxHtml;
         totGlobalMensu+=cycleTotMensu;
         totGlobalPrevu+=cycleTotPrevu;
+        totGlobalMensuValide+=cycleTotMensuValide;
+        totGlobalPrevuValide+=cycleTotPrevuValide;
       } // fin else moisTries
       }); // fin forEach cycles
         const diffGen=totGlobalPrevu-totGlobalMensu;
+        // 25/08/2026 (Sophie) : diff affiché en haut, limité aux mois validés uniquement — distinct de
+        // diffGen (qui reste la base de c._regulDiffEuros ci-dessous, usage différent, ailleurs).
+        const diffGenValide=totGlobalPrevuValide-totGlobalMensuValide;
         // Stocker le diff en euros pour buildRecapHtml (cycle le plus récent non soldé)
         const dernierCycleEnCours=cycles.find(cy=>!cy.solde);
         const diffDernierCycle=dernierCycleEnCours?(()=>{
@@ -2954,7 +2967,7 @@ function renderDetTab(id,tab){
           return diffGen;
         })():0;
         c._regulDiffEuros=parseFloat(diffDernierCycle.toFixed(2));
-        const dcGen=diffGen>0?'var(--vt)':diffGen<0?'var(--al)':'var(--tx2)';
+        const dcGen=diffGenValide>0?'var(--vt)':diffGenValide<0?'var(--al)':'var(--tx2)';
         cont.innerHTML=`
           <div class="card" style="background:var(--mp);margin-bottom:12px;border-bottom:none">
             <div style="display:flex;justify-content:space-between;align-items:center">
@@ -2964,10 +2977,10 @@ function renderDetTab(id,tab){
             </div>
               <div style="font-size:13px">
                 <div style="display:flex;gap:16px;flex-wrap:wrap">
-                  <span style="white-space:nowrap">Salaire mensualisé :<br><strong>${totGlobalMensu.toFixed(2)} €</strong></span>
-                  <span style="white-space:nowrap">Salaire dû :<br><strong>${totGlobalPrevu.toFixed(2)} €</strong></span>
+                  <span style="white-space:nowrap">Salaire mensualisé :<br><strong>${totGlobalMensuValide.toFixed(2)} €</strong></span>
+                  <span style="white-space:nowrap">Salaire dû :<br><strong>${totGlobalPrevuValide.toFixed(2)} €</strong></span>
                 </div>
-                ${diffGen!==0?('<div style="text-align:center;margin-top:6px;color:'+dcGen+';font-weight:700">'+(diffGen>0?'+':'')+diffGen.toFixed(2)+' €'+(diffGen>0?' à régulariser':' (trop versé)')+pastilleAide('regularisation')+'</div>'):''}
+                ${diffGenValide!==0?('<div style="text-align:center;margin-top:6px;color:'+dcGen+';font-weight:700">'+(diffGenValide>0?'+':'')+diffGenValide.toFixed(2)+' €'+(diffGenValide>0?' à régulariser':' (trop versé)')+pastilleAide('regularisation')+'</div>'):''}
               </div>
             </div>
           </div>
@@ -3681,6 +3694,7 @@ function calcRegulDiffEurosAuto(c, moisMaxForce){
       else if(j.heureDebPrev&&j.heureFinPrev)hReel+=Math.max(0,(toMins(j.heureFinPrev)-toMins(j.heureDebPrev))/60);
     });
     const montantPrevu=parseFloat((hReel*txNetMois).toFixed(2));
+    if(window.DEBUG_REGUL_COMPARE)console.log('[TEMP-fnA]',key,'| montantMensu:',montantMensu,'| montantPrevu:',montantPrevu,'| txNetMois:',txNetMois,'| hReel:',hReel);
     totGenMensu+=montantMensu;totGenPrevu+=montantPrevu;
   });
   c._regulDiffEuros=parseFloat((totGenPrevu-totGenMensu).toFixed(2));
@@ -15778,7 +15792,7 @@ function renderRuptureCDD(c, cont){
   </div>`:'' ;
 
   cont.innerHTML=`
-    <div style="font-size:12px;color:var(--tx2);margin-bottom:12px;display:flex;align-items:center">Situation au <strong>${dateSitStr}</strong>${pastilleAide('rupture')}</div>
+    <div style="font-size:12px;color:var(--tx2);margin-bottom:12px;display:flex;align-items:center">Situation au <strong style="margin-left:4px">${dateSitStr}</strong>${pastilleAide('rupture')}</div>
     ${confirmeeHtml}
     ${!rp.confirmee?`<div id="warn-rupture-${cid}" style="display:none;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">⚠ Modifications non enregistrées — pensez à cliquer sur 💾 Enregistrer</div>`:''}
     ${soldeCongesHtml}
@@ -15872,7 +15886,7 @@ function renderRupture(c, cont){
           <input type="text" id="rp-occ-fin-${c.id}" value="${dateISOversTexte(rpOcc.dateSignif||'')}" placeholder="JJ/MM/AAAA" oninput="formaterSaisieDate(this)" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
           <button class="btn bp" style="margin-top:10px" onclick="confirmerRuptureOcc(${c.id})">Confirmer la fin de l'accueil</button>
         </div>`;
-    cont.innerHTML=`<div style="font-size:12px;color:var(--tx2);margin-bottom:12px;display:flex;align-items:center">Situation au <strong>${dateSitOccStr}</strong>${pastilleAide('rupture')}</div>
+    cont.innerHTML=`<div style="font-size:12px;color:var(--tx2);margin-bottom:12px;display:flex;align-items:center">Situation au <strong style="margin-left:4px">${dateSitOccStr}</strong>${pastilleAide('rupture')}</div>
     ${finOccHtml}
     <div class="card">
       <div class="ctitle">Rupture — Contrat occasionnel</div>
@@ -16219,7 +16233,7 @@ function renderRupture(c, cont){
   </div>`:'';
 
   cont.innerHTML=`
-    <div style="font-size:15px;color:var(--tx2);margin-bottom:12px;display:flex;align-items:center">Situation au <strong>${dateSitStr}</strong>${pastilleAide('rupture')}</div>
+    <div style="font-size:15px;color:var(--tx2);margin-bottom:12px;display:flex;align-items:center">Situation au <strong style="margin-left:4px">${dateSitStr}</strong>${pastilleAide('rupture')}</div>
     ${confirmeeHtml}
     ${soldeCongesHtml}
     ${indemRuptureEncartHtml}
