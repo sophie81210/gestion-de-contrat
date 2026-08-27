@@ -8294,8 +8294,15 @@ function calcCongesContrat(c, dateRefOverride){
             const lundiPV=new Date(premJourPV); lundiPV.setDate(premJourPV.getDate()+(dowPV===0?-6:1-dowPV));
             const dimanchePV=new Date(lundiPV); dimanchePV.setDate(lundiPV.getDate()+6);
             const semaineTraverseMoisPV=lundiPV.getMonth()!==dimanchePV.getMonth();
+            // 27/08/2026 (Sophie) : même correctif que calcContribSemaineFSMPV (min) — distinguer
+            // "l'autre mois manque parce que pas encore validé" de "manque parce que filtré par la
+            // frontière d'année de référence (debutRef/finRef)", ce dernier étant validé et connu.
+            const moisLundiPV=lundiPV.getFullYear()+'-'+String(lundiPV.getMonth()+1).padStart(2,'0');
+            const moisDimanchePV=dimanchePV.getFullYear()+'-'+String(dimanchePV.getMonth()+1).padStart(2,'0');
+            const moisManquantPV=moisTouchesPVG.includes(moisLundiPV)?moisDimanchePV:moisLundiPV;
+            const moisManquantValidePV=!!(c.fiches[moisManquantPV]&&c.fiches[moisManquantPV].valide);
             let jMaxSemAjustePV;
-            if(semaineTraverseMoisPV&&moisTouchesPVG.length<2){
+            if(semaineTraverseMoisPV&&moisTouchesPVG.length<2&&!moisManquantValidePV){
               jMaxSemAjustePV=0;
             } else if(moisTouchesPVG.length>1&&joursPatternPV){
               jMaxSemAjustePV=calcJoursGarantieCheval(joursSub,jMaxSem,(dateStr)=>{
@@ -8547,6 +8554,7 @@ function calcCongesContrat(c, dateRefOverride){
             // existe cette semaine-là (via le retour à 0 devenu conditionnel plus haut), au lieu de ne
             // compter QUE ce jour travaillé via joursTravailleFSM. Aucune garantie à appliquer sur une
             // semaine que la famille a explicitement déclarée "off".
+            if(window.DEBUG_CGAM)console.log('[CGAM-gateAjusteMin]',c.nom||c.prenom||c.id,'|',joursSub[0]?.date,'-',joursSub[joursSub.length-1]?.date,'| c.th:',c.th,'| c.planType:',c.planType,'| joursConges16:',joursConges16,'| absArretSub:',absArretSub,'| estSemaineOffMin:',estSemaineOffMin);
             if(c.th==='plan'&&c.planType==='min'&&joursConges16===0&&absArretSub===0&&!estSemaineOffMin){
               const sourceMinPl=getVersionActive(c,new Date(joursSub[0].date.split('-')[0],parseInt(joursSub[0].date.split('-')[1])-1,parseInt(joursSub[0].date.split('-')[2])));
               const joursPatternMinPl=sourceMinPl.joursMin||c.joursMin;
@@ -8561,8 +8569,19 @@ function calcCongesContrat(c, dateRefOverride){
               const lundiMin=new Date(premJourMin); lundiMin.setDate(premJourMin.getDate()+(dowMin===0?-6:1-dowMin));
               const dimancheMin=new Date(lundiMin); dimancheMin.setDate(lundiMin.getDate()+6);
               const semaineTraverseMoisMin=lundiMin.getMonth()!==dimancheMin.getMonth();
+              // 27/08/2026 (Sophie) : distinguer "l'autre mois manque parce qu'il n'est pas encore
+              // validé" (cas d'origine, ci-dessous, mise à 0 correcte) de "l'autre mois manque parce
+              // qu'il est filtré par la frontière d'année de référence (debutRef/finRef)" — ce dernier
+              // est validé et connu, juste hors de la période de CE calcul-ci (ex. semaine à cheval sur
+              // le 31 mai/1er juin : mai est déjà compté dans l'année qui se termine). Dans ce cas, ne
+              // pas mettre à 0 — laisser tomber dans la branche normale plus bas, qui gère déjà
+              // correctement un `joursSub` partiel (jours absents du motif simplement ignorés).
+              const moisLundiMin=lundiMin.getFullYear()+'-'+String(lundiMin.getMonth()+1).padStart(2,'0');
+              const moisDimancheMin=dimancheMin.getFullYear()+'-'+String(dimancheMin.getMonth()+1).padStart(2,'0');
+              const moisManquantMin=moisTouchesMinG.includes(moisLundiMin)?moisDimancheMin:moisLundiMin;
+              const moisManquantValideMin=!!(c.fiches[moisManquantMin]&&c.fiches[moisManquantMin].valide);
               let joursMaxSemAjusteMin;
-              if(semaineTraverseMoisMin&&moisTouchesMinG.length<2){
+              if(semaineTraverseMoisMin&&moisTouchesMinG.length<2&&!moisManquantValideMin){
                 joursMaxSemAjusteMin=0;
               } else if(moisTouchesMinG.length>1&&joursPatternMinPl){
                 joursMaxSemAjusteMin=calcJoursGarantieCheval(joursSub,joursMaxSem,(dateStr)=>{
@@ -8703,6 +8722,7 @@ function calcCongesContrat(c, dateRefOverride){
           }
         }
         totalSemaines+=joursTravailles/joursMaxSemC;
+        if(window.DEBUG_CGAM)console.log('[CGAM-semaineEnCours]',c.nom||c.prenom||c.id,'|',jours[0]?.date,'-',jours[jours.length-1]?.date,'| joursTravailles (heureDebReel):',joursTravailles,'| joursMaxSemC:',joursMaxSemC,'| contrib:',joursTravailles/joursMaxSemC,'| statuts:',jours.map(jj=>jj.date+':'+(jj.statut||getStatutPrevu(c,jj))+(jj.heureDebReel?'[reel]':'')).join(', '));
       }
     });
 
