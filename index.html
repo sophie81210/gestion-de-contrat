@@ -8222,9 +8222,23 @@ function calcCongesContrat(c, dateRefOverride){
             const typeSemPV=agPV&&agPV.semaines&&agPV.semaines[agKeyPV];
             const volAgendaPV=(typeSemPV&&typeSemPV!=='off'&&sourcePV.planVar)
               ?sourcePV.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemPV):null;
-            const joursActifs=joursSub.filter(j=>!['hors-contrat','repos','non-prevu'].includes(j.statut||getStatutPrevu(c,j)));
+            // 27/08/2026 (Sophie) : semaine "off" — n'inclure QUE les jours réellement travaillés/repris
+            // malgré tout (même principe que le garde-fou jour par jour de fixe/sem/min) ; les autres
+            // jours de cette même semaine (statut structurel hérité du motif habituel, jamais "off" en
+            // tant que tel) ne doivent pas compter. Sans ce filtre, joursActifs garderait tous les jours
+            // du motif, et le mécanisme de plancher plus bas (compteEffectifPV) redonnerait crédit pour
+            // toute la semaine au lieu du seul jour travaillé.
+            const joursActifs=joursSub.filter(j=>{
+              const stJ=j.statut||getStatutPrevu(c,j);
+              if(['hors-contrat','repos','non-prevu'].includes(stJ)) return false;
+              if(typeSemPV==='off'&&!['travaille','reprise'].includes(stJ)&&!j.heureDebReel) return false;
+              return true;
+            });
             const absArretSub=joursSub.filter(j=>j.statut==='arret').length;
-            if(typeSemPV==='off'||(joursActifs.length===0&&!volAgendaPV)) return {contrib:0,contribArret:0};
+            // 27/08/2026 (Sophie) : le test "off" seul est retiré — joursActifs (ci-dessus) reflète déjà
+            // correctement une semaine off (vide si aucun jour travaillé, réduit à ces jours sinon), donc
+            // le test générique "aucun jour actif et aucun volume" suffit désormais à couvrir les deux cas.
+            if(joursActifs.length===0&&!volAgendaPV) return {contrib:0,contribArret:0};
             let jMaxSem=joursMax;
             let joursPatternPV=null;
             if(volAgendaPV){
@@ -8309,7 +8323,11 @@ function calcCongesContrat(c, dateRefOverride){
               }
               jMaxSemAjustePV=Math.min(jMaxSem,joursPossiblesEnContratPV);
             }
-            const compteEffectifPV=(joursConges16PV===0&&absArretSub===0&&jMaxSemAjustePV>0)?Math.max(jMaxSemAjustePV,joursNormauxPV):joursNormauxPV;
+            // 27/08/2026 (Sophie) : neutralisé pendant une semaine off (typeSemPV==='off') — même
+            // raison que pour min (joursMaxSemAjusteMin plus haut) : sans ce garde-fou, ce plancher
+            // redonnerait crédit pour le motif hebdomadaire complet dès qu'un jour est travaillé cette
+            // semaine-là, au lieu du seul jour travaillé (via joursTravaillePV, compté séparément).
+            const compteEffectifPV=(joursConges16PV===0&&absArretSub===0&&jMaxSemAjustePV>0&&typeSemPV!=='off')?Math.max(jMaxSemAjustePV,joursNormauxPV):joursNormauxPV;
             const totalJAnnuelPV=(c.planVar||[]).reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
             const nbSemAnnuelPV=(c.planVar||[]).reduce((t,v)=>t+(v.s||0),0);
             const moyenneJourSemPV=nbSemAnnuelPV>0?totalJAnnuelPV/nbSemAnnuelPV:jMaxSem;
@@ -8373,12 +8391,21 @@ function calcCongesContrat(c, dateRefOverride){
             // voir estMin52Planning ailleurs dans le fichier) doit exclure une semaine marquée "off"
             // sur l'agenda, comme le fait déjà var (typeSemPV==='off') — absent jusqu'ici, une semaine
             // off comptait à tort comme une semaine normale pour l'acquisition.
+            // 27/08/2026 (Sophie) : mais un jour réellement travaillé malgré tout au sein d'une semaine
+            // off doit compter (même principe que fixe/sem, protégés jour par jour plus bas, étendu à
+            // min ici) — le retour à 0 ne s'applique donc plus si un tel jour existe cette semaine-là.
+            let estSemaineOffMin=false;
             if(sourceSem.th==='plan'&&sourceSem.planType==='min'&&(sourceSem.tc||c.tc)!=='52'){
               const agendasMinOff=sourceSem.agendas||c.agendas||[];
               const agMinOff=agendasMinOff.find(a=>parseDateLoc(a.dateDebut)<=dateRepSem&&parseDateLoc(a.dateFin)>=dateRepSem);
               const agKeyMinOff=getKeyAgenda(getSemISO(joursSub[0].date),getSemAnnee(joursSub[0].date));
               const typeSemMinOff=agMinOff&&agMinOff.semaines&&agMinOff.semaines[agKeyMinOff];
-              if(typeSemMinOff==='off') return {contrib:0,contribArret:0};
+              estSemaineOffMin=typeSemMinOff==='off';
+              const aJourTravailleMinOff=estSemaineOffMin&&joursSub.some(jj=>{
+                const stJJ=jj.statut||getStatutPrevu(c,jj);
+                return ['travaille','reprise'].includes(stJJ)||jj.heureDebReel;
+              });
+              if(estSemaineOffMin&&!aJourTravailleMinOff) return {contrib:0,contribArret:0};
             }
             let joursMaxSem=joursMax;
             let typeSemActif46=null;
@@ -8449,7 +8476,11 @@ function calcCongesContrat(c, dateRefOverride){
               // habituel du contrat, qui ignore que cette semaine précise est "off", et comptait le
               // jour comme normal/travaillé à tort. Var/min a déjà cette protection plus haut
               // (`typeSemPV==='off'`) ; fixe/sem ne l'avait pas.
-              const estSemaineOffCg=(sourceCgProt.th==='fixe'||sourceCgProt.th==='sem')&&(()=>{
+              // 27/08/2026 (Sophie) : étendu à plan min (hors 52) — son propre retour à 0 plus haut
+              // (estSemaineOffMin) ne s'applique plus quand un jour travaillé existe cette semaine-là ;
+              // ce garde-fou jour par jour reste nécessaire pour ignorer les AUTRES jours de cette même
+              // semaine (non travaillés), qui doivent rester à 0 malgré l'exception.
+              const estSemaineOffCg=(sourceCgProt.th==='fixe'||sourceCgProt.th==='sem'||(sourceCgProt.th==='plan'&&sourceCgProt.planType==='min'&&(sourceCgProt.tc||c.tc)!=='52'))&&(()=>{
                 const agendasCgProt=sourceCgProt.agendas||c.agendas||[];
                 const dateJCgProt=new Date(jpy,jpm-1,jpd);
                 const agCgProt=agendasCgProt.find(ag=>parseDateLoc(ag.dateDebut)<=dateJCgProt&&parseDateLoc(ag.dateFin)>=dateJCgProt);
@@ -8510,7 +8541,12 @@ function calcCongesContrat(c, dateRefOverride){
               }
             });
 
-            if(c.th==='plan'&&c.planType==='min'&&joursConges16===0&&absArretSub===0){
+            // 27/08/2026 (Sophie) : neutralisé pendant une semaine off (estSemaineOffMin) — sinon ce
+            // plancher remonte joursNormaux au motif hebdomadaire complet dès qu'un jour travaillé
+            // existe cette semaine-là (via le retour à 0 devenu conditionnel plus haut), au lieu de ne
+            // compter QUE ce jour travaillé via joursTravailleFSM. Aucune garantie à appliquer sur une
+            // semaine que la famille a explicitement déclarée "off".
+            if(c.th==='plan'&&c.planType==='min'&&joursConges16===0&&absArretSub===0&&!estSemaineOffMin){
               const sourceMinPl=getVersionActive(c,new Date(joursSub[0].date.split('-')[0],parseInt(joursSub[0].date.split('-')[1])-1,parseInt(joursSub[0].date.split('-')[2])));
               const joursPatternMinPl=sourceMinPl.joursMin||c.joursMin;
               const moisTouchesMinG=[...new Set(joursSub.map(j=>j.date.slice(0,7)))];
