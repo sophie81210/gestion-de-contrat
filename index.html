@@ -15067,8 +15067,18 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
           console.log('[TEMP-fnC-jour]',j.date,'| statut:',j.statut,'| heureDebPrev:',j.heureDebPrev,'| heureFinPrev:',j.heureFinPrev,'| isFerie:',isFerie(j.date,c),'| typeSem:',typeSem);
         }
         if(typeSem==='off') return;
-        if(['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges'].includes(j.statut)) return;
-        if(j.heureDebPrev&&j.heureFinPrev){
+        // 27/08/2026 (Sophie) : liste complétée avec les 8 statuts qu'elle n'avait jamais eus
+        // (alignée sur statutsExclus de calcRegulDiffEurosAuto) — abs-non notamment ("Absence non
+        // rémunérée", "le jour sera déduit du salaire" dans son propre libellé) tombait avant dans la
+        // branche générique et comptait à tort ses heures prévues complètes. Confirmé par Sophie sur
+        // 3 exemples chiffrés : janvier 2024 (405,15 et non 429,96), septembre 2025 (0 et non 52,23).
+        if(['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges','abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat'].includes(j.statut)) return;
+        if(j.statut==='abs-partielle'){
+          // 27/08/2026 (Sophie) : même traitement que calcRegulDiffEurosAuto — heures réellement
+          // travaillées ce jour-là (jamais les heures prévues complètes), la déduction proportionnelle
+          // hAbsReelles ci-dessous est retirée en même temps que cet ajout (sinon double déduction).
+          if(j.heureDebReel&&j.heureFinReel) hPrevu+=Math.max(0,(toMins(j.heureFinReel)-toMins(j.heureDebReel))/60);
+        } else if(j.heureDebPrev&&j.heureFinPrev){
           hPrevu+=(toMins(j.heureFinPrev)-toMins(j.heureDebPrev))/60;
         } else if(j.statut==='travaille'&&isFerie(j.date,c)){
           // Jour férié normalement prévu, passé en "travaillé" (statut nécessaire pour que la
@@ -15091,9 +15101,12 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
         }
       });
     }
-    // Déduire les heures d'absence des heures réelles (proportionnellement aux heures prévues)
-    const hAbsReelles=hMensuMois>0?(hAbsDedMois/hMensuMois)*hPrevu:0;
-    const hPrevuNetMoisH=Math.max(0,hPrevu-hAbsReelles);
+    // 27/08/2026 (Sophie) : déduction proportionnelle retirée côté "dû" — devenue redondante et
+    // à risque de double déduction maintenant que la boucle ci-dessus gère précisément abs-partielle
+    // (heures réelles) et exclut les statuts d'absence (abs-non, abs-am, abs-enfant, arret) comme
+    // calcRegulDiffEurosAuto. Le côté "mensu" (ci-dessus, hMensuNetMoisH) reste inchangé — confirmé
+    // correct par Sophie, la proportionnalité y reste nécessaire.
+    const hPrevuNetMoisH=Math.max(0,hPrevu);
     // 27/08/2026 (Sophie) : conversion en euros ICI, mois par mois, avec le taux net DE CE MOIS
     // (_txNetRegulMois, déjà calculé plus haut pour la déduction d'absence) — plus une seule
     // conversion globale à la fin avec le taux actuel. Le taux de Constance a changé en septembre
