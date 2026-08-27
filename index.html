@@ -6772,11 +6772,14 @@ function calcSoldeToutCompte(c, key){
   let regul=null;
   if(srcActifSolde.tc!=='52'&&srcActifSolde.tc!=='occ'){
     const reg=calcRegularisationDefinitive(c);
-    if(reg.diff>0){
+    if(reg.diffNet>0){
+      // 27/08/2026 (Sophie) : reg.diffNet est déjà en euros nets, calculé mois par mois au bon taux —
+      // source/txBrut restent utiles ci-dessous pour l'équivalent en jours au taux actuel (affichage),
+      // mais regBrut n'est plus qu'une valeur dérivée (net/coefficient), pas un recalcul depuis des heures.
       const source=getVersionActive(c,dateFinContrat);
       const txBrut=source.txBrut||0;
-      const regBrut=parseFloat((reg.diff*txBrut).toFixed(2));
-      const regNet=parseFloat((regBrut*coefNet).toFixed(2));
+      const regNet=reg.diffNet;
+      const regBrut=coefNet>0?parseFloat((regNet/coefNet).toFixed(2)):0;
       const hMensuSrc=source.hMensu||0;
       const nbJoursSrc=parseFloat((getNbSemReel(source,c)*hMensuSrc/12/(hMensuSrc/((source.joursFixe||[]).filter(j=>j).length||5)||1)).toFixed(2));
       const hParJour=hMensuSrc>0&&nbJoursSrc>0?hMensuSrc/nbJoursSrc:0;
@@ -15016,7 +15019,7 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
     }
     return true;
   }).sort();
-  let totalMensu=0, totalPrevu=0;
+  let totalMensuNet=0, totalPrevuNet=0;
   moisTries.forEach(key=>{
     const fiche=c.fiches[key];
     const [ay2,am2]=key.split('-').map(Number);
@@ -15037,7 +15040,7 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
     const _montantAbsNormMois=Math.max(0,parseFloat(recapMois.montantAbsences||0)-parseFloat(recapMois.montantAbsMaj||0));
     const hAbsDedMois=_txNetRegulMois>0?parseFloat((_montantAbsNormMois/_txNetRegulMois).toFixed(2)):0;
     const hMensuMois=parseFloat(recapMois.hMensu||source.hMensu||0);
-    totalMensu+=Math.max(0,hMensuMois-hAbsDedMois);
+    const hMensuNetMoisH=Math.max(0,hMensuMois-hAbsDedMois);
     // Heures prévues (sans off ni congés)
     const agendas=source.agendas||c.agendas||[];
     const ag=agendas.find(a=>{
@@ -15084,9 +15087,19 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
     }
     // Déduire les heures d'absence des heures réelles (proportionnellement aux heures prévues)
     const hAbsReelles=hMensuMois>0?(hAbsDedMois/hMensuMois)*hPrevu:0;
-    totalPrevu+=Math.max(0,hPrevu-hAbsReelles);
+    const hPrevuNetMoisH=Math.max(0,hPrevu-hAbsReelles);
+    // 27/08/2026 (Sophie) : conversion en euros ICI, mois par mois, avec le taux net DE CE MOIS
+    // (_txNetRegulMois, déjà calculé plus haut pour la déduction d'absence) — plus une seule
+    // conversion globale à la fin avec le taux actuel. Le taux de Constance a changé en septembre
+    // 2025 ; l'ancienne version (accumulation d'heures sur tout l'historique, conversion unique à la
+    // fin) revalorisait les mois antérieurs au taux d'aujourd'hui, gonflant l'écart d'environ
+    // 110-130€ par rapport à "Situation au"/"onglet Régularisation", qui calculaient déjà euro par
+    // euro, mois par mois, au bon taux à chaque fois — cette fonction était la seule des trois à ne
+    // pas le faire.
+    totalMensuNet+=parseFloat((hMensuNetMoisH*_txNetRegulMois).toFixed(2));
+    totalPrevuNet+=parseFloat((hPrevuNetMoisH*_txNetRegulMois).toFixed(2));
   });
-  return {totalMensu:parseFloat(totalMensu.toFixed(2)),totalPrevu:parseFloat(totalPrevu.toFixed(2)),diff:parseFloat((totalPrevu-totalMensu).toFixed(2))};
+  return {totalMensuNet:parseFloat(totalMensuNet.toFixed(2)),totalPrevuNet:parseFloat(totalPrevuNet.toFixed(2)),diffNet:parseFloat((totalPrevuNet-totalMensuNet).toFixed(2))};
 }
 
 function calcDureePreavis(c, dateSignif){
@@ -15768,10 +15781,11 @@ function renderRuptureCDD(c, cont){
       if(s.montantNonVersesBrut>0){lignes.push({label:'Congés acquis non versés',net:s.montantNonVersesNet,brut:s.montantNonVersesBrut});totalNet+=s.montantNonVersesNet;totalBrut+=s.montantNonVersesBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
       const reg=calcRegularisationDefinitive(c);
-      if(reg.diff>0){
-        const src=getVersionActive(c,dateSit||new Date());
-        const regBrut=parseFloat((reg.diff*(src.txBrut||0)).toFixed(2));
-        const regNet=parseFloat((regBrut*coefNet).toFixed(2));
+      if(reg.diffNet>0){
+        // 27/08/2026 (Sophie) : reg.diffNet déjà en euros nets, mois par mois au bon taux — plus
+        // besoin de source/txBrut ici, regBrut n'est qu'une valeur d'affichage dérivée.
+        const regNet=reg.diffNet;
+        const regBrut=coefNet>0?parseFloat((regNet/coefNet).toFixed(2)):0;
         lignes.push({label:'Régularisation définitive',net:regNet,brut:regBrut});
         totalNet+=regNet;totalBrut+=regBrut;
       }
@@ -16181,15 +16195,14 @@ function renderRupture(c, cont){
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
       if(srcActifSim.tc!=='52'){
         const reg=calcRegularisationDefinitive(c);
-        if(reg.diff>0){
-        const source=getVersionActive(c,dateSit);
-        const txBrut=source.txBrut||0;
-        const regBrut=parseFloat((reg.diff*txBrut).toFixed(2));
-        // 29/07/2026 (correctif Sophie) : même bug que calcSoldeConges46 — coefNet n'existe pas dans
-        // cette portée. Régularisation de salaire au taux ET coefficient en vigueur à la rupture,
-        // comme demandé — même date de référence (dateSit) que le reste de l'onglet.
+        if(reg.diffNet>0){
+        // 29/07/2026 (correctif Sophie) : coefNet n'existe pas dans cette portée — coefficient en
+        // vigueur à la rupture (dateSit), même référence que le reste de l'onglet.
+        // 27/08/2026 (Sophie) : reg.diffNet déjà en euros nets, mois par mois au bon taux — regBrut
+        // n'est plus qu'une valeur d'affichage dérivée (net/coefficient), pas un recalcul depuis des heures.
         const coefNetRegul=getParamAt('coefficients',dateToStr(dateSit)).valeur||0.7811975;
-        const regNet=parseFloat((regBrut*coefNetRegul).toFixed(2));
+        const regNet=reg.diffNet;
+        const regBrut=coefNetRegul>0?parseFloat((regNet/coefNetRegul).toFixed(2)):0;
         lignes.push({label:'Régularisation définitive',net:regNet,brut:regBrut});
         totalNet+=regNet;totalBrut+=regBrut;
       }
