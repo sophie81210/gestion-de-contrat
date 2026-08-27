@@ -8150,7 +8150,12 @@ function calcCongesContrat(c, dateRefOverride){
       const aRecoitDuReste=Math.max(0,reste-bPrend);
       const donneA=Math.min(possiblesA,cochesA+aRecoitDuReste);
       const donneB=Math.min(possiblesB,cochesB+bPrend);
-      return donneA+donneB;
+      // 27/08/2026 (Sophie) : retourne désormais les deux parts séparément (pas seulement leur somme)
+      // — nécessaire pour le cas frontière d'année de référence, où chaque mois est calculé dans un
+      // appel séparé de calcCongesContrat (années différentes) et doit recevoir SA part précise, pas
+      // le total combiné. Les appelants existants (semaine à cheval sur un avenant, un seul calcul,
+      // un seul mois-résultat pertinent) utilisent .total, inchangé dans sa valeur.
+      return {donneA, donneB, total:donneA+donneB};
     }
 
     Object.entries(semaines).forEach(([semKey,sem])=>{
@@ -8304,13 +8309,32 @@ function calcCongesContrat(c, dateRefOverride){
             let jMaxSemAjustePV;
             if(semaineTraverseMoisPV&&moisTouchesPVG.length<2&&!moisManquantValidePV){
               jMaxSemAjustePV=0;
+            } else if(semaineTraverseMoisPV&&moisTouchesPVG.length<2&&moisManquantValidePV){
+              // 27/08/2026 (Sophie) : mois manquant validé mais hors de CETTE année de référence
+              // (ex. semaine à cheval sur le 31 mai/1er juin) — reconstruire ses jours dans les
+              // limites de cette semaine calendaire précise, calculer la répartition de la garantie
+              // sur la semaine complète reconstituée, puis ne garder QUE la part qui revient au mois
+              // en cours ici (l'autre part a déjà été comptée dans le calcul de l'année précédente).
+              const ficheManquantePV=c.fiches[moisManquantPV];
+              const joursManquantsPV=(ficheManquantePV.jours||[]).filter(jm=>{
+                const dJm=new Date(jm.date.split('-')[0],parseInt(jm.date.split('-')[1])-1,parseInt(jm.date.split('-')[2]));
+                return dJm>=lundiPV&&dJm<=dimanchePV;
+              }).map(jm=>({statut:jm.statut||getStatutPrevu(c,jm),heureDebReel:jm.heureDebReel,date:jm.date}));
+              const joursSubCompletPV=[...joursSub,...joursManquantsPV].sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+              const splitPV=calcJoursGarantieCheval(joursSubCompletPV,jMaxSem,(dateStr)=>{
+                const [py2,pm2,pd2]=dateStr.split('-').map(Number);
+                const idxPoss2=new Date(py2,pm2-1,pd2).getDay();
+                const idxPossISO2=idxPoss2===0?6:idxPoss2-1;
+                return !!(joursPatternPV&&joursPatternPV[idxPossISO2]);
+              });
+              jMaxSemAjustePV=moisTouchesPVG[0]>moisManquantPV?splitPV.donneB:splitPV.donneA;
             } else if(moisTouchesPVG.length>1&&joursPatternPV){
               jMaxSemAjustePV=calcJoursGarantieCheval(joursSub,jMaxSem,(dateStr)=>{
                 const [py2,pm2,pd2]=dateStr.split('-').map(Number);
                 const idxPoss2=new Date(py2,pm2-1,pd2).getDay();
                 const idxPossISO2=idxPoss2===0?6:idxPoss2-1;
                 return !!(joursPatternPV&&joursPatternPV[idxPossISO2]);
-              });
+              }).total;
             } else {
               let joursPossiblesEnContratPV=jMaxSem;
               if(joursPatternPV){
@@ -8573,9 +8597,12 @@ function calcCongesContrat(c, dateRefOverride){
               // validé" (cas d'origine, ci-dessous, mise à 0 correcte) de "l'autre mois manque parce
               // qu'il est filtré par la frontière d'année de référence (debutRef/finRef)" — ce dernier
               // est validé et connu, juste hors de la période de CE calcul-ci (ex. semaine à cheval sur
-              // le 31 mai/1er juin : mai est déjà compté dans l'année qui se termine). Dans ce cas, ne
-              // pas mettre à 0 — laisser tomber dans la branche normale plus bas, qui gère déjà
-              // correctement un `joursSub` partiel (jours absents du motif simplement ignorés).
+              // le 31 mai/1er juin : mai est déjà compté dans l'année qui se termine). Dans ce cas,
+              // reconstruire les jours du mois manquant et répartir la garantie de la semaine complète
+              // entre les deux mois (comme calcJoursGarantieCheval le fait déjà pour un cheval de mois
+              // classique), en ne gardant que la part qui revient à CE mois-ci — pas la totalité de la
+              // garantie, qui double-compterait les jours déjà crédités à l'année précédente (bug
+              // trouvé sur un premier essai plus simple, corrigé le même jour).
               const moisLundiMin=lundiMin.getFullYear()+'-'+String(lundiMin.getMonth()+1).padStart(2,'0');
               const moisDimancheMin=dimancheMin.getFullYear()+'-'+String(dimancheMin.getMonth()+1).padStart(2,'0');
               const moisManquantMin=moisTouchesMinG.includes(moisLundiMin)?moisDimancheMin:moisLundiMin;
@@ -8583,13 +8610,27 @@ function calcCongesContrat(c, dateRefOverride){
               let joursMaxSemAjusteMin;
               if(semaineTraverseMoisMin&&moisTouchesMinG.length<2&&!moisManquantValideMin){
                 joursMaxSemAjusteMin=0;
+              } else if(semaineTraverseMoisMin&&moisTouchesMinG.length<2&&moisManquantValideMin){
+                const ficheManquanteMin=c.fiches[moisManquantMin];
+                const joursManquantsMin=(ficheManquanteMin.jours||[]).filter(jm=>{
+                  const dJm=new Date(jm.date.split('-')[0],parseInt(jm.date.split('-')[1])-1,parseInt(jm.date.split('-')[2]));
+                  return dJm>=lundiMin&&dJm<=dimancheMin;
+                }).map(jm=>({statut:jm.statut||getStatutPrevu(c,jm),heureDebReel:jm.heureDebReel,date:jm.date}));
+                const joursSubCompletMin=[...joursSub,...joursManquantsMin].sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+                const splitMin=calcJoursGarantieCheval(joursSubCompletMin,joursMaxSem,(dateStr)=>{
+                  const [py,pm,pd]=dateStr.split('-').map(Number);
+                  const idxPoss=new Date(py,pm-1,pd).getDay();
+                  const idxPossISO=idxPoss===0?6:idxPoss-1;
+                  return !!(joursPatternMinPl&&joursPatternMinPl[idxPossISO]);
+                });
+                joursMaxSemAjusteMin=moisTouchesMinG[0]>moisManquantMin?splitMin.donneB:splitMin.donneA;
               } else if(moisTouchesMinG.length>1&&joursPatternMinPl){
                 joursMaxSemAjusteMin=calcJoursGarantieCheval(joursSub,joursMaxSem,(dateStr)=>{
                   const [py,pm,pd]=dateStr.split('-').map(Number);
                   const idxPoss=new Date(py,pm-1,pd).getDay();
                   const idxPossISO=idxPoss===0?6:idxPoss-1;
                   return !!(joursPatternMinPl&&joursPatternMinPl[idxPossISO]);
-                });
+                }).total;
               } else {
                 // 24/08/2026 (Sophie) : corrigé — partir du plafond (jours du motif en contrat cette
                 // semaine, plafonné à joursMaxSem) puis retirer UNIQUEMENT les jours abs-non/abs-enfant
