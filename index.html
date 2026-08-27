@@ -6828,7 +6828,7 @@ function calcSoldeToutCompte(c, key){
   // Indemnité de rupture
   let indemRupture=null;
   if(aIndemniteRupture){
-    const ir=calcIndemniteRupture(c,dateFinContrat,indemConges?.montantBrut||0);
+    const ir=calcIndemniteRupture(c,dateFinContrat,indemConges?.montantBrut||0,regul?.montantBrut||0);
     if(ir) indemRupture={montantBrut:ir.montantBrut};
   }
   
@@ -8405,6 +8405,7 @@ function calcCongesContrat(c, dateRefOverride){
                 const stJJ=jj.statut||getStatutPrevu(c,jj);
                 return ['travaille','reprise'].includes(stJJ)||jj.heureDebReel;
               });
+              if(window.DEBUG_CGAM)console.log('[CGAM-offMin]',c.nom||c.prenom||c.id,'|',joursSub[0]?.date,'-',joursSub[joursSub.length-1]?.date,'| agMinOff trouvé:',!!agMinOff,'| agKeyMinOff:',agKeyMinOff,'| typeSemMinOff:',typeSemMinOff,'| estSemaineOffMin:',estSemaineOffMin,'| aJourTravailleMinOff:',aJourTravailleMinOff,'| statuts:',joursSub.map(jj=>jj.date+':'+(jj.statut||getStatutPrevu(c,jj))).join(', '));
               if(estSemaineOffMin&&!aJourTravailleMinOff) return {contrib:0,contribArret:0};
             }
             let joursMaxSem=joursMax;
@@ -15328,7 +15329,7 @@ function calcSemainesEquivalentesPreavis(c, dateDebutNonEffectue, dateFinPreavis
   return semainesEq;
 }
 
-function calcIndemniteRupture(c, dateFin, indemCongesBrut=0){
+function calcIndemniteRupture(c, dateFin, indemCongesBrut=0, regulBrut=0){
   const [ddy,ddm,ddd]=c.dateDeb.split('-').map(Number);
   const dateDebContrat=new Date(ddy,ddm-1,ddd);
   const diffMois=(dateFin-dateDebContrat)/(1000*60*60*24*30.44);
@@ -15336,7 +15337,9 @@ function calcIndemniteRupture(c, dateFin, indemCongesBrut=0){
   // 06/08/2026 (Sophie) : la base du 1/80ème inclut aussi l'indemnité compensatrice de congés payés
   // (pas de détail à part dans le calcul lui-même — un seul montant global), pas seulement les
   // salaires bruts déjà versés pendant le contrat.
-  const totalBrut=calcBrutTotal(c,null,dateFin)+(indemCongesBrut||0);
+  // 27/08/2026 (Sophie) : idem pour la régularisation de salaire — un montant dû mais pas encore
+  // versé au moment de la rupture, donc à inclure dans la base au même titre que les congés.
+  const totalBrut=calcBrutTotal(c,null,dateFin)+(indemCongesBrut||0)+(regulBrut||0);
   const montantBrut=parseFloat((totalBrut/80).toFixed(2));
   const params=S.params||{};
   const coefNet=getParamAt('coefficients',dateToStr(dateFin)).valeur||0.7811975; // 27/07/2026 (correctif Sophie)
@@ -16307,7 +16310,10 @@ function renderRupture(c, cont){
 
     // Indemnité de rupture
     if(aIndemniteRupture&&dateFinContrat){
-      const ir=calcIndemniteRupture(c,dateFinContrat);
+      // 27/08/2026 (Sophie) : régularisation récupérée via lignes (calculée plus haut dans un bloc à
+      // portée limitée) pour l'inclure dans la base du 1/80ème, comme pour congés en cours ci-dessus.
+      const ligneRegul=lignes.find(l=>l.label==='Régularisation définitive');
+      const ir=calcIndemniteRupture(c,dateFinContrat,0,ligneRegul?.brut||0);
       if(ir){
         // Indemnité de rupture : brut uniquement (non soumise à cotisations)
         lignes.push({label:'Indemnité de rupture (1/80ème)',brut:ir.montantBrut,brutSeulement:true});
