@@ -14978,21 +14978,14 @@ function calcSoldeConges46(c, dateRupture){
   // pour une année déjà terminée.
   if(cgEnCours) joursEnCours=Math.ceil(Math.max(0,(cgEnCours.acqBrut||0)-(cgEnCours.pris||0)));
   const dateSit=dateRupture||getDateSituationAu(c)||new Date();
-  // 06/08/2026 (Sophie) : corrigé — utilisait auparavant uniquement le dernier mois VALIDÉ
-  // (`getDateSituationAu`), qui par construction ne peut jamais être le mois cherché ici
-  // (justement celui qui n'est PAS encore validé) : ce contrôle ne se déclenchait donc jamais.
-  const keyRuptSC46=dateSit.getFullYear()+'-'+String(dateSit.getMonth()+1).padStart(2,'0');
-  const ficheRuptSC46=c.fiches?.[keyRuptSC46];
-  // 06/08/2026 (Sophie) : le principe "jours posés ce mois déjà payés via le salaire normal" ne
-  // s'applique PAS à 46 — contrairement à 52, les congés y sont payés séparément (mode dateCg :
-  // juin/principale/chaque), jamais mensualisés dans le salaire de base. Retour à la version qui ne
-  // déduit que les jours acquis prévus sur un mois pas encore validé (l'autre correctif "mode chaque"
-  // reste en pause, sujet distinct).
-  if(ficheRuptSC46&&!ficheRuptSC46.valide){
-    const nbAcqPrevuSC46=(ficheRuptSC46.jours||[]).filter(j=>j.statut==='conges-acq').length;
-    joursEnCours=Math.max(0,joursEnCours-nbAcqPrevuSC46);
-  }
-  if(window.DEBUG_ESTIM)console.log('[TEMP-joursEnCours]','dateSit:',dateSit,'| cgEnCours:',cgEnCours?JSON.stringify({acqBrut:cgEnCours.acqBrut,pris:cgEnCours.pris}):null,'| joursEnCours après Math.ceil:',cgEnCours?Math.ceil(Math.max(0,(cgEnCours.acqBrut||0)-(cgEnCours.pris||0))):null,'| keyRuptSC46:',keyRuptSC46,'| ficheRuptSC46 existe ?',!!ficheRuptSC46,'| ficheRuptSC46.valide:',ficheRuptSC46?.valide,'| joursEnCours final:',joursEnCours);
+  // 25/08/2026 (Sophie) : la déduction "jours congés acquis présents sur une fiche future non
+  // validée" (06/08/2026) a été retirée — pour un contrat 46, les congés en cours d'acquisition ne
+  // sont JAMAIS payés pendant leur propre année d'acquisition, quoi qu'il arrive dans une fiche
+  // future. Cette déduction confondait à tort le prévu d'un mois futur avec l'acquis de l'année en
+  // cours, faisant chuter joursEnCours à 0 par coïncidence de calendrier plutôt que par une vraie
+  // logique métier. Le cas qu'elle visait à couvrir (jours déjà payés lors de la validation d'un
+  // mois) existe déjà, correctement, dans la boucle des années TERMINÉES plus haut (dejaPaye, modes
+  // juin/chaque) — ce correctif n'avait donc pas sa place ici.
   // Calcul montant en cours : meilleur entre 10ème et maintien
   const anneeRefDebut=dateSit.getMonth()>=5?dateSit.getFullYear():dateSit.getFullYear()-1;
   const dateJuin=new Date(anneeRefDebut,5,1);
@@ -15077,6 +15070,15 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
           if(prevusFerieReg&&prevusFerieReg.debut&&prevusFerieReg.fin){
             hPrevu+=(toMins(prevusFerieReg.fin)-toMins(prevusFerieReg.debut))/60;
           }
+        } else if(j.statut==='ferie'){
+          // 25/08/2026 (Sophie) : un férié resté au statut "ferie" (pas "travaillé") dans une pose de
+          // congés acquis doit compter, sur un jour prévu ou jour union — même traitement qu'un jour
+          // de congés ordinaire (moyenne hebdo / jours union, getHJourCongesNonDeduit) — même
+          // correctif que celui posé dans calcRegulDiffEurosAuto et hReelPortion plus tôt aujourd'hui,
+          // bug identique dans cette troisième fonction séparée (exemple chiffré Sophie : 25 décembre
+          // 2025, jeudi, jour union, tombait à zéro en plan sem).
+          const hJourFerieReg2=getHJourCongesNonDeduit(c,j.date,j.jourSemaine);
+          if(hJourFerieReg2>0) hPrevu+=hJourFerieReg2;
         }
       });
     }
