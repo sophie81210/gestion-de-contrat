@@ -4611,7 +4611,7 @@ function ouvrirFiche(contratId,key){
     <div class="card" style="margin-top:10px">
       <div class="ctitle">Déclaration Pajemploi — ${label}${pastilleAide('declaration-pajemploi')}</div>
       <table id="recap-pj-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
-        ${buildRecapPajemploi(recap, c)}
+        ${buildRecapPajemploi(recap, c, calcSoldeToutCompte(c, key)?.regul)}
       </table>
     </div>`}
     <div style="text-align:center;padding:14px 0">
@@ -6360,7 +6360,7 @@ function imprimerFiche(contratId,key){
   </table>
   <h3>Récapitulatif</h3>
   <table style="font-size:13px">${buildRecapHtml(recap, calcSoldeToutCompte(c, key), calcRegul52(c, key), c)}</table>
- <h3 style="margin-top:16px">Déclaration Pajemploi</h3><table style="font-size:13px">${buildRecapPajemploi(recap, c)}</table>
+ <h3 style="margin-top:16px">Déclaration Pajemploi</h3><table style="font-size:13px">${buildRecapPajemploi(recap, c, calcSoldeToutCompte(c, key)?.regul)}</table>
   ${(()=>{
     const soldePdf=calcSoldeToutCompte(c, key);
     if(!soldePdf) return '';
@@ -6453,7 +6453,7 @@ function enregistrerFiche(contratId,key){
     if(!el)return;
     el.innerHTML=buildRecapHtml(recap, null, null, c);
     const elPj=document.getElementById('recap-pj-'+contratId+'-'+key);
-    if(elPj) elPj.innerHTML=buildRecapPajemploi(recap, c);
+    if(elPj) elPj.innerHTML=buildRecapPajemploi(recap, c, calcSoldeToutCompte(c, key)?.regul);
   }
 }
 
@@ -7282,15 +7282,30 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
 
 // Encart "Déclaration Pajemploi" — mois simple, sans avenant (pour les mois avec avenant, cette même
 // structure est reproduite par buildRecapCumul, qui a son propre encart "Cumul / Déclaration Pajemploi")
-function buildRecapPajemploi(recap,c){
+function buildRecapPajemploi(recap,c,regulExterne){
   const ligneG=(label,val,gras,color,noBorder)=>'<tr style="'+(noBorder?'':'border-bottom:1px solid var(--mb)')+'"><td style="padding:7px 4px;color:var(--tx2);'+(gras?'font-weight:700':'')+'">'+(label||'')+'</td><td style="padding:7px 4px;font-weight:'+(gras?'700':'600')+';text-align:right;'+(color?'color:'+color:'')+'">'+(val||'')+'</td></tr>';
   let html='';
-  const _hasRegul=recap.estPassage46vers52&&recap.periodeAv!=='apres'&&c&&c._regulDiffEuros>0;
-  const _diffEuros=_hasRegul?c._regulDiffEuros:0;
-  const _txNetRegul46=_hasRegul?(()=>{const [ay46,am46,ad46]=recap.dateAvenantPassage.split('-').map(Number);const vR=new Date(ay46,am46-1,ad46-1);return parseFloat(((getVersionActive(c,vR).txBrut||0)*(getParamAt('coefficients',dateToStr(vR)).valeur||0.7811975)).toFixed(4));})():0;
-  const _hRegul46=(_hasRegul&&_txNetRegul46>0)?parseFloat((_diffEuros/_txNetRegul46).toFixed(2)):0;
+  const _hasRegul52=recap.estPassage46vers52&&recap.periodeAv!=='apres'&&c&&c._regulDiffEuros>0;
+  // 27/08/2026 (Sophie) : régularisation pour un contrat qui RESTE en 46 (pas de passage vers 52) —
+  // reçue en paramètre (solde.regul de calcSoldeToutCompte), déjà calculée avec la logique corrigée
+  // aujourd'hui, et jamais mise en cache contrairement à `recap` — donc toujours à jour, y compris
+  // après validation de la fiche. Ne doit compter QUE dans jours/heures/salaire net déclarés (demande
+  // Sophie) — jamais l'indemnité de congés ni l'indemnité de rupture, qui restent hors de cette
+  // déclaration et ne sont donc jamais lues ici. Unifiée avec le mécanisme 46→52 existant (_hasRegul/
+  // _diffEuros/_hRegul46/_joursRegul) pour que tout le reste de la fonction s'applique aux deux cas
+  // sans dupliquer la logique d'ajout dans jours/heures/salaire net — les deux cas sont mutuellement
+  // exclusifs (un contrat ne peut pas à la fois passer en 52 et rester en 46).
+  const _hasRegulExt=!!(regulExterne&&regulExterne.montantNet>0);
+  const _hasRegul=_hasRegul52||_hasRegulExt;
+  const _diffEuros=_hasRegul52?c._regulDiffEuros:(_hasRegulExt?regulExterne.montantNet:0);
+  const _hRegul46=_hasRegul52?(()=>{
+    const [ay46,am46,ad46]=recap.dateAvenantPassage.split('-').map(Number);
+    const vR=new Date(ay46,am46-1,ad46-1);
+    const txNetRegul46=parseFloat(((getVersionActive(c,vR).txBrut||0)*(getParamAt('coefficients',dateToStr(vR)).valeur||0.7811975)).toFixed(4));
+    return txNetRegul46>0?parseFloat((_diffEuros/txNetRegul46).toFixed(2)):0;
+  })():(_hasRegulExt?regulExterne.hRegul:0);
   const _hMoyJourRegul=recap.nbJoursMoisContrat>0?(recap.hMensu||0)/recap.nbJoursMoisContrat:(recap.hMensu||0)/20;
-  const _joursRegul=(_hasRegul&&_hMoyJourRegul>0)?parseFloat((_hRegul46/_hMoyJourRegul).toFixed(1)):0;
+  const _joursRegul=_hasRegul52?((_hMoyJourRegul>0)?parseFloat((_hRegul46/_hMoyJourRegul).toFixed(1)):0):(_hasRegulExt?regulExterne.joursRegul:0);
   // Jours de congés payés (contrat 46 uniquement, congés payés en cours de contrat ce mois-ci)
   if(parseFloat(recap.indemCongeMois||0)>0) html+=ligneG('Jours de congés payés', recap.indemCongeNbJours+' j', true);
   // Jours d'activité
@@ -7664,7 +7679,7 @@ function majFicheRepas(contratId,key,idx,ri,checked){
     // n'affiche pas le repas. D'où l'impression que le repas ne s'actualisait qu'au prochain
     // rafraîchissement complet (déclenché par un champ heures).
     const recapPjEl=document.getElementById('recap-pj-'+contratId+'-'+key);
-    if(recapPjEl) recapPjEl.innerHTML=buildRecapPajemploi(recapNew,c);
+    if(recapPjEl) recapPjEl.innerHTML=buildRecapPajemploi(recapNew,c,calcSoldeToutCompte(c,key)?.regul);
   }
 }
 
