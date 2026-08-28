@@ -5809,7 +5809,41 @@ function enregistrerPlanningMois(contratId, moisKey){
           }
         }
       } else {
+      // 27/08/2026 (Sophie) : si le mois précédent (le plus ancien des deux) a modifications
+      // autorisées actif, les heures dues sur cette semaine peuvent avoir été consommées n'importe
+      // où ailleurs dans SON PROPRE mois — ne compter que ses jours littéraux sur cette semaine
+      // précise (comme avant) sous-estime alors ce qu'il a réellement pris, et laisse à tort de la
+      // place à ce mois-ci. Vérifier son enveloppe globale à la place (même principe que le
+      // contrôle mensuel plus bas dans cette fonction) : enveloppe pleine → sa part structurelle de
+      // cette semaine est considérée consommée en entier, peu importe sur quels jours précis.
+      const moisPrecDateEnr=new Date(ay,am-2,1);
+      const moisPrecAyEnr=moisPrecDateEnr.getFullYear(), moisPrecAmEnr=moisPrecDateEnr.getMonth()+1;
+      const moisPrecKeyEnr=moisPrecAyEnr+'-'+String(moisPrecAmEnr).padStart(2,'0');
+      const modifActiveMoisPrecEnr=(source.planType==='var'||source.planType==='min')&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisPrecKeyEnr];
       let heuresAutreMois6=0;
+      if(modifActiveMoisPrecEnr){
+        let joursPossiblesMoisPrecEnr=0;
+        for(let dd6b=0;dd6b<7;dd6b++){
+          const jd6b=new Date(lundiSem); jd6b.setDate(lundiSem.getDate()+dd6b);
+          if(jd6b.getMonth()===am-1&&jd6b.getFullYear()===ay) continue;
+          if(jd6b.getFullYear()*12+jd6b.getMonth()>ay*12+(am-1)) continue;
+          if(joursPattern[dd6b]&&jd6b.getDay()!==(c.reposHebdo||0)) joursPossiblesMoisPrecEnr++;
+        }
+        const structShareMoisPrecEnr=Math.min(joursPossiblesMoisPrecEnr,jMaxVol)*(volH/jMaxVol);
+        const envMoisPrecEnr=calcEnveloppeMoisVar(c,moisPrecAyEnr,moisPrecAmEnr);
+        let reelMoisPrecEnr=0;
+        Object.keys(c.planning).forEach(dtPrec=>{
+          const [dtpy,dtpm]=dtPrec.split('-').map(Number);
+          if(!(dtpm===moisPrecAmEnr&&dtpy===moisPrecAyEnr)) return;
+          const pdPrec=c.planning[dtPrec];
+          const infosPrec=pdPrec&&pdPrec.coche?getInfosJourPlanning(c,dtPrec):null;
+          if(infosPrec&&jourComptePlanning(c,dtPrec,infosPrec)){
+            reelMoisPrecEnr+=(pdPrec.d&&pdPrec.f)?(toM(pdPrec.f)-toM(pdPrec.d))/60:((infosPrec.volH||0)/(infosPrec.jMax||1));
+          }
+        });
+        const resteMoisPrecEnr=Math.max(0,(envMoisPrecEnr.minutes/60)-reelMoisPrecEnr);
+        heuresAutreMois6=Math.max(0,structShareMoisPrecEnr-resteMoisPrecEnr);
+      } else {
       for(let dd6=0;dd6<7;dd6++){
         const jd6=new Date(lundiSem); jd6.setDate(lundiSem.getDate()+dd6);
         if(jd6.getMonth()===am-1&&jd6.getFullYear()===ay) continue; // jour de CE mois, pas l'autre
@@ -5824,6 +5858,7 @@ function enregistrerPlanningMois(contratId, moisKey){
         const pd6=c.planning&&c.planning[ds6];
         // Un jour non possible rempli est un vrai supplément, jamais soustrait du volume normal.
         if(pd6&&pd6.coche&&jourComptePlanning(c,ds6,getInfosJourPlanning(c,ds6))) heuresAutreMois6+=(pd6.d&&pd6.f)?(toM(pd6.f)-toM(pd6.d))/60:volH/jMaxVol;
+      }
       }
       volHCeMois=Math.max(0,volH-heuresAutreMois6);
       }
@@ -9501,11 +9536,6 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
           const idx=jj.jourSemaine===0?6:jj.jourSemaine-1;
           return joursMinTh[idx];
         }).length;
-        const nbJoursCochesMoisCourant=joursDesSem.filter(jj=>{
-          if(joursHCExclus&&joursHCExclus.has(jj.date)) return false;
-          const idx=jj.jourSemaine===0?6:jj.jourSemaine-1;
-          return joursMinTh[idx]&&c.planning&&c.planning[jj.date]&&c.planning[jj.date].coche;
-        }).length;
         const joursSemaineComplete=[0,1,2,3,4,5,6].map(off=>{const d=new Date(lundiSem);d.setDate(lundiSem.getDate()+off);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');});
         const joursDesSemDates=new Set(joursDesSem.map(jj=>jj.date));
         const nbJoursPossiblesAutrePortion=joursSemaineComplete.filter(dStr=>{
@@ -9513,6 +9543,44 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
           const dObj=new Date(dStr);
           const idx=dObj.getDay()===0?6:dObj.getDay()-1;
           return joursMinTh[idx];
+        }).length;
+        // 27/08/2026 (Sophie) : si CE mois a modifications autorisées actif, ses heures dues sur cette
+        // semaine à cheval peuvent avoir été consommées n'importe où ailleurs dans SON PROPRE mois —
+        // compter seulement ses jours cochés sur cette semaine précise (branche jours cochés ci-dessous)
+        // sous-estime alors ce qui est réellement dû, avec un risque concret de perte d'heures si le
+        // contrat est rompu avant que l'autre portion ait pu absorber la différence. Vérifier son
+        // enveloppe globale à la place (même principe que le correctif du même jour sur
+        // enregistrerPlanningMois) : enveloppe pleine → sa part structurelle de cette semaine est due en
+        // entier. Plancher de sécurité en plus (jamais appliqué à la validation du planning, seulement
+        // ici, sur la régularisation) : l'autre portion ne peut de toute façon jamais absorber plus que
+        // sa propre capacité en jours possibles — si elle ne peut pas tout prendre, CE mois garde au
+        // minimum la différence, quoi que dise l'enveloppe (protection contre une perte d'heures).
+        const moisCourantKeyTh=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0');
+        const modifActiveMoisCourantTh=c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisCourantKeyTh];
+        if(modifActiveMoisCourantTh){
+          const structShareMoisCourantTh=Math.min(nbJoursPossiblesMoisCourant,jMaxMinTh)*(hMinTh/jMaxMinTh);
+          const envMoisCourantTh=calcEnveloppeMoisVar(c,fiche.annee,fiche.mois+1);
+          let reelMoisCourantTh=0;
+          Object.keys(c.planning||{}).forEach(dtTh=>{
+            const [dtyTh,dtmTh]=dtTh.split('-').map(Number);
+            if(!(dtmTh===fiche.mois+1&&dtyTh===fiche.annee)) return;
+            const pdTh=c.planning[dtTh];
+            const infosTh=pdTh&&pdTh.coche?getInfosJourPlanning(c,dtTh):null;
+            if(infosTh&&jourComptePlanning(c,dtTh,infosTh)){
+              reelMoisCourantTh+=(pdTh.d&&pdTh.f)?(toM(pdTh.f)-toM(pdTh.d))/60:((infosTh.volH||0)/(infosTh.jMax||1));
+            }
+          });
+          const resteMoisCourantTh=Math.max(0,(envMoisCourantTh.minutes/60)-reelMoisCourantTh);
+          const consommeMoisCourantTh=Math.max(0,structShareMoisCourantTh-resteMoisCourantTh);
+          const plancherMoisCourantTh=Math.max(0,jMaxMinTh-Math.min(nbJoursPossiblesAutrePortion,jMaxMinTh))*(hMinTh/jMaxMinTh);
+          const contributionChevalTh=Math.min(structShareMoisCourantTh,Math.max(plancherMoisCourantTh,consommeMoisCourantTh));
+          hTheoriques+=contributionChevalTh;
+          if(window.DEBUG_CGAM)console.log('[CGAM-minTh-cheval-modif]',c.nom||c.prenom||c.id,'|',semKey,'| mois calculé:',moisCourantKeyTh,'| nbJoursPossiblesMoisCourant:',nbJoursPossiblesMoisCourant,'| structShare:',structShareMoisCourantTh,'| envMoisCourant(h):',envMoisCourantTh.minutes/60,'| reelMoisCourant:',reelMoisCourantTh,'| reste:',resteMoisCourantTh,'| consomme:',consommeMoisCourantTh,'| plancher:',plancherMoisCourantTh,'| contribution:',contributionChevalTh);
+        } else {
+        const nbJoursCochesMoisCourant=joursDesSem.filter(jj=>{
+          if(joursHCExclus&&joursHCExclus.has(jj.date)) return false;
+          const idx=jj.jourSemaine===0?6:jj.jourSemaine-1;
+          return joursMinTh[idx]&&c.planning&&c.planning[jj.date]&&c.planning[jj.date].coche;
         }).length;
         const nbJoursCochesAutrePortion=joursSemaineComplete.filter(dStr=>{
           if(joursDesSemDates.has(dStr)) return false;
@@ -9539,6 +9607,7 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
         }
         hTheoriques+=hMinTh*(joursDonnesMoisCourant/jMaxMinTh);
         if(window.DEBUG_CGAM)console.log('[CGAM-minTh-cheval]',c.nom||c.prenom||c.id,'|',semKey,'| mois calculé:',fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0'),'| estPortionFinDeMois:',estPortionFinDeMois,'| nbJoursPossiblesMoisCourant:',nbJoursPossiblesMoisCourant,'| nbJoursCochesMoisCourant:',nbJoursCochesMoisCourant,'| nbJoursPossiblesAutrePortion:',nbJoursPossiblesAutrePortion,'| nbJoursCochesAutrePortion:',nbJoursCochesAutrePortion,'| joursDonnesMoisCourant:',joursDonnesMoisCourant,'| contribution h:',hMinTh*(joursDonnesMoisCourant/jMaxMinTh),'| joursDesSem:',joursDesSem.map(jj=>jj.date+':'+jj.statut+(jj.heureDebReel?'[reel]':'')).join(', '));
+        }
       } else {
         hTheoriques+=hMinTh;
       }
