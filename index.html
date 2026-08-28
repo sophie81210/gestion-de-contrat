@@ -5420,8 +5420,10 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
   // sous la case "modifications autorisées" pour éviter d'avoir à ouvrir plusieurs mois pour trouver
   // celui à réenregistrer, et pour voir en un coup d'œil combien il reste à répartir.
   const envMoisTile=estCaseModifTile?calcEnveloppeMoisVar(c,annee,moisIdx+1):null;
-  const joursDisponiblesTile=envMoisTile?Math.max(0,envMoisTile.jours-totalJoursMoisFS):0;
-  const minDisponiblesTile=envMoisTile?Math.max(0,envMoisTile.minutes-totalMoisMinFS):0;
+  // 27/08/2026 (Sophie) : plafond à 0 retiré — un dépassement doit s'afficher en négatif, pour que
+  // l'utilisateur le voie avant d'enregistrer, plutôt que d'être masqué par un 0 trompeur.
+  const joursDisponiblesTile=envMoisTile?(envMoisTile.jours-totalJoursMoisFS):0;
+  const minDisponiblesTile=envMoisTile?(envMoisTile.minutes-totalMoisMinFS):0;
   return `<div id="pln-tile-${c.id}-${moisKeyTile}" style="border:1px solid var(--mb);border-radius:8px;margin-bottom:10px;overflow:hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#fff;cursor:pointer" onclick="togglePlanningMois('${idMois}','pln-container-${c.id}')">
       <div style="display:flex;align-items:center;gap:8px">
@@ -5440,7 +5442,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
           </label>
           <span id="modif-autorisees-total-${c.id}-${moisKeyTile}" style="font-size:11px;color:var(--tx2);white-space:nowrap">${totalJoursMoisFS}j — ${fmtH(totalMoisMinFS)}</span>
         </div>
-        ${modifMoisChecked?`<div style="font-size:11px;color:var(--tx3);text-align:right">Volume disponible : ${joursDisponiblesTile}j et ${fmtH(minDisponiblesTile)}</div>`:''}
+        ${modifMoisChecked?`<div style="font-size:11px;color:${minDisponiblesTile<0?'var(--al)':'var(--tx3)'};text-align:right">Volume disponible : ${joursDisponiblesTile}j et ${minDisponiblesTile<0?'-':''}${fmtH(Math.abs(minDisponiblesTile))}</div>`:''}
       </div>`:''}
       ${semainesHtml}
       ${!moisVerrouille?`<button id="${idMois}-btn-save" onclick="enregistrerPlanningMois(${c.id},'${moisKeyTile}')" ${planningNonEnregistrePourMois(c,moisKeyTile)?'':'disabled'}
@@ -6683,77 +6685,10 @@ function calcEnveloppeMoisVar(c,ay,am){
               if((vol3.jours&&vol3.jours[dd4])||modifActiveEnvV) joursQualifiantsFinDeMoisV++;
             }
           }
-          // jMax et le volume d'heures sont TOUS DEUX des plafonds PARTAGÉS pour la semaine
-          // entière, pas des budgets séparés par mois — corrigé après que Sophie a montré
-          // l'incohérence entre un prorata figé du motif (1/5=8h) pour les heures et jMax (le
-          // vrai plafond exploitable) pour les jours. Les deux utilisent maintenant la même
-          // logique : retirer ce qui est RÉELLEMENT déjà utilisé dans l'AUTRE portion (autre
-          // mois) de cette même semaine, plutôt qu'une fraction figée à l'avance — si l'autre
-          // mois n'a rien utilisé, ce mois récupère la totalité, rien n'est jamais perdu.
-          let joursDejaCochesAutreMois=0, heuresDejaUtiliseesAutreMois=0;
-          for(let dd5=0;dd5<7;dd5++){
-            const jd5=new Date(lundiSem3); jd5.setDate(lundiSem3.getDate()+dd5);
-            if(jd5.getMonth()===am-1&&jd5.getFullYear()===ay) continue; // jour de CE mois, pas l'autre
-            // Priorité au début de semaine (décision Sophie 22/07/2026) : même principe que dans le
-            // contrôle hebdomadaire — ne jamais soustraire un jour d'un mois plus tardif que celui
-            // traité, pour que le mois le plus ancien ne dépende jamais de l'ordre d'enregistrement.
-            if(jd5.getFullYear()*12+jd5.getMonth()>ay*12+(am-1)) continue; // jour d'un mois plus tardif : ignoré
-            const ds5=jd5.getFullYear()+'-'+String(jd5.getMonth()+1).padStart(2,'0')+'-'+String(jd5.getDate()).padStart(2,'0');
-            const pd5=c.planning&&c.planning[ds5];
-            // Un jour non possible rempli (grâce aux modifications autorisées) est un vrai
-            // supplément, jamais soustrait du volume normal — précision Sophie 18/07/2026.
-            if(pd5&&pd5.coche&&jourComptePlanning(c,ds5,getInfosJourPlanning(c,ds5))){
-              joursDejaCochesAutreMois++;
-              heuresDejaUtiliseesAutreMois+=(pd5.d&&pd5.f)?(toM(pd5.f)-toM(pd5.d))/60:(vol3.h||0)/(vol3.j||1);
-            }
-          }
-          // 25/08/2026 (Sophie) : quand le mois précédent a "modifications autorisées" actif, sa part
-          // sur cette semaine (fairShareAutreMoisV) fait partie intégrante de SON enveloppe globale à
-          // lui — donc si cette enveloppe globale est épuisée (par d'autres semaines de ce mois-là,
-          // peu importe lesquelles), la part de CETTE semaine est nécessairement déjà consommée elle
-          // aussi, même si rien n'a été tapé ICI spécifiquement. L'ancien calcul (juste au-dessus) ne
-          // regardait que les heures tapées SUR cette semaine précise, jamais l'état global du mois
-          // précédent — laissant passer un dépassement quand ce mois avait déjà tout consommé
-          // ailleurs (bug confirmé Sophie 25/08, exemple chiffré : 22h avant correctif, 11h attendues).
-          const anneeAutreMoisV=lundiSem3.getFullYear(), moisAutreMoisV=lundiSem3.getMonth()+1;
-          const moisKeyAutreMoisV=anneeAutreMoisV+'-'+String(moisAutreMoisV).padStart(2,'0');
-          const modifActiveAutreMoisV=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKeyAutreMoisV]);
-          if(modifActiveAutreMoisV&&joursDejaCochesAutreMois<joursPossiblesSemaine3){
-            // Part structurelle (pas seulement cochée) de l'autre mois sur cette semaine
-            let joursFairShareAutreMoisV=0;
-            for(let dd6=0;dd6<7;dd6++){
-              const jd6=new Date(lundiSem3); jd6.setDate(lundiSem3.getDate()+dd6);
-              if(jd6.getMonth()===am-1&&jd6.getFullYear()===ay) continue;
-              if(jd6.getFullYear()*12+jd6.getMonth()>ay*12+(am-1)) continue;
-              if(vol3.jours&&vol3.jours[dd6]) joursFairShareAutreMoisV++;
-            }
-            const fairShareAutreMoisV=joursFairShareAutreMoisV*((vol3.h||0)/(vol3.j||1));
-            if(fairShareAutreMoisV>0){
-              const envAutreMoisV=calcEnveloppeMoisVar(c,anneeAutreMoisV,moisAutreMoisV);
-              let totalPlanifieAutreMoisV=0;
-              Object.keys(c.planning||{}).forEach(dtAutre=>{
-                const [dtyA,dtmA]=dtAutre.split('-').map(Number);
-                if(dtyA!==anneeAutreMoisV||dtmA!==moisAutreMoisV) return;
-                const pdAutre=c.planning[dtAutre];
-                if(pdAutre&&pdAutre.coche&&jourComptePlanning(c,dtAutre,getInfosJourPlanning(c,dtAutre))){
-                  totalPlanifieAutreMoisV+=(pdAutre.d&&pdAutre.f)?(toM(pdAutre.f)-toM(pdAutre.d))/60:(vol3.h||0)/(vol3.j||1);
-                }
-              });
-              const placeRestanteAutreMoisV=Math.max(0,(envAutreMoisV.minutes/60)-totalPlanifieAutreMoisV);
-              const heuresDejaUtiliseesEnveloppeV=Math.min(fairShareAutreMoisV,Math.max(0,fairShareAutreMoisV-placeRestanteAutreMoisV));
-              heuresDejaUtiliseesAutreMois=Math.max(heuresDejaUtiliseesAutreMois,heuresDejaUtiliseesEnveloppeV);
-            }
-          }
-          // 06/08/2026 (Sophie) : cet endroit n'avait jamais reçu la mise à jour "au plus favorable"
-          // du 05/08 (déjà faite côté paie dans calcRecapFiche) — il valorisait encore le hors-contrat
-          // à l'ancienne (jours possibles du type / moyenne annuelle union), d'où un quota mensuel
-          // "modifications autorisées" trop bas d'un jour ET une majoration heures comp parasite sur
-          // la feuille de présence (même cause pour les deux symptômes constatés par Sophie). Corrigé :
-          // la partie travaillée récupère d'abord tous les jours max qu'elle peut vraiment prendre
-          // cette semaine (joursPossiblesSemaine3, déjà calculé ci-dessus), le hors-contrat n'hérite
-          // que du reste — jours ET heures valorisés sur le volume/jMax PROPRE à cette semaine, jamais
-          // la moyenne annuelle/jours union. horsContrat4 couvre déjà début ET fin de contrat, donc ce
-          // correctif s'applique symétriquement aux deux cas.
+          // 27/08/2026 (Sophie) : ne plus tenir compte de l'autre mois du tout, ni ses jours cochés
+          // littéraux ni son enveloppe globale (retire le mécanisme du 25/08 ci-dessus) — décision
+          // Sophie : en cas de dépassement induit par l'autre mois, le planning du mois suivant est à
+          // revalider (avertissement déjà en place ailleurs), plutôt que d'essayer de le prévenir ici.
           const jMaxSemaine3=Math.min(vol3.j||1, joursPossiblesSemaine3);
           const volHSemaine3=(vol3.h||0)*jMaxSemaine3/(vol3.j||1);
           let jMaxRestant3, volHRestant3;
@@ -6767,9 +6702,9 @@ function calcEnveloppeMoisVar(c,ay,am){
             volHRestant3=jMaxSemaine3>0?jMaxFinDeMoisV*(volHSemaine3/jMaxSemaine3):0;
             joursBaseV+=jMaxRestant3;
           } else {
-            jMaxRestant3=Math.max(0,jMaxSemaine3-joursDejaCochesAutreMois);
-            volHRestant3=Math.max(0,volHSemaine3-heuresDejaUtiliseesAutreMois);
-            joursBaseV+=Math.min(joursDansCeMois3,jMaxRestant3);
+            jMaxRestant3=Math.min(jMaxSemaine3,joursDansCeMois3);
+            volHRestant3=jMaxSemaine3>0?jMaxRestant3*(volHSemaine3/jMaxSemaine3):0;
+            joursBaseV+=jMaxRestant3;
           }
           minBaseV+=volHRestant3*60;
           }
@@ -8737,10 +8672,23 @@ function calcCongesContrat(c, dateRefOverride){
               const moisDimancheMin=dimancheMin.getFullYear()+'-'+String(dimancheMin.getMonth()+1).padStart(2,'0');
               const moisManquantMin=moisTouchesMinG.includes(moisLundiMin)?moisDimancheMin:moisLundiMin;
               const moisManquantValideMin=!!(c.fiches[moisManquantMin]&&c.fiches[moisManquantMin].valide);
+              // 27/08/2026 (Sophie) : le mois manquant peut n'avoir structurellement AUCUN jour
+              // possible dans sa portion de cette semaine (ex. un seul dimanche) — un fait purement
+              // calendaire (motif contre jour de la semaine), qui ne dépend d'aucune donnée de ce mois.
+              // Inutile d'attendre sa validation dans ce cas précis : si 0 jour possible, la branche
+              // "même mois" plus bas (qui ne regarde que joursSub, donc CE mois-ci seul) donne déjà le
+              // bon résultat sans avoir besoin du mois manquant du tout.
+              let joursPossiblesManquantMin=0;
+              for(let dd7=0;dd7<7;dd7++){
+                const jd7=new Date(lundiMin); jd7.setDate(lundiMin.getDate()+dd7);
+                if((jd7.getFullYear()+'-'+String(jd7.getMonth()+1).padStart(2,'0'))!==moisManquantMin) continue;
+                const idxJd7=jd7.getDay()===0?6:jd7.getDay()-1;
+                if(joursPatternMinPl&&joursPatternMinPl[idxJd7]) joursPossiblesManquantMin++;
+              }
               let joursMaxSemAjusteMin;
-              if(semaineTraverseMoisMin&&moisTouchesMinG.length<2&&!moisManquantValideMin){
+              if(semaineTraverseMoisMin&&moisTouchesMinG.length<2&&joursPossiblesManquantMin>0&&!moisManquantValideMin){
                 joursMaxSemAjusteMin=0;
-              } else if(semaineTraverseMoisMin&&moisTouchesMinG.length<2&&moisManquantValideMin){
+              } else if(semaineTraverseMoisMin&&moisTouchesMinG.length<2&&joursPossiblesManquantMin>0&&moisManquantValideMin){
                 const ficheManquanteMin=c.fiches[moisManquantMin];
                 const joursManquantsMin=(ficheManquanteMin.jours||[]).filter(jm=>{
                   const dJm=new Date(jm.date.split('-')[0],parseInt(jm.date.split('-')[1])-1,parseInt(jm.date.split('-')[2]));
