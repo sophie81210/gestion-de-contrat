@@ -2420,9 +2420,28 @@ function renderDetTab(id,tab){
                     if(joursCongesVol>=nbJoursPossiblesVol){
                       // Semaine entièrement en congés : rien à compter (comme une semaine off)
                     } else {
-                    const rateJourVol=volH/nbJoursPossiblesVol;
-                    const hCongesVol=joursCongesVol*rateJourVol;
-                    const hAbsVol=joursAbsenceVol*rateJourVol;
+                    // 27/08/2026 (Sophie) : remplace le taux générique volume/joursPossibles (22/5=4,4h,
+                    // qui sous-comptait la déduction — confirmé sur un cas chiffré début de contrat où
+                    // l'app donnait 98,51€ au lieu de 43,98€) par la somme des heures RÉELLEMENT prévues
+                    // au planning de chaque jour de congé/absence précis (potentiellement différentes
+                    // d'un jour à l'autre), comme Sophie l'a elle-même calculé à la main.
+                    const sommeHeuresJoursVol=(predicateFn)=>{
+                      let somme=0;
+                      for(let d=0;d<7;d++){
+                        const jd=new Date(lundiSem); jd.setDate(lundiSem.getDate()+d);
+                        const jdStr=fmtSem(jd);
+                        if(!joursPattern[d]||!predicateFn(jdStr)) continue;
+                        const moisKeyJd=jd.getFullYear()+'-'+String(jd.getMonth()+1).padStart(2,'0');
+                        const ficheJd=c.fiches&&c.fiches[moisKeyJd];
+                        const jourJd=ficheJd&&ficheJd.jours.find(jj=>jj.date===jdStr);
+                        if(jourJd&&jourJd.heureDebPrev&&jourJd.heureFinPrev){
+                          somme+=Math.max(0,(toMins(jourJd.heureFinPrev)-toMins(jourJd.heureDebPrev))/60);
+                        }
+                      }
+                      return somme;
+                    };
+                    const hCongesVol=cycle.clause52?0:sommeHeuresJoursVol(jdStr=>isJourCongeAM(jdStr));
+                    const hAbsVol=sommeHeuresJoursVol(jdStr=>estJourAbsenceVol(jdStr));
                     if(limiteDebut||limiteFin){
                       // Semaine à cheval sur début (ou avenant) ou fin de contrat : quota disponible
                       // = volume complet - absence hors contrat de cette semaine (moyenne pondérée /
