@@ -2504,20 +2504,33 @@ function renderDetTab(id,tab){
                         const moisEarlierAy=lundiSem.getFullYear(), moisEarlierAm=lundiSem.getMonth()+1;
                         const moisEarlierKeyReg=moisEarlierAy+'-'+String(moisEarlierAm).padStart(2,'0');
                         const modifActiveEarlierReg=c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisEarlierKeyReg];
+                        // 27/08/2026 (Sophie) : jMaxStructReg/joursPossibles*/structShareEarlierReg/
+                        // plancherEarlierReg calculés inconditionnellement (avant, seulement pour le cas
+                        // modifications autorisées) — le plancher protège aussi le cas non coché : sans
+                        // lui, sommePlafonneePeriode (jours littéraux) peut sous-évaluer le mois le plus
+                        // ancien quand le mois suivant n'a en réalité aucun jour possible pour absorber
+                        // la différence (exemple chiffré Sophie : dernière semaine de juillet 2021 finit
+                        // un samedi, la portion d'août ne contient qu'un dimanche — 0 jour possible — mais
+                        // recevait quand même 1/4 du volume, perdu pour juillet qui l'avait réellement
+                        // consommé ailleurs dans son mois).
+                        const jMaxStructReg=source.planType==='min'?(source.jMaxMin||nbJoursPossiblesVol):(()=>{
+                          const volLookupReg=source.planVar&&source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);
+                          return (volLookupReg&&volLookupReg.j)||nbJoursPossiblesVol;
+                        })();
+                        let joursPossiblesEarlierReg=0, joursPossiblesLaterReg=0;
+                        for(let d=0;d<7;d++){
+                          const jd=new Date(lundiSem); jd.setDate(lundiSem.getDate()+d);
+                          if(!joursPattern[d]) continue;
+                          if(jd.getMonth()===lundiSem.getMonth()&&jd.getFullYear()===lundiSem.getFullYear()) joursPossiblesEarlierReg++;
+                          else joursPossiblesLaterReg++;
+                        }
+                        const structShareEarlierReg=Math.min(joursPossiblesEarlierReg,jMaxStructReg)*(volH/jMaxStructReg);
+                        const plancherEarlierReg=Math.max(0,jMaxStructReg-Math.min(joursPossiblesLaterReg,jMaxStructReg))*(volH/jMaxStructReg);
                         const partMoisPrecedentReg=()=>{
-                          if(!modifActiveEarlierReg) return sommePlafonneePeriode(lundiSemStr,fmtSem(new Date(moisEarlierAy,moisEarlierAm,0)));
-                          const jMaxStructReg=source.planType==='min'?(source.jMaxMin||nbJoursPossiblesVol):(()=>{
-                            const volLookupReg=source.planVar&&source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);
-                            return (volLookupReg&&volLookupReg.j)||nbJoursPossiblesVol;
-                          })();
-                          let joursPossiblesEarlierReg=0, joursPossiblesLaterReg=0;
-                          for(let d=0;d<7;d++){
-                            const jd=new Date(lundiSem); jd.setDate(lundiSem.getDate()+d);
-                            if(!joursPattern[d]) continue;
-                            if(jd.getMonth()===lundiSem.getMonth()&&jd.getFullYear()===lundiSem.getFullYear()) joursPossiblesEarlierReg++;
-                            else joursPossiblesLaterReg++;
+                          if(!modifActiveEarlierReg){
+                            const litteralEarlierReg=sommePlafonneePeriode(lundiSemStr,fmtSem(new Date(moisEarlierAy,moisEarlierAm,0)));
+                            return Math.min(structShareEarlierReg,Math.max(plancherEarlierReg,litteralEarlierReg));
                           }
-                          const structShareEarlierReg=Math.min(joursPossiblesEarlierReg,jMaxStructReg)*(volH/jMaxStructReg);
                           const envEarlierReg=calcEnveloppeMoisVar(c,moisEarlierAy,moisEarlierAm);
                           let reelEarlierReg=0;
                           Object.keys(c.planning||{}).forEach(dtReg=>{
@@ -2531,7 +2544,6 @@ function renderDetTab(id,tab){
                           });
                           const resteEarlierReg=Math.max(0,(envEarlierReg.minutes/60)-reelEarlierReg);
                           const consommeEarlierReg=Math.max(0,structShareEarlierReg-resteEarlierReg);
-                          const plancherEarlierReg=Math.max(0,jMaxStructReg-Math.min(joursPossiblesLaterReg,jMaxStructReg))*(volH/jMaxStructReg);
                           return Math.min(structShareEarlierReg,Math.max(plancherEarlierReg,consommeEarlierReg));
                         };
                         if(moisLundiSem===cur.getMonth()&&lundiSem.getFullYear()===cur.getFullYear()){
@@ -8692,6 +8704,11 @@ function calcCongesContrat(c, dateRefOverride){
             // compter QUE ce jour travaillé via joursTravailleFSM. Aucune garantie à appliquer sur une
             // semaine que la famille a explicitement déclarée "off".
             if(window.DEBUG_CGAM)console.log('[CGAM-gateAjusteMin]',c.nom||c.prenom||c.id,'|',joursSub[0]?.date,'-',joursSub[joursSub.length-1]?.date,'| c.th:',c.th,'| c.planType:',c.planType,'| joursConges16:',joursConges16,'| absArretSub:',absArretSub,'| estSemaineOffMin:',estSemaineOffMin);
+            // 27/08/2026 (Sophie) : joursMaxSemAjusteMinLog en portée extérieure — le log
+            // [CGAM-contribSemaine] plus bas affichait toujours "(n/a)" même quand ce bloc s'exécutait
+            // réellement, parce que joursMaxSemAjusteMin (déclarée avec let à l'intérieur du bloc)
+            // sortait de portée avant d'atteindre ce log, sans lien avec le calcul réel.
+            let joursMaxSemAjusteMinLog='(n/a)';
             if(c.th==='plan'&&c.planType==='min'&&joursConges16===0&&absArretSub===0&&!estSemaineOffMin){
               const sourceMinPl=getVersionActive(c,new Date(joursSub[0].date.split('-')[0],parseInt(joursSub[0].date.split('-')[1])-1,parseInt(joursSub[0].date.split('-')[2])));
               const joursPatternMinPl=sourceMinPl.joursMin||c.joursMin;
@@ -8737,6 +8754,7 @@ function calcCongesContrat(c, dateRefOverride){
                   return !!(joursPatternMinPl&&joursPatternMinPl[idxPossISO]);
                 });
                 joursMaxSemAjusteMin=moisTouchesMinG[0]>moisManquantMin?splitMin.donneB:splitMin.donneA;
+                if(window.DEBUG_CGAM)console.log('[CGAM-moisManquantValide]',c.nom||c.prenom||c.id,'|',joursSub[0]?.date,'-',joursSub[joursSub.length-1]?.date,'| moisManquantMin:',moisManquantMin,'| joursManquantsMin:',JSON.stringify(joursManquantsMin),'| joursSubCompletMin:',joursSubCompletMin.map(jj=>jj.date+':'+jj.statut).join(', '),'| split:',JSON.stringify(splitMin),'| joursMaxSemAjusteMin retenu:',joursMaxSemAjusteMin);
               } else if(moisTouchesMinG.length>1&&joursPatternMinPl){
                 joursMaxSemAjusteMin=calcJoursGarantieCheval(joursSub,joursMaxSem,(dateStr)=>{
                   const [py,pm,pd]=dateStr.split('-').map(Number);
@@ -8773,6 +8791,7 @@ function calcCongesContrat(c, dateRefOverride){
                 joursMaxSemAjusteMin=Math.max(0,Math.min(joursMaxSem,joursMaxSemAjusteMinBase)-reductionAbsNonMin);
               }
               if(joursMaxSemAjusteMin>0) joursNormaux=Math.max(joursNormaux,joursMaxSemAjusteMin);
+              joursMaxSemAjusteMinLog=joursMaxSemAjusteMin;
             }
 
             let contributionNormale, contributionConges;
@@ -8807,7 +8826,7 @@ function calcCongesContrat(c, dateRefOverride){
                 return ['conges-acq','conges-anticipe','conges-non','conges-am','ferie','ferie-non','repos'].includes(stCap);
               });
             const prorataPlafonne=estSemUniquementCongesFerie?Math.min(prorata,1):prorata;
-            if(window.DEBUG_CGAM)console.log('[CGAM-contribSemaine]',c.nom||c.prenom||c.id,'|',joursSub[0]?.date,'-',joursSub[joursSub.length-1]?.date,'| joursNormaux:',joursNormaux,'| joursMaxSem:',joursMaxSem,'| joursMaxSemAjusteMin:',typeof joursMaxSemAjusteMin!=='undefined'?joursMaxSemAjusteMin:'(n/a)','| joursTravailleFSM:',joursTravailleFSM,'| joursConges16:',joursConges16,'| contributionNormale:',contributionNormale,'| contrib final:',prorataPlafonne);
+            if(window.DEBUG_CGAM)console.log('[CGAM-contribSemaine]',c.nom||c.prenom||c.id,'|',joursSub[0]?.date,'-',joursSub[joursSub.length-1]?.date,'| joursNormaux:',joursNormaux,'| joursMaxSem:',joursMaxSem,'| joursMaxSemAjusteMin:',joursMaxSemAjusteMinLog,'| joursTravailleFSM:',joursTravailleFSM,'| joursConges16:',joursConges16,'| contributionNormale:',contributionNormale,'| contrib final:',prorataPlafonne);
             return {contrib:prorataPlafonne,contribArret:contributionArret};
           };
 
