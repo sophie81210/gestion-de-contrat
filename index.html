@@ -2472,16 +2472,60 @@ function renderDetTab(id,tab){
                           }
                           return Math.min(somme,volH-hCongesVol-hAbsVol);
                         };
+                        // 27/08/2026 (Sophie) : si le mois le plus ancien de la semaine à cheval a
+                        // modifications autorisées actif, ses heures dues sur cette semaine peuvent avoir
+                        // été consommées n'importe où ailleurs dans SON PROPRE mois — sommePlafonneePeriode
+                        // (jours littéraux 29/30/31 uniquement) sous-estime alors ce qui est réellement dû.
+                        // Même principe que le correctif du même jour sur calcHTheoriquesPlanMin et
+                        // enregistrerPlanningMois : enveloppe pleine → part structurelle due en entier,
+                        // avec un plancher de sécurité (l'autre portion ne peut jamais absorber plus que sa
+                        // propre capacité en jours possibles) contre toute perte d'heures en cas de rupture.
+                        // Valeur réutilisée à l'identique pour le calcul du mois précédent ET pour le
+                        // "déjà alloué" du mois suivant, afin qu'ils restent cohérents entre eux.
+                        const moisEarlierAy=lundiSem.getFullYear(), moisEarlierAm=lundiSem.getMonth()+1;
+                        const moisEarlierKeyReg=moisEarlierAy+'-'+String(moisEarlierAm).padStart(2,'0');
+                        const modifActiveEarlierReg=c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisEarlierKeyReg];
+                        const partMoisPrecedentReg=()=>{
+                          if(!modifActiveEarlierReg) return sommePlafonneePeriode(lundiSemStr,fmtSem(new Date(moisEarlierAy,moisEarlierAm,0)));
+                          const jMaxStructReg=source.planType==='min'?(source.jMaxMin||nbJoursPossiblesVol):(()=>{
+                            const volLookupReg=source.planVar&&source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);
+                            return (volLookupReg&&volLookupReg.j)||nbJoursPossiblesVol;
+                          })();
+                          let joursPossiblesEarlierReg=0, joursPossiblesLaterReg=0;
+                          for(let d=0;d<7;d++){
+                            const jd=new Date(lundiSem); jd.setDate(lundiSem.getDate()+d);
+                            if(!joursPattern[d]) continue;
+                            if(jd.getMonth()===lundiSem.getMonth()&&jd.getFullYear()===lundiSem.getFullYear()) joursPossiblesEarlierReg++;
+                            else joursPossiblesLaterReg++;
+                          }
+                          const structShareEarlierReg=Math.min(joursPossiblesEarlierReg,jMaxStructReg)*(volH/jMaxStructReg);
+                          const envEarlierReg=calcEnveloppeMoisVar(c,moisEarlierAy,moisEarlierAm);
+                          let reelEarlierReg=0;
+                          Object.keys(c.planning||{}).forEach(dtReg=>{
+                            const [dtyReg,dtmReg]=dtReg.split('-').map(Number);
+                            if(!(dtmReg===moisEarlierAm&&dtyReg===moisEarlierAy)) return;
+                            const pdReg=c.planning[dtReg];
+                            const infosReg=pdReg&&pdReg.coche?getInfosJourPlanning(c,dtReg):null;
+                            if(infosReg&&jourComptePlanning(c,dtReg,infosReg)){
+                              reelEarlierReg+=(pdReg.d&&pdReg.f)?(toMins(pdReg.f)-toMins(pdReg.d))/60:((infosReg.volH||0)/(infosReg.jMax||1));
+                            }
+                          });
+                          const resteEarlierReg=Math.max(0,(envEarlierReg.minutes/60)-reelEarlierReg);
+                          const consommeEarlierReg=Math.max(0,structShareEarlierReg-resteEarlierReg);
+                          const plancherEarlierReg=Math.max(0,jMaxStructReg-Math.min(joursPossiblesLaterReg,jMaxStructReg))*(volH/jMaxStructReg);
+                          return Math.min(structShareEarlierReg,Math.max(plancherEarlierReg,consommeEarlierReg));
+                        };
                         if(moisLundiSem===cur.getMonth()&&lundiSem.getFullYear()===cur.getFullYear()){
                           // On traite le mois de début de semaine (fin de mois) : prévu plafonné au
                           // volume, uniquement sur la portion de la semaine dans ce mois
-                          const finDeMois=new Date(cur.getFullYear(),cur.getMonth()+1,0);
-                          hPrevu+=sommePlafonneePeriode(lundiSemStr,fmtSem(finDeMois));
+                          const partEarlierLog=partMoisPrecedentReg();
+                          if(window.DEBUG_CGAM)console.log('[CGAM-hPrevuReg-cheval]',c.nom||c.prenom||c.id,'| mois calculé (fin de mois):',moisEarlierKeyReg,'| modifActive:',modifActiveEarlierReg,'| part:',partEarlierLog,'| volH:',volH);
+                          hPrevu+=Math.min(partEarlierLog,volH-hCongesVol-hAbsVol);
                         } else {
                           // On traite le mois de fin de semaine (mois suivant) : volume complet moins
                           // ce qui a déjà été alloué (plafonné) dans le mois précédent
-                          const finMoisPrec=new Date(cur.getFullYear(),cur.getMonth(),0);
-                          const dejaAlloue=sommePlafonneePeriode(lundiSemStr,fmtSem(finMoisPrec));
+                          const dejaAlloue=partMoisPrecedentReg();
+                          if(window.DEBUG_CGAM)console.log('[CGAM-hPrevuReg-cheval]',c.nom||c.prenom||c.id,'| mois calculé (mois suivant):',cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0'),'| dejaAlloue:',dejaAlloue,'| volH:',volH,'| contribution:',Math.max(0,volH-hCongesVol-hAbsVol-dejaAlloue));
                           hPrevu+=Math.max(0,volH-hCongesVol-hAbsVol-dejaAlloue);
                         }
                       } else {
