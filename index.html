@@ -5898,6 +5898,41 @@ function enregistrerPlanningMois(contratId, moisKey){
               delete c.planningConfirmeMois[moisSuivKeyEnr];
               avertissementsInfo.push(`Le planning de ${moisSuivKeyEnr} devra être réenregistré : la semaine ${getSemISO(dateStr)}, combinée à ce mois, dépasse maintenant le volume prévu (${fmtH(totalSemaineComplete*60)} pour ${fmtH(volH*60)}).`);
             }
+          } else {
+            // 27/08/2026 (Sophie) : ce mois-ci a modifications autorisées actif — sa part réelle sur
+            // cette semaine ne se limite plus aux seuls jours cochés ICI, elle peut avoir été prise
+            // n'importe où ailleurs dans SON PROPRE mois. Même principe que partMoisPrecedentReg
+            // (calcHPrevuReg, onglet Régularisation) : enveloppe pleine → part structurelle due en
+            // entier, sinon part réduite d'autant que ce qu'il reste de disponible dans l'enveloppe.
+            // Réservé à ce contrôle de sécurité — "Volume disponible" reste volontairement non
+            // coordonné entre mois (décision Sophie du jour), plus réactif mais moins précis.
+            const envCeMoisEnr=calcEnveloppeMoisVar(c,ay,am);
+            let reelCeMoisEnr=0;
+            Object.keys(c.planning).forEach(dtR=>{
+              const [dtyR,dtmR]=dtR.split('-').map(Number);
+              if(!(dtmR===am&&dtyR===ay)) return;
+              const pdR=c.planning[dtR];
+              const infosR=pdR&&pdR.coche?getInfosJourPlanning(c,dtR):null;
+              if(infosR&&jourComptePlanning(c,dtR,infosR)){
+                reelCeMoisEnr+=(pdR.d&&pdR.f)?(toM(pdR.f)-toM(pdR.d))/60:((infosR.volH||0)/(infosR.jMax||1));
+              }
+            });
+            const resteCeMoisEnr=Math.max(0,(envCeMoisEnr.minutes/60)-reelCeMoisEnr);
+            const contributionEnveloppeEnr=Math.max(0,volHCeMois-resteCeMoisEnr);
+            const partRestanteSuivEnr=Math.max(0,volH-contributionEnveloppeEnr);
+            let totalSuivDejaSauveEnr=0;
+            Object.keys(c.planning).forEach(dtS=>{
+              if((getSemISO(dtS)+'-'+getSemAnnee(dtS))!==semKeyISO) return;
+              const [dtyS,dtmS]=dtS.split('-').map(Number);
+              if(dtyS*12+(dtmS-1)<=ay*12+(am-1)) return; // jour de CE mois ou antérieur : pas le mois suivant
+              const pdS=c.planning[dtS];
+              if(!pdS||!pdS.coche||!jourComptePlanning(c,dtS,getInfosJourPlanning(c,dtS))) return;
+              totalSuivDejaSauveEnr+=(pdS.d&&pdS.f)?(toM(pdS.f)-toM(pdS.d))/60:volH/jMaxVol;
+            });
+            if(totalSuivDejaSauveEnr>partRestanteSuivEnr+0.01){
+              delete c.planningConfirmeMois[moisSuivKeyEnr];
+              avertissementsInfo.push(`Le planning de ${moisSuivKeyEnr} devra être réenregistré : la semaine ${getSemISO(dateStr)}, une fois l'enveloppe de ce mois-ci prise en compte, ne lui laisse plus que ${fmtH(partRestanteSuivEnr*60)} (déjà ${fmtH(totalSuivDejaSauveEnr*60)} enregistrés).`);
+            }
           }
         }
       } else {
@@ -12995,7 +13030,7 @@ function resetForm(){
   document.getElementById('essai-cdi-wrap').style.display='flex';
   document.getElementById('essai-cdd-wrap').style.display='none';
   document.getElementById('ro-occ').style.display='';
-  document.getElementById('cdd-date-max-info').style.display='none';
+  document.getElementById('cdd-date-max-info')?.style.setProperty('display','none');
   document.getElementById('btn-val').textContent='Valider et enregistrer';
 }
 
