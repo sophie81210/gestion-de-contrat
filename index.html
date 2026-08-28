@@ -5422,7 +5422,10 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
   // 25/08/2026 (Sophie) : volume disponible (enveloppe moins ce qui est déjà saisi ce mois), affiché
   // sous la case "modifications autorisées" pour éviter d'avoir à ouvrir plusieurs mois pour trouver
   // celui à réenregistrer, et pour voir en un coup d'œil combien il reste à répartir.
-  const envMoisTile=estCaseModifTile?calcEnveloppeMoisVar(c,annee,moisIdx+1):null;
+  // 27/08/2026 (Sophie) : version coordonnée — "Volume disponible" doit refléter la même limite que
+  // ce que la validation à l'enregistrement va réellement appliquer, sinon l'utilisateur se voit
+  // refuser une saisie que cette ligne laissait pourtant croire possible.
+  const envMoisTile=estCaseModifTile?calcEnveloppeMoisVarCoordonnee(c,annee,moisIdx+1):null;
   // 27/08/2026 (Sophie) : plafond à 0 retiré — un dépassement doit s'afficher en négatif, pour que
   // l'utilisateur le voie avant d'enregistrer, plutôt que d'être masqué par un 0 trompeur.
   const joursDisponiblesTile=envMoisTile?(envMoisTile.jours-totalJoursMoisFS):0;
@@ -5644,7 +5647,7 @@ function majPlanningJour(contratId, dateStr, champ, val, semKeyDom){
     const volDispoEl=document.getElementById('pln-vol-dispo-'+contratId+'-'+moisKeyTile2);
     if(volDispoEl){
       const [ayLive,amLive]=moisKeyTile2.split('-').map(Number);
-      const envLive=calcEnveloppeMoisVar(c,ayLive,amLive);
+      const envLive=calcEnveloppeMoisVarCoordonnee(c,ayLive,amLive);
       const joursDispoLive=envLive.jours-joursMoisLive;
       const minDispoLive=envLive.minutes-totalMoisMinLive;
       volDispoEl.style.color=minDispoLive<0?'var(--al)':'var(--tx3)';
@@ -6071,70 +6074,11 @@ function enregistrerPlanningMois(contratId, moisKey){
   // Var et min, modifications autorisées ce mois : même principe, plafond mensuel jours+heures au
   // lieu du plafond hebdomadaire habituel — précision Sophie 18/07/2026, étendu à min le 23/07/2026.
   if(srcMoisFS.th==='plan'&&(srcMoisFS.planType==='var'||srcMoisFS.planType==='min')&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey]){
-    // Enveloppe calculée par la fonction PARTAGÉE avec la paie — extraction 22/07/2026, à l'identique.
-    const envMoisV=calcEnveloppeMoisVar(c,ay,am);
+    // 27/08/2026 (Sophie) : calcEnveloppeMoisVarCoordonnee (au lieu de calcEnveloppeMoisVar seule) —
+    // ajuste l'enveloppe pour la semaine de début de mois à cheval sur le mois précédent, si celui-ci
+    // a aussi modifications autorisées actif. Voir la fonction elle-même pour le détail du calcul.
+    const envMoisV=calcEnveloppeMoisVarCoordonnee(c,ay,am);
     joursBaseV=envMoisV.jours; minBaseV=envMoisV.minutes;
-    // 27/08/2026 (Sophie) : ajustement pour la semaine de DÉBUT de ce mois si elle est à cheval sur le
-    // mois précédent et que celui-ci a aussi modifications autorisées actif — calcEnveloppeMoisVar
-    // (ci-dessus) donne alors à ce mois-ci sa part structurelle NON coordonnée pour cette semaine
-    // partagée (décision Sophie du jour : la garder simple pour "Volume disponible"), ce qui peut être
-    // trop généreux si le mois précédent a déjà consommé plus que sa propre part structurelle ailleurs
-    // dans son enveloppe. Coordination réservée à CE contrôle : retire l'excédent de l'enveloppe avant
-    // de comparer, sans toucher à calcEnveloppeMoisVar ni à son affichage en direct.
-    const premJourMoisV=new Date(ay,am-1,1);
-    const dowMoisV=premJourMoisV.getDay();
-    if(dowMoisV!==1){ // le mois ne commence pas un lundi : sa 1ère semaine est à cheval
-      const lundiMoisV=new Date(premJourMoisV); lundiMoisV.setDate(premJourMoisV.getDate()+(dowMoisV===0?-6:1-dowMoisV));
-      const moisPrecVDate=new Date(ay,am-2,1);
-      const moisPrecVAy=moisPrecVDate.getFullYear(), moisPrecVAm=moisPrecVDate.getMonth()+1;
-      const moisPrecVKey=moisPrecVAy+'-'+String(moisPrecVAm).padStart(2,'0');
-      if((srcMoisFS.planType==='var'||srcMoisFS.planType==='min')&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisPrecVKey]){
-        const jMaxMoisV=srcMoisFS.planType==='min'?(srcMoisFS.jMaxMin||1):(()=>{
-          const semKeyLundiV=getSemISO(lundiMoisV)+'-'+getSemAnnee(lundiMoisV);
-          const agLundiV=(srcMoisFS.agendas||c.agendas||[]).find(agv=>parseDateLoc(agv.dateDebut)<=lundiMoisV&&parseDateLoc(agv.dateFin)>=lundiMoisV);
-          const typeLundiV=agLundiV&&agLundiV.semaines&&agLundiV.semaines[semKeyLundiV];
-          const volLundiV=typeLundiV&&srcMoisFS.planVar&&srcMoisFS.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeLundiV);
-          return (volLundiV&&volLundiV.j)||1;
-        })();
-        const volHMoisV=srcMoisFS.planType==='min'?(srcMoisFS.hMin||0):(()=>{
-          const semKeyLundiV2=getSemISO(lundiMoisV)+'-'+getSemAnnee(lundiMoisV);
-          const agLundiV2=(srcMoisFS.agendas||c.agendas||[]).find(agv=>parseDateLoc(agv.dateDebut)<=lundiMoisV&&parseDateLoc(agv.dateFin)>=lundiMoisV);
-          const typeLundiV2=agLundiV2&&agLundiV2.semaines&&agLundiV2.semaines[semKeyLundiV2];
-          const volLundiV2=typeLundiV2&&srcMoisFS.planVar&&srcMoisFS.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeLundiV2);
-          return (volLundiV2&&volLundiV2.h)||0;
-        })();
-        let joursPossiblesMoisVAdj=0, joursPossiblesPrecVAdj=0;
-        const patternMoisVAdj=srcMoisFS.planType==='min'?srcMoisFS.joursMin:null;
-        for(let dAdj=0;dAdj<7;dAdj++){
-          const jdAdj=new Date(lundiMoisV); jdAdj.setDate(lundiMoisV.getDate()+dAdj);
-          const possibleAdj=patternMoisVAdj?patternMoisVAdj[dAdj]:jdAdj.getDay()!==(c.reposHebdo||0);
-          if(!possibleAdj) continue;
-          if(jdAdj.getMonth()===am-1&&jdAdj.getFullYear()===ay) joursPossiblesMoisVAdj++;
-          else joursPossiblesPrecVAdj++;
-        }
-        const structShareMoisVAdj=Math.min(joursPossiblesMoisVAdj,jMaxMoisV)*(volHMoisV/jMaxMoisV);
-        const structSharePrecVAdj=Math.min(joursPossiblesPrecVAdj,jMaxMoisV)*(volHMoisV/jMaxMoisV);
-        const envPrecVAdj=calcEnveloppeMoisVar(c,moisPrecVAy,moisPrecVAm);
-        let reelPrecVAdj=0;
-        Object.keys(c.planning||{}).forEach(dtPrecV=>{
-          const [dtyPV,dtmPV]=dtPrecV.split('-').map(Number);
-          if(!(dtmPV===moisPrecVAm&&dtyPV===moisPrecVAy)) return;
-          const pdPrecV=c.planning[dtPrecV];
-          const infosPrecV=pdPrecV&&pdPrecV.coche?getInfosJourPlanning(c,dtPrecV):null;
-          if(infosPrecV&&jourComptePlanning(c,dtPrecV,infosPrecV)){
-            reelPrecVAdj+=(pdPrecV.d&&pdPrecV.f)?(toM(pdPrecV.f)-toM(pdPrecV.d))/60:((infosPrecV.volH||0)/(infosPrecV.jMax||1));
-          }
-        });
-        const restePrecVAdj=Math.max(0,(envPrecVAdj.minutes/60)-reelPrecVAdj);
-        const contributionPrecVAdj=Math.max(0,structSharePrecVAdj-restePrecVAdj);
-        const partCoordonneeMoisVAdj=Math.max(0,volHMoisV-contributionPrecVAdj);
-        const excedentAdj=Math.max(0,structShareMoisVAdj-partCoordonneeMoisVAdj);
-        if(excedentAdj>0){
-          minBaseV-=excedentAdj*60;
-          if(window.DEBUG_CGAM)console.log('[CGAM-envMoisV-adj]',c.nom||c.prenom||c.id,'| mois:',ay+'-'+String(am).padStart(2,'0'),'| moisPrecVKey:',moisPrecVKey,'| structShareMoisVAdj:',structShareMoisVAdj,'| contributionPrecVAdj:',contributionPrecVAdj,'| partCoordonneeMoisVAdj:',partCoordonneeMoisVAdj,'| excedentAdj (retiré, en h):',excedentAdj);
-        }
-      }
-    }
     for(let d3=1; d3<=finMoisDate.getDate(); d3++){
       const dateStr3=ay+'-'+String(am).padStart(2,'0')+'-'+String(d3).padStart(2,'0');
       const pd3=c.planning&&c.planning[dateStr3];
@@ -6829,6 +6773,70 @@ function calcEnveloppeMoisVar(c,ay,am){
       }
     }
   return {jours:joursBaseV, minutes:minBaseV, heures:minBaseV/60};
+}
+
+// 27/08/2026 (Sophie) : variante coordonnée de calcEnveloppeMoisVar, réservée aux endroits qui en ont
+// besoin (contrôle d'enregistrement, et maintenant l'affichage "Volume disponible" pour rester
+// cohérent avec ce que la validation refusera réellement) — calcEnveloppeMoisVar elle-même reste
+// simple et non coordonnée entre mois (décision Sophie du jour), pour tout le reste.
+// Ajuste l'enveloppe de la semaine de DÉBUT de mois si elle est à cheval sur le mois précédent et que
+// celui-ci a aussi modifications autorisées actif : calcEnveloppeMoisVar donne alors à ce mois-ci sa
+// part structurelle NON coordonnée pour cette semaine partagée, trop généreuse si le mois précédent a
+// déjà consommé plus que sa propre part structurelle ailleurs dans son enveloppe.
+function calcEnveloppeMoisVarCoordonnee(c,ay,am){
+  const env=calcEnveloppeMoisVar(c,ay,am);
+  let minBaseV=env.minutes;
+  const srcMoisFS=getVersionActive(c,new Date(ay,am-1,1));
+  if(srcMoisFS.th!=='plan'||(srcMoisFS.planType!=='var'&&srcMoisFS.planType!=='min')) return env;
+  const premJourMoisV=new Date(ay,am-1,1);
+  const dowMoisV=premJourMoisV.getDay();
+  if(dowMoisV===1) return env; // commence un lundi : pas de semaine à cheval en début de mois
+  const lundiMoisV=new Date(premJourMoisV); lundiMoisV.setDate(premJourMoisV.getDate()+(dowMoisV===0?-6:1-dowMoisV));
+  const moisPrecVDate=new Date(ay,am-2,1);
+  const moisPrecVAy=moisPrecVDate.getFullYear(), moisPrecVAm=moisPrecVDate.getMonth()+1;
+  if(!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisPrecVAy+'-'+String(moisPrecVAm).padStart(2,'0')])) return env;
+  const jMaxMoisV=srcMoisFS.planType==='min'?(srcMoisFS.jMaxMin||1):(()=>{
+    const semKeyLundiV=getSemISO(lundiMoisV)+'-'+getSemAnnee(lundiMoisV);
+    const agLundiV=(srcMoisFS.agendas||c.agendas||[]).find(agv=>parseDateLoc(agv.dateDebut)<=lundiMoisV&&parseDateLoc(agv.dateFin)>=lundiMoisV);
+    const typeLundiV=agLundiV&&agLundiV.semaines&&agLundiV.semaines[semKeyLundiV];
+    const volLundiV=typeLundiV&&srcMoisFS.planVar&&srcMoisFS.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeLundiV);
+    return (volLundiV&&volLundiV.j)||1;
+  })();
+  const volHMoisV=srcMoisFS.planType==='min'?(srcMoisFS.hMin||0):(()=>{
+    const semKeyLundiV2=getSemISO(lundiMoisV)+'-'+getSemAnnee(lundiMoisV);
+    const agLundiV2=(srcMoisFS.agendas||c.agendas||[]).find(agv=>parseDateLoc(agv.dateDebut)<=lundiMoisV&&parseDateLoc(agv.dateFin)>=lundiMoisV);
+    const typeLundiV2=agLundiV2&&agLundiV2.semaines&&agLundiV2.semaines[semKeyLundiV2];
+    const volLundiV2=typeLundiV2&&srcMoisFS.planVar&&srcMoisFS.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeLundiV2);
+    return (volLundiV2&&volLundiV2.h)||0;
+  })();
+  let joursPossiblesMoisVAdj=0, joursPossiblesPrecVAdj=0;
+  const patternMoisVAdj=srcMoisFS.planType==='min'?srcMoisFS.joursMin:null;
+  for(let dAdj=0;dAdj<7;dAdj++){
+    const jdAdj=new Date(lundiMoisV); jdAdj.setDate(lundiMoisV.getDate()+dAdj);
+    const possibleAdj=patternMoisVAdj?patternMoisVAdj[dAdj]:jdAdj.getDay()!==(c.reposHebdo||0);
+    if(!possibleAdj) continue;
+    if(jdAdj.getMonth()===am-1&&jdAdj.getFullYear()===ay) joursPossiblesMoisVAdj++;
+    else joursPossiblesPrecVAdj++;
+  }
+  const structShareMoisVAdj=jMaxMoisV>0?Math.min(joursPossiblesMoisVAdj,jMaxMoisV)*(volHMoisV/jMaxMoisV):0;
+  const structSharePrecVAdj=jMaxMoisV>0?Math.min(joursPossiblesPrecVAdj,jMaxMoisV)*(volHMoisV/jMaxMoisV):0;
+  const envPrecVAdj=calcEnveloppeMoisVar(c,moisPrecVAy,moisPrecVAm);
+  let reelPrecVAdj=0;
+  Object.keys(c.planning||{}).forEach(dtPrecV=>{
+    const [dtyPV,dtmPV]=dtPrecV.split('-').map(Number);
+    if(!(dtmPV===moisPrecVAm&&dtyPV===moisPrecVAy)) return;
+    const pdPrecV=c.planning[dtPrecV];
+    const infosPrecV=pdPrecV&&pdPrecV.coche?getInfosJourPlanning(c,dtPrecV):null;
+    if(infosPrecV&&jourComptePlanning(c,dtPrecV,infosPrecV)){
+      reelPrecVAdj+=(pdPrecV.d&&pdPrecV.f)?(toM(pdPrecV.f)-toM(pdPrecV.d))/60:((infosPrecV.volH||0)/(infosPrecV.jMax||1));
+    }
+  });
+  const restePrecVAdj=Math.max(0,(envPrecVAdj.minutes/60)-reelPrecVAdj);
+  const contributionPrecVAdj=Math.max(0,structSharePrecVAdj-restePrecVAdj);
+  const partCoordonneeMoisVAdj=Math.max(0,volHMoisV-contributionPrecVAdj);
+  const excedentAdj=Math.max(0,structShareMoisVAdj-partCoordonneeMoisVAdj);
+  if(excedentAdj>0) minBaseV-=excedentAdj*60;
+  return {jours:env.jours, minutes:minBaseV, heures:minBaseV/60};
 }
 
 function calcEnveloppeMoisFixeSem(c,ay,am,ficheRef){
