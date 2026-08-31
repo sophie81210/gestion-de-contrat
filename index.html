@@ -16015,6 +16015,39 @@ async function confirmerRuptureSuite(cid){
   if(!c) return;
   c.rupture.confirmee=true;
   c._regulDirty=true;
+  // 30/08/2026 (Sophie) : marquer immédiatement hors-contrat les jours après la rupture — fiche ET
+  // planning (modifications autorisées var/min) — plutôt que de dépendre du déclenchement étroit déjà
+  // en place (fiche pas encore ouverte + mois précédent validé, lignes ~4115+), qui ne se déclenchait
+  // pas de façon fiable. Sans ce nettoyage immédiat, tout calcul lisant c.planning directement
+  // (régularisation, enveloppe...) continuait de voir un mois complet au lieu de s'arrêter à la
+  // rupture. Décoche (coche=false) plutôt que supprime, pour rester réversible si la rupture est
+  // ensuite annulée (annulerRupture ne restaure pas le planning, seulement la fiche).
+  const dateFinRuptureConf=getDateFinContrat(c);
+  if(dateFinRuptureConf){
+    const dateFinRuptureConfStr=dateFinRuptureConf.getFullYear()+'-'+String(dateFinRuptureConf.getMonth()+1).padStart(2,'0')+'-'+String(dateFinRuptureConf.getDate()).padStart(2,'0');
+    const moisRuptureKey=dateFinRuptureConf.getFullYear()+'-'+String(dateFinRuptureConf.getMonth()+1).padStart(2,'0');
+    const ficheRuptureConf=c.fiches&&c.fiches[moisRuptureKey];
+    if(ficheRuptureConf&&!ficheRuptureConf.valide){
+      ficheRuptureConf.jours.forEach(j=>{
+        if(j.date>dateFinRuptureConfStr&&j.statut!=='hors-contrat'){
+          j._horsContratCloture=true;
+          j.statut='hors-contrat';
+          delete j.heureDebReel;
+          delete j.heureFinReel;
+        }
+      });
+    }
+    if(c.planning){
+      Object.keys(c.planning).forEach(dtConf=>{
+        if(dtConf.slice(0,7)===moisRuptureKey&&dtConf>dateFinRuptureConfStr&&c.planning[dtConf]&&c.planning[dtConf].coche){
+          c.planning[dtConf].coche=false;
+        }
+      });
+    }
+    // Force le réenregistrement du planning de ce mois, comme pour un avenant qui change
+    // rétroactivement ce qui était disponible (même mécanisme, 27/08/2026).
+    if(c.planningConfirmeMois&&c.planningConfirmeMois[moisRuptureKey]) delete c.planningConfirmeMois[moisRuptureKey];
+  }
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
@@ -16043,6 +16076,10 @@ function annulerRupture(cid){
       if(j._horsContratCloture||j.statut==='hors-contrat'){
         delete j._horsContratCloture;
         delete j.statut;
+        // 30/08/2026 (Sophie) : recoche symétriquement le planning décoché par confirmerRuptureSuite
+        // pour ce même jour — sinon les jours redevenus normaux côté fiche restaient décochés côté
+        // planning (var/min modifications autorisées), invisibles dans les calculs malgré l'annulation.
+        if(c.planning&&c.planning[j.date]&&c.planning[j.date].coche===false) c.planning[j.date].coche=true;
       }
     });
     anneesAmAAnnuler.add(getAnneeAmPourDate(key));
