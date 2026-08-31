@@ -2544,6 +2544,12 @@ function renderDetTab(id,tab){
                           Object.keys(c.planning||{}).forEach(dtReg=>{
                             const [dtyReg,dtmReg]=dtReg.split('-').map(Number);
                             if(!(dtmReg===moisEarlierAm&&dtyReg===moisEarlierAy)) return;
+                            // 30/08/2026 (Sophie) : ignorer les jours au-delà de la date de rupture — sans
+                            // cette limite, un mois planifié en entier avant la décision de rupture reste
+                            // sommé jusqu'au bout, alors que l'enveloppe (calcEnveloppeMoisVar, via la
+                            // fiche elle-même tronquée à la rupture) s'arrête déjà à cette date — comparer
+                            // les deux sans cohérence gonflait "reste" à tort.
+                            if(dateRuptureC&&dtReg>dateRuptureC) return;
                             const pdReg=c.planning[dtReg];
                             const infosReg=pdReg&&pdReg.coche?getInfosJourPlanning(c,dtReg):null;
                             if(infosReg&&jourComptePlanning(c,dtReg,infosReg)){
@@ -5922,9 +5928,12 @@ function enregistrerPlanningMois(contratId, moisKey){
             // coordonné entre mois (décision Sophie du jour), plus réactif mais moins précis.
             const envCeMoisEnr=calcEnveloppeMoisVar(c,ay,am);
             let reelCeMoisEnr=0;
+            // 30/08/2026 (Sophie) : même limite de rupture que les autres endroits corrigés le même jour.
+            const dateRuptureCEnr=c.rupture&&c.rupture.confirmee?c.rupture.dateFinContrat:null;
             Object.keys(c.planning).forEach(dtR=>{
               const [dtyR,dtmR]=dtR.split('-').map(Number);
               if(!(dtmR===am&&dtyR===ay)) return;
+              if(dateRuptureCEnr&&dtR>dateRuptureCEnr) return;
               const pdR=c.planning[dtR];
               const infosR=pdR&&pdR.coche?getInfosJourPlanning(c,dtR):null;
               if(infosR&&jourComptePlanning(c,dtR,infosR)){
@@ -6833,9 +6842,14 @@ function calcEnveloppeMoisVarCoordonnee(c,ay,am){
   const structSharePrecVAdj=jMaxMoisV>0?Math.min(joursPossiblesPrecVAdj,jMaxMoisV)*(volHMoisV/jMaxMoisV):0;
   const envPrecVAdj=calcEnveloppeMoisVar(c,moisPrecVAy,moisPrecVAm);
   let reelPrecVAdj=0;
+  // 30/08/2026 (Sophie) : même limite de rupture que calcHPrevuReg/calcHTheoriquesPlanMin — ignorer
+  // les jours au-delà, sinon un mois planifié en entier avant la décision de rupture reste sommé
+  // jusqu'au bout, incohérent avec l'enveloppe déjà tronquée à cette date.
+  const dateRuptureCAdj=c.rupture&&c.rupture.confirmee?c.rupture.dateFinContrat:null;
   Object.keys(c.planning||{}).forEach(dtPrecV=>{
     const [dtyPV,dtmPV]=dtPrecV.split('-').map(Number);
     if(!(dtmPV===moisPrecVAm&&dtyPV===moisPrecVAy)) return;
+    if(dateRuptureCAdj&&dtPrecV>dateRuptureCAdj) return;
     const pdPrecV=c.planning[dtPrecV];
     const infosPrecV=pdPrecV&&pdPrecV.coche?getInfosJourPlanning(c,dtPrecV):null;
     if(infosPrecV&&jourComptePlanning(c,dtPrecV,infosPrecV)){
@@ -9727,9 +9741,16 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
           const structShareMoisCourantTh=Math.min(nbJoursPossiblesMoisCourant,jMaxMinTh)*(hMinTh/jMaxMinTh);
           const envMoisCourantTh=calcEnveloppeMoisVar(c,fiche.annee,fiche.mois+1);
           let reelMoisCourantTh=0;
+          // 30/08/2026 (Sophie) : limite de rupture — exemple chiffré confirmé (contrat Enaël, rupture
+          // 16/09/2021) : sans elle, un mois planifié en entier avant la décision de rupture reste
+          // sommé jusqu'au bout (77h), alors que l'enveloppe (calcEnveloppeMoisVar, via la fiche
+          // tronquée à la rupture) s'arrête déjà à cette date (60,5h) — "reste" tombait donc à tort à
+          // 0, gonflant la contribution de la semaine à cheval d'1 jour max (5,5h : 16,5 au lieu de 11).
+          const dateRuptureCTh=c.rupture&&c.rupture.confirmee?c.rupture.dateFinContrat:null;
           Object.keys(c.planning||{}).forEach(dtTh=>{
             const [dtyTh,dtmTh]=dtTh.split('-').map(Number);
             if(!(dtmTh===fiche.mois+1&&dtyTh===fiche.annee)) return;
+            if(dateRuptureCTh&&dtTh>dateRuptureCTh) return;
             const pdTh=c.planning[dtTh];
             const infosTh=pdTh&&pdTh.coche?getInfosJourPlanning(c,dtTh):null;
             if(infosTh&&jourComptePlanning(c,dtTh,infosTh)){
