@@ -3921,6 +3921,12 @@ function ouvrirFiche(contratId,key){
       [getVersionActive(c,debutMoisV)];
     const tousAgendasV=[...new Set(versionsV.flatMap(sv=>(sv.agendas||c.agendas||[])))];
     if(tousAgendasV.length){
+      // 01/09/2026 (Sophie) : jours après la fin de contrat (rupture confirmée) exclus au même titre
+      // que les jours avant dateDeb — indépendamment de j.statut (peut être resté à son ancienne
+      // valeur si le jour existait avant la rupture) ou de l'état du planning (décoché par
+      // confirmerRuptureSuite pour d'autres besoins, régularisation/enveloppe).
+      const dateFinContratV=getDateFinContrat(c);
+      const dateFinContratVStr=dateFinContratV?(dateFinContratV.getFullYear()+'-'+String(dateFinContratV.getMonth()+1).padStart(2,'0')+'-'+String(dateFinContratV.getDate()).padStart(2,'0')):null;
       const semDuMois=[...new Set(fiche.jours.map(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))))];
       const semDuMoisFiltrees=semDuMois.filter(sk=>{
         return fiche.jours.some(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))===sk&&
@@ -3928,6 +3934,7 @@ function ouvrirFiche(contratId,key){
           new Date(j.date).getDay()!==(c.reposHebdo||0)&&
           new Date(j.date).getDay()!==0&&
           !(c.dateDeb&&j.date<c.dateDeb)&& // hors contrat : rien à pointer
+          !(dateFinContratVStr&&j.date>dateFinContratVStr)&&
           j.statut!=='hors-contrat');
       });
       // Inclure les jours du mois adjacent pour les semaines à cheval, sinon leur score de congés est
@@ -3955,7 +3962,7 @@ function ouvrirFiche(contratId,key){
       // le mois — un mois peut désormais être à cheval entre deux cycles d'agenda à l'anniversaire)
       const semNonPointee=semDuMoisFiltrees.find(sk=>{
         if(semsViolettes.has(sk)) return false;
-        const jourDeCetteSem=fiche.jours.find(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))===sk&&!(c.dateDeb&&j.date<c.dateDeb)&&j.statut!=='hors-contrat');
+        const jourDeCetteSem=fiche.jours.find(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))===sk&&!(c.dateDeb&&j.date<c.dateDeb)&&!(dateFinContratVStr&&j.date>dateFinContratVStr)&&j.statut!=='hors-contrat');
         if(!jourDeCetteSem) return false;
         const dateJourSem=new Date(jourDeCetteSem.date);
         const srcCetteSem=getVersionActive(c,dateJourSem);
@@ -4307,6 +4314,13 @@ function ouvrirFiche(contratId,key){
     }
   }
 
+  // 01/09/2026 (Sophie) : date de fin de contrat (rupture confirmée) calculée une fois pour tout le
+  // rendu — permet à l'affichage de reconnaître "hors contrat" même si le statut stocké sur le jour
+  // est resté à son ancienne valeur (jour créé/rempli avant que la rupture soit confirmée),
+  // indépendamment de l'état coché/décoché du planning.
+  const dateFinCSPAff=getDateFinContrat(c);
+  const dateFinCSPAffStr=dateFinCSPAff?(dateFinCSPAff.getFullYear()+'-'+String(dateFinCSPAff.getMonth()+1).padStart(2,'0')+'-'+String(dateFinCSPAff.getDate()).padStart(2,'0')):null;
+
     const lignes=joursSemaines.map((j,idx)=>{
     const numJour=parseInt(j.date.split('-')[2]);
     const nomJour=JOURS_ABR[j.jourSemaine===0?6:j.jourSemaine-1];
@@ -4316,7 +4330,8 @@ function ouvrirFiche(contratId,key){
     // sans toucher à j.statut ni à aucun autre statut (prévu, travaillé, etc. restent inchangés).
     const srcJourAff3837=getVersionActive(c,new Date(j.date));
     const estVraiReposAff3837=(srcJourAff3837.th==='fixe'||srcJourAff3837.th==='sem')&&j.jourSemaine===(srcJourAff3837.reposHebdo||0);
-    const statutActuel=(estVraiReposAff3837&&j.statut==='non-prevu')?'repos':(j.statut||statutPrevu);
+    const apresRuptureAff=!!(dateFinCSPAffStr&&j.date>dateFinCSPAffStr&&!fiche.valide);
+    const statutActuel=apresRuptureAff?'hors-contrat':((estVraiReposAff3837&&j.statut==='non-prevu')?'repos':(j.statut||statutPrevu));
     const bg=getStatutBg(statutActuel);
     const border=statutActuel!==statutPrevu?'border-left:3px solid var(--m)':'';
     const manquant=statutPrevu==='prevu'&&!j.heureDebReel&&!j.heureFinReel&&statutActuel==='prevu';
@@ -8026,6 +8041,11 @@ function validerFiche(contratId,key){
         [getVersionActive(c,debutMoisV)];
       const tousAgendas=[...new Set(versionsAVerifier.flatMap(sv=>(sv.agendas||c.agendas||[])))];
       if(tousAgendas.length){
+        // 01/09/2026 (Sophie) : jours après la fin de contrat (rupture confirmée) exclus au même
+        // titre que les jours avant dateDeb — indépendamment de j.statut ou de l'état du planning,
+        // même raison que le contrôle toast équivalent plus haut dans le fichier.
+        const dateFinContratB=getDateFinContrat(c);
+        const dateFinContratBStr=dateFinContratB?(dateFinContratB.getFullYear()+'-'+String(dateFinContratB.getMonth()+1).padStart(2,'0')+'-'+String(dateFinContratB.getDate()).padStart(2,'0')):null;
         // Calculer les semaines du mois (hors jours hors contrat, rien à pointer avant l'embauche)
         const semDuMois=[...new Set(c.fiches[key].jours.map(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))))];
         const semDuMoisFiltrees=semDuMois.filter(sk=>{
@@ -8034,6 +8054,7 @@ function validerFiche(contratId,key){
             new Date(j.date).getDay()!==(c.reposHebdo||0)&&
             new Date(j.date).getDay()!==0&&
             !(c.dateDeb&&j.date<c.dateDeb)&&
+            !(dateFinContratBStr&&j.date>dateFinContratBStr)&&
             j.statut!=='hors-contrat');
         });
         // Semaines violettes = semaines avec beaucoup de congés/fériés — inclure le mois adjacent pour
@@ -8060,7 +8081,7 @@ function validerFiche(contratId,key){
         // tout le mois — un mois peut être à cheval entre deux cycles d'agenda à l'anniversaire)
         const semNonPointee=semDuMoisFiltrees.find(sk=>{
           if(semsViolettes.has(sk)) return false;
-          const jourDeCetteSem=c.fiches[key].jours.find(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))===sk&&!(c.dateDeb&&j.date<c.dateDeb)&&j.statut!=='hors-contrat');
+          const jourDeCetteSem=c.fiches[key].jours.find(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))===sk&&!(c.dateDeb&&j.date<c.dateDeb)&&!(dateFinContratBStr&&j.date>dateFinContratBStr)&&j.statut!=='hors-contrat');
           if(!jourDeCetteSem) return false;
           const dateJourSem=new Date(jourDeCetteSem.date);
           const agPourCetteSem=tousAgendas.find(ag=>new Date(ag.dateDebut)<=dateJourSem&&new Date(ag.dateFin)>=dateJourSem);
