@@ -1371,12 +1371,12 @@ function goTo(p){
     if(!confirm('Des modifications du planning non enregistrées seront perdues. Continuer ?')) return;
     S.planningModifie=false;
   }
-  // Réinitialiser la simulation de rupture non confirmée si on quitte entièrement la fiche contrat
+  // 01/09/2026 (Sophie) : même correctif que switchDetTab — n'abandonner que le brouillon non
+  // enregistré (_ruptureTemp), jamais c.rupture déjà enregistré via le bouton "Enregistrer".
   if(S.page==='det'&&p!=='det'&&S.detTab==='rupture'&&S.enCours){
     const cRupG=S.contrats.find(x=>x.id==S.enCours);
-    if(cRupG&&cRupG.rupture&&!cRupG.rupture.confirmee&&(cRupG.rupture.motif||cRupG.rupture.dateSignif)){
-      cRupG.rupture={};
-      delete cRupG._dateFinContratCache;
+    if(cRupG&&cRupG._ruptureTemp&&!cRupG.rupture?.confirmee){
+      delete cRupG._ruptureTemp;
     }
   }
   S.page = p;
@@ -1847,12 +1847,16 @@ function switchDetTab(tab,id){
     if(!confirm('Des modifications du planning non enregistrées seront perdues. Continuer ?')) return;
     S.planningModifie=false;
   }
-  // Réinitialiser la simulation de rupture non confirmée quand on quitte l'onglet sans enregistrer
+  // 01/09/2026 (Sophie) : réinitialiser seulement le BROUILLON non enregistré (_ruptureTemp) quand on
+  // quitte l'onglet — jamais c.rupture lui-même, qui peut avoir été explicitement enregistré via le
+  // bouton "Enregistrer" (sauvegarderRupture) sans être encore confirmé. Avant ce correctif, cette
+  // condition ne distinguait pas les deux cas : une rupture enregistrée mais pas confirmée se faisait
+  // effacer dès qu'on changeait d'onglet, malgré la sauvegarde volontaire (bug confirmé Sophie : le
+  // bouton "Enregistrer" annonçait le succès, mais le formulaire se vidait après actualisation).
   if(S.detTab==='rupture'&&tab!=='rupture'){
     const cRup=S.contrats.find(x=>x.id==id);
-    if(cRup&&cRup.rupture&&!cRup.rupture.confirmee&&(cRup.rupture.motif||cRup.rupture.dateSignif)){
-      cRup.rupture={};
-      delete cRup._dateFinContratCache;
+    if(cRup&&cRup._ruptureTemp&&!cRup.rupture?.confirmee){
+      delete cRup._ruptureTemp;
     }
   }
   S.detTab=tab;
@@ -15480,6 +15484,7 @@ function calcSoldeConges46(c, dateRupture){
   let joursNonVerses=0, montantNonVersesBrut=0, montantNonVersesNet=0;
   let joursEnCours=0, montantEnCoursBrut=0, montantEnCoursNet=0;
   Object.entries(c.conges||{}).forEach(([anneeRef,cg])=>{
+    if(window.DEBUG_CGAM)console.log('[CGAM-soldeConges46-annee]',anneeRef,'| estTerminee:',cg.estTerminee,'| acqBrut:',cg.acqBrut,'| dateCg:',c.dateCg);
     if(!cg.estTerminee) return;
     // 27/07/2026 (correctif Sophie) : coefficient à la fin de la période d'acquisition concernée
     // (31 mai de l'année suivante), pas celui d'aujourd'hui — cette période peut être ancienne
@@ -15503,6 +15508,7 @@ function calcSoldeConges46(c, dateRupture){
       }
       dejaPaye=parseFloat(dejaPaye.toFixed(2));
     }
+    if(window.DEBUG_CGAM)console.log('[CGAM-soldeConges46-dejaPaye]',anneeRef,'| meilleurNet:',ind.meilleurNet,'| dejaPaye:',dejaPaye,'| resteNet (avant Math.max 0):',ind.meilleurNet-dejaPaye);
     const resteNet=Math.max(0,ind.meilleurNet-dejaPaye);
     const resteBrut=Math.max(0,ind.meilleurBrut-dejaPaye/coefNet);
     if(resteNet>0){
@@ -15525,6 +15531,7 @@ function calcSoldeConges46(c, dateRupture){
   // correctif du 25/08/2026 juste en dessous (les jours en cours d'acquisition ne sont jamais payés
   // pendant leur propre année, quoi qu'il arrive par ailleurs) — acqBrut utilisé directement.
   if(cgEnCours) joursEnCours=Math.ceil(Math.max(0,cgEnCours.acqBrut||0));
+  if(window.DEBUG_CGAM)console.log('[CGAM-soldeConges46-enCours]','cgEnCours trouvé:',!!cgEnCours,'| acqBrut:',cgEnCours?.acqBrut,'| joursEnCours:',joursEnCours);
   const dateSit=dateRupture||getDateSituationAu(c)||new Date();
   // 25/08/2026 (Sophie) : la déduction "jours congés acquis présents sur une fiche future non
   // validée" (06/08/2026) a été retirée — pour un contrat 46, les congés en cours d'acquisition ne
