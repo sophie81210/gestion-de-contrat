@@ -5915,6 +5915,16 @@ function enregistrerPlanningMois(contratId, moisKey){
         {depuis:dAvenantObj,jusqua:dimSem,version:getVersionActive(c,dAvenantObj)}
       ];
       let volHTotalSemaine=0;
+      // 01/09/2026 (Sophie) : chaque portion (avant/après avenant) est une part contractuelle
+      // distincte, jamais interchangeable — même principe que calcHPrevuReg (chaque jour résout SA
+      // propre version). Sans ce contrôle par portion, rien n'empêchait de laisser une portion à 0h
+      // pour reporter la totalité de son volume sur l'autre (bug confirmé Sophie, exemple chiffré :
+      // 0h côté min, 21h entassées côté var qui ne dispose pourtant que de 15h — le total hebdomadaire
+      // combiné, 21h, semblait alors correct alors qu'une portion dépassait bel et bien SA propre
+      // part). Toujours vérifié, même "modifications autorisées" coché : ce n'est pas une
+      // redistribution normale entre semaines du mois, mais un dépassement d'une frontière
+      // contractuelle (avant/après avenant).
+      const portionsDetailEnr=[];
       portionsEnr.forEach(portion=>{
         if(portion.depuis>portion.jusqua) return;
         const srcP=portion.version;
@@ -5932,9 +5942,24 @@ function enregistrerPlanningMois(contratId, moisKey){
         }
         if(!volP||!volP.jours) return;
         const nbJoursPossiblesP=volP.jours.filter(Boolean).length||1;
+        let volHPortionP=0, actuelPortionP=0;
         for(let cur=new Date(portion.depuis);cur<=portion.jusqua;cur.setDate(cur.getDate()+1)){
           const idxP=cur.getDay()===0?6:cur.getDay()-1;
-          if(volP.jours[idxP]) volHTotalSemaine+=volP.h/nbJoursPossiblesP;
+          if(!volP.jours[idxP]) continue;
+          const curStrP=fmtSem(cur);
+          volHPortionP+=volP.h/nbJoursPossiblesP;
+          volHTotalSemaine+=volP.h/nbJoursPossiblesP;
+          const pdP=c.planning&&c.planning[curStrP];
+          if(pdP&&pdP.coche&&jourComptePlanning(c,curStrP,getInfosJourPlanning(c,curStrP))){
+            actuelPortionP+=(pdP.d&&pdP.f)?(toM(pdP.f)-toM(pdP.d))/60:volP.h/nbJoursPossiblesP;
+          }
+        }
+        portionsDetailEnr.push({debut:fmtSem(portion.depuis),fin:fmtSem(portion.jusqua),plan:estMinPlanP?'min':'var',cap:volHPortionP,actuel:actuelPortionP});
+      });
+      if(window.DEBUG_CGAM)console.log('[CGAM-enrPlanning-portionsAvenant]',getSemISO(dateStr),portionsDetailEnr);
+      portionsDetailEnr.forEach(pdEnr=>{
+        if(pdEnr.actuel>pdEnr.cap+0.01){
+          erreurs.push(`Semaine ${getSemISO(dateStr)}, portion ${pdEnr.plan==='min'?'avant':'après'} avenant (${pdEnr.debut} au ${pdEnr.fin}) : ${fmtH(pdEnr.actuel*60)} prévues pour ${fmtH(pdEnr.cap*60)} possibles sur cette portion — chaque partie de la semaine (avant/après avenant) a son propre volume, non interchangeable`);
         }
       });
       volH=volHTotalSemaine;
