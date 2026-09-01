@@ -124,12 +124,6 @@ window.fbLoadParamsPartages = async()=>{
 };
 
 document.addEventListener('DOMContentLoaded',()=>{
-  // 30/08/2026 (Sophie) : gestionnaire d'erreur global TEMPORAIRE — affiche toute exception non
-  // interceptée directement à l'écran (alert), pour diagnostiquer sur téléphone sans console. À
-  // retirer une fois la cause de l'onglet contrats vide identifiée.
-  window.addEventListener('error',function(e){
-    alert('ERREUR JS :\n'+e.message+'\nFichier/ligne : '+(e.filename||'?')+':'+(e.lineno||'?')+'\nStack :\n'+(e.error&&e.error.stack?e.error.stack.slice(0,500):'(non disponible)'));
-  });
   onAuthStateChanged(auth,async user=>{
     window.FB_USER=user||null;
     if(user&&window.entrerApresAuth){
@@ -1315,29 +1309,13 @@ else S.params=JSON.parse(localStorage.getItem('cam_params')||'null')||JSON.parse
       // Recalculer les statuts congés en arrière-plan après affichage
       if(S.congesAM){
         setTimeout(()=>{
-          // 30/08/2026 (Sophie) : instrumentation TEMPORAIRE — chronométrage par contrat pour trouver
-          // la source des 40+ secondes au chargement, affiché via alert (pas besoin de console sur
-          // téléphone). À retirer une fois la cause identifiée.
-          const _diagLignes=[];
-          const _diagDebut=performance.now();
-          S.contrats.forEach(c=>{
-            const _t0=performance.now();
-            calcCongesContrat(c);
-            const _t1=performance.now();
-            _diagLignes.push((c.nom||c.prenom||c.id)+' : '+Math.round(_t1-_t0)+'ms');
-          });
-          const _diagFin=performance.now();
-          _diagLignes.push('— TOTAL calcCongesContrat : '+Math.round(_diagFin-_diagDebut)+'ms —');
           Object.keys(S.congesAM).forEach(am=>{
             majFichesCgAm(parseInt(am),false);
           });
-          const _diagFin2=performance.now();
-          _diagLignes.push('TOTAL avec majFichesCgAm : '+Math.round(_diagFin2-_diagDebut)+'ms');
-          alert('DIAGNOSTIC CHARGEMENT :\n'+_diagLignes.join('\n'));
         },200);
       }
     }
-  }catch(e){console.error('Load:',e);S._paramsChargementTermine=true;alert('ERREUR dans loadFromFirestore :\n'+e.message+'\nStack :\n'+(e.stack?e.stack.slice(0,500):'(non disponible)'));}
+  }catch(e){console.error('Load:',e);S._paramsChargementTermine=true;}
 }
 
 function migrerFiches(){
@@ -5041,7 +5019,14 @@ function getInfosJourPlanning(c, dateStr){
   // sur une semaine où un agenda est déjà assigné (typeSem non vide) — sortie en clause séparée,
   // jamais filtrée par cette même condition.
   const dateFinRuptureIJP=getDateFinContrat(c);
-  const horsContratRupture=!!(dateFinRuptureIJP&&d>dateFinRuptureIJP);
+  // 01/09/2026 (Sophie) : comparaison en chaîne (YYYY-MM-DD), jamais en objets Date directement — d
+  // est construit via new Date(dateStr) (minuit UTC), alors que getDateFinContrat renvoie une date
+  // construite en local (minuit local) ; comparés directement, l'écart de fuseau horaire (France
+  // UTC+1/+2) faisait apparaître le dernier jour du préavis comme déjà "après" la fin de contrat, un
+  // jour trop tôt (bug confirmé Sophie : fin de préavis le 16, le 16 lui-même marqué hors contrat sur
+  // le planning — la feuille, qui compare déjà en chaîne comme partout ailleurs, était correcte).
+  const dateFinRuptureIJPStr=dateFinRuptureIJP?(dateFinRuptureIJP.getFullYear()+'-'+String(dateFinRuptureIJP.getMonth()+1).padStart(2,'0')+'-'+String(dateFinRuptureIJP.getDate()).padStart(2,'0')):null;
+  const horsContratRupture=!!(dateFinRuptureIJPStr&&dateStr>dateFinRuptureIJPStr);
   const horsContrat=horsContratRupture||((d<new Date(c.dateDeb)||(c.dateFin&&d>new Date(c.dateFin)))&&(contournerAgenda||!agenda));
   const agendaManquant=!contournerAgenda&&!agenda&&!horsContrat; // dans le contrat, mais aucun type assigné pour cette semaine
   const semaineOff=!contournerAgenda&&typeSem==='off';
