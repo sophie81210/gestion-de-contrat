@@ -1180,7 +1180,11 @@ function getContratsCompresses(){
       });
       fichesClean[k]={...f,jours:joursClean};
     });
-    const {_regulHtml:_, _regulDirty:__, _planningSauvegarde:planningSauve, _modifAutoriseesSauvegarde:modifSauve, ...cClean}=c;
+    // 30/08/2026 (Sophie) : _dateFinContratCache ajouté à l'exclusion — cache de calcul uniquement
+    // (voir getDateFinContrat), ne doit jamais être persisté : un Date sérialisé en chaîne reviendrait
+    // au chargement suivant au lieu d'un objet Date, et pourrait rester désynchronisé de c.rupture si
+    // celui-ci change ailleurs (autre session/appareil) entre-temps.
+    const {_regulHtml:_, _regulDirty:__, _planningSauvegarde:planningSauve, _modifAutoriseesSauvegarde:modifSauve, _dateFinContratCache:___, ...cClean}=c;
     // Si un planning "brouillon" (non encore validé via le bouton Enregistrer) existe en mémoire, ne
     // jamais l'enregistrer — utiliser la dernière version réellement validée à la place, pour qu'une
     // sauvegarde déclenchée ailleurs (ex. la feuille de présence) ne fige pas accidentellement des
@@ -1365,6 +1369,7 @@ function goTo(p){
     const cRupG=S.contrats.find(x=>x.id==S.enCours);
     if(cRupG&&cRupG.rupture&&!cRupG.rupture.confirmee&&(cRupG.rupture.motif||cRupG.rupture.dateSignif)){
       cRupG.rupture={};
+      delete cRupG._dateFinContratCache;
     }
   }
   S.page = p;
@@ -1840,6 +1845,7 @@ function switchDetTab(tab,id){
     const cRup=S.contrats.find(x=>x.id==id);
     if(cRup&&cRup.rupture&&!cRup.rupture.confirmee&&(cRup.rupture.motif||cRup.rupture.dateSignif)){
       cRup.rupture={};
+      delete cRup._dateFinContratCache;
     }
   }
   S.detTab=tab;
@@ -6963,7 +6969,15 @@ function getDateFinContrat(c){
   // lisent c.rupture vérifient déjà `confirmee` en premier (ex. L4960 juste plus bas) ; cette
   // fonction-ci était la seule à ne pas le faire.
   if(!c.rupture||!c.rupture.confirmee) return null;
-  return calcDateFinContratBrute(c);
+  // 30/08/2026 (Sophie) : mise en cache — getInfosJourPlanning appelle désormais cette fonction pour
+  // chaque jour affiché (potentiellement des centaines par chargement), alors que le résultat est
+  // identique pour tout le contrat tant que c.rupture ne change pas. Sans cache, ralentissement
+  // sévère du chargement constaté sur mobile. Invalidée explicitement partout où c.rupture est
+  // modifié (confirmerRuptureSuite, annulerRupture, sauvegarderRupture...).
+  if(c._dateFinContratCache!==undefined) return c._dateFinContratCache;
+  const result=calcDateFinContratBrute(c);
+  c._dateFinContratCache=result;
+  return result;
 }
 
 function calcSoldeToutCompte(c, key){
@@ -15816,6 +15830,7 @@ function reinitialiserSimulationRupture(cid){
   if(c.rupture?.confirmee) return; // sécurité : ne jamais toucher une rupture confirmée
   if(!confirm('Réinitialiser la simulation de rupture ? Les informations saisies (motif, date...) seront effacées.')) return;
   c.rupture={};
+  delete c._dateFinContratCache;
   c._regulDirty=true;
   S.ruptureModifiee=false;
   _contratsModifies.add(c.id);
@@ -15934,6 +15949,7 @@ async function sauvegarderRupture(cid){
   }
   const rp=c._ruptureTemp||{};
   c.rupture={...rp};
+  delete c._dateFinContratCache;
   delete c._ruptureTemp;
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1) S.contrats[cidx]=c;
@@ -15959,6 +15975,7 @@ function confirmerRuptureOcc(cid){
   }
   if(!confirm('Confirmer la fin de l\'accueil au '+dateISOversTexte(dateISO)+' ?\n\nLes jours suivants seront marqués hors-contrat. Cette action est réversible (bouton « Annuler la confirmation »).')) return;
   c.rupture={motif:'fin-occasionnel',dateSignif:dateISO,confirmee:true};
+  delete c._dateFinContratCache;
   delete c._ruptureTemp;
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1) S.contrats[cidx]=c;
@@ -15978,6 +15995,7 @@ function confirmerRupture(cid){
     if(!confirm('Des modifications n\'ont pas été enregistrées. Confirmer quand même avec ces valeurs ?')) return;
     // Sauvegarder _ruptureTemp avant de confirmer
     c.rupture={...c._ruptureTemp};
+    delete c._dateFinContratCache;
     delete c._ruptureTemp;
   }
   // 0. Date de signification sur jour de repos ou férié
@@ -16043,6 +16061,7 @@ async function confirmerRuptureSuite(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c) return;
   c.rupture.confirmee=true;
+  delete c._dateFinContratCache;
   c._regulDirty=true;
   // 30/08/2026 (Sophie) : marquer immédiatement hors-contrat les jours après la rupture — fiche ET
   // planning (modifications autorisées var/min) — plutôt que de dépendre du déclenchement étroit déjà
@@ -16096,6 +16115,7 @@ function annulerRupture(cid){
   if(!c) return;
 
   c.rupture={};
+  delete c._dateFinContratCache;
   c._regulDirty=true;
   delete c._ruptureTemp;
   // Nettoyer les jours hors-contrat marqués par la clôture
