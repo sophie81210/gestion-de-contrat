@@ -15490,7 +15490,11 @@ function calcSoldeConges52(c, dateRupture){
       (fiche2.jours||[]).forEach(j=>{
         if(!['conges-acq','conges-anticipe','decompte-acq','decompte-anticipe','decompte-conges'].includes(j.statut)) return;
         if(bornerDate&&j.date>bornerDate) return;
-        const origineCg=j.statut==='decompte-conges'?statutOrigineCg(j.date):j.statut;
+        let origineCg;
+        if(j.statut==='decompte-conges') origineCg=statutOrigineCg(j.date);
+        else if(j.statut==='decompte-acq') origineCg='conges-acq';
+        else if(j.statut==='decompte-anticipe') origineCg='conges-anticipe';
+        else origineCg=j.statut;
         if(origineCg==='conges-non') return; // pose non-acquis : jamais compté ici
         // Une seule fenêtre, celle de l'origine réelle de la pose — plus de vérification des deux à
         // la fois pour decompte-conges, maintenant que l'origine est connue avec certitude.
@@ -15578,7 +15582,7 @@ function calcSoldeConges52(c, dateRupture){
   // Pour chaque année : 10ème total (fenêtre complète si terminée, jusqu'à la rupture si en cours) vs
   // déjà versé + restant au taux de rupture — la différence remplace le simple restant en maintien si
   // le 10ème est plus favorable.
-  let montantAcquisBrut=0, montantEnCoursSuppBrut=0;
+  let montantAcquisBrut=0, montantEnCoursBrutTotal=0;
   anneesSC52.forEach(a=>{
     const bornerDixieme=a.estTerminee?null:dateRefIccpStr; // fenêtre complète si terminée, sinon jusqu'à la rupture
     const finFenetreDixieme=a.estTerminee?new Date(a.anneeRef+1,4,31):dateRefIccp;
@@ -15589,14 +15593,14 @@ function calcSoldeConges52(c, dateRupture){
     const montantA=Math.max(dixiemeTotalA,dejaVerseA+restantMaintienA)-dejaVerseA;
     if(window.DEBUG_CGAM)console.log('[CGAM-soldeConges52-annee]',a.anneeRef,'| estTerminee:',a.estTerminee,'| restants:',a.restants,'| brutAnnuel:',brutAnnuelA,'| dixiemeTotal:',dixiemeTotalA,'| dejaVerse:',dejaVerseA,'| restantMaintien:',restantMaintienA,'| montant retenu:',montantA);
     if(a.estTerminee) montantAcquisBrut+=montantA;
-    else montantEnCoursSuppBrut+=montantA-restantMaintienA; // supplément par rapport au maintien simple, ajouté à montantEnCours plus bas
+    else montantEnCoursBrutTotal+=montantA; // 01/09/2026 (Sophie) : montantA directement, jamais reconstruit via jours arrondis + supplément (mélange qui faussait le résultat — bug confirmé Sophie, exemple chiffré : 123,55€ au lieu de 101,45/110,87)
   });
   montantAcquisBrut=parseFloat(Math.max(0,montantAcquisBrut).toFixed(2));
   const montantAcquisNet=parseFloat((montantAcquisBrut*coefNet).toFixed(2));
-  joursEnCoursRestants=Math.ceil(joursEnCoursRestants);
-  const montantEnCoursBrut=parseFloat(Math.max(0,(joursEnCoursRestants*hJour*txBrut)+montantEnCoursSuppBrut).toFixed(2));
+  joursEnCoursRestants=parseFloat(Math.ceil(joursEnCoursRestants).toFixed(2)); // arrondi supérieur, affichage seul — les montants ci-dessus utilisent déjà les jours réels, non arrondis
+  const montantEnCoursBrut=parseFloat(Math.max(0,montantEnCoursBrutTotal).toFixed(2));
   const montantEnCoursNet=parseFloat((montantEnCoursBrut*coefNet).toFixed(2));
-  return {joursAcquisRestants, montantAcquisBrut, montantAcquisNet, joursEnCoursRestants:parseFloat(joursEnCoursRestants.toFixed(2)), montantEnCoursBrut, montantEnCoursNet};
+  return {joursAcquisRestants, montantAcquisBrut, montantAcquisNet, joursEnCoursRestants, montantEnCoursBrut, montantEnCoursNet};
 }
 
 function calcSoldeConges46(c, dateRupture){
