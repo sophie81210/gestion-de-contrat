@@ -15468,20 +15468,33 @@ function calcSoldeConges52(c, dateRupture){
   function calcDejaVerseMaintien(anneeRef, bornerDate){
     const debutAntCg=anneeRef+'-06-01', finAntCg=(anneeRef+1)+'-04-30';
     const debutPoseCg=(anneeRef+1)+'-05-01', finPoseCg=(anneeRef+2)+'-04-30';
+    // 01/09/2026 (Sophie) : decompte-conges (jour qui continue une pose déjà commencée, sans porter
+    // lui-même le type d'origine) peut continuer une pose "acquis", "anticipé", OU "non-acquis" — ce
+    // dernier cas n'a pas à compter ici (bug confirmé Sophie, exemple chiffré : 23/08/2023, un jour
+    // "non-acquis" compté à tort comme déjà versé en maintien, faussant tout le calcul en cascade).
+    // Reconstitue une liste chronologique de tous les jours à statut connu, tous mois confondus, pour
+    // pouvoir remonter en arrière jusqu'au tout premier jour de la pose (celui qui porte le vrai type).
+    const tousJoursTriesCg=[];
+    Object.values(c.fiches||{}).forEach(fJ=>{(fJ.jours||[]).forEach(jJ=>{if(jJ.statut) tousJoursTriesCg.push({date:jJ.date,statut:jJ.statut});});});
+    tousJoursTriesCg.sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+    const statutsContinuationCg=['decompte-acq','decompte-anticipe','decompte-conges'];
+    function statutOrigineCg(dateJourCg){
+      let idx=tousJoursTriesCg.findIndex(x=>x.date===dateJourCg);
+      if(idx<0) return null;
+      while(idx>=0&&statutsContinuationCg.includes(tousJoursTriesCg[idx].statut)) idx--;
+      return idx>=0?tousJoursTriesCg[idx].statut:null;
+    }
     let dejaVerse=0;
     Object.values(c.fiches||{}).forEach(fiche2=>{
       if(!fiche2.valide) return;
       (fiche2.jours||[]).forEach(j=>{
         if(!['conges-acq','conges-anticipe','decompte-acq','decompte-anticipe','decompte-conges'].includes(j.statut)) return;
         if(bornerDate&&j.date>bornerDate) return;
-        let appartient=false;
-        if(j.statut==='conges-anticipe'||j.statut==='decompte-anticipe'){
-          appartient=j.date>=debutAntCg&&j.date<=finAntCg;
-        } else if(j.statut==='decompte-conges'){
-          appartient=(j.date>=debutAntCg&&j.date<=finAntCg)||(j.date>=debutPoseCg&&j.date<=finPoseCg);
-        } else {
-          appartient=j.date>=debutPoseCg&&j.date<=finPoseCg;
-        }
+        const origineCg=j.statut==='decompte-conges'?statutOrigineCg(j.date):j.statut;
+        if(origineCg==='conges-non') return; // pose non-acquis : jamais compté ici
+        // Une seule fenêtre, celle de l'origine réelle de la pose — plus de vérification des deux à
+        // la fois pour decompte-conges, maintenant que l'origine est connue avec certitude.
+        const appartient=origineCg==='conges-anticipe'?(j.date>=debutAntCg&&j.date<=finAntCg):(j.date>=debutPoseCg&&j.date<=finPoseCg);
         if(!appartient) return;
         const [jy,jm,jd]=j.date.split('-').map(Number);
         const dateVeille=new Date(jy,jm-1,jd); dateVeille.setDate(dateVeille.getDate()-1);
@@ -15497,7 +15510,7 @@ function calcSoldeConges52(c, dateRupture){
         const txBrutNormV=parseFloat(srcV.txBrut||0);
         const txBrutMajV=parseFloat(srcV.txBrut||0)*(1+majSupV);
         dejaVerse+=hJourCgV*((1-partMajV)*txBrutNormV+partMajV*txBrutMajV);
-        if(window.DEBUG_CGAM)console.log('[CGAM-dejaVerseMaintien-jour]',anneeRef,'|',j.date,'| statut:',j.statut,'| hJourCgV:',hJourCgV,'| txBrutNormV:',txBrutNormV,'| montant:',hJourCgV*((1-partMajV)*txBrutNormV+partMajV*txBrutMajV));
+        if(window.DEBUG_CGAM)console.log('[CGAM-dejaVerseMaintien-jour]',anneeRef,'|',j.date,'| statut:',j.statut,'| origine:',origineCg,'| hJourCgV:',hJourCgV,'| txBrutNormV:',txBrutNormV,'| montant:',hJourCgV*((1-partMajV)*txBrutNormV+partMajV*txBrutMajV));
       });
     });
     return dejaVerse;
