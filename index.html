@@ -15456,15 +15456,32 @@ function calcSoldeConges52(c, dateRupture){
   const hHebdo=(sourcePrecRupture.hMensu||0)*12/nbSem;
   const hJour=hHebdo/6;
   calcCongesContrat(c,dateRefIccp);
-  let joursAcquisRestants=0, joursEnCoursRestants=0;
-  Object.values(c.conges||{}).forEach(cg=>{
-    if(cg.estTerminee) joursAcquisRestants+=cg.restants||0;
+  // 01/09/2026 (Sophie) : pour chaque année déjà TERMINÉE, comparer maintien et 10ème (comme
+  // calcIndemniteConges le fait déjà pour le 46, mais jamais fait jusqu'ici pour une rupture en 52 —
+  // calcIndemniteConges exclut explicitement le 52, et calcRegul52, le complément normal du 52, ne se
+  // déclenche que si TOUS les jours de l'année ont été pris, jamais le cas d'une rupture avec des
+  // jours encore dus). Le 10ème se base sur le brut de l'année complète (juin à mai), déjà connu avec
+  // certitude puisque l'année est terminée — même calcul que calcIndemniteConges (calcBrutTotal),
+  // simplement sans son exclusion 52 ni sa condition de fiche de mai validée l'année suivante
+  // (inutile ici : on a besoin du brut déjà acquis, pas d'une validation ultérieure).
+  const anneesTermineesSC52=[];
+  let joursEnCoursRestants=0;
+  Object.entries(c.conges||{}).forEach(([anneeRefStr,cg])=>{
+    if(cg.estTerminee){
+      const anneeRefSC52=parseInt(anneeRefStr);
+      const dateMaiSC52=new Date(anneeRefSC52+1,4,31);
+      const totalBrutSC52=calcBrutTotal(c,new Date(anneeRefSC52,5,1),dateMaiSC52);
+      const dixiemeTotalSC52=totalBrutSC52*0.1;
+      const dixiemeParJourSC52=(cg.acquis||0)>0?dixiemeTotalSC52/cg.acquis:0;
+      anneesTermineesSC52.push({anneeRef:anneeRefSC52,restants:cg.restants||0,dixiemeParJour:dixiemeParJourSC52});
+    }
     // 06/08/2026 (Sophie) : contrairement aux années déjà terminées (qui soustraient bien "restants"),
     // l'année en cours prenait le brut accumulé tel quel, sans jamais soustraire ce qui a déjà été
     // pris cette même année — comptant ces jours-là une fois via le salaire normal du mois où ils sont
     // pris, et une deuxième fois ici. Même principe que pour une année terminée : brut moins pris.
     else joursEnCoursRestants+=Math.max(0,(cg.acqBrut||0)-(cg.pris||0));
   });
+  let joursAcquisRestants=anneesTermineesSC52.reduce((t,a)=>t+a.restants,0);
   // 06/08/2026 (Sophie) : reformulé complètement — ce n'est pas seulement le dernier mois pas encore
   // validé qui compte, ni seulement les jours "acquis" : TOUS les jours de congé posés ce mois (acquis
   // ET anticipé/en cours, peu importe la validation) sont de toute façon déjà payés via le salaire
@@ -15485,6 +15502,14 @@ function calcSoldeConges52(c, dateRupture){
     const nbCongesPoseSC52=(ficheRuptSC52.jours||[]).filter(j=>statsCongesTypeSC52.includes(j.statut)&&j.date<=keyRuptStrSC52).length;
     if(window.DEBUG_CGAM)console.log('[CGAM-soldeConges52-moisRupture]','keyRuptSC52:',keyRuptSC52,'| joursCongesTrouvés:',(ficheRuptSC52.jours||[]).filter(j=>statsCongesTypeSC52.includes(j.statut)).map(j=>j.date+':'+j.statut),'| joursAcquisRestants (avant déduction):',joursAcquisRestants,'| joursEnCoursRestants (avant déduction):',joursEnCoursRestants,'| c.conges brut:',JSON.stringify(c.conges));
     const deduitAnciennesSC52=Math.min(joursAcquisRestants,nbCongesPoseSC52);
+    // Répercuter la déduction sur les années terminées, la plus ancienne en premier — même principe
+    // que joursAcquisRestants ci-dessus, mais année par année pour garder le 10ème de chacune exact.
+    let restantADeduireSC52=deduitAnciennesSC52;
+    anneesTermineesSC52.sort((a,b)=>a.anneeRef-b.anneeRef).forEach(a=>{
+      const pris=Math.min(a.restants,restantADeduireSC52);
+      a.restants-=pris;
+      restantADeduireSC52-=pris;
+    });
     joursAcquisRestants=Math.max(0,joursAcquisRestants-deduitAnciennesSC52);
     const resteADeduirSC52=nbCongesPoseSC52-deduitAnciennesSC52;
     if(!ficheRuptSC52.valide){
@@ -15495,7 +15520,15 @@ function calcSoldeConges52(c, dateRupture){
     // Si déjà validée : "pris" a déjà normalement pris en compte la part de l'année en cours — ne pas
     // soustraire une deuxième fois ici.
   }
-  const montantAcquisBrut=parseFloat((joursAcquisRestants*hJour*txBrut).toFixed(2));
+  // Maintien vs 10ème, par année terminée, puis sommés — jamais un seul taux moyen entre années aux
+  // brut/quotas potentiellement différents.
+  let montantAcquisBrut=0;
+  anneesTermineesSC52.forEach(a=>{
+    const maintienA=a.restants*hJour*txBrut;
+    const dixiemeA=a.restants*a.dixiemeParJour;
+    montantAcquisBrut+=Math.max(maintienA,dixiemeA);
+  });
+  montantAcquisBrut=parseFloat(montantAcquisBrut.toFixed(2));
   const montantAcquisNet=parseFloat((montantAcquisBrut*coefNet).toFixed(2));
   joursEnCoursRestants=Math.ceil(joursEnCoursRestants);
   const montantEnCoursBrut=parseFloat((joursEnCoursRestants*hJour*txBrut).toFixed(2));
