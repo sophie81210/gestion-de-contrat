@@ -15583,6 +15583,7 @@ function calcSoldeConges52(c, dateRupture){
   // déjà versé + restant au taux de rupture — la différence remplace le simple restant en maintien si
   // le 10ème est plus favorable.
   let montantAcquisBrut=0, montantEnCoursBrutTotal=0;
+  let dejaVerseEnCoursBrut=0, dixiemeTotalEnCoursBrut=0;
   anneesSC52.forEach(a=>{
     const bornerDixieme=a.estTerminee?null:dateRefIccpStr; // fenêtre complète si terminée, sinon jusqu'à la rupture
     const finFenetreDixieme=a.estTerminee?new Date(a.anneeRef+1,4,31):dateRefIccp;
@@ -15593,14 +15594,22 @@ function calcSoldeConges52(c, dateRupture){
     const montantA=Math.max(dixiemeTotalA,dejaVerseA+restantMaintienA)-dejaVerseA;
     if(window.DEBUG_CGAM)console.log('[CGAM-soldeConges52-annee]',a.anneeRef,'| estTerminee:',a.estTerminee,'| restants:',a.restants,'| brutAnnuel:',brutAnnuelA,'| dixiemeTotal:',dixiemeTotalA,'| dejaVerse:',dejaVerseA,'| restantMaintien:',restantMaintienA,'| montant retenu:',montantA);
     if(a.estTerminee) montantAcquisBrut+=montantA;
-    else montantEnCoursBrutTotal+=montantA; // 01/09/2026 (Sophie) : montantA directement, jamais reconstruit via jours arrondis + supplément (mélange qui faussait le résultat — bug confirmé Sophie, exemple chiffré : 123,55€ au lieu de 101,45/110,87)
+    else {
+      montantEnCoursBrutTotal+=montantA; // 01/09/2026 (Sophie) : montantA directement, jamais reconstruit via jours arrondis + supplément (mélange qui faussait le résultat — bug confirmé Sophie, exemple chiffré : 123,55€ au lieu de 101,45/110,87)
+      dejaVerseEnCoursBrut+=dejaVerseA;
+      dixiemeTotalEnCoursBrut+=dixiemeTotalA;
+    }
   });
   montantAcquisBrut=parseFloat(Math.max(0,montantAcquisBrut).toFixed(2));
   const montantAcquisNet=parseFloat((montantAcquisBrut*coefNet).toFixed(2));
   joursEnCoursRestants=parseFloat(Math.ceil(joursEnCoursRestants).toFixed(2)); // arrondi supérieur, affichage seul — les montants ci-dessus utilisent déjà les jours réels, non arrondis
   const montantEnCoursBrut=parseFloat(Math.max(0,montantEnCoursBrutTotal).toFixed(2));
   const montantEnCoursNet=parseFloat((montantEnCoursBrut*coefNet).toFixed(2));
-  return {joursAcquisRestants, montantAcquisBrut, montantAcquisNet, joursEnCoursRestants, montantEnCoursBrut, montantEnCoursNet};
+  // 01/09/2026 (Sophie) : exposés séparément pour l'encart de l'onglet Congés lors d'une rupture
+  // (déjà versé / 10ème total de la période / reste à verser) — même trio que demandé par Sophie.
+  const dejaVerseEnCoursNet=parseFloat((dejaVerseEnCoursBrut*coefNet).toFixed(2));
+  const dixiemeTotalEnCoursNet=parseFloat((dixiemeTotalEnCoursBrut*coefNet).toFixed(2));
+  return {joursAcquisRestants, montantAcquisBrut, montantAcquisNet, joursEnCoursRestants, montantEnCoursBrut, montantEnCoursNet, dejaVerseEnCoursNet, dixiemeTotalEnCoursNet};
 }
 
 function calcSoldeConges46(c, dateRupture){
@@ -17492,6 +17501,22 @@ function buildCgAcquisEncarts(c, anneeAcq){
         <div style="${ls3}"><span>Maintien de salaire versé</span><span style="${vs3}">${regul52Trouve.maintienVerse.toFixed(2)} €</span></div>
         <div style="${ls3}"><span>Méthode du 10e</span><span style="${vs3}">${regul52Trouve.dixiemeNet.toFixed(2)} €</span></div>
         <div style="${ls3};border-bottom:none;color:var(--vt)"><span>Complément à verser</span><span style="${vs3};color:var(--vt)">${regul52Trouve.diff.toFixed(2)} €</span></div>
+      </div>`;
+    } else if(!cg.estTerminee&&c.rupture?.confirmee){
+      // 01/09/2026 (Sophie) : équivalent pour l'année EN COURS au moment d'une rupture confirmée —
+      // le complément normal (ci-dessus) ne se déclenche que si tous les jours de l'année ont été
+      // pris, jamais le cas d'une rupture avec des jours encore dus. Réutilise calcSoldeConges52
+      // (déjà correct, utilisée par l'onglet Rupture). Format différent du 46 (maintien/10e/meilleur)
+      // : ici le paiement se fait en continu (10% mensuel), donc "déjà versé" plutôt que de supposer
+      // que rien n'a encore été payé.
+      const soldeEnCoursCg52=calcSoldeConges52(c,getDateFinContrat(c)||new Date());
+      const ls3='display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid rgba(0,0,0,0.07);font-size:13px';
+      const vs3='font-weight:600;color:var(--m)';
+      html+=`<div style="background:#f2eef1;border-radius:8px;padding:10px 12px;margin-bottom:8px">
+        <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:6px">Complément congés payés (net) — estimation à la rupture</div>
+        <div style="${ls3}"><span>Déjà versé (maintien)</span><span style="${vs3}">${soldeEnCoursCg52.dejaVerseEnCoursNet.toFixed(2)} €</span></div>
+        <div style="${ls3}"><span>10e total de la période</span><span style="${vs3}">${soldeEnCoursCg52.dixiemeTotalEnCoursNet.toFixed(2)} €</span></div>
+        <div style="${ls3};border-bottom:none;color:var(--vt)"><span>Reste à verser</span><span style="${vs3};color:var(--vt)">${soldeEnCoursCg52.montantEnCoursNet.toFixed(2)} €</span></div>
       </div>`;
     }
   }
