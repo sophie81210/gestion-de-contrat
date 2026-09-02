@@ -17212,7 +17212,7 @@ function buildCgAcquisEncarts(c, anneeAcq){
       return j.date>=anneeAcq+'-06-01'&&j.date<=(anneeAcq+1)+'-04-30';
     }).length;
   },0);
-  const quotaTotalAnneeCg=cg.estTerminee?(cg.acquis||0):(cg.acqBrut!==undefined?Math.floor(cg.acqBrut):(cg.acquis||0));
+  const quotaTotalAnneeCg=cg.estTerminee?(cg.acquis||0):(cg.acqBrut!==undefined?Math.ceil(cg.acqBrut):(cg.acquis||0)); // 01/09/2026 (Sophie) : arrondi supérieur, pas inférieur — un jour de congé entamé est dû
   // Plafonner au quota restant après déduction des jours déjà validés (anticipés en fiches validées)
   const nbAnticipesProg=Math.min(nbAnticipesProgBrut,Math.max(0,quotaTotalAnneeCg-nbAnticipes));
   const debutPoseAcq=(anneeAcq+1)+'-05-01';
@@ -19669,7 +19669,7 @@ if(tousNonPrevus){
               // net de l'anticipé déjà pris (validé + provisoire) sur cette même année
               const debutPoseAcq=new Date(cg.anneeRef+1,4,1);
               if(debutDate>=debutPoseAcq){
-                quotaAcquis+=Math.max(0,Math.floor(cg.acqBrut||0)-anticipeValideCgQA-anticipeProvisoireCgQA);
+                quotaAcquis+=Math.max(0,Math.ceil(cg.acqBrut||0)-anticipeValideCgQA-anticipeProvisoireCgQA); // 01/09/2026 (Sophie) : arrondi supérieur
               }
             }
           }
@@ -19707,7 +19707,7 @@ if(tousNonPrevus){
             } else if(c.tc==='52'&&cg.anneeRef!==anneeAcqPose){
               // Utiliser restants pour ne pas cumuler les 2 années
               // (anneeAcqPose déjà traitée dans la 1ère boucle, on ne traite ici que les années antérieures en report)
-              quotaAcquis+=cg.restants!==undefined?cg.restants:Math.floor(cg.acqBrut||0);
+              quotaAcquis+=cg.restants!==undefined?cg.restants:Math.ceil(cg.acqBrut||0); // 01/09/2026 (Sophie) : arrondi supérieur
             }
           }
         });
@@ -19817,6 +19817,17 @@ if(tousNonPrevus){
         const moisKey=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0');
         // Ne pas créer de fiche avant la date de début du contrat
         if(c.dateDeb&&dateStr<c.dateDeb){cur.setDate(cur.getDate()+1);continue;}
+        // 01/09/2026 (Sophie) : même exclusion, côté fin de contrat — sans elle, un jour après une
+        // rupture confirmée pouvait quand même se voir attribuer conges-acq/conges-anticipe par
+        // cette boucle de pose, au lieu de rester hors-contrat (même problème déjà corrigé pour le
+        // début de contrat ci-dessus, jamais répliqué pour la fin — bug confirmé Sophie, exemple
+        // chiffré : les 3 derniers jours de juillet 2024 affichés en congés au lieu de hors contrat
+        // après une rupture au 19/07/2024).
+        const dateFinContratCgAm=getDateFinContrat(c);
+        if(dateFinContratCgAm){
+          const dateFinContratCgAmStr=dateFinContratCgAm.getFullYear()+'-'+String(dateFinContratCgAm.getMonth()+1).padStart(2,'0')+'-'+String(dateFinContratCgAm.getDate()).padStart(2,'0');
+          if(dateStr>dateFinContratCgAmStr){cur.setDate(cur.getDate()+1);continue;}
+        }
         if(!c.fiches[moisKey])c.fiches[moisKey]=creerFiche(c,cur.getFullYear(),cur.getMonth());
         const fiche=c.fiches[moisKey];
         const jourIdx=fiche.jours.findIndex(j=>j.date===dateStr);
