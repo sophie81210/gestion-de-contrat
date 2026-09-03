@@ -2437,7 +2437,6 @@ function modifierKmDirect(contratId, val, cibleId){
               const moisKey=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0');
               const fiche=c.fiches&&c.fiches[moisKey];
               const jour=fiche&&fiche.jours.find(j=>j.date===dateStr);
-              if(window.DEBUG_CGAM)console.log('[CGAM-hPrevuReg-fixesem-jourTrouve]',dateStr,'| fiche existe:',!!fiche,'| ficheValide:',fiche?.valide,'| jour trouvé:',!!jour);
               if(jour){
                 const agendas=source.agendas||c.agendas||[];
                 const ag=agendas.find(a=>{
@@ -2448,13 +2447,11 @@ function modifierKmDirect(contratId, val, cibleId){
                 const semKey=getSemISO(dateStr);
                 const agKey=getKeyAgenda(semKey,getSemAnnee(dateStr));
                 const typeSem=ag&&ag.semaines&&ag.semaines[agKey];
-                if(window.DEBUG_CGAM)console.log('[CGAM-hPrevuReg-fixesem-jour]',dateStr,'| statut:',jour.statut,'| clause52:',clause52,'| typeSem:',typeSem,'| heureDebPrev:',jour.heureDebPrev,'| heureFinPrev:',jour.heureFinPrev);
                 if(typeSem==='off'){ cur.setDate(cur.getDate()+1); continue; }
                 const estConge=!clause52&&['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges'].includes(jour.statut);
                 if(estConge){ cur.setDate(cur.getDate()+1); continue; }
                 if(jour.heureDebPrev&&jour.heureFinPrev){
                   const m=toMins(jour.heureFinPrev)-toMins(jour.heureDebPrev);
-                  if(window.DEBUG_CGAM)console.log('[CGAM-hPrevuReg-fixesem-ajout]',dateStr,'| minutes:',m,'| heures ajoutées:',m>0?m/60:0);
                   if(m>0) hPrevu+=m/60;
                 }
               }
@@ -2973,8 +2970,14 @@ function renderDetTab(id,tab){
               if(ficheMois&&estPlanMinVarQ){
                 hR=calcHPrevuReg(c, cycle.clause52, debQ, finQ);
               } else if(ficheMois){
-                const statutsExclus=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-conges',
-                  'abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat','travaille','reprise'];
+                // 03/09/2026 (Sophie) : statuts congés séparés des autres exclusions et exclus
+                // seulement si !clause52 — même principe déjà appliqué dans calcHPrevuReg, jamais
+                // répliqué ici jusqu'à présent. Pour une clause 52 sem, les congés sont couverts par
+                // la mensualisation et doivent compter normalement dans le "dû" (les horaires sont
+                // connus) — bug confirmé Sophie, exemple chiffré : août 2021, 150h attendues, 319,53€
+                // obtenus au lieu de ~599,96€ (deux semaines de congés complètement exclues).
+                const statutsCongesHR=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-conges'];
+                const statutsExclus=['abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat','travaille','reprise'];
                 ficheMois.jours.forEach(j=>{
                   if(j.date<debQ||j.date>finQ) return;
                   const statut=j.statut||getStatutPrevu(c,j);
@@ -3002,6 +3005,7 @@ function renderDetTab(id,tab){
                     if(hJourFerieReg>0) hR+=hJourFerieReg;
                     return;
                   }
+                  if(statutsCongesHR.includes(statut)&&!cycle.clause52) return;
                   if(statutsExclus.includes(statut)) return;
                   if(statut==='abs-partielle'){
                     // Heures réelles saisies (pas les prévues)
