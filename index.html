@@ -15854,6 +15854,42 @@ function dateToStr(d){
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
 
+// 01/09/2026 (Sophie) : la période d'essai est prolongée jour pour jour par l'arrêt maladie et les
+// congés payés/sans solde (pas les congés pour événements familiaux, exclus par choix de Sophie) —
+// seuls les statuts de fiche conges-acq/conges-anticipe/conges-non comptent, jamais conges-am (statut
+// d'affichage, pas un jour d'absence en soi) ni les décomptes post-pose (decompte-acq/anticipe/conges,
+// qui ne représentent pas non plus un jour d'absence à eux seuls — confirmé Sophie).
+function estJourAbsenceEssai(c, dateStr){
+  const moisKey=dateStr.slice(0,7);
+  const fiche=c.fiches?.[moisKey];
+  if(!fiche) return false;
+  const j=(fiche.jours||[]).find(jj=>jj.date===dateStr);
+  if(!j) return false;
+  return ['arret','conges-acq','conges-anticipe','conges-non'].includes(j.statut);
+}
+
+// Repousse dateFinNominale (déjà calculée par le code existant : début + durée) du nombre exact de
+// jours d'absence trouvés jour par jour dans la fenêtre — même principe de suspension que
+// calcDateFinPreavis (garde-fou iterations<500 repris pour la même raison).
+function calcFinEssaiAvecProlongation(c, dateDebutEssai, dateFinNominale){
+  if(!dateDebutEssai||!dateFinNominale) return dateFinNominale;
+  const dureeNominaleJours=Math.round((dateFinNominale-dateDebutEssai)/(1000*60*60*24))+1;
+  const result=new Date(dateDebutEssai.getFullYear(),dateDebutEssai.getMonth(),dateDebutEssai.getDate());
+  let joursCourus=0;
+  let iterations=0;
+  while(joursCourus<dureeNominaleJours&&iterations<500){
+    iterations++;
+    const dateStr=dateToStr(result);
+    if(!estJourAbsenceEssai(c,dateStr)){
+      joursCourus++;
+      if(joursCourus<dureeNominaleJours) result.setDate(result.getDate()+1);
+    } else {
+      result.setDate(result.getDate()+1);
+    }
+  }
+  return result;
+}
+
 function reporterSiDimanche(d){
   // Si la date tombe un dimanche (jour de repos), reporter au lundi
   if(d.getDay()===0) d.setDate(d.getDate()+1);
@@ -16640,8 +16676,10 @@ function renderRuptureCDD(c, cont){
           ${motifsList.map(m=>{
             // Désactiver fin-essai si la période d'essai est dépassée
             if((m.v==='fin-essai'||m.v==='fin-essai-am')&&c.periodeEssaiCdd>0){
-              const dateFinEssai=new Date(c.dateDeb);
-              dateFinEssai.setDate(dateFinEssai.getDate()+c.periodeEssaiCdd);
+              const dateDebEssaiCdd=new Date(c.dateDeb);
+              const dateFinEssaiNominaleCdd=new Date(c.dateDeb);
+              dateFinEssaiNominaleCdd.setDate(dateFinEssaiNominaleCdd.getDate()+c.periodeEssaiCdd);
+              const dateFinEssai=calcFinEssaiAvecProlongation(c,dateDebEssaiCdd,dateFinEssaiNominaleCdd);
               const aujourdhui=dateSit||new Date();
               if(aujourdhui>dateFinEssai){
                 return `<option value="${m.v}" disabled style="color:var(--tx3)">${m.l} (délai dépassé)</option>`;
@@ -16930,8 +16968,9 @@ function renderRupture(c, cont){
     const [ddy2,ddm2,ddd2]=(c.dateDeb||'').split('-').map(Number);
     const dateDebContratEssai=c.dateDeb?new Date(ddy2,ddm2-1,ddd2):null;
     const periodeEssaiMois=c.periodeEssai||0;
-    const dateFinPeriodeEssai=dateDebContratEssai&&periodeEssaiMois>0?
+    const dateFinPeriodeEssaiNominale=dateDebContratEssai&&periodeEssaiMois>0?
       new Date(ddy2,ddm2-1+periodeEssaiMois,ddd2):null;
+    const dateFinPeriodeEssai=calcFinEssaiAvecProlongation(c,dateDebContratEssai,dateFinPeriodeEssaiNominale);
     const dateMaxNotif=dateFinPeriodeEssai?(dateFinPeriodeEssai.getFullYear()+'-'+String(dateFinPeriodeEssai.getMonth()+1).padStart(2,'0')+'-'+String(dateFinPeriodeEssai.getDate()).padStart(2,'0')):'';
     const erreurEssai=dateNotif&&dateFinPeriodeEssai&&dateNotif>dateFinPeriodeEssai?
       `<div style="color:var(--al);font-size:12px;margin-top:4px">⚠ La date de notification dépasse la fin de la période d'essai (${dateFinPeriodeEssai.toLocaleDateString('fr-FR')})</div>`:
@@ -17088,9 +17127,11 @@ function renderRupture(c, cont){
           <option value="retrait-force" ${motif==='retrait-force'?'selected':''}>Retrait forcé</option>
           ${(()=>{
             if(c.periodeEssai>0){
-              const dateFinEssai=new Date(c.dateDeb);
-              dateFinEssai.setMonth(dateFinEssai.getMonth()+c.periodeEssai);
-              if((dateSit||new Date())>dateFinEssai){
+              const [ddyE,ddmE,dddE]=(c.dateDeb||'').split('-').map(Number);
+              const dateDebEssaiCdi=c.dateDeb?new Date(ddyE,ddmE-1,dddE):null;
+              const dateFinEssaiNominaleCdi=dateDebEssaiCdi?new Date(ddyE,ddmE-1+c.periodeEssai,dddE):null;
+              const dateFinEssai=calcFinEssaiAvecProlongation(c,dateDebEssaiCdi,dateFinEssaiNominaleCdi);
+              if(dateFinEssai&&(dateSit||new Date())>dateFinEssai){
                 return `<option value="fin-essai" disabled style="color:var(--tx3)">Fin de période d'essai (délai dépassé)</option>`;
               }
             }
