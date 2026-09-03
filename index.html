@@ -15447,25 +15447,11 @@ function calcHeuresSupMensuBrutTotal(c, dateDebut, dateFin){
   return parseFloat(total.toFixed(2));
 }
 
-function calcSoldeConges52(c, dateRupture){
-  const params=S.params||{};
-  const dateRefIccp=dateRupture||new Date();
-  const dateRefIccpStr=dateRefIccp.getFullYear()+'-'+String(dateRefIccp.getMonth()+1).padStart(2,'0')+'-'+String(dateRefIccp.getDate()).padStart(2,'0');
-  const coefNet=getParamAt('coefficients',dateToStr(dateRefIccp)).valeur||0.7811975; // 27/07/2026 (correctif Sophie)
-  const sourcePrecRupture=getVersionActive(c,dateRefIccp);
-  const txBrut=sourcePrecRupture.txBrut||0;
-  const nbSem=sourcePrecRupture.nbSem||52;
-  const hHebdo=(sourcePrecRupture.hMensu||0)*12/nbSem;
-  const hJour=hHebdo/6;
-  calcCongesContrat(c,dateRefIccp);
-
-  // 01/09/2026 (Sophie) : pour CHAQUE année (terminée ou en cours), comparer le 10ème du brut de la
-  // période d'acquisition (complète si terminée, jusqu'à la date de rupture si en cours) contre ce qui
-  // a déjà été versé en maintien PLUS le restant, valorisé au taux en vigueur À LA DATE DE RUPTURE
-  // (précisé par Sophie). Repris de calcRegul52 (le complément normal du 52), qui fait déjà ce calcul
-  // "déjà versé, jour par jour au taux historique de chacun" — mais seulement pour le cas où TOUS les
-  // jours d'une année ont été pris, jamais pour une rupture avec des jours encore dus.
-  function calcDejaVerseMaintien(anneeRef, bornerDate){
+// 01/09/2026 (Sophie) : extraite de calcSoldeConges52 (etait imbriquee) - appelee aussi
+// directement depuis le rendu de l'onglet Conges (crash confirme Sophie : "calcDejaVerseMaintien
+// is not defined" des que ce rendu tournait hors du contexte de calcSoldeConges52). c est
+// maintenant un parametre explicite au lieu d'une fermeture, comme calcHPrevuReg plus haut.
+  function calcDejaVerseMaintien(c, anneeRef, bornerDate){
     const debutAntCg=anneeRef+'-06-01', finAntCg=(anneeRef+1)+'-04-30';
     const debutPoseCg=(anneeRef+1)+'-05-01', finPoseCg=(anneeRef+2)+'-04-30';
     // 01/09/2026 (Sophie) : decompte-conges (jour qui continue une pose déjà commencée, sans porter
@@ -15520,6 +15506,24 @@ function calcSoldeConges52(c, dateRupture){
     return dejaVerse;
   }
 
+function calcSoldeConges52(c, dateRupture){
+  const params=S.params||{};
+  const dateRefIccp=dateRupture||new Date();
+  const dateRefIccpStr=dateRefIccp.getFullYear()+'-'+String(dateRefIccp.getMonth()+1).padStart(2,'0')+'-'+String(dateRefIccp.getDate()).padStart(2,'0');
+  const coefNet=getParamAt('coefficients',dateToStr(dateRefIccp)).valeur||0.7811975; // 27/07/2026 (correctif Sophie)
+  const sourcePrecRupture=getVersionActive(c,dateRefIccp);
+  const txBrut=sourcePrecRupture.txBrut||0;
+  const nbSem=sourcePrecRupture.nbSem||52;
+  const hHebdo=(sourcePrecRupture.hMensu||0)*12/nbSem;
+  const hJour=hHebdo/6;
+  calcCongesContrat(c,dateRefIccp);
+
+  // 01/09/2026 (Sophie) : pour CHAQUE année (terminée ou en cours), comparer le 10ème du brut de la
+  // période d'acquisition (complète si terminée, jusqu'à la date de rupture si en cours) contre ce qui
+  // a déjà été versé en maintien PLUS le restant, valorisé au taux en vigueur À LA DATE DE RUPTURE
+  // (précisé par Sophie). Repris de calcRegul52 (le complément normal du 52), qui fait déjà ce calcul
+  // "déjà versé, jour par jour au taux historique de chacun" — mais seulement pour le cas où TOUS les
+  // jours d'une année ont été pris, jamais pour une rupture avec des jours encore dus.
   const anneesSC52=[];
   let joursEnCoursRestants=0;
   Object.entries(c.conges||{}).forEach(([anneeRefStr,cg])=>{
@@ -15589,7 +15593,7 @@ function calcSoldeConges52(c, dateRupture){
     const finFenetreDixieme=a.estTerminee?new Date(a.anneeRef+1,4,31):dateRefIccp;
     const brutAnnuelA=calcBrutTotal(c,new Date(a.anneeRef,5,1),finFenetreDixieme);
     const dixiemeTotalA=brutAnnuelA*0.1;
-    const dejaVerseA=calcDejaVerseMaintien(a.anneeRef,dateRefIccpStr);
+    const dejaVerseA=calcDejaVerseMaintien(c,a.anneeRef,dateRefIccpStr);
     const restantMaintienA=a.restants*hJour*txBrut;
     const montantA=Math.max(dixiemeTotalA,dejaVerseA+restantMaintienA)-dejaVerseA;
     if(window.DEBUG_CGAM)console.log('[CGAM-soldeConges52-annee]',a.anneeRef,'| estTerminee:',a.estTerminee,'| restants:',a.restants,'| brutAnnuel:',brutAnnuelA,'| dixiemeTotal:',dixiemeTotalA,'| dejaVerse:',dejaVerseA,'| restantMaintien:',restantMaintienA,'| montant retenu:',montantA);
@@ -17518,7 +17522,7 @@ function buildCgAcquisEncarts(c, anneeAcq){
       const finFenetreCg52=cg.estTerminee?new Date(anneeAcq+1,4,31):dateRefCg52;
       const brutAnnuelCg52=calcBrutTotal(c,new Date(anneeAcq,5,1),finFenetreCg52);
       const dixiemeTotalCg52=brutAnnuelCg52*0.1;
-      const dejaVerseCg52=calcDejaVerseMaintien(anneeAcq,dateRefCg52Str);
+      const dejaVerseCg52=calcDejaVerseMaintien(c,anneeAcq,dateRefCg52Str);
       const restantMaintienCg52=restantsCg52*hJourCg52*(srcCg52.txBrut||0);
       const montantCg52=Math.max(dixiemeTotalCg52,dejaVerseCg52+restantMaintienCg52)-dejaVerseCg52;
       const ls3='display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid rgba(0,0,0,0.07);font-size:13px';
