@@ -8318,14 +8318,17 @@ function _validerFicheSuite(contratId,key,c){
     // Contrats 52 sem : vérifier si tous les congés acquis seront pris avant le 30 avril
     if(c.tc==='52'&&c.conges){
       calcCongesContrat(c);
-      Object.entries(c.conges).forEach(([ar,cg])=>{
-        const anneeRef=parseInt(ar);
-        const butoir=new Date(anneeRef+2,3,30); // 30 avril anneeRef+2
-        if(new Date()>butoir) return; // déjà passé
-        if((cg.restants||0)>0){
-          msgs.push('⚠ Il reste '+cg.restants+' jour(s) de congés acquis '+anneeRef+'/'+(anneeRef+1)+' à poser avant le 30 avril '+(anneeRef+2)+'.');
-        }
-      });
+      // 03/09/2026 (Sophie) : ne vérifier QUE l'année dont l'échéance (30 avril) tombe cette même
+      // année civile que le janvier en cours de validation (anneeRef+2===kvy) — pas toutes les
+      // années suivies dans c.conges. Sans cette restriction, une année dont la fenêtre de pose n'a
+      // même pas commencé (échéance dans plus d'un an) déclenchait déjà l'avertissement, bien trop
+      // tôt (confirmé Sophie, exemple chiffré : validation de janvier 2026, avertissement pour une
+      // échéance d'avril 2027 — un an d'avance).
+      const anneeRefPertinente=kvy-2;
+      const cgPertinent=c.conges[anneeRefPertinente];
+      if(cgPertinent&&(cgPertinent.restants||0)>0){
+        msgs.push('⚠ Il reste '+cgPertinent.restants+' jour(s) de congés acquis '+anneeRefPertinente+'/'+(anneeRefPertinente+1)+' à poser avant le 30 avril '+kvy+'.');
+      }
     }
     // Tous contrats : vérifier calendrier AM
     const anneeAmCur=kvm>=5?kvy:kvy-1; // année ref AM en cours en février
@@ -9214,7 +9217,7 @@ function calcCongesContrat(c, dateRefOverride){
     // n'importe quel jour acquis supplémentaire.
     let bonusFractionnementJours=0;
     const sourceFinRef=getVersionActive(c,finRef);
-    if(S.congesAM?.[anneeRef]?.fractionnement){
+    if(c.fractionnement?.[anneeRef]){
       bonusFractionnementJours=calcJoursFractionnement(c,anneeRef);
       if(bonusFractionnementJours>0&&sourceFinRef.tc==='52') cgTotal=Math.min(30,cgTotal+bonusFractionnementJours);
     }
@@ -9240,6 +9243,11 @@ function calcCongesContrat(c, dateRefOverride){
       acqBrut:parseFloat(cgTotal.toFixed(4)),
       bonusEnfants:bonusEnfantsJours,
       bonusFractionnement:sourceFinRef.tc==='52'?0:bonusFractionnementJours,
+      // 03/09/2026 (Sophie) : portion des jours de fractionnement qui reste PAYABLE sans dépasser 30
+      // jours au total (mensualisation 46 basée sur 30 jours, jamais plus) — les jours au-delà de ce
+      // plafond sont quand même POSABLES (la case à cocher/le calcul les autorise), mais pas payés via
+      // l'indemnité (confirmé Sophie, exemple chiffré : 29 jours + 2 fractionnement → 1 seul payé).
+      bonusFractionnementPayable:sourceFinRef.tc==='52'?0:Math.max(0,Math.min(bonusFractionnementJours,30-acquis)),
       estTerminee,joursComptes:Math.round(totalSemaines*joursMax),joursArret:joursArretTotal,
       anneeRef,anneeRefFin:anneeRef+1
     };
@@ -12777,9 +12785,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         // année (ind.montantJournalierNet) — jamais une comparaison maintien/10ème séparée pour ces
         // 1-2 jours (confirmé Sophie : mathématiquement le même taux aurait de toute façon gagné).
         const cgFracMois=c.conges?.[anneeAcq];
-        if(cgFracMois?.bonusFractionnement>0){
+        if(cgFracMois?.bonusFractionnementPayable>0){
           const dejaPayesFrac=Math.max(0,dejaPayesAcq-totalAcquis);
-          const resteAPayerFrac=Math.max(0,cgFracMois.bonusFractionnement-dejaPayesFrac);
+          const resteAPayerFrac=Math.max(0,cgFracMois.bonusFractionnementPayable-dejaPayesFrac);
           const nbFracMois=Math.min(totalCeMoisAcq-nbAcqMois,resteAPayerFrac);
           if(nbFracMois>0){
             indemFractionnementNbJours=nbFracMois;
@@ -17360,7 +17368,7 @@ function genOngletCongesContrat(c){
     const acquis=cg?.acquis||0;
     const restants=cg?.restants||0;
     const label=`Acquisition juin ${anneeAcq} → mai ${anneeAcq+1}`;
-    const fracAppliqueContrat=S.congesAM?.[anneeAcq]?.fractionnement?calcJoursFractionnement(c,anneeAcq):0;
+    const fracAppliqueContrat=c.fractionnement?.[anneeAcq]?calcJoursFractionnement(c,anneeAcq):0;
     html+=`<div style="border:1px solid var(--mb);border-radius:8px;margin-bottom:10px;overflow:hidden">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#d9ccd6;cursor:pointer" onclick="toggleCgContrat('${id}','${containerId}')">
         <div>
@@ -17558,14 +17566,16 @@ function buildCgAcquisEncarts(c, anneeAcq){
   }
   html+=`</div>`;
 
-  // Case fractionnement
-  const fracData=S.congesAM?.[anneeAcq]||{};
+  // Case fractionnement — 03/09/2026 (Sophie) : stockée PAR CONTRAT (c.fractionnement), plus dans
+  // S.congesAM (partagé entre tous les contrats) — le nombre de jours restants au 31/10 varie selon
+  // le contrat, cocher la case sur l'un ne doit donc jamais l'appliquer aux autres.
+  const fracData={fractionnement:!!c.fractionnement?.[anneeAcq]};
   const joursFragCalc=calcJoursFractionnement(c,anneeAcq);
   if(joursFragCalc>0||fracData.fractionnement){
     html+=`<div class="fg" style="margin-bottom:8px;display:flex;align-items:center;gap:8px">
       <input type="checkbox" id="frac-${c.id}-${anneeAcq}" ${fracData.fractionnement?'checked':''}
         style="width:16px;height:16px"
-        onchange="majCgAmFractionnement(${anneeAcq},this.checked)">
+        onchange="majCgAmFractionnement(${c.id},${anneeAcq},this.checked)">
       <label for="frac-${c.id}-${anneeAcq}" style="font-size:13px;cursor:pointer">
         Jours de fractionnement
       </label>
@@ -19090,12 +19100,12 @@ function buildCgAmDetail(anneeDebut,data){
   }
 
   // Calculer les jours de fractionnement (max sur tous les contrats)
+  // 03/09/2026 (Sophie) : le drapeau "case cochée" est maintenant par contrat (c.fractionnement),
+  // donc vérifié pour chaque contrat individuellement dans la boucle, plus un seul drapeau global.
   let joursFragMax=0;
-  if(data.fractionnement){
-    S.contrats.filter(c=>c.signe&&!estContratCloture(c)).forEach(c=>{
-      joursFragMax=Math.max(joursFragMax,calcJoursFractionnement(c,anneeDebut));
-    });
-  }
+  S.contrats.filter(c=>c.signe&&!estContratCloture(c)&&c.fractionnement?.[anneeDebut]).forEach(c=>{
+    joursFragMax=Math.max(joursFragMax,calcJoursFractionnement(c,anneeDebut));
+  });
   const joursMax=30+joursFragMax;
   // 25/08/2026 (Sophie) : bannière "✓ X jours posés dont 5 samedis" supprimée (comptait à tort des
   // samedis fériés comme si c'étaient des samedis "consommés") — toujours le simple compteur.
@@ -20793,20 +20803,33 @@ function calcJoursFractionnement(c, anneeDebut){
     });
   });
   const restants=totalAcquis-poséesJusquOct;
-  // Exclure la 5e semaine (6 jours) pour le calcul du fractionnement
-  const restandsFrac=restants-6;
+  // 03/09/2026 (Sophie) : le congé principal est plafonné à 24 jours (4 semaines) — au-delà, ce sont
+  // des jours de 5e semaine, jamais pris en compte pour le fractionnement. Avant, on soustrayait
+  // systématiquement 6 jours du restant, ce qui suppose à tort qu'il y a toujours une 5e semaine —
+  // faux pour un contrat avec moins de 24 jours acquis au total (bug confirmé Sophie, exemple chiffré
+  // : 16 jours acquis dont 4 grâce aux enfants à charge, 12 posés, 4 restants → devrait donner 1 jour,
+  // donnait 0 car 4-6=-2).
+  const joursCongePrincipal=Math.min(24,totalAcquis);
+  const joursPrincipalPoses=Math.min(poséesJusquOct,joursCongePrincipal);
+  const restandsFrac=joursCongePrincipal-joursPrincipalPoses;
   if(restandsFrac>=6) return 2;
   if(restandsFrac>=3&&restandsFrac<=5) return 1;
   return 0;
 }
          
-function majCgAmFractionnement(anneeDebut,val){
-  if(!S.congesAM) S.congesAM={};
-  if(!S.congesAM[anneeDebut]) S.congesAM[anneeDebut]={enfants:0,jours:{}};
-  S.congesAM[anneeDebut].fractionnement=val;
-  S.cgAmModifie=true;
-  localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM));
-  ouvrirCgAm(anneeDebut);
+function majCgAmFractionnement(contratId,anneeDebut,val){
+  // 03/09/2026 (Sophie) : stocké PAR CONTRAT (c.fractionnement), plus dans S.congesAM (partagé entre
+  // tous les contrats) — le nombre de jours restants au 31/10 varie selon le contrat, cocher la case
+  // sur l'un ne doit donc jamais l'appliquer aux autres.
+  const c=S.contrats.find(x=>x.id==contratId);
+  if(!c||estLectureSeuleEmployeur()) return;
+  if(!c.fractionnement) c.fractionnement={};
+  c.fractionnement[anneeDebut]=val;
+  const cidx=S.contrats.findIndex(x=>x.id==contratId);
+  if(cidx!==-1) S.contrats[cidx]=c;
+  _contratsModifies.add(contratId);
+  saveToFirestore();
+  if(S.enCours==contratId) renderDetTab(contratId,'conges');
 }
          
 function majCgAmEnfants(anneeDebut,val){         
