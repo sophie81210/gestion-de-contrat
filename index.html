@@ -9192,7 +9192,7 @@ function calcCongesContrat(c, dateRefOverride){
       const nbEnfants=amData?.enfants||0;
       if(nbEnfants>0) cgTotal=Math.min(30,cgTotal+nbEnfants*2);
     }
-    const acquis=toutesValidees?Math.ceil(cgTotal):Math.floor(cgTotal);
+    const acquis=(estTerminee||c.rupture?.confirmee)?Math.ceil(cgTotal):Math.floor(cgTotal); // 01/09/2026 (Sophie) : arrondi supérieur seulement si année terminée ou rupture confirmée — un jour entamé n'est dû qu'à ce moment-là, pas en cours d'année normale
 
     // Jours pris
     let prisDansRef=0;
@@ -17321,7 +17321,7 @@ function buildCgAcquisEncarts(c, anneeAcq){
       return j.date>=anneeAcq+'-06-01'&&j.date<=(anneeAcq+1)+'-04-30';
     }).length;
   },0);
-  const quotaTotalAnneeCg=cg.estTerminee?(cg.acquis||0):(cg.acqBrut!==undefined?Math.ceil(cg.acqBrut):(cg.acquis||0)); // 01/09/2026 (Sophie) : arrondi supérieur, pas inférieur — un jour de congé entamé est dû
+  const quotaTotalAnneeCg=cg.estTerminee?(cg.acquis||0):(cg.acqBrut!==undefined?Math.floor(cg.acqBrut):(cg.acquis||0));
   // Plafonner au quota restant après déduction des jours déjà validés (anticipés en fiches validées)
   const nbAnticipesProg=Math.min(nbAnticipesProgBrut,Math.max(0,quotaTotalAnneeCg-nbAnticipes));
   const debutPoseAcq=(anneeAcq+1)+'-05-01';
@@ -17502,21 +17502,33 @@ function buildCgAcquisEncarts(c, anneeAcq){
         <div style="${ls3}"><span>Méthode du 10e</span><span style="${vs3}">${regul52Trouve.dixiemeNet.toFixed(2)} €</span></div>
         <div style="${ls3};border-bottom:none;color:var(--vt)"><span>Complément à verser</span><span style="${vs3};color:var(--vt)">${regul52Trouve.diff.toFixed(2)} €</span></div>
       </div>`;
-    } else if(!cg.estTerminee&&c.rupture?.confirmee){
-      // 01/09/2026 (Sophie) : équivalent pour l'année EN COURS au moment d'une rupture confirmée —
-      // le complément normal (ci-dessus) ne se déclenche que si tous les jours de l'année ont été
-      // pris, jamais le cas d'une rupture avec des jours encore dus. Réutilise calcSoldeConges52
-      // (déjà correct, utilisée par l'onglet Rupture). Format différent du 46 (maintien/10e/meilleur)
-      // : ici le paiement se fait en continu (10% mensuel), donc "déjà versé" plutôt que de supposer
-      // que rien n'a encore été payé.
-      const soldeEnCoursCg52=calcSoldeConges52(c,getDateFinContrat(c)||new Date());
+    } else if(c.rupture?.confirmee&&(cg.estTerminee?(cg.restants||0):(Math.max(0,(cg.acqBrut||0)-(cg.pris||0))))>0){
+      // 01/09/2026 (Sophie) : équivalent pour CETTE année (terminée avec un solde restant, OU en
+      // cours), au moment d'une rupture confirmée — le complément normal (ci-dessus) ne se déclenche
+      // que si TOUS les jours de l'année ont été pris, jamais un solde encore dû (rupture avec
+      // année terminée mais pas soldée, ou année en cours). Calcul direct pour CETTE année précise
+      // (pas l'agrégat de calcSoldeConges52, qui somme plusieurs années) — même principe partout :
+      // 10ème total de la période vs déjà versé + reste, au taux en vigueur à la rupture.
+      const dateRefCg52=getDateFinContrat(c)||new Date();
+      const dateRefCg52Str=dateRefCg52.getFullYear()+'-'+String(dateRefCg52.getMonth()+1).padStart(2,'0')+'-'+String(dateRefCg52.getDate()).padStart(2,'0');
+      const srcCg52=getVersionActive(c,dateRefCg52);
+      const coefNetCg52=getParamAt('coefficients',dateToStr(dateRefCg52)).valeur||0.7811975;
+      const hJourCg52=((srcCg52.hMensu||0)*12/(srcCg52.nbSem||52))/6;
+      const restantsCg52=cg.estTerminee?(cg.restants||0):Math.max(0,(cg.acqBrut||0)-(cg.pris||0));
+      const finFenetreCg52=cg.estTerminee?new Date(anneeAcq+1,4,31):dateRefCg52;
+      const brutAnnuelCg52=calcBrutTotal(c,new Date(anneeAcq,5,1),finFenetreCg52);
+      const dixiemeTotalCg52=brutAnnuelCg52*0.1;
+      const dejaVerseCg52=calcDejaVerseMaintien(anneeAcq,dateRefCg52Str);
+      const restantMaintienCg52=restantsCg52*hJourCg52*(srcCg52.txBrut||0);
+      const montantCg52=Math.max(dixiemeTotalCg52,dejaVerseCg52+restantMaintienCg52)-dejaVerseCg52;
       const ls3='display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid rgba(0,0,0,0.07);font-size:13px';
       const vs3='font-weight:600;color:var(--m)';
       html+=`<div style="background:#f2eef1;border-radius:8px;padding:10px 12px;margin-bottom:8px">
         <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:6px">Complément congés payés (net) — estimation à la rupture</div>
-        <div style="${ls3}"><span>Déjà versé (maintien)</span><span style="${vs3}">${soldeEnCoursCg52.dejaVerseEnCoursNet.toFixed(2)} €</span></div>
-        <div style="${ls3}"><span>10e total de la période</span><span style="${vs3}">${soldeEnCoursCg52.dixiemeTotalEnCoursNet.toFixed(2)} €</span></div>
-        <div style="${ls3};border-bottom:none;color:var(--vt)"><span>Reste à verser</span><span style="${vs3};color:var(--vt)">${soldeEnCoursCg52.montantEnCoursNet.toFixed(2)} €</span></div>
+        <div style="${ls3}"><span>Déjà versé (maintien)</span><span style="${vs3}">${(dejaVerseCg52*coefNetCg52).toFixed(2)} €</span></div>
+        <div style="${ls3}"><span>Maintien total (${cg.estTerminee?cg.acquis:Math.ceil(cg.acqBrut||0)} j)</span><span style="${vs3}">${((dejaVerseCg52+restantMaintienCg52)*coefNetCg52).toFixed(2)} €</span></div>
+        <div style="${ls3}"><span>10e total de la période</span><span style="${vs3}">${(dixiemeTotalCg52*coefNetCg52).toFixed(2)} €</span></div>
+        <div style="${ls3};border-bottom:none;color:var(--vt)"><span>Reste à verser</span><span style="${vs3};color:var(--vt)">${(montantCg52*coefNetCg52).toFixed(2)} €</span></div>
       </div>`;
     }
   }
@@ -19794,7 +19806,7 @@ if(tousNonPrevus){
               // net de l'anticipé déjà pris (validé + provisoire) sur cette même année
               const debutPoseAcq=new Date(cg.anneeRef+1,4,1);
               if(debutDate>=debutPoseAcq){
-                quotaAcquis+=Math.max(0,Math.ceil(cg.acqBrut||0)-anticipeValideCgQA-anticipeProvisoireCgQA); // 01/09/2026 (Sophie) : arrondi supérieur
+                quotaAcquis+=Math.max(0,Math.floor(cg.acqBrut||0)-anticipeValideCgQA-anticipeProvisoireCgQA);
               }
             }
           }
@@ -19832,7 +19844,7 @@ if(tousNonPrevus){
             } else if(c.tc==='52'&&cg.anneeRef!==anneeAcqPose){
               // Utiliser restants pour ne pas cumuler les 2 années
               // (anneeAcqPose déjà traitée dans la 1ère boucle, on ne traite ici que les années antérieures en report)
-              quotaAcquis+=cg.restants!==undefined?cg.restants:Math.ceil(cg.acqBrut||0); // 01/09/2026 (Sophie) : arrondi supérieur
+              quotaAcquis+=cg.restants!==undefined?cg.restants:Math.floor(cg.acqBrut||0);
             }
           }
         });
