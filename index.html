@@ -7074,6 +7074,21 @@ function calcDateFinContratBrute(c){
   if(motif==='fin-occasionnel'&&rp.dateSignif){
     return new Date(rp.dateSignif);
   }
+  // 03/09/2026 (Sophie) : deux cas jusqu'ici manquants ici (motif non reconnu, retournait null,
+  // date de fin jamais déterminable). Terme précis : la date de fin est déjà connue depuis la
+  // signature du contrat, aucune notification distincte. Terme imprécis : aucun préavis, donc la
+  // date saisie devient directement la date de rupture (pas de délai à ajouter par-dessus).
+  if(motif==='fin-terme-precis'&&c.cddDateFin){
+    return new Date(c.cddDateFin);
+  }
+  if(motif==='fin-terme-imprecis'&&rp.dateSignif){
+    return new Date(rp.dateSignif);
+  }
+  // 03/09/2026 (Sophie) : mêmes motifs que motifsDateSimple dans le formulaire — date saisie
+  // directement, aucun délai de préavis à ajouter (confirmé absent pour ces motifs par Sophie).
+  if(['faute-grave','force-majeure','faute-grave-am','force-majeure-am','refus-cdi-emp','refus-cdi','autre-motif-emp','autre-motif-am'].includes(motif)&&rp.dateSignif){
+    return new Date(rp.dateSignif);
+  }
   return null;
 }
 function getDateFinContrat(c){
@@ -16635,6 +16650,12 @@ function renderRuptureCDD(c, cont){
   // ─── Préavis CDD ───
   const aPreavis=['embauche-cdi','accord-commun','accord-commun-am'].includes(motif);
   const pasPreavis=['fin-essai','fin-essai-am','faute-grave','force-majeure','faute-grave-am','force-majeure-am','fin-terme-precis','fin-terme-imprecis'].includes(motif);
+  // 03/09/2026 (Sophie) : motifs qui ont besoin d'une date de rupture simple (rp.dateSignif), sans
+  // délai de préavis à calculer par-dessus — jusqu'ici, seuls les motifs dans aPreavis affichaient un
+  // champ de date, laissant faute-grave/force-majeure/leurs variantes/refus-cdi/autre-motif sans
+  // aucun moyen de saisir une date (bug confirmé Sophie). fin-essai/fin-essai-am exclus ici : ils
+  // suivent une logique à part (date de notification + délai), pas encore traitée.
+  const motifsDateSimple=['faute-grave','force-majeure','faute-grave-am','force-majeure-am','fin-terme-imprecis','refus-cdi-emp','refus-cdi','autre-motif-emp','autre-motif-am'];
   const aPrecarite=!['faute-grave','force-majeure','faute-grave-am','force-majeure-am','refus-cdi','autre-motif-am','embauche-cdi','refus-cdi-emp'].includes(motif)&&motif!=='';
   const aSalairesRestants=motif==='autre-motif-emp';
   const aAvertissement=motif==='autre-motif-am';
@@ -16760,10 +16781,16 @@ function renderRuptureCDD(c, cont){
         </select>
       </div>`:''}
       ${motif&&!pasPreavis&&!aPreavis?'':''}
-      ${aPreavis?`<div style="margin-top:10px">
-        <label style="font-size:12px;color:var(--tx2)">Date de signification</label>
+      ${(aPreavis||motifsDateSimple.includes(motif))?`<div style="margin-top:10px">
+        <label style="font-size:12px;color:var(--tx2)">${motifsDateSimple.includes(motif)?'Date de rupture':'Date de signification'}</label>
         <input type="text" id="rp-date-signif-${cid}" value="${dateISOversTexte(rp.dateSignif||'')}" placeholder="JJ/MM/AAAA" oninput="formaterSaisieDate(this)" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
-        ${preavisHtml}
+        ${aPreavis?preavisHtml:''}
+      </div>`:''}
+      ${(motif==='fin-essai'||motif==='fin-essai-am')?`<div style="margin-top:10px">
+        <label style="font-size:12px;color:var(--tx2)">Date de notification</label>
+        <input type="text" id="rp-date-notif-${cid}" value="${dateISOversTexte(rp.dateNotif||'')}" placeholder="JJ/MM/AAAA" oninput="formaterSaisieDate(this)" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+        <label style="font-size:12px;color:var(--tx2);display:block;margin-top:8px">Délai de prévenance (jours)</label>
+        <input type="number" min="0" max="8" id="rp-delai-prev-${cid}" value="${rp.delaiPrev||''}" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
       </div>`:''}
       ${pasPreavis?`<div style="margin-top:8px;background:var(--mp);border-radius:6px;padding:8px;font-size:13px">Aucun préavis requis.</div>`:''}
       ${aAvertissement?`<div style="margin-top:8px;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px;font-size:13px">⚠ L'employeur est en droit de demander des dommages et intérêts. L'Ass'Mat ne perçoit pas l'indemnité de précarité.</div>`:''}
