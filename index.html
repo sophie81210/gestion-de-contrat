@@ -9188,10 +9188,14 @@ function calcCongesContrat(c, dateRefOverride){
     });
     // Enfants à charge (seulement si année terminée et toutes fiches validées)
     if(window.DEBUG_CGAM)console.log('[CGAM-enfantsCharge]',anneeRef,'| debutRef:',dateToStr(debutRef),'| finRef:',dateToStr(finRef),'| nowRef:',dateToStr(nowRef),'| apresFinRef:',apresFinRef,'| aFicheDansPeriode:',aFicheDansPeriode,'| toutesValidees:',toutesValidees,'| S.congesAM existe:',!!S.congesAM,'| amData (anneeRef+1='+(anneeRef+1)+'):',JSON.stringify(S.congesAM?.[anneeRef+1]),'| cgTotal avant bonus:',cgTotal);
+    // 03/09/2026 (Sophie) : bonusEnfantsJours suivi séparément — nécessaire pour mettre le 10ème à
+    // l'échelle en aval (calcIndemniteConges), sans quoi le taux journalier "chaque prise" se dilue
+    // et sous-paie les jours bonus (voir commentaire détaillé sur place).
+    let bonusEnfantsJours=0;
     if(S.congesAM&&toutesValidees){
       const amData=S.congesAM[anneeRef+1];
       const nbEnfants=amData?.enfants||0;
-      if(nbEnfants>0) cgTotal=Math.min(30,cgTotal+nbEnfants*2);
+      if(nbEnfants>0){ bonusEnfantsJours=nbEnfants*2; cgTotal=Math.min(30,cgTotal+bonusEnfantsJours); }
     }
     const acquis=toutesValidees?Math.ceil(cgTotal):Math.floor(cgTotal);
 
@@ -9213,6 +9217,7 @@ function calcCongesContrat(c, dateRefOverride){
       acquis,pris:prisDansRef,
       restants:Math.max(0,acquis-prisDansRef),
       acqBrut:parseFloat(cgTotal.toFixed(4)),
+      bonusEnfants:bonusEnfantsJours,
       estTerminee,joursComptes:Math.round(totalSemaines*joursMax),joursArret:joursArretTotal,
       anneeRef,anneeRefFin:anneeRef+1
     };
@@ -17213,7 +17218,16 @@ function calcIndemniteConges(c, anneeRef){
   // le taux figé sur celui de mai (bug confirmé, écart de 1,39€) et gère nativement un avenant en
   // cours de mois (scindé avant/après), que le recalcul manuel ne gérait pas.
   const totalBrut=calcBrutTotal(c,new Date(anneeRef,5,1),dateMai);
-  const dixieme=parseFloat((totalBrut*0.1).toFixed(2));
+  let dixieme=parseFloat((totalBrut*0.1).toFixed(2));
+  // 03/09/2026 (Sophie) : mis à l'échelle des jours bonus "enfants à charge" — sans ça, le total du
+  // 10ème reste fixe (basé sur le salaire) alors que cg.acquis grossit avec le bonus ; comme le
+  // paiement à la prise se fait via un taux journalier (montantJournalierNet = meilleur/cg.acquis),
+  // un total qui ne bouge pas dilue ce taux et sous-paie CHAQUE jour, bonus compris — confirmé Sophie
+  // avec un exemple chiffré (12 jours pris en premier ne laisseraient rien pour les 4 jours bonus
+  // pris ensuite si le total restait figé). Les jours bonus sont donc traités comme s'ils avaient été
+  // acquis au même taux que les jours normaux.
+  const acquisSansBonus=cg.acquis-(cg.bonusEnfants||0);
+  if(cg.bonusEnfants>0&&acquisSansBonus>0) dixieme=parseFloat((dixieme*(cg.acquis/acquisSansBonus)).toFixed(2));
   // Part du 10ème (brut) attribuable aux heures sup mensualisées, au prorata de leur poids dans le
   // brut total de la période — même principe que le maintien ci-dessus, mais à partir de vrais
   // montants mensuels plutôt qu'une moyenne théorique.
