@@ -19059,7 +19059,22 @@ function buildCgAmDetail(anneeDebut,data){
   const anneeAcqPose=anneeDebut; // pose de anneeDebut = acquisition anneeDebut-1
   const joursRestantsParContrat=contratsActifs.map(c=>{
     const cgAcq=c.conges&&c.conges[anneeAcqPose-1];
-    return {c, restants:cgAcq?.restants||0};
+    // 03/09/2026 (Sophie) : même ajustement que le résumé juste en dessous (jours déjà programmés,
+    // pas encore validés, soustraits) — pour que les pointillés restent cohérents avec le nombre
+    // affiché ; sans ça, un contrat pouvait afficher "0 j restants" dans le résumé tout en gardant
+    // des jours éligibles en pointillés, basés sur l'ancien restants non ajusté.
+    const anneeAcqRefJRP=anneeAcqPose-1;
+    const debutPoseJRP=anneeAcqPose+'-05-01', finPoseJRP=(anneeAcqPose+1)+'-04-30';
+    const debutAntJRP=anneeAcqRefJRP+'-06-01', finAntJRP=anneeAcqPose+'-04-30';
+    const nbDejaProgJRP=Object.values(c.fiches||{}).reduce((n,f)=>{
+      if(f.valide) return n;
+      return n+(f.jours||[]).filter(j=>{
+        if(['conges-acq','decompte-acq'].includes(j.statut)) return j.date>=debutPoseJRP&&j.date<=finPoseJRP;
+        if(['conges-anticipe','decompte-anticipe'].includes(j.statut)) return j.date>=debutAntJRP&&j.date<=finAntJRP;
+        return false;
+      }).length;
+    },0);
+    return {c, restants:Math.max(0,(cgAcq?.restants||0)-nbDejaProgJRP)};
   });
   // Fonction : ce jour est-il éligible à la bordure pointillée ?
   function jourEligibleBordure(dateStr){
@@ -19111,7 +19126,24 @@ function buildCgAmDetail(anneeDebut,data){
     // Trouver l'année d'acquisition correspondant à cette période AM
     const anneeAcq=anneeDebut; // la pose de anneeDebut correspond à l'acquisition anneeDebut-1
     const cgAcq=c.conges&&c.conges[anneeAcq-1];
-    const restants=cgAcq?.restants||0;
+    // 03/09/2026 (Sophie) : jours déjà programmés (conges-acq/anticipe ou leur decompte, sur une
+    // fiche pas encore validée) soustraits du restant affiché — sans ça, ce nombre ne reflète
+    // jamais une pose déjà cochée tant que sa fiche n'est pas validée, laissant croire qu'il reste
+    // toujours des jours disponibles alors qu'ils sont déjà programmés (bug confirmé Sophie). Même
+    // logique que nbAcqProgBrut/nbAnticipesProgBrut dans buildCgAcquisEncarts, dupliquée ici
+    // volontairement plutôt que d'y toucher (déjà testée aujourd'hui).
+    const anneeAcqRef=anneeAcq-1;
+    const debutPoseRes=anneeAcq+'-05-01', finPoseRes=(anneeAcq+1)+'-04-30';
+    const debutAntRes=anneeAcqRef+'-06-01', finAntRes=anneeAcq+'-04-30';
+    const nbDejaProgRes=Object.values(c.fiches||{}).reduce((n,f)=>{
+      if(f.valide) return n;
+      return n+(f.jours||[]).filter(j=>{
+        if(['conges-acq','decompte-acq'].includes(j.statut)) return j.date>=debutPoseRes&&j.date<=finPoseRes;
+        if(['conges-anticipe','decompte-anticipe'].includes(j.statut)) return j.date>=debutAntRes&&j.date<=finAntRes;
+        return false;
+      }).length;
+    },0);
+    const restants=Math.max(0,(cgAcq?.restants||0)-nbDejaProgRes);
     if(restants>0){
       resumeHtml+=`<div style="background:#f2eef1;border-radius:8px;padding:6px 12px;font-size:12px">
         <span style="font-weight:600">${c.nom}</span> — <span style="color:var(--m);font-weight:700">${restants} j restants</span>
