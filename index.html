@@ -9243,20 +9243,10 @@ function calcCongesContrat(c, dateRefOverride){
       const nbEnfants=amData?.enfants||0;
       if(nbEnfants>0){ bonusEnfantsJours=nbEnfants*2; cgTotal=Math.min(30,cgTotal+bonusEnfantsJours); }
     }
-    // 03/09/2026 (Sophie) : jours de fractionnement — gardés séparés (jamais ajoutés à cgTotal) pour
-    // le 46, puisque l'indemnité de cette année peut déjà être réglée/versée en juin, bien avant que
-    // le fractionnement (qui ne se détermine qu'au 31 octobre) ne soit connu ; y ajouter ces jours
-    // grossirait rétroactivement un montant déjà figé. Le 52 n'a pas ce problème (paiement continu,
-    // mensuel) — les jours de fractionnement y sont donc ajoutés directement à cgTotal, comme
-    // n'importe quel jour acquis supplémentaire.
-    let bonusFractionnementJours=0;
-    const sourceFinRef=getVersionActive(c,finRef);
-    if(c.fractionnement?.[anneeRef]){
-      const cgTotalAvantFrac=cgTotal;
-      bonusFractionnementJours=calcJoursFractionnement(c,anneeRef);
-      if(bonusFractionnementJours>0&&sourceFinRef.tc==='52') cgTotal=Math.min(30,cgTotal+bonusFractionnementJours);
-      if(window.DEBUG_CGAM)console.log('[CGAM-fractionnementAjout]','anneeRef:',anneeRef,'| cg.acquis stocké AVANT ce calcul:',c.conges?.[anneeRef]?.acquis,'| cg.bonusFractionnement stocké AVANT:',c.conges?.[anneeRef]?.bonusFractionnement,'| cgTotal avant frac (ce calcul):',cgTotalAvantFrac,'| bonusFractionnementJours (ce calcul):',bonusFractionnementJours,'| cgTotal après frac:',cgTotal,'| tc:',sourceFinRef.tc);
-    }
+    // 04/09/2026 (Sophie) : jours de fractionnement séparés du système de congés — jours de repos
+    // posés sans déduction de salaire, plus aucun ajout à l'acquis ni paiement séparé ici (ancien
+    // mécanisme retiré ; voir le nouveau statut dédié "Congé fractionnement" sur la feuille de
+    // présence). calcJoursFractionnement reste utilisé ailleurs (sélecteur du picker).
     const acquis=(estTerminee||c.rupture?.confirmee)?Math.ceil(cgTotal):Math.floor(cgTotal); // 03/09/2026 (Sophie) : arrondi supérieur si année terminée ou rupture confirmée — un jour entamé n'est dû qu'à ce moment-là, pas en cours d'année normale (correctif réappliqué, perdu lors de la reconstruction depuis le fichier "avant")
 
     // Jours pris
@@ -9278,12 +9268,6 @@ function calcCongesContrat(c, dateRefOverride){
       restants:Math.max(0,acquis-prisDansRef),
       acqBrut:parseFloat(cgTotal.toFixed(4)),
       bonusEnfants:bonusEnfantsJours,
-      bonusFractionnement:bonusFractionnementJours, // 03/09/2026 (Sophie) : toujours la vraie valeur, jamais forcée à 0 pour le 52 — sinon la protection anti-boucle dans calcJoursFractionnement (qui soustrait cette valeur avant de recalculer) ne soustrait jamais rien, et la boucle continue de grossir (bug confirmé Sophie, exemple chiffré : 16→17→18 jours, logs à l'appui)
-      // 03/09/2026 (Sophie) : portion des jours de fractionnement qui reste PAYABLE sans dépasser 30
-      // jours au total (mensualisation 46 basée sur 30 jours, jamais plus) — les jours au-delà de ce
-      // plafond sont quand même POSABLES (la case à cocher/le calcul les autorise), mais pas payés via
-      // l'indemnité (confirmé Sophie, exemple chiffré : 29 jours + 2 fractionnement → 1 seul payé).
-      bonusFractionnementPayable:sourceFinRef.tc==='52'?0:Math.max(0,Math.min(bonusFractionnementJours,30-acquis)),
       estTerminee,joursComptes:Math.round(totalSemaines*joursMax),joursArret:joursArretTotal,
       anneeRef,anneeRefFin:anneeRef+1
     };
@@ -12832,21 +12816,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             indemCongeMois=parseFloat((ind.montantJournalierNet*nbAcqMois).toFixed(2));
           }
         }
-        // 03/09/2026 (Sophie) : jours de fractionnement (46 uniquement — pour 52 ils sont déjà inclus
-        // dans totalAcquis/resteAPayer ci-dessus, via cgTotal) — payés au moment de leur PRISE, une
-        // fois le quota normal épuisé, au même taux journalier déjà figé de l'indemnité de cette
-        // année (ind.montantJournalierNet) — jamais une comparaison maintien/10ème séparée pour ces
-        // 1-2 jours (confirmé Sophie : mathématiquement le même taux aurait de toute façon gagné).
-        const cgFracMois=c.conges?.[anneeAcq];
-        if(cgFracMois?.bonusFractionnementPayable>0){
-          const dejaPayesFrac=Math.max(0,dejaPayesAcq-totalAcquis);
-          const resteAPayerFrac=Math.max(0,cgFracMois.bonusFractionnementPayable-dejaPayesFrac);
-          const nbFracMois=Math.min(totalCeMoisAcq-nbAcqMois,resteAPayerFrac);
-          if(nbFracMois>0){
-            indemFractionnementNbJours=nbFracMois;
-            indemFractionnementMois=parseFloat((ind.montantJournalierNet*nbFracMois).toFixed(2));
-          }
-        }
+        // 04/09/2026 (Sophie) : indemnité de fractionnement retirée — jours de repos posés sans
+        // déduction ni paiement séparé (indemFractionnementMois/NbJours restent à 0 ci-dessus).
         if(fiche.mois===5){
           // 17/08/2026 (Sophie) : bornée depuis le 1er juin de l'ANNÉE PRÉCÉDENTE — sans cette borne
           // basse, des jours anticipés bien plus anciens (déjà payés lors d'un juin précédent) étaient
@@ -17439,13 +17410,11 @@ function genOngletCongesContrat(c){
     const acquis=cg?.acquis||0;
     const restants=cg?.restants||0;
     const label=`Acquisition juin ${anneeAcq} → mai ${anneeAcq+1}`;
-    const fracAppliqueContrat=c.fractionnement?.[anneeAcq]?calcJoursFractionnement(c,anneeAcq):0;
     html+=`<div style="border:1px solid var(--mb);border-radius:8px;margin-bottom:10px;overflow:hidden">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#d9ccd6;cursor:pointer" onclick="toggleCgContrat('${id}','${containerId}')">
         <div>
           <div style="font-weight:700;font-size:14px;color:var(--m)">${label}</div>
           <div style="font-size:12px;color:var(--tx2)">${acquis} j acquis · ${nbAcq > 0 ? nbAcq+' j posés acquis · ' : ''}${nbAnticipe > 0 ? nbAnticipe+' j posés anticipés · ' : ''}${restants > 0 ? restants+' j restants' : 'soldé'}</div>
-          ${fracAppliqueContrat>0?(c.tc==='52'?`<div style="font-size:12px;color:var(--tx2)">dont ${fracAppliqueContrat} jour${fracAppliqueContrat>1?'s':''} de fractionnement</div>`:`<div style="font-size:12px;color:var(--tx2)">+ ${fracAppliqueContrat} jour${fracAppliqueContrat>1?'s':''} de fractionnement (en plus, non compris ci-dessus)</div>`):''}
         </div>
         <span style="font-size:20px;color:var(--tx2)" id="${id}-arrow">›</span>
       </div>
@@ -17649,7 +17618,7 @@ function buildCgAcquisEncarts(c, anneeAcq){
         style="width:16px;height:16px"
         onchange="majCgAmFractionnement(${c.id},${anneeAcq},this.checked)">
       <label for="frac-${c.id}-${anneeAcq}" style="font-size:13px;cursor:pointer">
-        Jours de fractionnement
+        Jours de fractionnement (${joursFragCalc} jour${joursFragCalc>1?'s':''})
       </label>
     </div>`;
   }
