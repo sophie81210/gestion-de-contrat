@@ -12123,6 +12123,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         :!!(j.heureDebPrev&&j.heureFinPrev)); // jour prévu au planning qui est aussi férié
       const estFerieNonPrevu=estFerieContrat&&!estFeriePrevu;
       const estReposJ=jourSemJ===(sourceActif.reposHebdo||c.reposHebdo||0)&&statut==='travaille'&&!isFerie(j.date,c);
+      // 03/09/2026 (Sophie) : variable séparée, SANS l'exclusion férié — estReposJ ("!isFerie(...)")
+      // ne peut jamais être vraie en même temps qu'un contexte férié, rendant toute comparaison
+      // "le plus favorable entre férié et repos" structurellement impossible (elle était calculée
+      // plus bas mais ne pouvait jamais faire gagner repos). Utilisée uniquement pour CETTE
+      // comparaison ; estReposJ elle-même reste inchangée pour ses autres usages (entrée de
+      // branche, cas repos pur sans férié).
+      const estJourReposHebdoBrut=jourSemJ===(sourceActif.reposHebdo||c.reposHebdo||0);
       if(estFeriePrevu){
         // Férié sur jour prévu : heures réelles majorées (sans exo), dépassement en hComp
         // Garde contre null (bug confirmé Sophie 18/07/2026) : pour min/var, estFeriePrevu se
@@ -12132,12 +12139,21 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const hPrevJour=(j.heureFinPrev&&j.heureDebPrev)?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:0;
         if(hReelJourSpec>0){
           if(mmddJ==='05-01'&&sourceActif.maj1erMai!=null){
-            // 1er mai : majoration la plus favorable entre maj1erMai et majRepos si jour de repos
-            const majPctFP=estReposJ?Math.max(maj1erMaiPct,majReposPct):maj1erMaiPct;
-            hMaj1erMai+=hReelJourSpec;
+            // 1er mai : majoration la plus favorable entre maj1erMai et majRepos si jour de repos —
+            // comparaison désormais réellement appliquée (pas seulement calculée).
+            if(estJourReposHebdoBrut&&majReposPct>maj1erMaiPct){
+              hMajRepos+=hReelJourSpec;
+            } else {
+              hMaj1erMai+=hReelJourSpec;
+            }
           } else if(sourceActif.majFerie!=null){
-            // Majoration la plus favorable entre majFerie et majRepos si cumul
-            hMajFeriePrevu+=hReelJourSpec;
+            // Majoration la plus favorable entre majFerie et majRepos si cumul — comparaison
+            // désormais réellement appliquée (pas seulement calculée).
+            if(estJourReposHebdoBrut&&majReposPct>majFeriePct){
+              hMajRepos+=hReelJourSpec;
+            } else {
+              hMajFeriePrevu+=hReelJourSpec;
+            }
           }
         }
         // Dépassement des heures prévues → heures comp normales
@@ -12146,15 +12162,16 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         // Heures réelles entières majorées (avec exo)
         const hReelJourSpec=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
         if(hReelJourSpec>0){
-          // Majoration la plus favorable si cumul férié + repos
-          const estCumulFerieRepos=estFerieNonPrevu&&estReposJ;
           if(mmddJ==='05-01'&&sourceActif.maj1erMai!=null){
-            const pctEff=estReposJ?Math.max(maj1erMaiPct,majReposPct):maj1erMaiPct;
-            hMaj1erMai+=hReelJourSpec;
+            if(estJourReposHebdoBrut&&majReposPct>maj1erMaiPct){
+              hMajRepos+=hReelJourSpec;
+            } else {
+              hMaj1erMai+=hReelJourSpec;
+            }
           } else if(estFerieNonPrevu){
             // Si le jour est aussi un jour de repos, prendre le taux le plus favorable
             const pctFerie=majFeriePct;
-            const pctRepos=estReposJ?majReposPct:0;
+            const pctRepos=estJourReposHebdoBrut?majReposPct:0;
             if(pctRepos>pctFerie){
               hMajRepos+=hReelJourSpec; // repos plus favorable
             } else {
