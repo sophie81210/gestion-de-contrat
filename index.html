@@ -2442,6 +2442,13 @@ function modifierKmDirect(contratId, val, cibleId){
               const fiche=c.fiches&&c.fiches[moisKey];
               const jour=fiche&&fiche.jours.find(j=>j.date===dateStr);
               if(jour){
+                // 04/09/2026 (Sophie, test Enaël) : aucune des 3 fonctions de régularisation ne
+                // vérifiait la date de fin de contrat pour fixe/sem — le mois de rupture comptait les
+                // heures prévues de TOUT le mois, y compris après la rupture (calcRecapFiche, lui,
+                // exclut déjà ces jours correctement pour le mensualisé — d'où l'écart mensualisé
+                // correct / dû faux constaté). Même correctif que calcRecapFiche : getDateFinContrat.
+                const dateFinCHP=getDateFinContrat(c);
+                if(dateFinCHP&&dateStr>dateToStr(dateFinCHP)){ cur.setDate(cur.getDate()+1); continue; }
                 const agendas=source.agendas||c.agendas||[];
                 const ag=agendas.find(a=>{
                   const pm=new Date(cur.getFullYear(),cur.getMonth(),1);
@@ -2992,6 +2999,12 @@ function renderDetTab(id,tab){
                 const statutsExclus=['conges-non','abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat','travaille','reprise','fractionnement'];
                 ficheMois.jours.forEach(j=>{
                   if(j.date<debQ||j.date>finQ) return;
+                  // 04/09/2026 (Sophie, test Enaël) : jamais de vérification de la date de fin de
+                  // contrat ici — le mois de rupture comptait les heures dues de tout le mois, y
+                  // compris après la rupture, alors que calcRecapFiche (mensualisé) les exclut déjà.
+                  // Même correctif que calcHPrevuReg, juste posé au-dessus pour fixe/sem.
+                  const dateFinCHR=getDateFinContrat(c);
+                  if(dateFinCHR&&j.date>dateToStr(dateFinCHR)) return;
                   let statut=j.statut||getStatutPrevu(c,j);
                   // 04/09/2026 (Sophie) : fractionnement (repos posé, couvert par la mensualisation,
                   // jamais des heures réellement dues en plus) et déduction abs-non cross-contrat
@@ -3852,6 +3865,10 @@ function calcRegulDiffEurosAuto(c, moisMaxForce){
         console.log('[TEMP-fnA-jour]',j.date,'| statut:',j.statut,'| heureDebPrev:',j.heureDebPrev,'| heureFinPrev:',j.heureFinPrev,'| isFerie:',isFerie(j.date,c),'| isAbsEmpl:',isAbsenceEmployeur(agendaMoisReg,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))),'| horsPlage:',(j.date<debutMoisRegul||j.date>finMoisRegul));
       }
       if(j.date<debutMoisRegul||j.date>finMoisRegul) return;
+      // 04/09/2026 (Sophie, test Enaël) : même correctif que hReelPortion/calcHPrevuReg — jamais de
+      // vérification de la date de fin de contrat ici avant aujourd'hui.
+      const dateFinCFnA=getDateFinContrat(c);
+      if(dateFinCFnA&&j.date>dateToStr(dateFinCFnA)) return;
       let statut=j.statut||getStatutPrevu(c,j);
       // 04/09/2026 (Sophie) : même principe que hReelPortion — fractionnement et abs-non cross-contrat
       // recalculés localement ici, jamais visibles sans cette injection.
@@ -15920,9 +15937,10 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
           console.log('[TEMP-fnC-jour]',j.date,'| statut:',j.statut,'| heureDebPrev:',j.heureDebPrev,'| heureFinPrev:',j.heureFinPrev,'| isFerie:',isFerie(j.date,c),'| typeSem:',typeSem);
         }
         if(typeSem==='off') return;
-        // 04/09/2026 (Sophie) : fractionnement et abs-non cross-contrat, même principe que les 2
-        // autres fonctions de régularisation — cette fonction-ci vérifie j.statut brut sans repli
-        // getStatutPrevu, donc un check dédié plutôt qu'une réaffectation de variable locale.
+        // 04/09/2026 (Sophie, test Enaël) : même correctif que les 2 autres fonctions de régularisation
+        // — jamais de vérification de la date de fin de contrat ici avant aujourd'hui.
+        const dateFinCFnC=getDateFinContrat(c);
+        if(dateFinCFnC&&j.date>dateToStr(dateFinCFnC)) return;
         if(estJourFractionnementChoisi(c,j.date)) return;
         if(estJourAbsNonFractionnement(c,j)) return;
         // 27/08/2026 (Sophie) : liste complétée avec les 8 statuts qu'elle n'avait jamais eus
@@ -16063,17 +16081,25 @@ function calcDateFinPreavis(dateSignif, dureePreavis, cumulConges, c){
       let joursRestants=dureePreavis.duree;
       const cur=new Date(dateSignif.getFullYear(),dateSignif.getMonth(),dateSignif.getDate());
       let iterationsJ=0;
-      console.log('[TEMP-preavis-debut]','dateSignif:',dateToStr(dateSignif),'| duree:',dureePreavis.duree,'| cumulConges:',cumulConges);
+      // 04/09/2026 (Sophie) : un jour de repos hebdo tombant PENDANT une pose de congés (ex. dimanche
+      // entre deux jours cochés) doit rester suspendu même non coché individuellement — isJourCongeAM
+      // seul ne reconnaît que les jours explicitement posés, jamais les jours de repos "de passage"
+      // à l'intérieur d'une pose (même principe que la garantie hebdo/acquisition : un repos entre
+      // deux jours de congé ne rompt pas la continuité). Bug confirmé Sophie, exemple chiffré :
+      // dimanche 26/12/2021 non coché en pleine pose 20/12-04/01, préavis reprenait ce jour-là.
+      let enPoseConsecutive=false;
       while(joursRestants>0&&iterationsJ<500){
         iterationsJ++;
         const dateStr=dateToStr(cur);
-        const estCongeIterP=isJourCongeAM(dateStr);
-        if(!estCongeIterP) joursRestants--;
-        console.log('[TEMP-preavis]',dateStr,'| congé AM:',estCongeIterP,'| joursRestants après:',joursRestants);
+        const estCongePoseP=isJourCongeAM(dateStr);
+        const estReposP=cur.getDay()===reposH;
+        const suspenduP=estCongePoseP||(estReposP&&enPoseConsecutive);
+        if(estCongePoseP) enPoseConsecutive=true;
+        else if(!estReposP) enPoseConsecutive=false;
+        if(!suspenduP) joursRestants--;
         if(joursRestants>0) cur.setDate(cur.getDate()+1);
       }
       reporterSiDimanche(cur);
-      console.log('[TEMP-preavis-fin]','résultat avant report dimanche déjà appliqué:',dateToStr(cur));
       return cur;
     }
   } else {
@@ -16090,14 +16116,22 @@ function calcDateFinPreavis(dateSignif, dureePreavis, cumulConges, c){
     const result=new Date(dateSignif.getFullYear(),dateSignif.getMonth(),dateSignif.getDate());
     let joursCourus=0;
     let iterations=0;
+    // 04/09/2026 (Sophie) : même correctif que la branche "jours" ci-dessus — un jour de repos hebdo
+    // au milieu d'une pose de congés reste suspendu même non coché individuellement.
+    let enPoseConsecutiveM=false;
     while(joursCourus<dureePreavJours&&iterations<500){
       iterations++;
       const dateStr=dateToStr(result);
-      if(!isJourCongeAM(dateStr)){
+      const estCongePoseM=isJourCongeAM(dateStr);
+      const estReposM=result.getDay()===reposH;
+      const suspenduM=estCongePoseM||(estReposM&&enPoseConsecutiveM);
+      if(estCongePoseM) enPoseConsecutiveM=true;
+      else if(!estReposM) enPoseConsecutiveM=false;
+      if(!suspenduM){
         joursCourus++;
         if(joursCourus<dureePreavJours) result.setDate(result.getDate()+1);
       } else {
-        // Jour de congé AM : avancer sans compter (suspension)
+        // Jour suspendu (congé AM ou repos au milieu d'une pose) : avancer sans compter
         result.setDate(result.getDate()+1);
       }
     }
