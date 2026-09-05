@@ -2217,19 +2217,14 @@ function modifierKmDirect(contratId, val, cibleId){
               const semUnique=semAnnee+'-'+semKey;
               if(!semainesCompteesVM.has(semUnique)){
                 semainesCompteesVM.add(semUnique);
-                const lundiSem=new Date(cur); lundiSem.setDate(cur.getDate()-(cur.getDay()||7)+1);
-                const dimSem=new Date(lundiSem); dimSem.setDate(lundiSem.getDate()+6);
-                const fmtSem=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
-                const lundiSemStr=fmtSem(lundiSem), dimSemStr=fmtSem(dimSem);
-                const dateRuptureC=c.rupture&&c.rupture.confirmee?c.rupture.dateFinContrat:null;
-                // 04/09/2026 (Sophie, test Enaël) : une semaine ENTIÈREMENT après la rupture (pas
-                // seulement celle à cheval dessus, gérée plus bas via limiteFin) ne comptait jamais
-                // 0 — chaque semaine suivant la rupture jusqu'à la fin du mois comptait son volume
-                // plein, faute de vérification. Traitée ici comme une semaine "off".
-                if(window.DEBUG_REGUL_COMPARE) console.log('[TEMP-hprevureg-semaine]',lundiSemStr,'→',dimSemStr,'| typeSem:',typeSem,'| dateRuptureC:',dateRuptureC,'| semaineApresRupture:',!!(dateRuptureC&&lundiSemStr>dateRuptureC));
-                if(!(dateRuptureC&&lundiSemStr>dateRuptureC)&&typeSem&&typeSem!=='off'){
+                if(typeSem&&typeSem!=='off'){
+                  const lundiSem=new Date(cur); lundiSem.setDate(cur.getDate()-(cur.getDay()||7)+1);
+                  const dimSem=new Date(lundiSem); dimSem.setDate(lundiSem.getDate()+6);
+                  const fmtSem=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
+                  const lundiSemStr=fmtSem(lundiSem), dimSemStr=fmtSem(dimSem);
                   const dateDebC=c.dateDeb;
                   const dateAvenantC=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant)?.dateAvenant;
+                  const dateRuptureC=c.rupture&&c.rupture.confirmee?c.rupture.dateFinContrat:null;
                   let limiteDebut=null;
                   if(dateDebC&&lundiSemStr<dateDebC&&dimSemStr>=dateDebC) limiteDebut=dateDebC;
                   else if(dateAvenantC&&lundiSemStr<=dateAvenantC&&dimSemStr>=dateAvenantC) limiteDebut=dateAvenantC;
@@ -2270,11 +2265,7 @@ function modifierKmDirect(contratId, val, cibleId){
                       const moisKeyAbs=jdStr.slice(0,7);
                       const ficheAbs=c.fiches&&c.fiches[moisKeyAbs];
                       const jourAbs=ficheAbs&&ficheAbs.jours.find(jj=>jj.date===jdStr);
-                      if(!jourAbs) return false;
-                      // 04/09/2026 (Sophie) : abs-non cross-contrat (autre contrat en fractionnement ce
-                      // jour, rien ici) — même recalcul local que partout ailleurs, jamais vu sans ça.
-                      if(estJourAbsNonFractionnement(c,jourAbs)) return true;
-                      return statutsAbsenceVol.includes(jourAbs.statut);
+                      return !!(jourAbs&&statutsAbsenceVol.includes(jourAbs.statut));
                     };
                     let joursAbsenceVol=0;
                     for(let d=0;d<7;d++){
@@ -2447,13 +2438,6 @@ function modifierKmDirect(contratId, val, cibleId){
               const fiche=c.fiches&&c.fiches[moisKey];
               const jour=fiche&&fiche.jours.find(j=>j.date===dateStr);
               if(jour){
-                // 04/09/2026 (Sophie, test Enaël) : aucune des 3 fonctions de régularisation ne
-                // vérifiait la date de fin de contrat pour fixe/sem — le mois de rupture comptait les
-                // heures prévues de TOUT le mois, y compris après la rupture (calcRecapFiche, lui,
-                // exclut déjà ces jours correctement pour le mensualisé — d'où l'écart mensualisé
-                // correct / dû faux constaté). Même correctif que calcRecapFiche : getDateFinContrat.
-                const dateFinCHP=getDateFinContrat(c);
-                if(dateFinCHP&&dateStr>dateToStr(dateFinCHP)){ cur.setDate(cur.getDate()+1); continue; }
                 const agendas=source.agendas||c.agendas||[];
                 const ag=agendas.find(a=>{
                   const pm=new Date(cur.getFullYear(),cur.getMonth(),1);
@@ -2466,9 +2450,6 @@ function modifierKmDirect(contratId, val, cibleId){
                 if(typeSem==='off'){ cur.setDate(cur.getDate()+1); continue; }
                 const estConge=!clause52&&['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges'].includes(jour.statut);
                 if(estConge){ cur.setDate(cur.getDate()+1); continue; }
-                // 04/09/2026 (Sophie) : même ajout que la branche min/var juste au-dessus — abs-non
-                // cross-contrat, jamais visible sans ce check dédié (jour.statut reste 'prevu' brut).
-                if(estJourAbsNonFractionnement(c,jour)){ cur.setDate(cur.getDate()+1); continue; }
                 if(jour.heureDebPrev&&jour.heureFinPrev){
                   const m=toMins(jour.heureFinPrev)-toMins(jour.heureDebPrev);
                   if(m>0) hPrevu+=m/60;
@@ -3001,22 +2982,10 @@ function renderDetTab(id,tab){
                 // salaire dû, clause52 ou non (bug confirmé Sophie : décembre 2021, régul52, jours
                 // non-acquis comptés à tort).
                 const statutsCongesHR=['conges-acq','conges-anticipe','conges-am','decompte-conges'];
-                const statutsExclus=['conges-non','abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat','travaille','reprise','fractionnement'];
+                const statutsExclus=['conges-non','abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat','travaille','reprise'];
                 ficheMois.jours.forEach(j=>{
                   if(j.date<debQ||j.date>finQ) return;
-                  // 04/09/2026 (Sophie, test Enaël) : jamais de vérification de la date de fin de
-                  // contrat ici — le mois de rupture comptait les heures dues de tout le mois, y
-                  // compris après la rupture, alors que calcRecapFiche (mensualisé) les exclut déjà.
-                  // Même correctif que calcHPrevuReg, juste posé au-dessus pour fixe/sem.
-                  const dateFinCHR=getDateFinContrat(c);
-                  if(dateFinCHR&&j.date>dateToStr(dateFinCHR)) return;
-                  let statut=j.statut||getStatutPrevu(c,j);
-                  // 04/09/2026 (Sophie) : fractionnement (repos posé, couvert par la mensualisation,
-                  // jamais des heures réellement dues en plus) et déduction abs-non cross-contrat
-                  // (autre contrat en fractionnement ce jour, rien ici) — même principe que partout
-                  // ailleurs : recalcul local, jamais vu sans cette injection explicite.
-                  if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) statut='fractionnement';
-                  else if(estJourAbsNonFractionnement(c,j)) statut='abs-non';
+                  const statut=j.statut||getStatutPrevu(c,j);
                   // Jour férié normalement prévu, passé en "travaillé" (statut nécessaire pour que la
                   // majoration férié s'applique) : ce statut n'entretient jamais d'heures prévues et est
                   // exclu ci-dessous — on retrouve ici les heures qui auraient été dues, recalculées
@@ -3478,7 +3447,6 @@ function getStatutOptions(statutPrevu, isPlanMinVar, c, sourceActive){
     'decompte-acq':['reprise'],
     'decompte-anticipe':['reprise'],
     'reprise':['decompte-conges'],
-    'fractionnement':['fractionnement'],
   };
   const labels={
     'prevu':'Prévu','abs-rem':'Absence rémunérée','abs-enfant':'Abs. maladie enfant',
@@ -3487,7 +3455,7 @@ function getStatutOptions(statutPrevu, isPlanMinVar, c, sourceActive){
     'ferie':'Férié','conges-acq':'Congés','conges-non':'Congés','conges-anticipe':'Congés','conges-am':'Congés','conges-6j':'Non prévu',
     'init':'↺ Réinitialiser','hors-contrat':'Hors contrat','abs-partielle':'Absence partielle',
     'decompte-conges':'Non prévu','decompte-acq':'Non prévu','decompte-anticipe':'Non prévu',
-    'reprise':'Reprise','fractionnement':'Fractionnement'
+    'reprise':'Reprise'
   };
   return (opts[statutPrevu]||['init']).map(v=>`<option value="${v}">${labels[v]||v}</option>`).join('');
 }
@@ -3542,7 +3510,6 @@ function getStatutBg(statut){
     'arret':'#f5e6e2','travaille':'#e8efe1','conges':eclaircir('#9B7A94',0.6),
     'conges-anticipe':eclaircir('#9B7A94',0.75),'conges-am':eclaircir('#9B7A94',0.75),
     'abs-partielle':'#faf1ee','hors-contrat':'#fcfcfc','decompte-conges':'#fcfcfc','decompte-acq':'#fcfcfc','decompte-anticipe':'#fcfcfc','reprise':'#e8efe1',
-    'fractionnement':eclaircir('#7C93A8',0.75),
   };
   return bgs[statut]||'#fff';
 }
@@ -3864,21 +3831,13 @@ function calcRegulDiffEurosAuto(c, moisMaxForce){
     if(estPlanMinVarRegAuto){
       hReel=calcHPrevuReg(c,false,debutMoisRegul,finMoisRegul);
     } else {
-    const statutsExclus=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-conges','abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat','fractionnement'];
+    const statutsExclus=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-conges','abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat'];
     (ficheMois.jours||[]).forEach(j=>{
       if(window.DEBUG_REGUL_COMPARE&&['2023-09','2023-12','2024-01','2024-03','2025-09','2026-05'].includes(key)){
         console.log('[TEMP-fnA-jour]',j.date,'| statut:',j.statut,'| heureDebPrev:',j.heureDebPrev,'| heureFinPrev:',j.heureFinPrev,'| isFerie:',isFerie(j.date,c),'| isAbsEmpl:',isAbsenceEmployeur(agendaMoisReg,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))),'| horsPlage:',(j.date<debutMoisRegul||j.date>finMoisRegul));
       }
       if(j.date<debutMoisRegul||j.date>finMoisRegul) return;
-      // 04/09/2026 (Sophie, test Enaël) : même correctif que hReelPortion/calcHPrevuReg — jamais de
-      // vérification de la date de fin de contrat ici avant aujourd'hui.
-      const dateFinCFnA=getDateFinContrat(c);
-      if(dateFinCFnA&&j.date>dateToStr(dateFinCFnA)) return;
-      let statut=j.statut||getStatutPrevu(c,j);
-      // 04/09/2026 (Sophie) : même principe que hReelPortion — fractionnement et abs-non cross-contrat
-      // recalculés localement ici, jamais visibles sans cette injection.
-      if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) statut='fractionnement';
-      else if(estJourAbsNonFractionnement(c,j)) statut='abs-non';
+      const statut=j.statut||getStatutPrevu(c,j);
       // 25/08/2026 (Sophie) : un jour "travaillé" qui tombe dans une semaine "off" ne doit jamais
       // compter, même s'il porte des heures prévues structurelles (bug confirmé Sophie 25/08 : 14 et
       // 16 janvier 2025, jours "travaillé" dans une semaine "off", comptés à tort avec leurs heures
@@ -4395,25 +4354,14 @@ function ouvrirFiche(contratId,key){
     const lignes=joursSemaines.map((j,idx)=>{
     const numJour=parseInt(j.date.split('-')[2]);
     const nomJour=JOURS_ABR[j.jourSemaine===0?6:j.jourSemaine-1];
-    let statutPrevu=j.statutPrevu||getStatutPrevu(c,j);
+    const statutPrevu=j.statutPrevu||getStatutPrevu(c,j);
     // 11/08/2026 (Sophie) : correction d'AFFICHAGE uniquement (jamais la donnée stockée) — un vieux
     // statut "non prévu" enregistré sur le vrai jour de repos (fixe/sem) doit s'afficher "Repos",
     // sans toucher à j.statut ni à aucun autre statut (prévu, travaillé, etc. restent inchangés).
     const srcJourAff3837=getVersionActive(c,new Date(j.date));
     const estVraiReposAff3837=(srcJourAff3837.th==='fixe'||srcJourAff3837.th==='sem')&&j.jourSemaine===(srcJourAff3837.reposHebdo||0);
     const apresRuptureAff=!!(dateFinCSPAffStr&&j.date>dateFinCSPAffStr&&!fiche.valide);
-    // 04/09/2026 (Sophie) : jour choisi via le picker de fractionnement — DOIT être vérifié ICI, dans
-    // statutActuel lui-même, pas seulement sur statutPrevu comme tenté d'abord (erreur trouvée par
-    // test Sophie) : statutActuel=(j.statut||statutPrevu) fait TOUJOURS gagner j.statut dès qu'il est
-    // renseigné (creerFiche/planning-sync l'écrivent systématiquement en 'prevu'/'non-prevu' — voir
-    // commentaires plus haut) — modifier seulement statutPrevu n'avait donc jamais d'effet visible.
-    // Priorité : rupture > repos (correction d'affichage ci-dessus) > fractionnement > normal.
-    let statutActuel;
-    if(apresRuptureAff) statutActuel='hors-contrat';
-    else if(estVraiReposAff3837&&j.statut==='non-prevu') statutActuel='repos';
-    else if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) statutActuel='fractionnement';
-    else if(estJourAbsNonFractionnement(c,j)) statutActuel='abs-non';
-    else statutActuel=j.statut||statutPrevu;
+    const statutActuel=apresRuptureAff?'hors-contrat':((estVraiReposAff3837&&j.statut==='non-prevu')?'repos':(j.statut||statutPrevu));
     const bg=getStatutBg(statutActuel);
     const border=statutActuel!==statutPrevu?'border-left:3px solid var(--m)':'';
     const manquant=statutPrevu==='prevu'&&!j.heureDebReel&&!j.heureFinReel&&statutActuel==='prevu';
@@ -4521,13 +4469,13 @@ function ouvrirFiche(contratId,key){
        ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'km',this.value)"`}>
     </td>`:aKm?'<td style="padding:3px 2px"><input type="number" style="width:38px;visibility:hidden" class="no-spin"></td>':'';
 
-    const optsBase=['conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','non-prevu','hors-contrat','repos','ferie','ferie-non','arret','fractionnement'].includes(statutActuel)?statutActuel:statutPrevu;
+    const optsBase=['conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','non-prevu','hors-contrat','repos','ferie','ferie-non','arret'].includes(statutActuel)?statutActuel:statutPrevu;
     const opts=getStatutOptions(optsBase, isPlanVar, c, sourceActive);
     let selectedOpts=opts.replace(`value="${statutActuel}"`,`value="${statutActuel}" selected`);
     if(!selectedOpts.includes('selected')){
     const moisNum=parseInt(key.split('-')[1]);
     const labelAnticipe=moisNum===5?'Congés acquis':'Congés anticipés';
-    const lbl={'conges-acq':'Congés','conges-non':'Congés','conges-anticipe':'Congés','conges-am':'Congés','conges-6j':'Non prévu','conges-6j-fin':'Non prévu','decompte-acq':'Non prévu','decompte-anticipe':'Non prévu','decompte-conges':'Non prévu','travaille':'Travaillé','prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié','ferie-non':'Férié non acquis','abs-rem':'Absence rémunérée','abs-enfant':'Absence maladie de l&rsquo;enfant','abs-non':'Absence non rémunérée','abs-am':'Absence AM','arret':'Arrêt de travail','hors-contrat':'Hors contrat','abs-partielle':'Absence partielle','fractionnement':'Fractionnement'};
+    const lbl={'conges-acq':'Congés','conges-non':'Congés','conges-anticipe':'Congés','conges-am':'Congés','conges-6j':'Non prévu','conges-6j-fin':'Non prévu','decompte-acq':'Non prévu','decompte-anticipe':'Non prévu','decompte-conges':'Non prévu','travaille':'Travaillé','prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié','ferie-non':'Férié non acquis','abs-rem':'Absence rémunérée','abs-enfant':'Absence maladie de l&rsquo;enfant','abs-non':'Absence non rémunérée','abs-am':'Absence AM','arret':'Arrêt de travail','hors-contrat':'Hors contrat','abs-partielle':'Absence partielle'};
       selectedOpts=`<option value="${statutActuel}" selected>${lbl[statutActuel]||statutActuel}</option>`+opts;
     }
 
@@ -4588,7 +4536,7 @@ function ouvrirFiche(contratId,key){
       const peutAvoirHeures=['prevu','travaille','abs-partielle'].includes(statutPrevuJ);
       // Coche verte : seulement si jour prévu sans modification (pas de statut forcé, pas d'heures réelles, pas de congé, pas hors-contrat)
       const statutForcé=j.statut&&j.statut!==statutPrevuJ;
-      const estCongeOuHors=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat','arret','abs-non','abs-am','ferie-non','abs-enfant'].includes(j.statut||statutPrevuJ)||statutActuel==='fractionnement'||statutActuel==='abs-non';
+      const estCongeOuHors=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat','arret','abs-non','abs-am','ferie-non','abs-enfant'].includes(j.statut||statutPrevuJ);
       const cocheVerte=!fiche.valide&&peutAvoirHeures&&j.heureDebPrev&&j.heureFinPrev&&!j.heureDebReel&&!j.heureFinReel&&!statutForcé&&!estCongeOuHors&&!estLectureSeuleEmployeur()
         ?`<button id="coche-prevu-${contratId}-${key}-${idx}" onclick="confirmerHeuresPrevues(${contratId},'${key}',${idx})"
             style="width:20px;height:36px;background:#6B8060;color:#fff;border:none;border-radius:3px;font-size:12px;cursor:pointer;margin-left:3px;flex-shrink:0"
@@ -4601,7 +4549,7 @@ function ouvrirFiche(contratId,key){
       const srcJourOffJ=getVersionActive(c,new Date(j.date));
       const agendaJourOffJ=(srcJourOffJ.agendas||c.agendas||[]).find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date));
       const estSemaineOff=agendaJourOffJ&&agendaJourOffJ.semaines&&agendaJourOffJ.semaines[j.semKey]==='off';
-      const estCongesJour=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat'].includes(j.statut||statutPrevuJ)||statutActuel==='fractionnement';
+      const estCongesJour=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat'].includes(j.statut||statutPrevuJ);
       const couleurPrev=(estSemaineOff||estCongesJour)?'transparent':'var(--tx)';
       prevuCell=`<td style="padding:3px 4px;font-size:12px;color:var(--tx);white-space:nowrap">
         <div style="display:flex;align-items:center">
@@ -5456,14 +5404,15 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       // cochable, même sans modification autorisée, dès qu'il n'appartenait à aucun type pointé.
       const estSaisissable=(infos.jourPossible||(infos.ferieChome&&!ferieDansConges&&(infos.jourPossible||modifMoisActive))||(estCongeAM&&estSemCongesPartiellePln))&&(!estCongeAM||estSemCongesPartiellePln)&&!moisVerrouille&&!casesVerrouillee;
       let contenu;
-      // 04/09/2026 (Sophie) : un jour de fractionnement choisi ne doit jamais être déplaçable via
-      // l'échange de jour (executerEchangeJourFS) — sinon la date choisie perd son lien avec un jour
-      // réellement prévu (bug confirmé Sophie : jour de fractionnement perdu après un échange sur
-      // plan fixe). Vérifié en tout premier, avant congés/férié/hors-contrat — mutuellement exclusif
-      // avec ces cas de toute façon (le picker n'autorise jamais fractionnement sur ces jours-là).
-      if(estJourFractionnementChoisi(c,j.date)){
-        contenu=`<span style="color:#5F7688;font-size:12px;font-weight:600">Fractionnement</span>`;
-      } else if(estCongeAM&&estSemCongesPartiellePln&&infos.jourPossible){
+      // 03/08/2026 (correctif Sophie) : cette case ne doit apparaître que si le jour est réellement
+      // possible pour le contrat, ou si les modifications sont autorisées ce mois-là — sinon un jour
+      // de congé tombant sur un jour non possible (ex. samedi hors motif) devenait à tort cochable,
+      // sans jamais vérifier infos.jourPossible. Sans cette condition, retombe sur l'affichage figé
+      // du cas suivant (estCongeAM||ferieDansConges).
+      // 03/08/2026 (confirmé Sophie, même règle que le férié) : un jour de congé sur une semaine
+      // partielle ne doit jamais être cochable s'il n'est pas prévu dans le type/motif, même en
+      // modifications autorisées — avant, modifMoisActive levait cette protection à tort.
+      if(estCongeAM&&estSemCongesPartiellePln&&infos.jourPossible){
         contenu=`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);cursor:${(moisVerrouille||casesVerrouillee)?'default':'pointer'}">
           <input type="checkbox" ${dejaCoche?'checked':''} ${(moisVerrouille||casesVerrouillee)?'disabled':''}
             onchange="toggleJourPlanning(${c.id},'${j.date}',this.checked,'${semKeyDom}',true)">
@@ -6692,11 +6641,8 @@ function imprimerFiche(contratId,key){
     const numJour=parseInt(j.date.split('-')[2]);
     const nomJour=JOURS_ABR[j.jourSemaine===0?6:j.jourSemaine-1];
     const statutPrevu=getStatutPrevu(c,j);
-    // 04/09/2026 (Sophie) : voir ouvrirFiche pour l'explication complète — statutActuel doit vérifier
-    // le fractionnement lui-même, pas seulement statutPrevu (j.statut gagne toujours sinon). Même
-    // priorité pour l'abs-non cross-contrat (autre contrat en fractionnement ce jour, rien ici).
-    const statutActuel=(!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)?'fractionnement':(estJourAbsNonFractionnement(c,j)?'abs-non':(j.statut||statutPrevu));
-    const statutLbl={'prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié','fractionnement':'Fractionnement',
+    const statutActuel=j.statut||statutPrevu;
+    const statutLbl={'prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié',
       'conges-acq':'Congés','conges-non':'Congés','conges-anticipe':'Congés','conges-am':'Congés','conges-6j':'Non prévu','conges-6j-fin':'Non prévu','decompte-acq':'Non prévu','decompte-anticipe':'Non prévu','decompte-conges':'Non prévu','travaille':'Travaillé',
       'abs-rem':'Absence rémunérée','abs-enfant':'Absence maladie de l&rsquo;enfant','abs-non':'Absence non rémunérée','abs-am':'Absence AM','ferie-non':'Férié non acquis',
       'arret':'Arrêt de travail','abs-partielle':'Absence partielle','hors-contrat':'Hors contrat'}[statutActuel]||statutActuel;
@@ -7679,13 +7625,13 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
   if(hasMaj){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:1px solid var(--mb)"></td></tr>';
     html+='<tr><td colspan="2" style="padding:4px 4px 2px;font-weight:700;color:var(--m);font-size:12px">Majorations'+pastilleAide('majorations')+'</td></tr>';
-    if(parseFloat(recap.hComp||0)>0) html+=ligneG('Majoration heures complémentaires', parseFloat(recap.hCompMaj||0).toFixed(2)+' h — '+(parseFloat(recap.montantMajComp||0)>0?'+'+parseFloat(recap.montantMajComp).toFixed(2)+' €':'0.00 €'));
-    if(parseFloat(recap.hSup||0)>0) html+=ligneG('Majoration heures supplémentaires', parseFloat(recap.hSup).toFixed(2)+' h — '+(parseFloat(recap.montantMajSup||0)>0?'+'+parseFloat(recap.montantMajSup).toFixed(2)+' €':'0.00 €'));
+    if(parseFloat(recap.hComp||0)>0) html+=ligneG('Majoration heures complémentaires', '<span style="font-weight:400;color:var(--tx3)">('+parseFloat(recap.hCompMaj||0).toFixed(2)+' h)</span> '+(parseFloat(recap.montantMajComp||0)>0?'+'+parseFloat(recap.montantMajComp).toFixed(2)+' €':'0.00 €'));
+    if(parseFloat(recap.hSup||0)>0) html+=ligneG('Majoration heures supplémentaires', '<span style="font-weight:400;color:var(--tx3)">('+parseFloat(recap.hSup).toFixed(2)+' h)</span> '+(parseFloat(recap.montantMajSup||0)>0?'+'+parseFloat(recap.montantMajSup).toFixed(2)+' €':'0.00 €'));
     const totalMajFerie=(parseFloat(recap.montantMajFeriePrevu2||0)+parseFloat(recap.montantMajFerieNP||0));
     const totalHMajFerie=(parseFloat(recap.hMajFerie||0)+parseFloat(recap.hMajFeriePrevu||0));
     if(totalMajFerie>0) html+=ligneG('Majoration férié', totalHMajFerie.toFixed(2)+' h — +'+totalMajFerie.toFixed(2)+' €');
-    if(parseFloat(recap.montantMajRepos||0)>0) html+=ligneG('Majoration repos travaillé', parseFloat(recap.hMajRepos||0).toFixed(2)+' h — +'+parseFloat(recap.montantMajRepos).toFixed(2)+' €');
-    if(parseFloat(recap.montantMaj1erMai||0)>0) html+=ligneG('Majoration 1er mai', parseFloat(recap.hMaj1erMai||0).toFixed(2)+' h — +'+parseFloat(recap.montantMaj1erMai).toFixed(2)+' €');
+    if(parseFloat(recap.montantMajRepos||0)>0) html+=ligneG('Majoration repos travaillé', '+'+parseFloat(recap.montantMajRepos).toFixed(2)+' €');
+    if(parseFloat(recap.montantMaj1erMai||0)>0) html+=ligneG('Majoration 1er mai', '+'+parseFloat(recap.montantMaj1erMai).toFixed(2)+' €');
   }
 
   if(parseFloat(recap.indemCongeMois||0)>0){
@@ -8743,17 +8689,12 @@ function calcCongesContrat(c, dateRefOverride){
             });
             let joursNormauxPV=0, joursTravaillePV=0, joursConges16PV=0;
             joursActifs.forEach(j=>{
-              let sj=j.statut||getStatutPrevu(c,j);
-              if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) sj='fractionnement';
+              const sj=j.statut||getStatutPrevu(c,j);
               const cocheCgPV=!!(c.planning&&c.planning[j.date]&&c.planning[j.date].coche);
               if(sj==='travaille'){
                 joursTravaillePV++;
               } else if(['prevu','abs-partielle','abs-rem'].includes(sj)){
                 joursNormauxPV++;
-              } else if(sj==='fractionnement'){
-                // 04/09/2026 (Sophie) : même règle que calcContribSemaineFSMPV — compte comme
-                // 'prevu' seulement si le jour est structurellement prévu.
-                if(getStatutPrevu(c,j)==='prevu') joursNormauxPV++;
               } else if(['conges-acq','conges-anticipe'].includes(sj)){
                 if(semaineCompleteCgPV||cocheCgPV) joursConges16PV++;
               } else if(sj==='ferie'){
@@ -8970,8 +8911,7 @@ function calcCongesContrat(c, dateRefOverride){
             }
 
             joursSub.forEach(j=>{
-              let statutJ=j.statut||getStatutPrevu(c,j);
-              if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) statutJ='fractionnement';
+              const statutJ=j.statut||getStatutPrevu(c,j);
               const cocheCgMin=!!(c.planning&&c.planning[j.date]&&c.planning[j.date].coche);
               const gateMinOk=!(c.th==='plan'&&c.planType==='min')||semaineCompleteCgMin||cocheCgMin;
               const [jpy,jpm,jpd]=j.date.split('-').map(Number);
@@ -8998,13 +8938,6 @@ function calcCongesContrat(c, dateRefOverride){
                 joursTravailleFSM++;
               } else if(['prevu','abs-partielle','abs-rem'].includes(statutJ)){
                 joursNormaux++;
-              } else if(statutJ==='fractionnement'){
-                // 04/09/2026 (Sophie) : un jour de fractionnement compte normalement pour
-                // l'acquisition (même bucket que 'prevu') UNIQUEMENT s'il tombe sur un jour prévu au
-                // contrat — recalcule le statut structurel réel via getStatutPrevu (j n'a jamais été
-                // muté, seule la variable locale statutJ porte 'fractionnement'). Le 2e jour d'une
-                // pose, s'il n'est pas prévu, ne compte pas — comme un non-prévu ordinaire.
-                if(getStatutPrevu(c,j)==='prevu') joursNormaux++;
               } else if(statutJ==='non-prevu'&&j.heureDebReel){
                 joursTravailleFSM++;
               } else if(['conges-acq','conges-anticipe'].includes(statutJ)){
@@ -9310,10 +9243,20 @@ function calcCongesContrat(c, dateRefOverride){
       const nbEnfants=amData?.enfants||0;
       if(nbEnfants>0){ bonusEnfantsJours=nbEnfants*2; cgTotal=Math.min(30,cgTotal+bonusEnfantsJours); }
     }
-    // 04/09/2026 (Sophie) : jours de fractionnement séparés du système de congés — jours de repos
-    // posés sans déduction de salaire, plus aucun ajout à l'acquis ni paiement séparé ici (ancien
-    // mécanisme retiré ; voir le nouveau statut dédié "Congé fractionnement" sur la feuille de
-    // présence). calcJoursFractionnement reste utilisé ailleurs (sélecteur du picker).
+    // 03/09/2026 (Sophie) : jours de fractionnement — gardés séparés (jamais ajoutés à cgTotal) pour
+    // le 46, puisque l'indemnité de cette année peut déjà être réglée/versée en juin, bien avant que
+    // le fractionnement (qui ne se détermine qu'au 31 octobre) ne soit connu ; y ajouter ces jours
+    // grossirait rétroactivement un montant déjà figé. Le 52 n'a pas ce problème (paiement continu,
+    // mensuel) — les jours de fractionnement y sont donc ajoutés directement à cgTotal, comme
+    // n'importe quel jour acquis supplémentaire.
+    let bonusFractionnementJours=0;
+    const sourceFinRef=getVersionActive(c,finRef);
+    if(c.fractionnement?.[anneeRef]){
+      const cgTotalAvantFrac=cgTotal;
+      bonusFractionnementJours=calcJoursFractionnement(c,anneeRef);
+      if(bonusFractionnementJours>0&&sourceFinRef.tc==='52') cgTotal=Math.min(30,cgTotal+bonusFractionnementJours);
+      if(window.DEBUG_CGAM)console.log('[CGAM-fractionnementAjout]','anneeRef:',anneeRef,'| cg.acquis stocké AVANT ce calcul:',c.conges?.[anneeRef]?.acquis,'| cg.bonusFractionnement stocké AVANT:',c.conges?.[anneeRef]?.bonusFractionnement,'| cgTotal avant frac (ce calcul):',cgTotalAvantFrac,'| bonusFractionnementJours (ce calcul):',bonusFractionnementJours,'| cgTotal après frac:',cgTotal,'| tc:',sourceFinRef.tc);
+    }
     const acquis=(estTerminee||c.rupture?.confirmee)?Math.ceil(cgTotal):Math.floor(cgTotal); // 03/09/2026 (Sophie) : arrondi supérieur si année terminée ou rupture confirmée — un jour entamé n'est dû qu'à ce moment-là, pas en cours d'année normale (correctif réappliqué, perdu lors de la reconstruction depuis le fichier "avant")
 
     // Jours pris
@@ -9335,6 +9278,12 @@ function calcCongesContrat(c, dateRefOverride){
       restants:Math.max(0,acquis-prisDansRef),
       acqBrut:parseFloat(cgTotal.toFixed(4)),
       bonusEnfants:bonusEnfantsJours,
+      bonusFractionnement:bonusFractionnementJours, // 03/09/2026 (Sophie) : toujours la vraie valeur, jamais forcée à 0 pour le 52 — sinon la protection anti-boucle dans calcJoursFractionnement (qui soustrait cette valeur avant de recalculer) ne soustrait jamais rien, et la boucle continue de grossir (bug confirmé Sophie, exemple chiffré : 16→17→18 jours, logs à l'appui)
+      // 03/09/2026 (Sophie) : portion des jours de fractionnement qui reste PAYABLE sans dépasser 30
+      // jours au total (mensualisation 46 basée sur 30 jours, jamais plus) — les jours au-delà de ce
+      // plafond sont quand même POSABLES (la case à cocher/le calcul les autorise), mais pas payés via
+      // l'indemnité (confirmé Sophie, exemple chiffré : 29 jours + 2 fractionnement → 1 seul payé).
+      bonusFractionnementPayable:sourceFinRef.tc==='52'?0:Math.max(0,Math.min(bonusFractionnementJours,30-acquis)),
       estTerminee,joursComptes:Math.round(totalSemaines*joursMax),joursArret:joursArretTotal,
       anneeRef,anneeRefFin:anneeRef+1
     };
@@ -9688,7 +9637,6 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
 
     // Vérifier si le type correspond à un semType réel (sinon c'est une semaine violette/congés)
     const stThCheck=typeSemTh?semTypes.find(st=>st.nom===typeSemTh):null;
-    if(window.DEBUG_CGAM)console.log('[CGAM-semBranche]',dateEx,'| typeSemTh:',typeSemTh,'| matchSemType:',!!stThCheck,'| noms semTypes dispo:',semTypes.map(st=>st.nom),'| hSemMoyPS:',hSemMoyPS);
     const estSemCongesPlanSem=typeSemTh&&!stThCheck; // type dans agenda mais pas dans semTypes = semaine violette
     if(!typeSemTh||estSemCongesPlanSem){
       // Semaine sans type ou semaine violette (congés) : jours décomptés → hSemMoy/6 par jour
@@ -11012,7 +10960,6 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     fiche.jours.forEach(j=>{
       const estHorsContrat=(j.statut||'')==='hors-contrat';
       const estAvantDebut=!!(c.dateDeb&&j.date<c.dateDeb);
-      if(window.DEBUG_CGAM&&(estHorsContrat||estAvantDebut))console.log('[CGAM-joursHCExclus-sem]',j.date,'| j.statut brut:',j.statut,'| estHorsContrat:',estHorsContrat,'| estAvantDebut:',estAvantDebut);
       if(!estHorsContrat&&!estAvantDebut) return;
       const jourIdxTh2=j.jourSemaine===0?6:j.jourSemaine-1;
       const srcTh=getVersionActive(c,new Date(j.date));
@@ -11877,13 +11824,6 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   window._hTravailleVersHS={};
   fiche.jours.forEach(j=>{
     let statut=j.statut||getStatutPrevu(c,j);
-    // 04/09/2026 (Sophie) : jour choisi via le picker de fractionnement — même règle que ouvrirFiche,
-    // corrigée le même jour : 'non-prevu' reste dépassable (valeur par défaut de creerFiche, jamais
-    // saisie par Sophie), seul un statut réellement explicite (travaille, abs-rem...) bloque. Rejoint
-    // le check hAbsJour plus bas (['conges-acq','conges-anticipe','conges-am','fractionnement']) via
-    // ce même statut.
-    if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) statut='fractionnement';
-    else if(estJourAbsNonFractionnement(c,j)) statut='abs-non';
     // Règle paiement férié : si encadré par arret sur jour prévu travaillé
     if(statut==='ferie'||(!j.statut&&isFerie(j.date,sourceActif))){
       const prevTrav=getPrevJourPrevuTravaille(c,j.date);
@@ -12543,8 +12483,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         hPrev=hMensu/(nbJoursMoisContrat||20);
       }
       const estCongesNon52Regr=statut==='conges-non'&&getVersionActive(c,new Date(j.date)).tc==='52';
-      if((statut==='hors-contrat'&&j._horsContratAvenant)||['conges-acq','conges-anticipe','conges-am','fractionnement'].includes(statut)||(statut==='conges-non'&&!estCongesNon52Regr)){
-        hAbsJour=0; // jour hors-contrat fabriqué pour un avenant (déjà compté par hAbsHorsPeriode) OU congés acquis/anticipé/AM (couverts par la mensualisation, jamais via cette déduction) OU fractionnement (jour de repos posé, jamais déduit — 04/09/2026) OU congés non-acquis pour un contrat 46 (géré séparément) — jamais recompter ici. congés non-acquis en 52 reste déduit normalement (ci-dessous), la mensualisation ne couvre que l'acquis.
+      if((statut==='hors-contrat'&&j._horsContratAvenant)||['conges-acq','conges-anticipe','conges-am'].includes(statut)||(statut==='conges-non'&&!estCongesNon52Regr)){
+        hAbsJour=0; // jour hors-contrat fabriqué pour un avenant (déjà compté par hAbsHorsPeriode) OU congés acquis/anticipé/AM (couverts par la mensualisation, jamais via cette déduction) OU congés non-acquis pour un contrat 46 (géré séparément) — jamais recompter ici. congés non-acquis en 52 reste déduit normalement (ci-dessous), la mensualisation ne couvre que l'acquis.
       } else if(j.heureDebReel&&j.heureFinReel){
         const hReel2=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
         hAbsJour=Math.max(0,hPrev-hReel2);
@@ -12892,8 +12832,21 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             indemCongeMois=parseFloat((ind.montantJournalierNet*nbAcqMois).toFixed(2));
           }
         }
-        // 04/09/2026 (Sophie) : indemnité de fractionnement retirée — jours de repos posés sans
-        // déduction ni paiement séparé (indemFractionnementMois/NbJours restent à 0 ci-dessus).
+        // 03/09/2026 (Sophie) : jours de fractionnement (46 uniquement — pour 52 ils sont déjà inclus
+        // dans totalAcquis/resteAPayer ci-dessus, via cgTotal) — payés au moment de leur PRISE, une
+        // fois le quota normal épuisé, au même taux journalier déjà figé de l'indemnité de cette
+        // année (ind.montantJournalierNet) — jamais une comparaison maintien/10ème séparée pour ces
+        // 1-2 jours (confirmé Sophie : mathématiquement le même taux aurait de toute façon gagné).
+        const cgFracMois=c.conges?.[anneeAcq];
+        if(cgFracMois?.bonusFractionnementPayable>0){
+          const dejaPayesFrac=Math.max(0,dejaPayesAcq-totalAcquis);
+          const resteAPayerFrac=Math.max(0,cgFracMois.bonusFractionnementPayable-dejaPayesFrac);
+          const nbFracMois=Math.min(totalCeMoisAcq-nbAcqMois,resteAPayerFrac);
+          if(nbFracMois>0){
+            indemFractionnementNbJours=nbFracMois;
+            indemFractionnementMois=parseFloat((ind.montantJournalierNet*nbFracMois).toFixed(2));
+          }
+        }
         if(fiche.mois===5){
           // 17/08/2026 (Sophie) : bornée depuis le 1er juin de l'ANNÉE PRÉCÉDENTE — sans cette borne
           // basse, des jours anticipés bien plus anciens (déjà payés lors d'un juin précédent) étaient
@@ -15777,11 +15730,7 @@ function calcSoldeConges52(c, dateRupture){
   // (déjà versé / 10ème total de la période / reste à verser) — même trio que demandé par Sophie.
   const dejaVerseEnCoursNet=parseFloat((dejaVerseEnCoursBrut*coefNet).toFixed(2));
   const dixiemeTotalEnCoursNet=parseFloat((dixiemeTotalEnCoursBrut*coefNet).toFixed(2));
-  // 04/09/2026 (Sophie) : jours de fractionnement pas encore posés, payables si la rupture tombe dans
-  // leur fenêtre — calcul totalement isolé (voir calcSoldeFractionnementRupture), simple ajout au
-  // retour, aucune ligne existante ci-dessus modifiée.
-  const soldeFracSC52=calcSoldeFractionnementRupture(c,dateRupture);
-  return {joursAcquisRestants, montantAcquisBrut, montantAcquisNet, joursEnCoursRestants, montantEnCoursBrut, montantEnCoursNet, dejaVerseEnCoursNet, dixiemeTotalEnCoursNet, joursFracRestants:soldeFracSC52.joursFracRestants, montantFracRupture:soldeFracSC52.montantFracRupture};
+  return {joursAcquisRestants, montantAcquisBrut, montantAcquisNet, joursEnCoursRestants, montantEnCoursBrut, montantEnCoursNet, dejaVerseEnCoursNet, dixiemeTotalEnCoursNet};
 }
 
 function calcSoldeConges46(c, dateRupture){
@@ -15878,8 +15827,7 @@ function calcSoldeConges46(c, dateRupture){
   // l'année en cours au moment de la rupture (cg.estTerminee toujours faux dans ce cas).
   const dixiemeEnCoursNet=parseFloat((dixiemeEnCours*coefNetEnCours).toFixed(2));
   const maintienEnCoursNet=parseFloat((maintienEnCours*coefNetEnCours).toFixed(2));
-  const soldeFracSC46=calcSoldeFractionnementRupture(c,dateRupture);
-  return {joursNonVerses, montantNonVersesBrut:parseFloat(montantNonVersesBrut.toFixed(2)), montantNonVersesNet:parseFloat(montantNonVersesNet.toFixed(2)), joursEnCours, montantEnCoursBrut:parseFloat(montantEnCoursBrut.toFixed(2)), montantEnCoursNet:parseFloat(montantEnCoursNet.toFixed(2)), dixiemeEnCoursNet, maintienEnCoursNet, joursFracRestants:soldeFracSC46.joursFracRestants, montantFracRupture:soldeFracSC46.montantFracRupture};
+  return {joursNonVerses, montantNonVersesBrut:parseFloat(montantNonVersesBrut.toFixed(2)), montantNonVersesNet:parseFloat(montantNonVersesNet.toFixed(2)), joursEnCours, montantEnCoursBrut:parseFloat(montantEnCoursBrut.toFixed(2)), montantEnCoursNet:parseFloat(montantEnCoursNet.toFixed(2)), dixiemeEnCoursNet, maintienEnCoursNet};
 }
 
 function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
@@ -15944,12 +15892,6 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
           console.log('[TEMP-fnC-jour]',j.date,'| statut:',j.statut,'| heureDebPrev:',j.heureDebPrev,'| heureFinPrev:',j.heureFinPrev,'| isFerie:',isFerie(j.date,c),'| typeSem:',typeSem);
         }
         if(typeSem==='off') return;
-        // 04/09/2026 (Sophie, test Enaël) : même correctif que les 2 autres fonctions de régularisation
-        // — jamais de vérification de la date de fin de contrat ici avant aujourd'hui.
-        const dateFinCFnC=getDateFinContrat(c);
-        if(dateFinCFnC&&j.date>dateToStr(dateFinCFnC)) return;
-        if(estJourFractionnementChoisi(c,j.date)) return;
-        if(estJourAbsNonFractionnement(c,j)) return;
         // 27/08/2026 (Sophie) : liste complétée avec les 8 statuts qu'elle n'avait jamais eus
         // (alignée sur statutsExclus de calcRegulDiffEurosAuto) — abs-non notamment ("Absence non
         // rémunérée", "le jour sera déduit du salaire" dans son propre libellé) tombait avant dans la
@@ -16088,22 +16030,10 @@ function calcDateFinPreavis(dateSignif, dureePreavis, cumulConges, c){
       let joursRestants=dureePreavis.duree;
       const cur=new Date(dateSignif.getFullYear(),dateSignif.getMonth(),dateSignif.getDate());
       let iterationsJ=0;
-      // 04/09/2026 (Sophie) : un jour de repos hebdo tombant PENDANT une pose de congés (ex. dimanche
-      // entre deux jours cochés) doit rester suspendu même non coché individuellement — isJourCongeAM
-      // seul ne reconnaît que les jours explicitement posés, jamais les jours de repos "de passage"
-      // à l'intérieur d'une pose (même principe que la garantie hebdo/acquisition : un repos entre
-      // deux jours de congé ne rompt pas la continuité). Bug confirmé Sophie, exemple chiffré :
-      // dimanche 26/12/2021 non coché en pleine pose 20/12-04/01, préavis reprenait ce jour-là.
-      let enPoseConsecutive=false;
       while(joursRestants>0&&iterationsJ<500){
         iterationsJ++;
         const dateStr=dateToStr(cur);
-        const estCongePoseP=isJourCongeAM(dateStr);
-        const estReposP=cur.getDay()===reposH;
-        const suspenduP=estCongePoseP||(estReposP&&enPoseConsecutive);
-        if(estCongePoseP) enPoseConsecutive=true;
-        else if(!estReposP) enPoseConsecutive=false;
-        if(!suspenduP) joursRestants--;
+        if(!isJourCongeAM(dateStr)) joursRestants--;
         if(joursRestants>0) cur.setDate(cur.getDate()+1);
       }
       reporterSiDimanche(cur);
@@ -16123,22 +16053,14 @@ function calcDateFinPreavis(dateSignif, dureePreavis, cumulConges, c){
     const result=new Date(dateSignif.getFullYear(),dateSignif.getMonth(),dateSignif.getDate());
     let joursCourus=0;
     let iterations=0;
-    // 04/09/2026 (Sophie) : même correctif que la branche "jours" ci-dessus — un jour de repos hebdo
-    // au milieu d'une pose de congés reste suspendu même non coché individuellement.
-    let enPoseConsecutiveM=false;
     while(joursCourus<dureePreavJours&&iterations<500){
       iterations++;
       const dateStr=dateToStr(result);
-      const estCongePoseM=isJourCongeAM(dateStr);
-      const estReposM=result.getDay()===reposH;
-      const suspenduM=estCongePoseM||(estReposM&&enPoseConsecutiveM);
-      if(estCongePoseM) enPoseConsecutiveM=true;
-      else if(!estReposM) enPoseConsecutiveM=false;
-      if(!suspenduM){
+      if(!isJourCongeAM(dateStr)){
         joursCourus++;
         if(joursCourus<dureePreavJours) result.setDate(result.getDate()+1);
       } else {
-        // Jour suspendu (congé AM ou repos au milieu d'une pose) : avancer sans compter
+        // Jour de congé AM : avancer sans compter (suspension)
         result.setDate(result.getDate()+1);
       }
     }
@@ -16801,9 +16723,8 @@ function renderRuptureCDD(c, cont){
       const s=calcSoldeConges52(c,dFinCdd||dateSit||new Date());
       if(s.montantAcquisBrut>0){lignes.push({label:'Solde congés acquis',net:s.montantAcquisNet,brut:s.montantAcquisBrut});totalNet+=s.montantAcquisNet;totalBrut+=s.montantAcquisBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
-      if(s.montantFracRupture>0){lignes.push({label:'Jours de fractionnement non pris ('+s.joursFracRestants+' j)',net:s.montantFracRupture,brut:s.montantFracRuptureBrut});totalNet+=s.montantFracRupture;totalBrut+=s.montantFracRuptureBrut;}
     } else {
-      const s=calcSoldeConges46(c,dFinCdd||dateSit||new Date());
+      const s=calcSoldeConges46(c);
       if(s.montantNonVersesBrut>0){lignes.push({label:'Congés acquis non versés',net:s.montantNonVersesNet,brut:s.montantNonVersesBrut});totalNet+=s.montantNonVersesNet;totalBrut+=s.montantNonVersesBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
       const reg=calcRegularisationDefinitive(c);
@@ -17230,12 +17151,10 @@ function renderRupture(c, cont){
       const s=calcSoldeConges52(c,dateFinContrat||dateSit);
       if(s.montantAcquisBrut>0){lignes.push({label:'Solde congés acquis',net:s.montantAcquisNet,brut:s.montantAcquisBrut});totalNet+=s.montantAcquisNet;totalBrut+=s.montantAcquisBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
-      if(s.montantFracRupture>0){lignes.push({label:'Jours de fractionnement non pris ('+s.joursFracRestants+' j)',net:s.montantFracRupture,brut:s.montantFracRuptureBrut});totalNet+=s.montantFracRupture;totalBrut+=s.montantFracRuptureBrut;}
     } else {
       const s=calcSoldeConges46(c,dateFinContrat||dateSit);
       if(s.montantNonVersesBrut>0){lignes.push({label:'Congés acquis non versés',net:s.montantNonVersesNet,brut:s.montantNonVersesBrut});totalNet+=s.montantNonVersesNet;totalBrut+=s.montantNonVersesBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
-      if(s.montantFracRupture>0){lignes.push({label:'Jours de fractionnement non pris ('+s.joursFracRestants+' j)',net:s.montantFracRupture,brut:s.montantFracRuptureBrut});totalNet+=s.montantFracRupture;totalBrut+=s.montantFracRuptureBrut;}
       if(srcActifSim.tc!=='52'){
         const reg=calcRegularisationDefinitive(c);
         if(reg.diffNet>0){
@@ -17520,11 +17439,13 @@ function genOngletCongesContrat(c){
     const acquis=cg?.acquis||0;
     const restants=cg?.restants||0;
     const label=`Acquisition juin ${anneeAcq} → mai ${anneeAcq+1}`;
+    const fracAppliqueContrat=c.fractionnement?.[anneeAcq]?calcJoursFractionnement(c,anneeAcq):0;
     html+=`<div style="border:1px solid var(--mb);border-radius:8px;margin-bottom:10px;overflow:hidden">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#d9ccd6;cursor:pointer" onclick="toggleCgContrat('${id}','${containerId}')">
         <div>
           <div style="font-weight:700;font-size:14px;color:var(--m)">${label}</div>
           <div style="font-size:12px;color:var(--tx2)">${acquis} j acquis · ${nbAcq > 0 ? nbAcq+' j posés acquis · ' : ''}${nbAnticipe > 0 ? nbAnticipe+' j posés anticipés · ' : ''}${restants > 0 ? restants+' j restants' : 'soldé'}</div>
+          ${fracAppliqueContrat>0?(c.tc==='52'?`<div style="font-size:12px;color:var(--tx2)">dont ${fracAppliqueContrat} jour${fracAppliqueContrat>1?'s':''} de fractionnement</div>`:`<div style="font-size:12px;color:var(--tx2)">+ ${fracAppliqueContrat} jour${fracAppliqueContrat>1?'s':''} de fractionnement (en plus, non compris ci-dessus)</div>`):''}
         </div>
         <span style="font-size:20px;color:var(--tx2)" id="${id}-arrow">›</span>
       </div>
@@ -17723,21 +17644,13 @@ function buildCgAcquisEncarts(c, anneeAcq){
   const joursFragCalc=calcJoursFractionnement(c,anneeAcq);
   if(window.DEBUG_CGAM)console.log('[CGAM-caseFractionnement]','anneeAcq:',anneeAcq,'| joursFragCalc:',joursFragCalc,'| fracData.fractionnement:',fracData.fractionnement,'| c.fractionnement:',JSON.stringify(c.fractionnement));
   if(joursFragCalc>0||fracData.fractionnement){
-    const datesFracAff=((c.fractionnementDates&&c.fractionnementDates[anneeAcq])||[]).slice().sort();
-    const datesFracTxt=datesFracAff.map(dfx=>parseDateLoc(dfx).toLocaleDateString('fr-FR',{day:'numeric',month:'short'})).join(', ');
-    html+=`<div class="fg" style="margin-bottom:8px">
-      <div style="display:flex;align-items:center;gap:8px">
-        <input type="checkbox" id="frac-${c.id}-${anneeAcq}" ${fracData.fractionnement?'checked':''}
-          style="width:16px;height:16px"
-          onchange="majCgAmFractionnement(${c.id},${anneeAcq},this.checked)">
-        <label for="frac-${c.id}-${anneeAcq}" style="font-size:13px;cursor:pointer">
-          Jours de fractionnement (${joursFragCalc} jour${joursFragCalc>1?'s':''})
-        </label>
-      </div>
-      ${fracData.fractionnement?`<div style="margin-left:24px;margin-top:4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <button class="btn bs bsm" style="font-size:11px" onclick="ouvrirPickerFractionnement(${c.id},${anneeAcq})">📅 Sélectionner</button>
-        <span style="font-size:12px;color:var(--tx2)">${datesFracTxt||'aucun jour choisi'}</span>
-      </div>`:''}
+    html+=`<div class="fg" style="margin-bottom:8px;display:flex;align-items:center;gap:8px">
+      <input type="checkbox" id="frac-${c.id}-${anneeAcq}" ${fracData.fractionnement?'checked':''}
+        style="width:16px;height:16px"
+        onchange="majCgAmFractionnement(${c.id},${anneeAcq},this.checked)">
+      <label for="frac-${c.id}-${anneeAcq}" style="font-size:13px;cursor:pointer">
+        Jours de fractionnement
+      </label>
     </div>`;
   }
 
@@ -19308,13 +19221,6 @@ function buildCgAmDetail(anneeDebut,data){
   // exemple : case cochée pour 2020, bonus affiché sur "2020/2021" au lieu de "2021/2022").
   let joursFragMax=0;
   S.contrats.filter(c=>c.signe&&!estContratCloture(c)&&c.fractionnement?.[anneeDebut-1]).forEach(c=>{
-    // 03/09/2026 (Sophie) : sans condition sur l'acquis — l'article 102-2 de la CCN garantit à
-    // l'assmat un repos annuel de 30 jours ouvrables MÊME QUAND l'acquis n'atteint pas 30 (comblé par
-    // des congés complémentaires non rémunérés), donc la fenêtre de 30 jours à poser est déjà
-    // garantie structurellement pour n'importe quel contrat, indépendamment de son acquis réel. Le
-    // fractionnement s'ajoute donc toujours par-dessus dès qu'un contrat y a droit (revient sur les
-    // deux tentatives précédentes du jour — "acquis≥30" puis "acquis+fractionnement>30" —, toutes
-    // deux fondées sur l'hypothèse erronée que la fenêtre de 30 dépendait de l'acquis réel).
     joursFragMax=Math.max(joursFragMax,calcJoursFractionnement(c,anneeDebut-1));
   });
   const joursMax=30+joursFragMax;
@@ -21052,10 +20958,6 @@ function majCgAmFractionnement(contratId,anneeDebut,val){
   if(!c||estLectureSeuleEmployeur()) return;
   if(!c.fractionnement) c.fractionnement={};
   c.fractionnement[anneeDebut]=val;
-  // 04/09/2026 (Sophie) : décocher la case doit vider les jours déjà choisis pour cette année — sinon
-  // ils restent affichés "Fractionnement" (planning et feuille) alors que le contrat n'y a plus droit,
-  // et le planning réclame des heures pour un jour resté sans statut cohérent (bug confirmé Sophie).
-  if(!val&&c.fractionnementDates&&c.fractionnementDates[anneeDebut]) delete c.fractionnementDates[anneeDebut];
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
   _contratsModifies.add(contratId);
@@ -21072,213 +20974,6 @@ function majCgAmFractionnement(contratId,anneeDebut,val){
     renderDetTab(contratId,'conges');
     if(etaitOuverte) toggleCgContrat(idTuileFrac,'cg-contrat-container-'+contratId);
   }
-}
-
-function estJourFractionnementChoisi(c,dateStr){
-  // 04/09/2026 (Sophie) : vrai si dateStr fait partie des jours de fractionnement choisis pour ce
-  // contrat (n'importe quelle année — en pratique une seule à la fois est pertinente, mais on ne
-  // suppose rien). Utilisée pour l'affichage (ouvrirFiche) et la non-déduction (calcRecapFiche).
-  if(!c.fractionnementDates) return false;
-  return Object.values(c.fractionnementDates).some(arr=>arr&&arr.includes(dateStr));
-}
-
-function estJourFractionnementAutreContrat(c,dateStr){
-  // 04/09/2026 (Sophie) : vrai si un AUTRE contrat actif (signé, non clôturé) a choisi dateStr comme
-  // jour de fractionnement — jamais ce contrat-ci (son propre fractionnement est vérifié à part).
-  return S.contrats.some(x=>x.id!=c.id&&x.signe&&!estContratCloture(x)&&estJourFractionnementChoisi(x,dateStr));
-}
-
-function estJourAbsNonFractionnement(c,j){
-  // 04/09/2026 (Sophie) : un contrat prévu ce jour-là mais qui n'a STRICTEMENT rien de son côté (ni
-  // son propre fractionnement, ni congé, ni férié, ni aucun statut déjà écrit — le statut brut vaut
-  // encore exactement 'prevu', valeur par défaut) doit être déduit en abs-non dès qu'un AUTRE contrat
-  // a du fractionnement ce jour-là. Priorité confirmée : le statut propre du contrat prime toujours
-  // s'il existe déjà (retourne false ici, jamais recalculé par-dessus).
-  if(estJourFractionnementChoisi(c,j.date)) return false;
-  const statutBrut=j.statut||getStatutPrevu(c,j);
-  if(statutBrut!=='prevu') return false;
-  return estJourFractionnementAutreContrat(c,j.date);
-}
-
-function calcSoldeFractionnementRupture(c,dateRupture){
-  // 04/09/2026 (Sophie) : si la rupture tombe dans la fenêtre nov→avril d'une année de fractionnement
-  // (même fenêtre que le picker : nov 1er anneeAcq+1 → avril 30 anneeAcq+2), les jours pas encore
-  // posés sont payés — au même taux journalier que l'indemnité compensatrice de congés payés
-  // (calcIndemniteConges, montantJournalierNet de CETTE MÊME année d'acquisition), jamais un calcul
-  // séparé. Calcul isolé de calcSoldeConges52/46 (10ème/maintien) : le fractionnement n'a jamais fait
-  // partie de ce système, et une comparaison 10ème n'a pas de sens pour 1-2 jours.
-  if(!dateRupture) return {joursFracRestants:0,montantFracRupture:0,montantFracRuptureBrut:0};
-  const dateRuptureStr=dateRupture.getFullYear()+'-'+String(dateRupture.getMonth()+1).padStart(2,'0')+'-'+String(dateRupture.getDate()).padStart(2,'0');
-  let joursFracRestants=0, montantFracRupture=0, montantFracRuptureBrut=0;
-  Object.keys(c.fractionnement||{}).forEach(anneeAcqStr=>{
-    if(!c.fractionnement[anneeAcqStr]) return;
-    const anneeAcqFR=parseInt(anneeAcqStr);
-    const debutFenFR=(anneeAcqFR+1)+'-11-01', finFenFR=(anneeAcqFR+2)+'-04-30';
-    if(dateRuptureStr<debutFenFR||dateRuptureStr>finFenFR) return;
-    const quotaFR=calcJoursFractionnement(c,anneeAcqFR);
-    const prisFR=((c.fractionnementDates&&c.fractionnementDates[anneeAcqFR])||[]).length;
-    const resteFR=Math.max(0,quotaFR-prisFR);
-    if(resteFR<=0) return;
-    joursFracRestants+=resteFR;
-    const indFR=calcIndemniteConges(c,anneeAcqFR);
-    montantFracRupture+=resteFR*(indFR?.montantJournalierNet||0);
-    montantFracRuptureBrut+=resteFR*(indFR?.montantJournalierBrut||0);
-  });
-  return {joursFracRestants,montantFracRupture:parseFloat(montantFracRupture.toFixed(2)),montantFracRuptureBrut:parseFloat(montantFracRuptureBrut.toFixed(2))};
-}
-
-function estJourPrevuFrac(c,dateStr){
-  // 04/09/2026 (Sophie) : détermine si dateStr est "prévu" pour le contrat c, pour le picker de
-  // fractionnement. Fixe/sem : motif structurel direct (déterministe, jamais d'ambiguïté). Min/var :
-  // si le mois est déjà confirmé au moins une fois via le bouton Enregistrer (planningConfirmeMois),
-  // coché/non coché réel (getStatutPrevu) ; sinon repli sur les jours possibles du contrat (mêmes
-  // champs que jourEligibleBordure) — sans ce repli, un contrat dont personne n'a encore rempli le
-  // planning sur la période n'aurait aucun jour cliquable.
-  const d=parseDateLoc(dateStr);
-  const jourSem=d.getDay();
-  const src=getVersionActive(c,d);
-  const reposH=src.reposHebdo||c.reposHebdo||0;
-  if(jourSem===reposH) return false;
-  if(isFerie(dateStr,c)) return false;
-  const jourIdx=jourSem===0?6:jourSem-1;
-  const th=src.th||c.th;
-  if(th==='fixe') return !!(src.joursFixe&&src.joursFixe[jourIdx]&&src.joursFixe[jourIdx].d);
-  if(th==='sem') return !!(src.semTypes&&src.semTypes.some(st=>st.jours&&st.jours[jourIdx]&&st.jours[jourIdx].d));
-  const moisKeyFrac=dateStr.slice(0,7);
-  const planType=src.planType||c.planType;
-  if(c.planningConfirmeMois&&c.planningConfirmeMois[moisKeyFrac]){
-    const jourFicheFrac=c.fiches&&c.fiches[moisKeyFrac]&&c.fiches[moisKeyFrac].jours&&c.fiches[moisKeyFrac].jours.find(jj=>jj.date===dateStr);
-    return !!jourFicheFrac&&getStatutPrevu(c,jourFicheFrac)==='prevu';
-  }
-  if(planType==='min') return !!((src.joursMin||c.joursMin||[])[jourIdx]);
-  if(planType==='var') return (src.planVar||c.planVar||[]).some(v=>v.jours&&v.jours[jourIdx]);
-  return false;
-}
-
-function fracDateSelectionnable(c,anneeAcq,dateStr){
-  // Vrai si dateStr peut être AJOUTÉ à la sélection (pas déjà choisi, quota pas atteint, règle 1er
-  // jour prévu / 2e jour peut suivre directement le 1er même non prévu, hors repos/férié — 04/09/2026
-  // Sophie). Utilisée à la fois par le rendu du picker et par la bascule, pour ne jamais désynchroniser
-  // ce qui est affiché cliquable de ce qui est réellement accepté.
-  const datesFrac=(c.fractionnementDates&&c.fractionnementDates[anneeAcq])||[];
-  if(datesFrac.includes(dateStr)) return false;
-  if(datesFrac.length>=calcJoursFractionnement(c,anneeAcq)) return false;
-  if(datesFrac.length===0) return estJourPrevuFrac(c,dateStr);
-  if(estJourPrevuFrac(c,dateStr)) return true;
-  const pD=parseDateLoc(datesFrac[0]);pD.setDate(pD.getDate()+1);
-  const lendemainStr=pD.getFullYear()+'-'+String(pD.getMonth()+1).padStart(2,'0')+'-'+String(pD.getDate()).padStart(2,'0');
-  if(dateStr!==lendemainStr) return false;
-  const dChk=parseDateLoc(dateStr);
-  const srcChk=getVersionActive(c,dChk);
-  const reposChk=srcChk.reposHebdo||c.reposHebdo||0;
-  return dChk.getDay()!==reposChk&&!isFerie(dateStr,c);
-}
-
-function toggleFractionnementDate(contratId,anneeAcq,dateStr){
-  const c=S.contrats.find(x=>x.id==contratId);
-  if(!c||estLectureSeuleEmployeur()) return;
-  if(!c.fractionnementDates) c.fractionnementDates={};
-  if(!c.fractionnementDates[anneeAcq]) c.fractionnementDates[anneeAcq]=[];
-  const datesFrac=c.fractionnementDates[anneeAcq];
-  const idxFrac=datesFrac.indexOf(dateStr);
-  if(idxFrac!==-1){
-    datesFrac.splice(idxFrac,1);
-  } else {
-    if(!fracDateSelectionnable(c,anneeAcq,dateStr)) return;
-    datesFrac.push(dateStr);
-  }
-  const cidxFrac=S.contrats.findIndex(x=>x.id==contratId);
-  if(cidxFrac!==-1) S.contrats[cidxFrac]=c;
-  _contratsModifies.add(contratId);
-  saveToFirestore();
-  document.querySelector('.modal-wrap')?.remove();
-  ouvrirPickerFractionnement(contratId,anneeAcq);
-  if(S.enCours==contratId) renderDetTab(contratId,'conges');
-}
-
-function ouvrirPickerFractionnement(contratId,anneeAcq){
-  const c=S.contrats.find(x=>x.id==contratId);
-  if(!c) return;
-  const quotaFrac=calcJoursFractionnement(c,anneeAcq);
-  const datesFracC=(c.fractionnementDates&&c.fractionnementDates[anneeAcq])||[];
-  // 04/09/2026 (Sophie, confirmé) : fenêtre nov→avril dérivée de anneeAcq comme calcJoursFractionnement
-  // (limiteOct=(anneeAcq+1)+'-10-31') : nov 1er (anneeAcq+1) → avril 30 (anneeAcq+2). L'écart avec
-  // jourEligibleBordure (qui va un an plus loin) s'explique par l'anticipé, propre aux congés normaux
-  // — le fractionnement n'a pas cet équivalent (rien avant le 31/10, rien après le 30 avril).
-  const anneeDebutFen=anneeAcq+1;
-  const moisListeFrac=[];
-  for(let mIdx=10;mIdx<16;mIdx++){
-    const dMoisFrac=new Date(anneeDebutFen,mIdx,1);
-    moisListeFrac.push({annee:dMoisFrac.getFullYear(),mois:dMoisFrac.getMonth()});
-  }
-  const congesAmData=(S.congesAM&&S.congesAM[anneeDebutFen])||{jours:{}};
-  const autresContratsFrac={};
-  S.contrats.filter(x=>x.id!=contratId&&x.signe&&!estContratCloture(x)).forEach(x=>{
-    ((x.fractionnementDates&&x.fractionnementDates[anneeAcq])||[]).forEach(dt=>{
-      if(!autresContratsFrac[dt]) autresContratsFrac[dt]=[];
-      autresContratsFrac[dt].push(x.nom||'');
-    });
-  });
-  const BLEU_FRAC={bg:'#7C93A8',brd:'#5F7688',txt:'#26333F'}; // même bleu que PLAN_COULEURS[2] (sélecteur type de semaine)
-
-  let grilleMoisFrac='';
-  moisListeFrac.forEach(({annee:aM,mois:mM})=>{
-    const nomMoisFrac=new Date(aM,mM,1).toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
-    const decalageFrac=(new Date(aM,mM,1).getDay()+6)%7;
-    const nbJoursMoisFrac=new Date(aM,mM+1,0).getDate();
-    let grilleJoursFrac=['L','M','M','J','V','S','D'].map(j=>`<div style="text-align:center;font-size:10px;font-weight:600;color:var(--tx3)">${j}</div>`).join('');
-    for(let i=0;i<decalageFrac;i++) grilleJoursFrac+='<div></div>';
-    for(let jNum=1;jNum<=nbJoursMoisFrac;jNum++){
-      const dateStrFrac=aM+'-'+String(mM+1).padStart(2,'0')+'-'+String(jNum).padStart(2,'0');
-      const dFrac=new Date(aM,mM,jNum);
-      const jourSemFrac=dFrac.getDay();
-      const srcFrac=getVersionActive(c,dFrac);
-      const reposHFrac=srcFrac.reposHebdo||c.reposHebdo||0;
-      const estReposFrac=jourSemFrac===reposHFrac;
-      const estFerieFrac=isFerie(dateStrFrac,c);
-      const estCongeFrac=congesAmData.jours&&congesAmData.jours[dateStrFrac]==='pose';
-      const estChoisiFrac=datesFracC.includes(dateStrFrac);
-      const nomsAutresFrac=autresContratsFrac[dateStrFrac];
-      let styleFrac,onclickFrac='',titreFrac='';
-      if(estChoisiFrac){
-        styleFrac=`background:${eclaircir(BLEU_FRAC.bg,0.35)};color:${BLEU_FRAC.txt};border:1px solid ${BLEU_FRAC.brd};font-weight:700;cursor:pointer`;
-        onclickFrac=`onclick="toggleFractionnementDate(${contratId},${anneeAcq},'${dateStrFrac}')"`;
-        titreFrac='Choisi — cliquer pour retirer';
-      } else if(estReposFrac||estFerieFrac||estCongeFrac){
-        styleFrac='color:var(--tx3);background:transparent';
-        titreFrac=estFerieFrac?'Férié':estCongeFrac?'Congé posé':'Repos';
-      } else if(fracDateSelectionnable(c,anneeAcq,dateStrFrac)){
-        // 04/09/2026 (Sophie) : "lecture seule" (autres contrats) veut dire "jamais écrit dans un
-        // stockage partagé" — pas "non cliquable ici". Un jour déjà pris par un autre contrat reste
-        // choisissable pour CE contrat s'il respecte par ailleurs ses propres règles (prévu/quota) —
-        // en principe Sophie choisira souvent les mêmes jours pour plusieurs contrats.
-        if(nomsAutresFrac){
-          styleFrac=`background:${eclaircir(BLEU_FRAC.bg,0.6)};border:1px dashed ${BLEU_FRAC.brd};color:${BLEU_FRAC.txt};cursor:pointer`;
-          titreFrac='Déjà pris par '+nomsAutresFrac.join(', ')+' — cliquer pour choisir aussi ce jour';
-        } else {
-          styleFrac='border:1px solid var(--m);background:#fff;color:var(--m);cursor:pointer';
-          titreFrac='Cliquer pour choisir';
-        }
-        onclickFrac=`onclick="toggleFractionnementDate(${contratId},${anneeAcq},'${dateStrFrac}')"`;
-      } else if(nomsAutresFrac){
-        styleFrac=`background:${eclaircir(BLEU_FRAC.bg,0.75)};color:${BLEU_FRAC.brd}`;
-        titreFrac='Déjà pris par '+nomsAutresFrac.join(', ');
-      } else {
-        styleFrac='color:var(--tx3);background:transparent';
-      }
-      grilleJoursFrac+=`<div ${onclickFrac} title="${titreFrac}" style="width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;margin:1px auto;${styleFrac}">${jNum}</div>`;
-    }
-    grilleMoisFrac+=`<div style="margin-bottom:10px"><div style="font-weight:700;font-size:12px;color:var(--m);text-transform:capitalize;margin-bottom:4px">${nomMoisFrac}</div><div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">${grilleJoursFrac}</div></div>`;
-  });
-
-  const m=document.createElement('div');m.className='modal-wrap';
-  m.innerHTML=`<div class="modal" style="max-width:360px;max-height:85vh;overflow-y:auto">
-    <h3>Jours de fractionnement</h3>
-    <p style="font-size:13px;color:var(--tx2)">${datesFracC.length}/${quotaFrac} jour${quotaFrac>1?'s':''} choisi${datesFracC.length>1?'s':''}. Le 1er jour doit être un jour prévu ; le 2e peut suivre directement le 1er même non prévu.</p>
-    ${grilleMoisFrac}
-    <div class="modal-btns"><button class="btn bs" onclick="this.closest('.modal-wrap').remove();renderDetTab(${contratId},'conges')">Fermer</button></div>
-  </div>`;
-  document.body.appendChild(m);
 }
          
 function majCgAmEnfants(anneeDebut,val){         
