@@ -4356,21 +4356,23 @@ function ouvrirFiche(contratId,key){
     const numJour=parseInt(j.date.split('-')[2]);
     const nomJour=JOURS_ABR[j.jourSemaine===0?6:j.jourSemaine-1];
     let statutPrevu=j.statutPrevu||getStatutPrevu(c,j);
-    // 04/09/2026 (Sophie) : jour choisi via le picker de fractionnement (c.fractionnementDates) —
-    // traité comme un statut effectif à part entière, sauf si un statut EXPLICITEMENT saisi par
-    // Sophie existe déjà (jamais écraser une vraie donnée). 'non-prevu' ne compte pas comme tel :
-    // creerFiche l'écrit automatiquement sur tout jour possible dès la création de la fiche (avant
-    // tout pointage réel) — un jour de fractionnement (surtout le 2e, potentiellement non prévu)
-    // vaut presque toujours ce statut par défaut, donc l'exclure bloquait le fractionnement à
-    // chaque fois (confirmé par test Sophie 04/09).
-    if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) statutPrevu='fractionnement';
     // 11/08/2026 (Sophie) : correction d'AFFICHAGE uniquement (jamais la donnée stockée) — un vieux
     // statut "non prévu" enregistré sur le vrai jour de repos (fixe/sem) doit s'afficher "Repos",
     // sans toucher à j.statut ni à aucun autre statut (prévu, travaillé, etc. restent inchangés).
     const srcJourAff3837=getVersionActive(c,new Date(j.date));
     const estVraiReposAff3837=(srcJourAff3837.th==='fixe'||srcJourAff3837.th==='sem')&&j.jourSemaine===(srcJourAff3837.reposHebdo||0);
     const apresRuptureAff=!!(dateFinCSPAffStr&&j.date>dateFinCSPAffStr&&!fiche.valide);
-    const statutActuel=apresRuptureAff?'hors-contrat':((estVraiReposAff3837&&j.statut==='non-prevu')?'repos':(j.statut||statutPrevu));
+    // 04/09/2026 (Sophie) : jour choisi via le picker de fractionnement — DOIT être vérifié ICI, dans
+    // statutActuel lui-même, pas seulement sur statutPrevu comme tenté d'abord (erreur trouvée par
+    // test Sophie) : statutActuel=(j.statut||statutPrevu) fait TOUJOURS gagner j.statut dès qu'il est
+    // renseigné (creerFiche/planning-sync l'écrivent systématiquement en 'prevu'/'non-prevu' — voir
+    // commentaires plus haut) — modifier seulement statutPrevu n'avait donc jamais d'effet visible.
+    // Priorité : rupture > repos (correction d'affichage ci-dessus) > fractionnement > normal.
+    let statutActuel;
+    if(apresRuptureAff) statutActuel='hors-contrat';
+    else if(estVraiReposAff3837&&j.statut==='non-prevu') statutActuel='repos';
+    else if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) statutActuel='fractionnement';
+    else statutActuel=j.statut||statutPrevu;
     const bg=getStatutBg(statutActuel);
     const border=statutActuel!==statutPrevu?'border-left:3px solid var(--m)':'';
     const manquant=statutPrevu==='prevu'&&!j.heureDebReel&&!j.heureFinReel&&statutActuel==='prevu';
@@ -6649,9 +6651,10 @@ function imprimerFiche(contratId,key){
   fiche.jours.forEach((j,idx)=>{
     const numJour=parseInt(j.date.split('-')[2]);
     const nomJour=JOURS_ABR[j.jourSemaine===0?6:j.jourSemaine-1];
-    let statutPrevu=getStatutPrevu(c,j);
-    if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) statutPrevu='fractionnement'; // 04/09/2026, corrigé même jour : non-prevu dépassable
-    const statutActuel=j.statut||statutPrevu;
+    const statutPrevu=getStatutPrevu(c,j);
+    // 04/09/2026 (Sophie) : voir ouvrirFiche pour l'explication complète — statutActuel doit vérifier
+    // le fractionnement lui-même, pas seulement statutPrevu (j.statut gagne toujours sinon).
+    const statutActuel=(!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)?'fractionnement':(j.statut||statutPrevu);
     const statutLbl={'prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié','fractionnement':'Fractionnement',
       'conges-acq':'Congés','conges-non':'Congés','conges-anticipe':'Congés','conges-am':'Congés','conges-6j':'Non prévu','conges-6j-fin':'Non prévu','decompte-acq':'Non prévu','decompte-anticipe':'Non prévu','decompte-conges':'Non prévu','travaille':'Travaillé',
       'abs-rem':'Absence rémunérée','abs-enfant':'Absence maladie de l&rsquo;enfant','abs-non':'Absence non rémunérée','abs-am':'Absence AM','ferie-non':'Férié non acquis',
