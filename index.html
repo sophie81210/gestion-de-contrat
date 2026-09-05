@@ -4357,11 +4357,13 @@ function ouvrirFiche(contratId,key){
     const nomJour=JOURS_ABR[j.jourSemaine===0?6:j.jourSemaine-1];
     let statutPrevu=j.statutPrevu||getStatutPrevu(c,j);
     // 04/09/2026 (Sophie) : jour choisi via le picker de fractionnement (c.fractionnementDates) —
-    // traité comme un statut effectif à part entière, mais SEULEMENT si aucun statut explicite n'est
-    // déjà écrit sur ce jour (j.statut) — jamais silencieusement écraser une donnée déjà saisie
-    // (même principe que "jamais modifier une donnée stockée pour corriger un affichage" : ici on ne
-    // modifie rien, on calcule juste l'affichage différemment quand rien d'explicite n'existe déjà).
-    if(!j.statut&&estJourFractionnementChoisi(c,j.date)) statutPrevu='fractionnement';
+    // traité comme un statut effectif à part entière, sauf si un statut EXPLICITEMENT saisi par
+    // Sophie existe déjà (jamais écraser une vraie donnée). 'non-prevu' ne compte pas comme tel :
+    // creerFiche l'écrit automatiquement sur tout jour possible dès la création de la fiche (avant
+    // tout pointage réel) — un jour de fractionnement (surtout le 2e, potentiellement non prévu)
+    // vaut presque toujours ce statut par défaut, donc l'exclure bloquait le fractionnement à
+    // chaque fois (confirmé par test Sophie 04/09).
+    if((!j.statut||j.statut==='non-prevu')&&estJourFractionnementChoisi(c,j.date)) statutPrevu='fractionnement';
     // 11/08/2026 (Sophie) : correction d'AFFICHAGE uniquement (jamais la donnée stockée) — un vieux
     // statut "non prévu" enregistré sur le vrai jour de repos (fixe/sem) doit s'afficher "Repos",
     // sans toucher à j.statut ni à aucun autre statut (prévu, travaillé, etc. restent inchangés).
@@ -6648,7 +6650,7 @@ function imprimerFiche(contratId,key){
     const numJour=parseInt(j.date.split('-')[2]);
     const nomJour=JOURS_ABR[j.jourSemaine===0?6:j.jourSemaine-1];
     let statutPrevu=getStatutPrevu(c,j);
-    if(!j.statut&&estJourFractionnementChoisi(c,j.date)) statutPrevu='fractionnement'; // 04/09/2026, même règle que ouvrirFiche
+    if((!j.statut||j.statut==='non-prevu')&&estJourFractionnementChoisi(c,j.date)) statutPrevu='fractionnement'; // 04/09/2026, corrigé même jour : non-prevu dépassable
     const statutActuel=j.statut||statutPrevu;
     const statutLbl={'prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié','fractionnement':'Fractionnement',
       'conges-acq':'Congés','conges-non':'Congés','conges-anticipe':'Congés','conges-am':'Congés','conges-6j':'Non prévu','conges-6j-fin':'Non prévu','decompte-acq':'Non prévu','decompte-anticipe':'Non prévu','decompte-conges':'Non prévu','travaille':'Travaillé',
@@ -8697,7 +8699,8 @@ function calcCongesContrat(c, dateRefOverride){
             });
             let joursNormauxPV=0, joursTravaillePV=0, joursConges16PV=0;
             joursActifs.forEach(j=>{
-              const sj=j.statut||getStatutPrevu(c,j);
+              let sj=j.statut||getStatutPrevu(c,j);
+              if((!j.statut||j.statut==='non-prevu')&&estJourFractionnementChoisi(c,j.date)) sj='fractionnement';
               const cocheCgPV=!!(c.planning&&c.planning[j.date]&&c.planning[j.date].coche);
               if(sj==='travaille'){
                 joursTravaillePV++;
@@ -8923,7 +8926,8 @@ function calcCongesContrat(c, dateRefOverride){
             }
 
             joursSub.forEach(j=>{
-              const statutJ=j.statut||getStatutPrevu(c,j);
+              let statutJ=j.statut||getStatutPrevu(c,j);
+              if((!j.statut||j.statut==='non-prevu')&&estJourFractionnementChoisi(c,j.date)) statutJ='fractionnement';
               const cocheCgMin=!!(c.planning&&c.planning[j.date]&&c.planning[j.date].coche);
               const gateMinOk=!(c.th==='plan'&&c.planType==='min')||semaineCompleteCgMin||cocheCgMin;
               const [jpy,jpm,jpd]=j.date.split('-').map(Number);
@@ -11827,10 +11831,12 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   window._hTravailleVersHS={};
   fiche.jours.forEach(j=>{
     let statut=j.statut||getStatutPrevu(c,j);
-    // 04/09/2026 (Sophie) : jour choisi via le picker de fractionnement — même garde que dans
-    // ouvrirFiche (jamais si un statut explicite existe déjà sur ce jour). Rejoint le check hAbsJour
-    // plus bas (['conges-acq','conges-anticipe','conges-am'].includes(statut)) via ce même statut.
-    if(!j.statut&&estJourFractionnementChoisi(c,j.date)) statut='fractionnement';
+    // 04/09/2026 (Sophie) : jour choisi via le picker de fractionnement — même règle que ouvrirFiche,
+    // corrigée le même jour : 'non-prevu' reste dépassable (valeur par défaut de creerFiche, jamais
+    // saisie par Sophie), seul un statut réellement explicite (travaille, abs-rem...) bloque. Rejoint
+    // le check hAbsJour plus bas (['conges-acq','conges-anticipe','conges-am','fractionnement']) via
+    // ce même statut.
+    if((!j.statut||j.statut==='non-prevu')&&estJourFractionnementChoisi(c,j.date)) statut='fractionnement';
     // Règle paiement férié : si encadré par arret sur jour prévu travaillé
     if(statut==='ferie'||(!j.statut&&isFerie(j.date,sourceActif))){
       const prevTrav=getPrevJourPrevuTravaille(c,j.date);
