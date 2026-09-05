@@ -5434,15 +5434,14 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       // cochable, même sans modification autorisée, dès qu'il n'appartenait à aucun type pointé.
       const estSaisissable=(infos.jourPossible||(infos.ferieChome&&!ferieDansConges&&(infos.jourPossible||modifMoisActive))||(estCongeAM&&estSemCongesPartiellePln))&&(!estCongeAM||estSemCongesPartiellePln)&&!moisVerrouille&&!casesVerrouillee;
       let contenu;
-      // 03/08/2026 (correctif Sophie) : cette case ne doit apparaître que si le jour est réellement
-      // possible pour le contrat, ou si les modifications sont autorisées ce mois-là — sinon un jour
-      // de congé tombant sur un jour non possible (ex. samedi hors motif) devenait à tort cochable,
-      // sans jamais vérifier infos.jourPossible. Sans cette condition, retombe sur l'affichage figé
-      // du cas suivant (estCongeAM||ferieDansConges).
-      // 03/08/2026 (confirmé Sophie, même règle que le férié) : un jour de congé sur une semaine
-      // partielle ne doit jamais être cochable s'il n'est pas prévu dans le type/motif, même en
-      // modifications autorisées — avant, modifMoisActive levait cette protection à tort.
-      if(estCongeAM&&estSemCongesPartiellePln&&infos.jourPossible){
+      // 04/09/2026 (Sophie) : un jour de fractionnement choisi ne doit jamais être déplaçable via
+      // l'échange de jour (executerEchangeJourFS) — sinon la date choisie perd son lien avec un jour
+      // réellement prévu (bug confirmé Sophie : jour de fractionnement perdu après un échange sur
+      // plan fixe). Vérifié en tout premier, avant congés/férié/hors-contrat — mutuellement exclusif
+      // avec ces cas de toute façon (le picker n'autorise jamais fractionnement sur ces jours-là).
+      if(estJourFractionnementChoisi(c,j.date)){
+        contenu=`<span style="color:#5F7688;font-size:12px;font-weight:600">Fractionnement</span>`;
+      } else if(estCongeAM&&estSemCongesPartiellePln&&infos.jourPossible){
         contenu=`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);cursor:${(moisVerrouille||casesVerrouillee)?'default':'pointer'}">
           <input type="checkbox" ${dejaCoche?'checked':''} ${(moisVerrouille||casesVerrouillee)?'disabled':''}
             onchange="toggleJourPlanning(${c.id},'${j.date}',this.checked,'${semKeyDom}',true)">
@@ -16064,13 +16063,17 @@ function calcDateFinPreavis(dateSignif, dureePreavis, cumulConges, c){
       let joursRestants=dureePreavis.duree;
       const cur=new Date(dateSignif.getFullYear(),dateSignif.getMonth(),dateSignif.getDate());
       let iterationsJ=0;
+      console.log('[TEMP-preavis-debut]','dateSignif:',dateToStr(dateSignif),'| duree:',dureePreavis.duree,'| cumulConges:',cumulConges);
       while(joursRestants>0&&iterationsJ<500){
         iterationsJ++;
         const dateStr=dateToStr(cur);
-        if(!isJourCongeAM(dateStr)) joursRestants--;
+        const estCongeIterP=isJourCongeAM(dateStr);
+        if(!estCongeIterP) joursRestants--;
+        console.log('[TEMP-preavis]',dateStr,'| congé AM:',estCongeIterP,'| joursRestants après:',joursRestants);
         if(joursRestants>0) cur.setDate(cur.getDate()+1);
       }
       reporterSiDimanche(cur);
+      console.log('[TEMP-preavis-fin]','résultat avant report dimanche déjà appliqué:',dateToStr(cur));
       return cur;
     }
   } else {
