@@ -2265,7 +2265,11 @@ function modifierKmDirect(contratId, val, cibleId){
                       const moisKeyAbs=jdStr.slice(0,7);
                       const ficheAbs=c.fiches&&c.fiches[moisKeyAbs];
                       const jourAbs=ficheAbs&&ficheAbs.jours.find(jj=>jj.date===jdStr);
-                      return !!(jourAbs&&statutsAbsenceVol.includes(jourAbs.statut));
+                      if(!jourAbs) return false;
+                      // 04/09/2026 (Sophie) : abs-non cross-contrat (autre contrat en fractionnement ce
+                      // jour, rien ici) — même recalcul local que partout ailleurs, jamais vu sans ça.
+                      if(estJourAbsNonFractionnement(c,jourAbs)) return true;
+                      return statutsAbsenceVol.includes(jourAbs.statut);
                     };
                     let joursAbsenceVol=0;
                     for(let d=0;d<7;d++){
@@ -2450,6 +2454,9 @@ function modifierKmDirect(contratId, val, cibleId){
                 if(typeSem==='off'){ cur.setDate(cur.getDate()+1); continue; }
                 const estConge=!clause52&&['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges'].includes(jour.statut);
                 if(estConge){ cur.setDate(cur.getDate()+1); continue; }
+                // 04/09/2026 (Sophie) : même ajout que la branche min/var juste au-dessus — abs-non
+                // cross-contrat, jamais visible sans ce check dédié (jour.statut reste 'prevu' brut).
+                if(estJourAbsNonFractionnement(c,jour)){ cur.setDate(cur.getDate()+1); continue; }
                 if(jour.heureDebPrev&&jour.heureFinPrev){
                   const m=toMins(jour.heureFinPrev)-toMins(jour.heureDebPrev);
                   if(m>0) hPrevu+=m/60;
@@ -2982,10 +2989,16 @@ function renderDetTab(id,tab){
                 // salaire dû, clause52 ou non (bug confirmé Sophie : décembre 2021, régul52, jours
                 // non-acquis comptés à tort).
                 const statutsCongesHR=['conges-acq','conges-anticipe','conges-am','decompte-conges'];
-                const statutsExclus=['conges-non','abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat','travaille','reprise'];
+                const statutsExclus=['conges-non','abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat','travaille','reprise','fractionnement'];
                 ficheMois.jours.forEach(j=>{
                   if(j.date<debQ||j.date>finQ) return;
-                  const statut=j.statut||getStatutPrevu(c,j);
+                  let statut=j.statut||getStatutPrevu(c,j);
+                  // 04/09/2026 (Sophie) : fractionnement (repos posé, couvert par la mensualisation,
+                  // jamais des heures réellement dues en plus) et déduction abs-non cross-contrat
+                  // (autre contrat en fractionnement ce jour, rien ici) — même principe que partout
+                  // ailleurs : recalcul local, jamais vu sans cette injection explicite.
+                  if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) statut='fractionnement';
+                  else if(estJourAbsNonFractionnement(c,j)) statut='abs-non';
                   // Jour férié normalement prévu, passé en "travaillé" (statut nécessaire pour que la
                   // majoration férié s'applique) : ce statut n'entretient jamais d'heures prévues et est
                   // exclu ci-dessous — on retrouve ici les heures qui auraient été dues, recalculées
@@ -3833,13 +3846,17 @@ function calcRegulDiffEurosAuto(c, moisMaxForce){
     if(estPlanMinVarRegAuto){
       hReel=calcHPrevuReg(c,false,debutMoisRegul,finMoisRegul);
     } else {
-    const statutsExclus=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-conges','abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat'];
+    const statutsExclus=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-conges','abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat','fractionnement'];
     (ficheMois.jours||[]).forEach(j=>{
       if(window.DEBUG_REGUL_COMPARE&&['2023-09','2023-12','2024-01','2024-03','2025-09','2026-05'].includes(key)){
         console.log('[TEMP-fnA-jour]',j.date,'| statut:',j.statut,'| heureDebPrev:',j.heureDebPrev,'| heureFinPrev:',j.heureFinPrev,'| isFerie:',isFerie(j.date,c),'| isAbsEmpl:',isAbsenceEmployeur(agendaMoisReg,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))),'| horsPlage:',(j.date<debutMoisRegul||j.date>finMoisRegul));
       }
       if(j.date<debutMoisRegul||j.date>finMoisRegul) return;
-      const statut=j.statut||getStatutPrevu(c,j);
+      let statut=j.statut||getStatutPrevu(c,j);
+      // 04/09/2026 (Sophie) : même principe que hReelPortion — fractionnement et abs-non cross-contrat
+      // recalculés localement ici, jamais visibles sans cette injection.
+      if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) statut='fractionnement';
+      else if(estJourAbsNonFractionnement(c,j)) statut='abs-non';
       // 25/08/2026 (Sophie) : un jour "travaillé" qui tombe dans une semaine "off" ne doit jamais
       // compter, même s'il porte des heures prévues structurelles (bug confirmé Sophie 25/08 : 14 et
       // 16 janvier 2025, jours "travaillé" dans une semaine "off", comptés à tort avec leurs heures
@@ -15737,7 +15754,11 @@ function calcSoldeConges52(c, dateRupture){
   // (déjà versé / 10ème total de la période / reste à verser) — même trio que demandé par Sophie.
   const dejaVerseEnCoursNet=parseFloat((dejaVerseEnCoursBrut*coefNet).toFixed(2));
   const dixiemeTotalEnCoursNet=parseFloat((dixiemeTotalEnCoursBrut*coefNet).toFixed(2));
-  return {joursAcquisRestants, montantAcquisBrut, montantAcquisNet, joursEnCoursRestants, montantEnCoursBrut, montantEnCoursNet, dejaVerseEnCoursNet, dixiemeTotalEnCoursNet};
+  // 04/09/2026 (Sophie) : jours de fractionnement pas encore posés, payables si la rupture tombe dans
+  // leur fenêtre — calcul totalement isolé (voir calcSoldeFractionnementRupture), simple ajout au
+  // retour, aucune ligne existante ci-dessus modifiée.
+  const soldeFracSC52=calcSoldeFractionnementRupture(c,dateRupture);
+  return {joursAcquisRestants, montantAcquisBrut, montantAcquisNet, joursEnCoursRestants, montantEnCoursBrut, montantEnCoursNet, dejaVerseEnCoursNet, dixiemeTotalEnCoursNet, joursFracRestants:soldeFracSC52.joursFracRestants, montantFracRupture:soldeFracSC52.montantFracRupture};
 }
 
 function calcSoldeConges46(c, dateRupture){
@@ -15834,7 +15855,8 @@ function calcSoldeConges46(c, dateRupture){
   // l'année en cours au moment de la rupture (cg.estTerminee toujours faux dans ce cas).
   const dixiemeEnCoursNet=parseFloat((dixiemeEnCours*coefNetEnCours).toFixed(2));
   const maintienEnCoursNet=parseFloat((maintienEnCours*coefNetEnCours).toFixed(2));
-  return {joursNonVerses, montantNonVersesBrut:parseFloat(montantNonVersesBrut.toFixed(2)), montantNonVersesNet:parseFloat(montantNonVersesNet.toFixed(2)), joursEnCours, montantEnCoursBrut:parseFloat(montantEnCoursBrut.toFixed(2)), montantEnCoursNet:parseFloat(montantEnCoursNet.toFixed(2)), dixiemeEnCoursNet, maintienEnCoursNet};
+  const soldeFracSC46=calcSoldeFractionnementRupture(c,dateRupture);
+  return {joursNonVerses, montantNonVersesBrut:parseFloat(montantNonVersesBrut.toFixed(2)), montantNonVersesNet:parseFloat(montantNonVersesNet.toFixed(2)), joursEnCours, montantEnCoursBrut:parseFloat(montantEnCoursBrut.toFixed(2)), montantEnCoursNet:parseFloat(montantEnCoursNet.toFixed(2)), dixiemeEnCoursNet, maintienEnCoursNet, joursFracRestants:soldeFracSC46.joursFracRestants, montantFracRupture:soldeFracSC46.montantFracRupture};
 }
 
 function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
@@ -15899,6 +15921,11 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
           console.log('[TEMP-fnC-jour]',j.date,'| statut:',j.statut,'| heureDebPrev:',j.heureDebPrev,'| heureFinPrev:',j.heureFinPrev,'| isFerie:',isFerie(j.date,c),'| typeSem:',typeSem);
         }
         if(typeSem==='off') return;
+        // 04/09/2026 (Sophie) : fractionnement et abs-non cross-contrat, même principe que les 2
+        // autres fonctions de régularisation — cette fonction-ci vérifie j.statut brut sans repli
+        // getStatutPrevu, donc un check dédié plutôt qu'une réaffectation de variable locale.
+        if(estJourFractionnementChoisi(c,j.date)) return;
+        if(estJourAbsNonFractionnement(c,j)) return;
         // 27/08/2026 (Sophie) : liste complétée avec les 8 statuts qu'elle n'avait jamais eus
         // (alignée sur statutsExclus de calcRegulDiffEurosAuto) — abs-non notamment ("Absence non
         // rémunérée", "le jour sera déduit du salaire" dans son propre libellé) tombait avant dans la
@@ -16730,8 +16757,9 @@ function renderRuptureCDD(c, cont){
       const s=calcSoldeConges52(c,dFinCdd||dateSit||new Date());
       if(s.montantAcquisBrut>0){lignes.push({label:'Solde congés acquis',net:s.montantAcquisNet,brut:s.montantAcquisBrut});totalNet+=s.montantAcquisNet;totalBrut+=s.montantAcquisBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
+      if(s.montantFracRupture>0){lignes.push({label:'Jours de fractionnement non pris ('+s.joursFracRestants+' j)',net:s.montantFracRupture,brut:s.montantFracRuptureBrut});totalNet+=s.montantFracRupture;totalBrut+=s.montantFracRuptureBrut;}
     } else {
-      const s=calcSoldeConges46(c);
+      const s=calcSoldeConges46(c,dFinCdd||dateSit||new Date());
       if(s.montantNonVersesBrut>0){lignes.push({label:'Congés acquis non versés',net:s.montantNonVersesNet,brut:s.montantNonVersesBrut});totalNet+=s.montantNonVersesNet;totalBrut+=s.montantNonVersesBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
       const reg=calcRegularisationDefinitive(c);
@@ -17158,10 +17186,12 @@ function renderRupture(c, cont){
       const s=calcSoldeConges52(c,dateFinContrat||dateSit);
       if(s.montantAcquisBrut>0){lignes.push({label:'Solde congés acquis',net:s.montantAcquisNet,brut:s.montantAcquisBrut});totalNet+=s.montantAcquisNet;totalBrut+=s.montantAcquisBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
+      if(s.montantFracRupture>0){lignes.push({label:'Jours de fractionnement non pris ('+s.joursFracRestants+' j)',net:s.montantFracRupture,brut:s.montantFracRuptureBrut});totalNet+=s.montantFracRupture;totalBrut+=s.montantFracRuptureBrut;}
     } else {
       const s=calcSoldeConges46(c,dateFinContrat||dateSit);
       if(s.montantNonVersesBrut>0){lignes.push({label:'Congés acquis non versés',net:s.montantNonVersesNet,brut:s.montantNonVersesBrut});totalNet+=s.montantNonVersesNet;totalBrut+=s.montantNonVersesBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
+      if(s.montantFracRupture>0){lignes.push({label:'Jours de fractionnement non pris ('+s.joursFracRestants+' j)',net:s.montantFracRupture,brut:s.montantFracRuptureBrut});totalNet+=s.montantFracRupture;totalBrut+=s.montantFracRuptureBrut;}
       if(srcActifSim.tc!=='52'){
         const reg=calcRegularisationDefinitive(c);
         if(reg.diffNet>0){
@@ -21020,6 +21050,33 @@ function estJourAbsNonFractionnement(c,j){
   const statutBrut=j.statut||getStatutPrevu(c,j);
   if(statutBrut!=='prevu') return false;
   return estJourFractionnementAutreContrat(c,j.date);
+}
+
+function calcSoldeFractionnementRupture(c,dateRupture){
+  // 04/09/2026 (Sophie) : si la rupture tombe dans la fenêtre nov→avril d'une année de fractionnement
+  // (même fenêtre que le picker : nov 1er anneeAcq+1 → avril 30 anneeAcq+2), les jours pas encore
+  // posés sont payés — au même taux journalier que l'indemnité compensatrice de congés payés
+  // (calcIndemniteConges, montantJournalierNet de CETTE MÊME année d'acquisition), jamais un calcul
+  // séparé. Calcul isolé de calcSoldeConges52/46 (10ème/maintien) : le fractionnement n'a jamais fait
+  // partie de ce système, et une comparaison 10ème n'a pas de sens pour 1-2 jours.
+  if(!dateRupture) return {joursFracRestants:0,montantFracRupture:0,montantFracRuptureBrut:0};
+  const dateRuptureStr=dateRupture.getFullYear()+'-'+String(dateRupture.getMonth()+1).padStart(2,'0')+'-'+String(dateRupture.getDate()).padStart(2,'0');
+  let joursFracRestants=0, montantFracRupture=0, montantFracRuptureBrut=0;
+  Object.keys(c.fractionnement||{}).forEach(anneeAcqStr=>{
+    if(!c.fractionnement[anneeAcqStr]) return;
+    const anneeAcqFR=parseInt(anneeAcqStr);
+    const debutFenFR=(anneeAcqFR+1)+'-11-01', finFenFR=(anneeAcqFR+2)+'-04-30';
+    if(dateRuptureStr<debutFenFR||dateRuptureStr>finFenFR) return;
+    const quotaFR=calcJoursFractionnement(c,anneeAcqFR);
+    const prisFR=((c.fractionnementDates&&c.fractionnementDates[anneeAcqFR])||[]).length;
+    const resteFR=Math.max(0,quotaFR-prisFR);
+    if(resteFR<=0) return;
+    joursFracRestants+=resteFR;
+    const indFR=calcIndemniteConges(c,anneeAcqFR);
+    montantFracRupture+=resteFR*(indFR?.montantJournalierNet||0);
+    montantFracRuptureBrut+=resteFR*(indFR?.montantJournalierBrut||0);
+  });
+  return {joursFracRestants,montantFracRupture:parseFloat(montantFracRupture.toFixed(2)),montantFracRuptureBrut:parseFloat(montantFracRuptureBrut.toFixed(2))};
 }
 
 function estJourPrevuFrac(c,dateStr){
