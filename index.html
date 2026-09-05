@@ -9666,20 +9666,6 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
     if(window.DEBUG_CGAM)console.log('[CGAM-semEntree]',joursDesSem[0].date,'| joursHCExclus tous:',!!(joursHCExclus&&joursDesSem.every(jj=>joursHCExclus.has(jj.date))),'| nb jours:',joursDesSem.length);
     if(joursHCExclus&&joursDesSem.every(jj=>joursHCExclus.has(jj.date))) return;
     const dateEx=joursDesSem[0].date;
-    // 04/09/2026 (Sophie) : une semaine ENTIÈREMENT après la semaine de rupture ne doit jamais aller
-    // chercher son type dans l'agenda (jamais entretenu après la fin du contrat, peut contenir
-    // n'importe quoi et fait varier théoriques à tort) — elle retombe directement sur la moyenne
-    // hebdomadaire (hSemMoyPS), exactement comme le cas "type inconnu" existant. dateEx est le premier
-    // jour de cette semaine présent dans la fiche : pour la semaine de la rupture elle-même, ce premier
-    // jour reste avant/à la rupture (donc pas concernée ici, gérée par le mécanisme "à cheval" déjà en
-    // place) — seules les semaines strictement suivantes ont TOUS leurs jours après.
-    const dateFinContratThSem=getDateFinContrat(c);
-    const dateRuptureThSem=dateFinContratThSem?dateToStr(dateFinContratThSem):null;
-    if(window.DEBUG_CGAM)console.log('[CGAM-semRuptureCheck]',dateEx,'| c.rupture:',JSON.stringify(c.rupture),'| dateRuptureThSem:',dateRuptureThSem,'| declenche:',!!(dateRuptureThSem&&dateEx>dateRuptureThSem));
-    if(dateRuptureThSem&&dateEx>dateRuptureThSem){
-      hTheoriques+=hSemMoyPS;
-      return;
-    }
     const semKey=semAn+'-S'+String(semNum).padStart(2,'0');
     const agKeyTh=getKeyAgenda(semNum,parseInt(semAn));
 
@@ -11026,8 +11012,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     fiche.jours.forEach(j=>{
       const estHorsContrat=(j.statut||'')==='hors-contrat';
       const estAvantDebut=!!(c.dateDeb&&j.date<c.dateDeb);
-      if(window.DEBUG_CGAM&&(estHorsContrat||estAvantDebut))console.log('[CGAM-joursHCExclus-sem]',j.date,'| j.statut brut:',j.statut,'| estHorsContrat:',estHorsContrat,'| estAvantDebut:',estAvantDebut);
-      if(!estHorsContrat&&!estAvantDebut) return;
+      // 04/09/2026 (Sophie) : jamais d'équivalent à estAvantDebut pour la fin de contrat — la rupture
+      // ne reposait que sur j.statut==='hors-contrat' (peu fiable, jamais écrit sur la donnée réelle
+      // en dehors d'ouvrirFiche). Même principe que le début : comparaison de date directe.
+      const dateFinCJHC=getDateFinContrat(c);
+      const estApresRupture=!!(dateFinCJHC&&j.date>dateToStr(dateFinCJHC));
+      if(window.DEBUG_CGAM&&(estHorsContrat||estAvantDebut||estApresRupture))console.log('[CGAM-joursHCExclus-sem]',j.date,'| j.statut brut:',j.statut,'| estHorsContrat:',estHorsContrat,'| estAvantDebut:',estAvantDebut,'| estApresRupture:',estApresRupture);
+      if(!estHorsContrat&&!estAvantDebut&&!estApresRupture) return;
       const jourIdxTh2=j.jourSemaine===0?6:j.jourSemaine-1;
       const srcTh=getVersionActive(c,new Date(j.date));
       const semTypesTh=srcTh.semTypes||c.semTypes||[];
@@ -11039,7 +11030,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     fiche.jours.forEach(j=>{
       const estHorsContrat=(j.statut||'')==='hors-contrat';
       const estAvantDebut=!!(c.dateDeb&&j.date<c.dateDeb);
-      if(!estHorsContrat&&!estAvantDebut) return;
+      // 04/09/2026 (Sophie) : même correctif que sem juste au-dessus — jamais d'équivalent à
+      // estAvantDebut pour la fin de contrat ici non plus.
+      const dateFinCJHCmv=getDateFinContrat(c);
+      const estApresRupture=!!(dateFinCJHCmv&&j.date>dateToStr(dateFinCJHCmv));
+      if(!estHorsContrat&&!estAvantDebut&&!estApresRupture) return;
       const jourIdxTh2=j.jourSemaine===0?6:j.jourSemaine-1;
       // 11/08/2026 (Sophie) : motif du plan var/min ACTUEL (sourceActif), jamais celui de l'ancien
       // contrat (srcTh) — même principe que la correction déjà faite dans le fabricant plus haut.
