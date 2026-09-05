@@ -3447,6 +3447,7 @@ function getStatutOptions(statutPrevu, isPlanMinVar, c, sourceActive){
     'decompte-acq':['reprise'],
     'decompte-anticipe':['reprise'],
     'reprise':['decompte-conges'],
+    'fractionnement':['fractionnement'],
   };
   const labels={
     'prevu':'Prévu','abs-rem':'Absence rémunérée','abs-enfant':'Abs. maladie enfant',
@@ -3455,7 +3456,7 @@ function getStatutOptions(statutPrevu, isPlanMinVar, c, sourceActive){
     'ferie':'Férié','conges-acq':'Congés','conges-non':'Congés','conges-anticipe':'Congés','conges-am':'Congés','conges-6j':'Non prévu',
     'init':'↺ Réinitialiser','hors-contrat':'Hors contrat','abs-partielle':'Absence partielle',
     'decompte-conges':'Non prévu','decompte-acq':'Non prévu','decompte-anticipe':'Non prévu',
-    'reprise':'Reprise'
+    'reprise':'Reprise','fractionnement':'Fractionnement'
   };
   return (opts[statutPrevu]||['init']).map(v=>`<option value="${v}">${labels[v]||v}</option>`).join('');
 }
@@ -4372,6 +4373,7 @@ function ouvrirFiche(contratId,key){
     if(apresRuptureAff) statutActuel='hors-contrat';
     else if(estVraiReposAff3837&&j.statut==='non-prevu') statutActuel='repos';
     else if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) statutActuel='fractionnement';
+    else if(estJourAbsNonFractionnement(c,j)) statutActuel='abs-non';
     else statutActuel=j.statut||statutPrevu;
     const bg=getStatutBg(statutActuel);
     const border=statutActuel!==statutPrevu?'border-left:3px solid var(--m)':'';
@@ -4480,7 +4482,7 @@ function ouvrirFiche(contratId,key){
        ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'km',this.value)"`}>
     </td>`:aKm?'<td style="padding:3px 2px"><input type="number" style="width:38px;visibility:hidden" class="no-spin"></td>':'';
 
-    const optsBase=['conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','non-prevu','hors-contrat','repos','ferie','ferie-non','arret'].includes(statutActuel)?statutActuel:statutPrevu;
+    const optsBase=['conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','non-prevu','hors-contrat','repos','ferie','ferie-non','arret','fractionnement'].includes(statutActuel)?statutActuel:statutPrevu;
     const opts=getStatutOptions(optsBase, isPlanVar, c, sourceActive);
     let selectedOpts=opts.replace(`value="${statutActuel}"`,`value="${statutActuel}" selected`);
     if(!selectedOpts.includes('selected')){
@@ -4547,7 +4549,7 @@ function ouvrirFiche(contratId,key){
       const peutAvoirHeures=['prevu','travaille','abs-partielle'].includes(statutPrevuJ);
       // Coche verte : seulement si jour prévu sans modification (pas de statut forcé, pas d'heures réelles, pas de congé, pas hors-contrat)
       const statutForcé=j.statut&&j.statut!==statutPrevuJ;
-      const estCongeOuHors=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat','arret','abs-non','abs-am','ferie-non','abs-enfant'].includes(j.statut||statutPrevuJ);
+      const estCongeOuHors=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat','arret','abs-non','abs-am','ferie-non','abs-enfant'].includes(j.statut||statutPrevuJ)||statutActuel==='fractionnement'||statutActuel==='abs-non';
       const cocheVerte=!fiche.valide&&peutAvoirHeures&&j.heureDebPrev&&j.heureFinPrev&&!j.heureDebReel&&!j.heureFinReel&&!statutForcé&&!estCongeOuHors&&!estLectureSeuleEmployeur()
         ?`<button id="coche-prevu-${contratId}-${key}-${idx}" onclick="confirmerHeuresPrevues(${contratId},'${key}',${idx})"
             style="width:20px;height:36px;background:#6B8060;color:#fff;border:none;border-radius:3px;font-size:12px;cursor:pointer;margin-left:3px;flex-shrink:0"
@@ -4560,7 +4562,7 @@ function ouvrirFiche(contratId,key){
       const srcJourOffJ=getVersionActive(c,new Date(j.date));
       const agendaJourOffJ=(srcJourOffJ.agendas||c.agendas||[]).find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date));
       const estSemaineOff=agendaJourOffJ&&agendaJourOffJ.semaines&&agendaJourOffJ.semaines[j.semKey]==='off';
-      const estCongesJour=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat'].includes(j.statut||statutPrevuJ);
+      const estCongesJour=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges','hors-contrat'].includes(j.statut||statutPrevuJ)||statutActuel==='fractionnement';
       const couleurPrev=(estSemaineOff||estCongesJour)?'transparent':'var(--tx)';
       prevuCell=`<td style="padding:3px 4px;font-size:12px;color:var(--tx);white-space:nowrap">
         <div style="display:flex;align-items:center">
@@ -6653,8 +6655,9 @@ function imprimerFiche(contratId,key){
     const nomJour=JOURS_ABR[j.jourSemaine===0?6:j.jourSemaine-1];
     const statutPrevu=getStatutPrevu(c,j);
     // 04/09/2026 (Sophie) : voir ouvrirFiche pour l'explication complète — statutActuel doit vérifier
-    // le fractionnement lui-même, pas seulement statutPrevu (j.statut gagne toujours sinon).
-    const statutActuel=(!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)?'fractionnement':(j.statut||statutPrevu);
+    // le fractionnement lui-même, pas seulement statutPrevu (j.statut gagne toujours sinon). Même
+    // priorité pour l'abs-non cross-contrat (autre contrat en fractionnement ce jour, rien ici).
+    const statutActuel=(!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)?'fractionnement':(estJourAbsNonFractionnement(c,j)?'abs-non':(j.statut||statutPrevu));
     const statutLbl={'prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié','fractionnement':'Fractionnement',
       'conges-acq':'Congés','conges-non':'Congés','conges-anticipe':'Congés','conges-am':'Congés','conges-6j':'Non prévu','conges-6j-fin':'Non prévu','decompte-acq':'Non prévu','decompte-anticipe':'Non prévu','decompte-conges':'Non prévu','travaille':'Travaillé',
       'abs-rem':'Absence rémunérée','abs-enfant':'Absence maladie de l&rsquo;enfant','abs-non':'Absence non rémunérée','abs-am':'Absence AM','ferie-non':'Férié non acquis',
@@ -11840,6 +11843,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // le check hAbsJour plus bas (['conges-acq','conges-anticipe','conges-am','fractionnement']) via
     // ce même statut.
     if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) statut='fractionnement';
+    else if(estJourAbsNonFractionnement(c,j)) statut='abs-non';
     // Règle paiement férié : si encadré par arret sur jour prévu travaillé
     if(statut==='ferie'||(!j.statut&&isFerie(j.date,sourceActif))){
       const prevTrav=getPrevJourPrevuTravaille(c,j.date);
@@ -20998,6 +21002,24 @@ function estJourFractionnementChoisi(c,dateStr){
   // suppose rien). Utilisée pour l'affichage (ouvrirFiche) et la non-déduction (calcRecapFiche).
   if(!c.fractionnementDates) return false;
   return Object.values(c.fractionnementDates).some(arr=>arr&&arr.includes(dateStr));
+}
+
+function estJourFractionnementAutreContrat(c,dateStr){
+  // 04/09/2026 (Sophie) : vrai si un AUTRE contrat actif (signé, non clôturé) a choisi dateStr comme
+  // jour de fractionnement — jamais ce contrat-ci (son propre fractionnement est vérifié à part).
+  return S.contrats.some(x=>x.id!=c.id&&x.signe&&!estContratCloture(x)&&estJourFractionnementChoisi(x,dateStr));
+}
+
+function estJourAbsNonFractionnement(c,j){
+  // 04/09/2026 (Sophie) : un contrat prévu ce jour-là mais qui n'a STRICTEMENT rien de son côté (ni
+  // son propre fractionnement, ni congé, ni férié, ni aucun statut déjà écrit — le statut brut vaut
+  // encore exactement 'prevu', valeur par défaut) doit être déduit en abs-non dès qu'un AUTRE contrat
+  // a du fractionnement ce jour-là. Priorité confirmée : le statut propre du contrat prime toujours
+  // s'il existe déjà (retourne false ici, jamais recalculé par-dessus).
+  if(estJourFractionnementChoisi(c,j.date)) return false;
+  const statutBrut=j.statut||getStatutPrevu(c,j);
+  if(statutBrut!=='prevu') return false;
+  return estJourFractionnementAutreContrat(c,j.date);
 }
 
 function estJourPrevuFrac(c,dateStr){
