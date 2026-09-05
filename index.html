@@ -9742,7 +9742,12 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
         const dimSem=new Date(lundiSem);dimSem.setDate(lundiSem.getDate()+6);
         const lundiStr=lundiSem.getFullYear()+'-'+String(lundiSem.getMonth()+1).padStart(2,'0')+'-'+String(lundiSem.getDate()).padStart(2,'0');
         const dimStr=dimSem.getFullYear()+'-'+String(dimSem.getMonth()+1).padStart(2,'0')+'-'+String(dimSem.getDate()).padStart(2,'0');
-        const estCheval=lundiStr<debutMoisStr||dimStr>finMoisStr||(c.dateDeb&&lundiStr<c.dateDeb&&dimStr>=c.dateDeb)||((c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&lundiStr<=av.dateAvenant&&dimStr>=av.dateAvenant));
+        // 04/09/2026 (Sophie) : même principe que le début de contrat, jamais fait pour la fin ici —
+        // sans ça, la semaine qui contient réellement la rupture n'avait aucun traitement théorique
+        // dédié (ni cheval, ni moyenne), contrairement à la déduction (hAbsHorsPeriode, déjà étendue).
+        const dateFinContratChSem=getDateFinContrat(c);
+        const dateFinContratChSemStr=dateFinContratChSem?dateToStr(dateFinContratChSem):null;
+        const estCheval=lundiStr<debutMoisStr||dimStr>finMoisStr||(c.dateDeb&&lundiStr<c.dateDeb&&dimStr>=c.dateDeb)||(dateFinContratChSemStr&&lundiStr<=dateFinContratChSemStr&&dimStr>=dateFinContratChSemStr)||((c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&lundiStr<=av.dateAvenant&&dimStr>=av.dateAvenant));
         if(estCheval){
           const avenantDeCetteSemCh=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&lundiStr<=av.dateAvenant&&dimStr>=av.dateAvenant);
           const statsCongésChevalDetect=['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe','conges-am'];
@@ -9826,13 +9831,22 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
               const jourDate=new Date(lundiSem);jourDate.setDate(lundiSem.getDate()+i);
               const jourStr=jourDate.getFullYear()+'-'+String(jourDate.getMonth()+1).padStart(2,'0')+'-'+String(jourDate.getDate()).padStart(2,'0');
               if(jourStr<debutMoisStr||jourStr>finMoisStr) continue;
-              if(joursHCExclus&&joursHCExclus.has(jourStr)) continue;
               if(jourDate.getDay()===reposHPS52) continue;
               const jourFiche=joursDesSem.find(jj=>jj.date===jourStr);
-              const stJour=jourFiche?.statut||getStatutPrevu(sourceActif||c,jourFiche||{date:jourStr,jourSemaine:jourDate.getDay()===0?0:jourDate.getDay()});
               const jourIdx=jourDate.getDay()===0?6:jourDate.getDay()-1;
               const stJourSem=stTh?.jours&&stTh.jours[jourIdx];
               const hJourReel=stJourSem&&stJourSem.d&&stJourSem.f?(toM(stJourSem.f)-toM(stJourSem.d))/60:0;
+              if(joursHCExclus&&joursHCExclus.has(jourStr)){
+                // 04/09/2026 (Sophie) : PAS les heures réelles du type ici (contrairement au calcul "à
+                // cheval" juste au-dessus, qui concerne LA semaine de la rupture elle-même, où l'agenda
+                // reste pertinent) — cette semaine-ci n'est pas celle de la rupture, donc exactement le
+                // cas où l'agenda ne doit pas être consulté (peut contenir n'importe quoi). Moyenne par
+                // jour possible, comme le fait déjà la boucle "jours hors contrat un par un" plus bas
+                // pour les semaines entièrement sans type — jamais 0, jamais le type précis rencontré.
+                hSem52+=hSemMoyPS/nbJoursPossiblesSem;
+                continue;
+              }
+              const stJour=jourFiche?.statut||getStatutPrevu(sourceActif||c,jourFiche||{date:jourStr,jourSemaine:jourDate.getDay()===0?0:jourDate.getDay()});
               if(statsCongésPS52.includes(stJour)){
                 // Congé/decompte : heures réelles que ce jour aurait eu selon le type de semaine réel (agenda)
                 hSem52+=hJourReel;
@@ -11532,9 +11546,14 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       nbJoursPossiblesAbsHPSem=joursPossiblesAbsHPArrSem.filter(Boolean).length||1;
       if(window.DEBUG_CGAM)console.log('[CGAM-joursUnionSem]','joursPossiblesAbsHPArrSem:',joursPossiblesAbsHPArrSem,'| nbJoursPossiblesAbsHPSem:',nbJoursPossiblesAbsHPSem,'| hSemMoyAbsHPSem:',hSemMoyAbsHPSem,'| semTypes bruts:',JSON.stringify(sourceActif.semTypes));
     }
+    // 04/09/2026 (Sophie) : même mécanisme, étendu à la rupture — testé sur tous les types pour
+    // l'avenant, jamais déclenché jusqu'ici en dehors d'un appel de régularisation (periodeAv), donc
+    // jamais actif pour le calcul normal d'une fiche. dateRuptureHPStr calculé une fois, hors boucle.
+    const dateFinContratHPc=getDateFinContrat(c);
+    const dateRuptureHPStr=dateFinContratHPc?dateToStr(dateFinContratHPc):null;
     for(let d=new Date(premierJourMois);d<=dernierJourMois;d.setDate(d.getDate()+1)){
       const dateStr=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-      const horsperiode=(periodeAv==='avant'&&dateStr>=dateAvenantStr)||(periodeAv==='apres'&&dateStr<dateAvenantStr);
+      const horsperiode=(periodeAv==='avant'&&dateStr>=dateAvenantStr)||(periodeAv==='apres'&&dateStr<dateAvenantStr)||(dateRuptureHPStr&&dateStr>dateRuptureHPStr);
       if(!horsperiode) continue;
       // 11/08/2026 (Sophie) : pour sem, la semaine ISO qui contient la date de l'avenant lui-même est
       // déjà intégralement traitée pour les THÉORIQUES par la gestion "semaine à cheval" de
@@ -11549,12 +11568,20 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const dimAvHP=new Date(lundiAvHP);dimAvHP.setDate(lundiAvHP.getDate()+6);
         dansSemaineAvenantHP=d>=lundiAvHP&&d<=dimAvHP;
       }
+      // 04/09/2026 (Sophie) : même principe, en miroir, pour la semaine qui contient la rupture —
+      // elle seule reste autorisée à consulter l'agenda (mécanisme cheval), pour la même raison.
+      let dansSemaineRuptureHP=false;
+      if(sourceActif.th==='sem'&&dateRuptureHPStr){
+        const lundiRupHP=parseDateLoc(dateRuptureHPStr);lundiRupHP.setDate(lundiRupHP.getDate()-(lundiRupHP.getDay()||7)+1);
+        const dimRupHP=new Date(lundiRupHP);dimRupHP.setDate(lundiRupHP.getDate()+6);
+        dansSemaineRuptureHP=d>=lundiRupHP&&d<=dimRupHP;
+      }
       const hAbsHorsPeriodeAvantIter=hAbsHorsPeriode;
       // 11/08/2026 (Sophie) : pour sem, seule la semaine de l'avenant elle-même (dansSemaineAvenantHP)
       // doit consulter l'agenda/heures réelles (mécanisme cheval de calcHTheoriquesPlanSem). Toute
       // autre semaine hors-période — pleine ou partielle — doit systématiquement passer par la
       // moyenne jours-union, jamais par un agenda "fantôme" qui ne représente plus le contrat réel.
-      const dansHorsSemNormaleSem=sourceActif.th==='sem'&&sourceActif.semTypes&&!dansSemaineAvenantHP;
+      const dansHorsSemNormaleSem=sourceActif.th==='sem'&&sourceActif.semTypes&&!dansSemaineAvenantHP&&!dansSemaineRuptureHP;
       const prevusHP=dansHorsSemNormaleSem?{debut:null,fin:null}:getHeuresPrevues(c,new Date(d),sourceActif);
       if(dansHorsSemNormaleSem){
         const jourIdxHPSemDirect=d.getDay()===0?6:d.getDay()-1;
@@ -11682,7 +11709,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const deltaJourHP=hAbsHorsPeriode-hAbsHorsPeriodeAvantIter;
         if(deltaJourHP>0)console.log('[CGAM-hAbsHorsPeriodeJour]',dateStr,'| delta:',deltaJourHP,'| dansSemaineAvenantHP:',dansSemaineAvenantHP,'| semKey:',getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr)));
       }
-      if(!dansSemaineAvenantHP) hAbsHorsPeriodeTheoSem+=(hAbsHorsPeriode-hAbsHorsPeriodeAvantIter);
+      if(!dansSemaineAvenantHP&&!dansSemaineRuptureHP) hAbsHorsPeriodeTheoSem+=(hAbsHorsPeriode-hAbsHorsPeriodeAvantIter);
     }
     if(window.DEBUG_CGAM&&sourceActif.planType==='min')console.log('[CGAM-minAbsFinal]','hAbs AVANT addition:',hAbs,'| hAbsHorsPeriode:',hAbsHorsPeriode,'| total après:',hAbs+hAbsHorsPeriode);
     hAbs+=hAbsHorsPeriode;
