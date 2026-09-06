@@ -5397,15 +5397,27 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       // 27/08/2026 (Sophie) : ne compte plus que lorsque les heures de début et de fin sont
       // réellement saisies — avant, cocher la case seule suffisait à ajouter un volume par défaut
       // (volH/jMax), affichant un dépassement ou une consommation avant toute heure renseignée.
-      if(dejaCoche&&planData.d&&planData.f&&(infos.jourPossible!==false||jourCompteT)){ totalSemMin+=toM(planData.f)-toM(planData.d); }
+      // 07/09/2026 (Sophie, mai 2026 : 11j/110h affichés pour 15j/150h réels) : exception pour les
+      // jours qui n'ont JAMAIS de champs d'heures — un férié coché, un jour de congés posés coché.
+      // Ceux-là ne pourront jamais recevoir d'horaires, alors qu'ils comptent bel et bien pour un
+      // jour max et pour leur part de volume dans le contrôle d'enregistrement (volume ÷ jours max),
+      // qui bloque correctement à 150h. Ils restaient donc invisibles dans les totaux affichés. La
+      // règle du 27/08 ne visait que les jours ORDINAIRES, qui eux attendent une saisie.
+      const aHeuresSaisiesTile=!!(planData.d&&planData.f);
+      const sansChampsHeuresTile=estVarTile&&dejaCoche&&!aHeuresSaisiesTile&&(infos.ferieChome||estCongeAM);
+      const minSansHeuresTile=sansChampsHeuresTile?((infos.volH||0)/(infos.jMax||1))*60:0;
+      if(dejaCoche&&aHeuresSaisiesTile&&(infos.jourPossible!==false||jourCompteT)){ totalSemMin+=toM(planData.f)-toM(planData.d); }
+      else if(minSansHeuresTile>0&&(infos.jourPossible!==false||jourCompteT)){ totalSemMin+=minSansHeuresTile; }
       if(window.DEBUG_CGAM&&dejaCoche)console.log('[CGAM-totalSemMin-tile]',j.date,'| planType:',c.planType,'| jourPossible:',infos.jourPossible,'| jourCompteT:',jourCompteT,'| a d/f:',!!(planData.d&&planData.f),'| volH:',infos.volH,'| jMax:',infos.jMax,'| ajoute:',(planData.d&&planData.f)?(toM(planData.f)-toM(planData.d)):0);
       let minJourTileP=0;
       if(estFixeOuSemTile&&!estCongeAM){
         if(dejaCoche&&planData.d&&planData.f) minJourTileP=toM(planData.f)-toM(planData.d);
         else if(!dejaCoche&&!decocheExpliciteTile&&infos.jourPossible&&infos.jPrevueDeb&&infos.jPrevueFin) minJourTileP=toM(infos.jPrevueFin)-toM(infos.jPrevueDeb);
         totalSemMinFS+=minJourTileP;
-      } else if(dejaCoche&&planData.d&&planData.f&&(infos.jourPossible!==false||jourCompteT)){
+      } else if(dejaCoche&&aHeuresSaisiesTile&&(infos.jourPossible!==false||jourCompteT)){
         minJourTileP=toM(planData.f)-toM(planData.d);
+      } else if(minSansHeuresTile>0&&(infos.jourPossible!==false||jourCompteT)){
+        minJourTileP=minSansHeuresTile;
       }
       if(dateDebAvP&&j.date>=dateDebAvP) minSemApresAv+=minJourTileP; else minSemAvantAv+=minJourTileP;
       // Total du mois (à côté de "Modifications autorisées") : compte le prévu par défaut,
@@ -5414,7 +5426,10 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       // Étendu à var (18/07 suite) : total du mois affichait 0 pour var, jamais construit —
       // seule la branche "coché avec heures" s'applique (var n'a pas de jPrevueDeb/Fin comme
       // fixe/sem, mais un férié coché a déjà ses heures auto-calculées par l'app).
-      if((estFixeOuSemTile||estVarTile)&&!estCongeAM&&(!estVarTile||infos.jourPossible||jourCompteT)){
+      // 07/09/2026 (Sophie) : un jour de congés posés COCHÉ compte désormais pour sa part de volume
+      // (même exception que le férié, voir plus haut) — l'exclusion pure et simple des congés le
+      // rendait invisible ici comme dans le total de la semaine.
+      if((estFixeOuSemTile||estVarTile)&&(!estCongeAM||minSansHeuresTile>0)&&(!estVarTile||infos.jourPossible||jourCompteT)){
         let minAjoutTileP=null;
         // 06/09/2026 (Sophie : déplacer le lundi de la semaine de l'avenant vers le 1er faisait
         // tomber le total du mois de 16j/160h à 15j/150h) : en fixe/sem, un jour explicitement coché
@@ -5425,8 +5440,11 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
         // y répond toujours non), alors que l'origine, elle, avait bien cessé de compter — les heures
         // s'évaporaient. Le total de la SEMAINE comptait déjà ce jour sans condition : les deux
         // affichages sont maintenant d'accord.
-        if(dejaCoche&&planData.d&&planData.f&&(estFixeOuSemTile||infos.jourPossible!==false||jourCompteT)){
+        if(dejaCoche&&aHeuresSaisiesTile&&(estFixeOuSemTile||infos.jourPossible!==false||jourCompteT)){
           minAjoutTileP=toM(planData.f)-toM(planData.d);
+        }
+        else if(minSansHeuresTile>0&&(infos.jourPossible!==false||jourCompteT)){
+          minAjoutTileP=minSansHeuresTile;
         }
         else if(estFixeOuSemTile&&!dejaCoche&&!decocheExpliciteTile&&infos.jourPossible&&infos.jPrevueDeb&&infos.jPrevueFin){
           minAjoutTileP=toM(infos.jPrevueFin)-toM(infos.jPrevueDeb);
@@ -5893,6 +5911,20 @@ function majPlanningJour(contratId, dateStr, champ, val, semKeyDom){
   // Lire directement la valeur affichée des champs (déjà correcte, prévu ou modifié, verrouillé
   // ou non) plutôt que ne compter que les jours "coché" — corrige le total qui n'incluait pas
   // le prévu par défaut, ni ne soustrayait un jour supprimé (bug confirmé Sophie 18/07/2026).
+  // 07/09/2026 (Sophie) : minutes à compter pour un jour SANS champs d'heures (férié coché, congés
+  // posés cochés), 0 si le jour n'est pas dans ce cas. La mise à jour en direct ne sait additionner
+  // que les champs de saisie : sans ça elle perdait ces jours dès la première frappe, alors que le
+  // rendu complet et le contrôle d'enregistrement les comptent tous deux (volume ÷ jours max).
+  const minSansChampsLive=(dsJ)=>{
+    const pdJ=c.planning&&c.planning[dsJ];
+    if(!pdJ||!pdJ.coche||(pdJ.d&&pdJ.f)) return 0;
+    const srcJ=getVersionActive(c,parseDateLoc(dsJ));
+    if(!(srcJ.th==='plan'&&(srcJ.planType==='var'||srcJ.planType==='min'))) return 0;
+    const infosJ=getInfosJourPlanning(c,dsJ);
+    if(!(infosJ.ferieChome||isJourCongeAM(dsJ))) return 0;
+    if(!(infosJ.jourPossible!==false||jourComptePlanning(c,dsJ,infosJ))) return 0;
+    return ((infosJ.volH||0)/(infosJ.jMax||1))*60;
+  };
   const semDiv=document.querySelector(`.pln-sem[data-semkey="${semKeyDom}"][data-contrat="${contratId}"]`);
   if(semDiv){
     // 06/09/2026 (Sophie) : sur une semaine coupée par un avenant, le total est désormais affiché en
@@ -5912,6 +5944,12 @@ function majPlanningJour(contratId, dateStr, champ, val, semKeyDom){
         const minLive=toM(finEl.value)-toM(debEl.value);
         if(apresLive) minApresLive+=minLive; else minAvantLive+=minLive;
       }
+    });
+    semDiv.querySelectorAll('.pln-jour[data-date]').forEach(elJS=>{
+      const dsJS=elJS.getAttribute('data-date');
+      const mJS=minSansChampsLive(dsJS);
+      if(!mJS) return;
+      if(dateAvLive&&dsJS>=dateAvLive) minApresLive+=mJS; else minAvantLive+=mJS;
     });
     const totApresSpan=semDiv.querySelector('.pln-total-apres');
     const totSemSpan=semDiv.querySelector('.pln-total');
@@ -5938,6 +5976,11 @@ function majPlanningJour(contratId, dateStr, champ, val, semKeyDom){
         totalMoisMinLive+=minJourLive; joursMoisLive++;
         if(debEl.dataset&&debEl.dataset.date) minParDateLive[debEl.dataset.date]=minJourLive;
       }
+    });
+    tileEl2.querySelectorAll('.pln-jour[data-date]').forEach(elJM=>{
+      const mJM=minSansChampsLive(elJM.getAttribute('data-date'));
+      if(!mJM) return;
+      totalMoisMinLive+=mJM; joursMoisLive++;
     });
     totMoisSpan.textContent=joursMoisLive+'j — '+fmtH(totalMoisMinLive);
     // 27/08/2026 (Sophie) : "Volume disponible" ne se mettait jamais à jour à la saisie des heures —
