@@ -3320,7 +3320,15 @@ function getTypeSem(agenda, semKey){
 function isAbsenceEmployeur(agenda, semKey){
   return agenda&&agenda.semaines&&agenda.semaines[semKey]==='off';
 }
-function getHeuresPrevues(c, date, sourceForce){
+// 06/09/2026 (Sophie) : ignorerPlanning (optionnel) — renvoie l'horaire STRUCTUREL du contrat pour ce
+// jour, sans jamais consulter le planning saisi. Nécessaire pour déduire les jours situés de l'AUTRE
+// côté d'un avenant : ces jours-là sont régis par l'autre version du contrat, leur ligne de planning
+// appartient à cette autre version et ne doit pas servir à valoriser la déduction de celle-ci. Sans
+// ce garde-fou, la partie avant avenant d'un mois en "modifications autorisées" allait chercher les
+// heures pointées côté après avenant (bug confirmé Sophie : mercredi 13/03 pointé 8h-18h côté var
+// ajoutait 10h à la déduction du côté sem, 96,92h au lieu de 86,92h, alors que le mercredi n'est même
+// pas un jour du motif sem). Omis ou faux : comportement inchangé partout ailleurs.
+function getHeuresPrevues(c, date, sourceForce, ignorerPlanning){
   // Trouver la version active (contrat ou avenant) à cette date
   const dateStr=date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0');
   const source=sourceForce||getVersionActive(c, date);
@@ -3354,7 +3362,7 @@ function getHeuresPrevues(c, date, sourceForce){
     // toute fonction appelant getHeuresPrevues (bug confirmé : confirmer les heures d'un jour
     // ré-ouvre la fiche, qui rappelle cette fonction, qui restaurait l'échange même case décochée).
     const moisPourModifSem=dateStr.slice(0,7);
-    const modifActiveSem=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisPourModifSem]);
+    const modifActiveSem=!ignorerPlanning&&!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisPourModifSem]);
     const pdSem=modifActiveSem?((c._planningSauvegarde||c.planning)&&(c._planningSauvegarde||c.planning)[dateStr]):undefined;
     if(pdSem&&pdSem.coche&&pdSem.d&&pdSem.f) return {debut:pdSem.d, fin:pdSem.f};
     if(pdSem&&pdSem.coche&&(!pdSem.d||!pdSem.f)) return {debut:null, fin:null}; // coché mais heures pas encore saisies
@@ -3374,7 +3382,7 @@ function getHeuresPrevues(c, date, sourceForce){
   if(source.th === 'fixe' && source.joursFixe){
     // Même raccordement que sem ci-dessus, pour la même raison.
     const moisPourModifFixe=dateStr.slice(0,7);
-    const modifActiveFixe=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisPourModifFixe]);
+    const modifActiveFixe=!ignorerPlanning&&!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisPourModifFixe]);
     const pdFixe=modifActiveFixe?((c._planningSauvegarde||c.planning)&&(c._planningSauvegarde||c.planning)[dateStr]):undefined;
     if(pdFixe&&pdFixe.coche&&pdFixe.d&&pdFixe.f) return {debut:pdFixe.d, fin:pdFixe.f, isOff: isAbsenceEmployeur(agenda, semKey)};
     if(pdFixe&&pdFixe.coche&&(!pdFixe.d||!pdFixe.f)) return {debut:null, fin:null, isOff: isAbsenceEmployeur(agenda, semKey)};
@@ -6747,8 +6755,39 @@ function toggleJourPlanning(contratId, dateStr, checked, semKeyDom, estFerie){
         if(c.planning[dt]&&c.planning[dt].coche){ totalCoche++; detailDiagJ.push(dt+' compté (coché)'); }
         else detailDiagJ.push(dt+' compté mais pas coché');
       });
-      if(window.DEBUG_CGAM)console.log('[CGAM-quotaSemaine]',dateStr,'| dateAvenantRefJ:',dateAvenantRefJ,'| infos.jMax:',infos.jMax,'| totalCoche:',totalCoche,'| détail:',detailDiagJ);
-      if(totalCoche>=infos.jMax){
+      // 06/09/2026 (décision Sophie) : quand un avenant coupe la semaine, une portion en plan var n'a
+      // droit qu'aux jours possibles de SON motif présents dans SA portion — jamais au maximum
+      // hebdomadaire entier, qui suppose la semaine complète (ex. 3 jours max sur une portion qui ne
+      // contient que 2 jours du motif). Le plan sem n'est pas concerné : ses jours sont ceux du motif,
+      // on ne peut que les échanger, pas en ajouter.
+      let plafondJoursJ=infos.jMax;
+      {
+        const jourIdxSemJ=parseDateLoc(dateStr).getDay()===0?6:parseDateLoc(dateStr).getDay()-1;
+        const lundiSemJ=parseDateLoc(dateStr); lundiSemJ.setDate(lundiSemJ.getDate()-jourIdxSemJ);
+        const dimSemJ=new Date(lundiSemJ); dimSemJ.setDate(lundiSemJ.getDate()+6);
+        const avSemJ=(c.avenants||[]).find(av=>{
+          if(!av.signe||!av.dateAvenant) return false;
+          const dAvTestJ=parseDateLoc(av.dateAvenant);
+          return dAvTestJ>lundiSemJ&&dAvTestJ<=dimSemJ;
+        });
+        if(avSemJ&&versionActiveJ.th==='plan'&&versionActiveJ.planType==='var'&&infos.volIdx>=0){
+          const volJ=(versionActiveJ.planVar||[])[infos.volIdx];
+          if(volJ&&volJ.jours){
+            const dAvJ=parseDateLoc(avSemJ.dateAvenant);
+            const estApresAvJ=dateStr>=avSemJ.dateAvenant;
+            const debPortJ=estApresAvJ?dAvJ:lundiSemJ;
+            const finPortJ=estApresAvJ?dimSemJ:(()=>{const vJ=new Date(dAvJ);vJ.setDate(dAvJ.getDate()-1);return vJ;})();
+            let possiblesPortJ=0;
+            for(let curJ=new Date(debPortJ);curJ<=finPortJ;curJ.setDate(curJ.getDate()+1)){
+              const idxPortJ=curJ.getDay()===0?6:curJ.getDay()-1;
+              if(volJ.jours[idxPortJ]) possiblesPortJ++;
+            }
+            plafondJoursJ=Math.min(infos.jMax,possiblesPortJ);
+          }
+        }
+      }
+      if(window.DEBUG_CGAM)console.log('[CGAM-quotaSemaine]',dateStr,'| dateAvenantRefJ:',dateAvenantRefJ,'| infos.jMax:',infos.jMax,'| plafondJoursJ:',plafondJoursJ,'| totalCoche:',totalCoche,'| détail:',detailDiagJ);
+      if(totalCoche>=plafondJoursJ){
         toast('Nombre de jours maximum atteint pour cette semaine, vous pourrez ajouter un jour complémentaire sur la feuille de présence');
         refreshPlanningTile(contratId, moisKeyJ);
         return;
@@ -11829,7 +11868,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       // pas concerné : getHeuresPrevues ne lui renvoie jamais d'heure de fin, il tombe déjà sur sa
       // propre branche structurelle.
       const dansHorsPlanVarHP=sourceActif.th==='plan'&&sourceActif.planType==='var'&&!!sourceActif.planVar;
-      const prevusHP=(dansHorsSemNormaleSem||dansHorsPlanVarHP)?{debut:null,fin:null}:getHeuresPrevues(c,new Date(d),sourceActif);
+      // 4e argument : jamais le planning. Ces jours sont de l'autre côté de l'avenant, donc régis par
+      // l'autre version du contrat — leur ligne de planning ne doit pas valoriser cette déduction-ci.
+      const prevusHP=(dansHorsSemNormaleSem||dansHorsPlanVarHP)?{debut:null,fin:null}:getHeuresPrevues(c,new Date(d),sourceActif,true);
       if(dansHorsSemNormaleSem){
         const jourIdxHPSemDirect=d.getDay()===0?6:d.getDay()-1;
         const semKeyHPSemDirect=getSemISO(dateStr);
