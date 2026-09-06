@@ -5317,6 +5317,15 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
     }
 
     let jMaxSem=0, volHSem=0, totalSemMin=0, totalSemMinFS=0, couleurSem=null;
+    // 06/09/2026 (Sophie) : total de la semaine réparti de part et d'autre d'un avenant qui la coupe.
+    // Chaque jour est compté selon les règles de SON propre type — jusqu'ici l'en-tête n'affichait
+    // qu'un seul total, choisi d'après le type du DERNIER jour de la semaine : sur une semaine coupée
+    // sem→var, il ne montrait donc que la partie var (31h30 au lieu de 41h30 avec un jour sem
+    // déplacé), la partie sem affichée en texte n'entrant nulle part.
+    let minSemAvantAv=0, minSemApresAv=0;
+    // Semaine réellement coupée : des jours de ce mois de part et d'autre de l'avenant. Si l'avenant
+    // tombe le lundi, la semaine est entièrement "après" — un seul total suffit, sur l'en-tête.
+    const semCoupeeAvP=!!dateDebAvP&&sem.jours.some(jc=>jc.date<dateDebAvP)&&sem.jours.some(jc=>jc.date>=dateDebAvP);
     // 25/08/2026 (Sophie) : jMax/volH/couleur propres à la portion APRÈS un avenant tombant dans
     // cette semaine — la bande d'en-tête existante ne montre que ce qui domine sur l'ensemble de la
     // semaine (souvent la portion avant), sans jamais indiquer ce qui s'applique après. Calculé à
@@ -5357,16 +5366,29 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       const estCongeAM=isJourCongeAM(j.date);
       const planData=(c.planning&&c.planning[j.date])||{};
       const dejaCoche=!!planData.coche;
+      // 06/09/2026 (Sophie, cas isolé par elle : « si je décoche, les 10h restent affichées dans le
+      // total même si le jour n'est plus là ») : un jour vidé par un échange garde une marque
+      // explicite {coche:false} (voir executerEchangeJourFS). Sans distinguer cette marque de
+      // « jamais touché », il continue de compter ses heures prévues par défaut — l'échange AJOUTE
+      // alors des heures au lieu de les déplacer, l'origine comptant toujours et la destination
+      // comptant en plus. Même défaut que celui repéré le 27/07 sur le contrôle mensuel fixe/sem, où
+      // il avait été contourné en retirant le message plutôt qu'en le corrigeant.
+      const decocheExpliciteTile=planData.coche===false;
       const jourCompteT=jourComptePlanning(c,j.date,infos);
       // 27/08/2026 (Sophie) : ne compte plus que lorsque les heures de début et de fin sont
       // réellement saisies — avant, cocher la case seule suffisait à ajouter un volume par défaut
       // (volH/jMax), affichant un dépassement ou une consommation avant toute heure renseignée.
       if(dejaCoche&&planData.d&&planData.f&&(infos.jourPossible!==false||jourCompteT)){ totalSemMin+=toM(planData.f)-toM(planData.d); }
       if(window.DEBUG_CGAM&&dejaCoche)console.log('[CGAM-totalSemMin-tile]',j.date,'| planType:',c.planType,'| jourPossible:',infos.jourPossible,'| jourCompteT:',jourCompteT,'| a d/f:',!!(planData.d&&planData.f),'| volH:',infos.volH,'| jMax:',infos.jMax,'| ajoute:',(planData.d&&planData.f)?(toM(planData.f)-toM(planData.d)):0);
+      let minJourTileP=0;
       if(estFixeOuSemTile&&!estCongeAM){
-        if(dejaCoche&&planData.d&&planData.f) totalSemMinFS+=toM(planData.f)-toM(planData.d);
-        else if(!dejaCoche&&infos.jourPossible&&infos.jPrevueDeb&&infos.jPrevueFin) totalSemMinFS+=toM(infos.jPrevueFin)-toM(infos.jPrevueDeb);
+        if(dejaCoche&&planData.d&&planData.f) minJourTileP=toM(planData.f)-toM(planData.d);
+        else if(!dejaCoche&&!decocheExpliciteTile&&infos.jourPossible&&infos.jPrevueDeb&&infos.jPrevueFin) minJourTileP=toM(infos.jPrevueFin)-toM(infos.jPrevueDeb);
+        totalSemMinFS+=minJourTileP;
+      } else if(dejaCoche&&planData.d&&planData.f&&(infos.jourPossible!==false||jourCompteT)){
+        minJourTileP=toM(planData.f)-toM(planData.d);
       }
+      if(dateDebAvP&&j.date>=dateDebAvP) minSemApresAv+=minJourTileP; else minSemAvantAv+=minJourTileP;
       // Total du mois (à côté de "Modifications autorisées") : compte le prévu par défaut,
       // pas seulement ce qui a été explicitement modifié — demande Sophie 18/07/2026. Un férié
       // ne compte que s'il a été explicitement débloqué (travaillé), jamais par défaut.
@@ -5378,7 +5400,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
         if(dejaCoche&&planData.d&&planData.f&&(infos.jourPossible!==false||jourCompteT)){
           minAjoutTileP=toM(planData.f)-toM(planData.d);
         }
-        else if(estFixeOuSemTile&&!dejaCoche&&infos.jourPossible&&infos.jPrevueDeb&&infos.jPrevueFin){
+        else if(estFixeOuSemTile&&!dejaCoche&&!decocheExpliciteTile&&infos.jourPossible&&infos.jPrevueDeb&&infos.jPrevueFin){
           minAjoutTileP=toM(infos.jPrevueFin)-toM(infos.jPrevueDeb);
         }
         if(minAjoutTileP!==null){
@@ -5582,8 +5604,13 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       const estInteractif=infos.jourPossible||infos.ferieChome;
       const bandeApresAvP=(dateDebAvP&&j.date===dateDebAvP)?(()=>{
         const bgApresAvP=couleurApresAvP?couleurApresAvP.bg+'40':'var(--mp)';
+        // 06/09/2026 (Sophie) : le total de la partie après avenant s'affiche sur SA bande, et celui
+        // de la partie avant reste sur l'en-tête de semaine. Le jeton est remplacé une fois la
+        // semaine entièrement parcourue (cette bande est écrite avant que les jours suivants soient
+        // comptés, son total n'est donc pas encore connu ici).
         return `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:${bgApresAvP};font-size:11px;font-weight:600;color:var(--tx2);border-top:3px solid var(--m)">
           <span title="Depuis l'avenant">Après avenant${jMaxApresAvP?' — maximum '+jMaxApresAvP+' jours':''}${volHApresAvP?' — '+volHApresAvP+'h max':''}</span>
+          ${semCoupeeAvP?'<span>Total : <span class="pln-total-apres">__TOTAL_APRES_AV__</span></span>':''}
         </div>`;
       })():'';
       return `${bandeApresAvP}<div class="pln-jour" data-date="${j.date}" data-possible="${estSaisissable?'1':'0'}"
@@ -5591,7 +5618,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
         <div style="width:60px;font-size:12px;font-weight:500;flex-shrink:0">${nomJourAbr} ${numJour}</div>
         <div style="flex:1">${contenu}</div>
       </div>`;
-    }).join('');
+    }).join('').replace('__TOTAL_APRES_AV__',fmtH(minSemApresAv));
     totalMoisMin+=totalSemMin;
     const bgSem=couleurSem?couleurSem.bg+'40':'var(--mp)';
     const brdSem=couleurSem?couleurSem.brd+'88':'var(--mb)';
@@ -5605,7 +5632,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       style="border:1px solid ${brdSem};border-radius:var(--rs);margin-bottom:8px;overflow:hidden">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:${bgSem};font-size:11px;font-weight:600;color:var(--tx2)">
         <span>Semaine ${getSemISO(sem.jours[0].date)}${(estVarTile&&modifMoisActive)?'':(jMaxSem?' — maximum '+jMaxSem+' jours':'')+(volHSem?' — '+volHSem+'h max':'')}</span>
-        <span>Total : <span class="pln-total">${fmtH(estFixeOuSemTile?totalSemMinFS:totalSemMin)}</span></span>
+        <span>Total : <span class="pln-total">${fmtH(semCoupeeAvP?minSemAvantAv:(estFixeOuSemTile?totalSemMinFS:totalSemMin))}</span></span>
       </div>
       ${joursHtml}
     </div>`;
@@ -5840,13 +5867,32 @@ function majPlanningJour(contratId, dateStr, champ, val, semKeyDom){
   // le prévu par défaut, ni ne soustrayait un jour supprimé (bug confirmé Sophie 18/07/2026).
   const semDiv=document.querySelector(`.pln-sem[data-semkey="${semKeyDom}"][data-contrat="${contratId}"]`);
   if(semDiv){
-    let totalSemMinLive=0;
+    // 06/09/2026 (Sophie) : sur une semaine coupée par un avenant, le total est désormais affiché en
+    // deux endroits (en-tête de semaine pour la partie avant, bande "Après avenant" pour la partie
+    // après) — la mise à jour en direct doit alimenter le bon. La partie avant est souvent affichée
+    // en texte (jours du motif sem, sans champs d'heures) : dans ce cas on n'y touche pas, taper dans
+    // un champ de la partie après ne peut de toute façon pas la changer.
+    const avSemLive=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&av.dateAvenant.slice(0,7)===moisKeyJ);
+    const dateAvLive=avSemLive?avSemLive.dateAvenant:null;
+    let minAvantLive=0, minApresLive=0, aInputAvantLive=false;
     semDiv.querySelectorAll('.pln-deb').forEach(debEl=>{
       const finEl=debEl.closest('div').querySelector('.pln-fin');
-      if(debEl.value&&finEl&&finEl.value) totalSemMinLive+=toM(finEl.value)-toM(debEl.value);
+      const dsLive=debEl.dataset?debEl.dataset.date:null;
+      const apresLive=!!(dateAvLive&&dsLive&&dsLive>=dateAvLive);
+      if(!apresLive) aInputAvantLive=true;
+      if(debEl.value&&finEl&&finEl.value){
+        const minLive=toM(finEl.value)-toM(debEl.value);
+        if(apresLive) minApresLive+=minLive; else minAvantLive+=minLive;
+      }
     });
+    const totApresSpan=semDiv.querySelector('.pln-total-apres');
     const totSemSpan=semDiv.querySelector('.pln-total');
-    if(totSemSpan) totSemSpan.textContent=fmtH(totalSemMinLive);
+    if(totApresSpan){
+      totApresSpan.textContent=fmtH(minApresLive);
+      if(totSemSpan&&aInputAvantLive) totSemSpan.textContent=fmtH(minAvantLive);
+    } else if(totSemSpan){
+      totSemSpan.textContent=fmtH(minAvantLive+minApresLive);
+    }
   }
   const moisKeyTile2=moisKeyJ;
   const tileEl2=document.getElementById('pln-tile-'+contratId+'-'+moisKeyTile2);
