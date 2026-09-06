@@ -2221,7 +2221,17 @@ function modifierKmDirect(contratId, val, cibleId){
                 const dimSem=new Date(lundiSem); dimSem.setDate(lundiSem.getDate()+6);
                 const fmtSem=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
                 const lundiSemStr=fmtSem(lundiSem), dimSemStr=fmtSem(dimSem);
-                const dateRuptureC=c.rupture&&c.rupture.confirmee?c.rupture.dateFinContrat:null;
+                // 07/09/2026 (Sophie, contrat Enaël, rupture du 16/09/2021) : la date de fin de
+                // contrat était lue directement dans c.rupture.dateFinContrat. Or ce champ reste VIDE
+                // pour tout motif avec préavis — c'est dateFinPreavis qui fait foi, via
+                // calcDateFinContratBrute (constat déjà écrit le 30/08 ailleurs dans le fichier). La
+                // rupture devenait donc invisible ICI seulement : la semaine du 20 au 26 septembre,
+                // entièrement postérieure à la rupture, comptait son volume plein et ajoutait 22h au
+                // salaire dû (77h au lieu de 55h, 246,28 € au lieu de 175,91 €) pendant que le
+                // mensualisé, lui, était juste. La branche fixe/sem juste en dessous avait déjà reçu
+                // ce correctif le 04/09 ; la branche var/min avait été oubliée. getDateFinContrat est
+                // la seule source de vérité, ici comme partout ailleurs.
+                const dateRuptureC=(()=>{const _dfcR=getDateFinContrat(c);return _dfcR?dateToStr(_dfcR):null;})();
                 // 04/09/2026 (Sophie, test Enaël) : une semaine ENTIÈREMENT après la rupture (pas
                 // seulement celle à cheval dessus, gérée plus bas via limiteFin) ne comptait jamais
                 // 0 — chaque semaine suivant la rupture jusqu'à la fin du mois comptait son volume
@@ -2308,29 +2318,29 @@ function modifierKmDirect(contratId, val, cibleId){
                     const hCongesVol=clause52?0:sommeHeuresJoursVol(jdStr=>isJourCongeAM(jdStr));
                     const hAbsVol=sommeHeuresJoursVol(jdStr=>estJourAbsenceVol(jdStr));
                     if(limiteDebut||limiteFin){
-                      // Semaine à cheval sur début (ou avenant) ou fin de contrat : quota disponible
-                      // = volume complet - absence hors contrat de cette semaine (moyenne pondérée /
-                      // jours possibles union), même mécanisme que sur les feuilles de présence
-                      let joursPossiblesUnion, nbJoursPossiblesUnion, hSemMoy;
-                      if(source.planType==='var'&&source.planVar){
-                        const totJ=source.planVar.reduce((t,v)=>t+(v.h||0)*(v.s||0),0);
-                        const totS=source.planVar.reduce((t,v)=>t+(v.s||0),0);
-                        hSemMoy=totS>0?totJ/totS:0;
-                        joursPossiblesUnion=Array.from({length:7},(_,idx)=>source.planVar.some(v=>v.jours&&v.jours[idx]));
-                      } else {
-                        hSemMoy=volH;
-                        joursPossiblesUnion=joursPattern;
-                      }
-                      nbJoursPossiblesUnion=joursPossiblesUnion.filter(Boolean).length||1;
-                      let joursHorsContrat=0;
+                      // 07/09/2026 (règle rappelée par Sophie) : semaine de début de contrat, de
+                      // début d'avenant ou de rupture — en plan min et var on applique « au plus
+                      // favorable » : si le nombre de jours MAXIMUM de la semaine tient encore dans la
+                      // portion sous contrat, il n'y a aucune déduction, la semaine vaut son volume
+                      // plein. C'est déjà ce que font les heures théoriques et le calcul d'absence ;
+                      // seule la régularisation était restée sur l'ancien calcul (volume moins les
+                      // jours hors contrat valorisés à la moyenne / jours union), qui retirait 4h24
+                      // sur la semaine du 13 au 19 septembre d'Enaël alors que les 4 jours maximum
+                      // tenaient du lundi au jeudi, le contrat étant rompu le jeudi soir.
+                      const jMaxSemHP=source.planType==='min'
+                        ?(source.jMaxMin||nbJoursPossiblesVol)
+                        :(()=>{const volJHP=source.planVar&&source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);return (volJHP&&volJHP.j)||nbJoursPossiblesVol;})();
+                      let joursSousContratHP=0;
                       for(let d=0;d<7;d++){
                         const jd=new Date(lundiSem); jd.setDate(lundiSem.getDate()+d);
                         const jdStr=fmtSem(jd);
-                        if(limiteDebut&&joursPossiblesUnion[d]&&jdStr<limiteDebut) joursHorsContrat++;
-                        else if(limiteFin&&joursPossiblesUnion[d]&&jdStr>limiteFin) joursHorsContrat++;
+                        if(!joursPattern[d]) continue;
+                        if(limiteDebut&&jdStr<limiteDebut) continue;
+                        if(limiteFin&&jdStr>limiteFin) continue;
+                        joursSousContratHP++;
                       }
-                      const hAbsHorsContratSem=joursHorsContrat*(hSemMoy/nbJoursPossiblesUnion);
-                      hPrevu+=Math.max(0,volH-hAbsHorsContratSem-hCongesVol-hAbsVol);
+                      const volDispoSemHP=Math.min(jMaxSemHP,joursSousContratHP)*(volH/(jMaxSemHP||1));
+                      hPrevu+=Math.max(0,volDispoSemHP-hCongesVol-hAbsVol);
                     } else {
                       // Semaine à cheval sur deux mois calendaires (sans lien avec le contrat) ?
                       const moisLundiSem=lundiSem.getMonth(), moisDimSem=dimSem.getMonth();
@@ -5239,8 +5249,10 @@ function estSemaineChevalPourModif(c, dateStr){
   // la date de rupture (fin de contrat) doit être isolée exactement comme le début de contrat, sinon
   // une semaine entièrement travaillée juste avant une rupture peut dépasser le volume sans blocage
   // en modifications autorisées, avec un risque d'heures jamais payées.
-  if(c.rupture&&c.rupture.confirmee&&c.rupture.dateFinContrat){
-    const dRupture=parseDateLoc(c.rupture.dateFinContrat);
+  // 07/09/2026 (Sophie) : getDateFinContrat, jamais le champ brut — voir la note de calcHPrevuReg.
+  const dRuptureCheval=getDateFinContrat(c);
+  if(dRuptureCheval){
+    const dRupture=dRuptureCheval;
     if(lundiSem<=dRupture&&dimancheSem>dRupture) return true;
   }
   return false;
@@ -6135,7 +6147,7 @@ function enregistrerPlanningMois(contratId, moisKey){
     const lundiSemStr=fmtSem(lundiSem), dimSemStr=fmtSem(dimSem);
     const dateDebC=c.dateDeb;
     const dateAvenantC=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&av.dateAvenant>lundiSemStr&&av.dateAvenant<=dimSemStr)?.dateAvenant;
-    const dateRuptureC=c.rupture&&c.rupture.confirmee?c.rupture.dateFinContrat:null;
+    const dateRuptureC=(()=>{const _dfcR=getDateFinContrat(c);return _dfcR?dateToStr(_dfcR):null;})();
     if(dateAvenantC){
       // 25/08/2026 (Sophie) : même principe que calcEnveloppeMoisVar (avenant en cours de semaine,
       // décision Sophie 06/08) — chaque portion (avant/après l'avenant) valorisée avec SA PROPRE
@@ -6297,7 +6309,7 @@ function enregistrerPlanningMois(contratId, moisKey){
             const envCeMoisEnr=calcEnveloppeMoisVar(c,ay,am);
             let reelCeMoisEnr=0;
             // 30/08/2026 (Sophie) : même limite de rupture que les autres endroits corrigés le même jour.
-            const dateRuptureCEnr=c.rupture&&c.rupture.confirmee?c.rupture.dateFinContrat:null;
+            const dateRuptureCEnr=(()=>{const _dfcR=getDateFinContrat(c);return _dfcR?dateToStr(_dfcR):null;})();
             Object.keys(c.planning).forEach(dtR=>{
               const [dtyR,dtmR]=dtR.split('-').map(Number);
               if(!(dtmR===am&&dtyR===ay)) return;
@@ -7328,7 +7340,7 @@ function calcEnveloppeMoisVarCoordonnee(c,ay,am,limDebV,limFinV){
   // 30/08/2026 (Sophie) : même limite de rupture que calcHPrevuReg/calcHTheoriquesPlanMin — ignorer
   // les jours au-delà, sinon un mois planifié en entier avant la décision de rupture reste sommé
   // jusqu'au bout, incohérent avec l'enveloppe déjà tronquée à cette date.
-  const dateRuptureCAdj=c.rupture&&c.rupture.confirmee?c.rupture.dateFinContrat:null;
+  const dateRuptureCAdj=(()=>{const _dfcR=getDateFinContrat(c);return _dfcR?dateToStr(_dfcR):null;})();
   Object.keys(c.planning||{}).forEach(dtPrecV=>{
     const [dtyPV,dtmPV]=dtPrecV.split('-').map(Number);
     if(!(dtmPV===moisPrecVAm&&dtyPV===moisPrecVAy)) return;
@@ -10379,7 +10391,7 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
           // sommé jusqu'au bout (77h), alors que l'enveloppe (calcEnveloppeMoisVar, via la fiche
           // tronquée à la rupture) s'arrête déjà à cette date (60,5h) — "reste" tombait donc à tort à
           // 0, gonflant la contribution de la semaine à cheval d'1 jour max (5,5h : 16,5 au lieu de 11).
-          const dateRuptureCTh=c.rupture&&c.rupture.confirmee?c.rupture.dateFinContrat:null;
+          const dateRuptureCTh=(()=>{const _dfcR=getDateFinContrat(c);return _dfcR?dateToStr(_dfcR):null;})();
           Object.keys(c.planning||{}).forEach(dtTh=>{
             const [dtyTh,dtmTh]=dtTh.split('-').map(Number);
             if(!(dtmTh===fiche.mois+1&&dtyTh===fiche.annee)) return;
@@ -11668,7 +11680,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const lundiSemStrTh=fmtSemTh(lundiSemTh), dimSemStrTh=fmtSemTh(dimSemTh);
         const dateDebCTh=c.dateDeb;
         const dateAvenantCTh=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant)?.dateAvenant;
-        const dateRuptureCTh=c.rupture&&c.rupture.confirmee?c.rupture.dateFinContrat:null;
+        const dateRuptureCTh=(()=>{const _dfcR=getDateFinContrat(c);return _dfcR?dateToStr(_dfcR):null;})();
         let limiteDebutTh=null, limiteFinTh=null;
         if(dateDebCTh&&lundiSemStrTh<dateDebCTh&&dimSemStrTh>=dateDebCTh) limiteDebutTh=dateDebCTh;
         else if(dateAvenantCTh&&lundiSemStrTh<=dateAvenantCTh&&dimSemStrTh>=dateAvenantCTh) limiteDebutTh=dateAvenantCTh;
