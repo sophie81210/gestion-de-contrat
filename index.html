@@ -6690,19 +6690,30 @@ function toggleJourPlanning(contratId, dateStr, checked, semKeyDom, estFerie){
         refreshPlanningTile(contratId, moisKeyJ);
         return;
       }
-    } else if(modifActiveJ&&(c.th==='plan'&&(c.planType==='var'||c.planType==='min'))){
+    } else if(modifActiveJ&&(()=>{const srcJourQ=getVersionActive(c,parseDateLoc(dateStr));return srcJourQ.th==='plan'&&(srcJourQ.planType==='var'||srcJourQ.planType==='min');})()){
       // 27/07/2026 (décision Sophie) : modifications autorisées ne supprime plus tout contrôle pour
       // var/min — le nombre de jours cochés du mois est désormais plafonné au jours max du mois
       // (calcEnveloppeMoisVar, qui gère déjà la semaine à cheval en fin de mois, logique inchangée),
       // sans imposer de minimum (le plancher existant reste). Dépasser en heures un jour déjà coché
       // reste possible et payé en complémentaire, comme aujourd'hui — seul le NOMBRE de jours est
       // borné, jamais les heures.
+      // 06/09/2026 (Sophie, liste des cas qui marchent et de celui qui ne marche pas) : ce plafond
+      // s'appuyait sur `c.th`/`c.planType`, le type du contrat D'ORIGINE, jamais mis à jour par un
+      // avenant. Il ne s'appliquait donc pas du tout après un avenant sem→var (base sem), alors qu'il
+      // fonctionnait partout ailleurs — exactement la liste dressée par Sophie (min, min→var des deux
+      // côtés, var après un avenant venant de min, var en contrat initial : tous ont une base
+      // var/min). Résolu sur la version active de CE jour, comme le reste du fichier.
+      // Et plafond pris sur la PORTION contractuelle du jour, pas sur le mois entier : un mois coupé
+      // par un avenant a deux parts distinctes, les jours de l'une ne financent jamais l'autre.
       const [ayJ,amJ]=moisKeyJ.split('-').map(Number);
-      const jMaxMoisJ=calcEnveloppeMoisVar(c,ayJ,amJ).jours;
+      // {} en 4e argument : on ne veut que les enveloppes, pas le décompte des heures déjà pointées.
+      const portionJourQ=getPortionsEnveloppeMois(c,ayJ,amJ,{}).find(pQ=>dateStr>=pQ.debut&&dateStr<=pQ.fin);
+      const jMaxMoisJ=(portionJourQ&&portionJourQ.env)?portionJourQ.env.jours:0;
       let totalCocheMois=0;
       Object.keys(c.planning).forEach(dt=>{
         if(dt===dateStr) return;
         if(dt.slice(0,7)!==moisKeyJ) return;
+        if(portionJourQ&&(dt<portionJourQ.debut||dt>portionJourQ.fin)) return;
         if(c.planning[dt]&&c.planning[dt].coche) totalCocheMois++;
       });
       if(jMaxMoisJ>0&&totalCocheMois>=jMaxMoisJ){
