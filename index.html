@@ -12416,6 +12416,30 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const jourContrat=dateDebContrat.getDate();
   let debutAnneeCont=new Date(anneeContrat,moisContrat,jourContrat);
   if(debutAnneeCont>new Date(fiche.annee,fiche.mois,28)) debutAnneeCont=new Date(anneeContrat-1,moisContrat,jourContrat);
+  // 07/09/2026 (Sophie) : compte des jours d'absence maladie de l'enfant au JOUR près, borné à
+  // l'année de contrat du jour concerné — un jour situé après l'anniversaire compte pour la NOUVELLE
+  // année, y compris dans le mois anniversaire lui-même. L'ancien calcul raisonnait par mois, en
+  // comparant le 1er du mois à la date d'anniversaire : sur un mois portant l'anniversaire, les jours
+  // situés après tombaient du mauvais côté, voire nulle part. Jamais repéré avant faute d'avoir
+  // testé un mois cumulant anniversaire et avenant (Sophie).
+  const datesAbsEnfantCont=[];
+  Object.values(c.fiches||{}).forEach(f=>{
+    (f.jours||[]).forEach(j=>{ if(j.statut==='abs-enfant'&&j.date) datesAbsEnfantCont.push(j.date); });
+  });
+  const bornesAnneeAbsEnfant=(dateStrJ)=>{
+    const [jyB,jmB,jdB]=dateStrJ.split('-').map(Number);
+    const dJB=new Date(jyB,jmB-1,jdB);
+    let debB=new Date(jyB,moisContrat,jourContrat);
+    if(debB>dJB) debB=new Date(jyB-1,moisContrat,jourContrat);
+    const finB=new Date(debB.getFullYear()+1,debB.getMonth(),debB.getDate());
+    const fmtB=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    return {deb:fmtB(debB),fin:fmtB(finB)};
+  };
+  // Nombre de jours déjà posés dans l'année de contrat de ce jour, jusqu'à lui inclus.
+  const nbAbsEnfantJusquA=(dateStrJ)=>{
+    const b=bornesAnneeAbsEnfant(dateStrJ);
+    return datesAbsEnfantCont.filter(ds=>ds>=b.deb&&ds<b.fin&&ds<=dateStrJ).length;
+  };
   let nbAbsEnfantAnneeCont=0;
   Object.entries(c.fiches||{}).forEach(([k,f])=>{
     if(k===Object.keys(c.fiches).find(kk=>c.fiches[kk]===fiche)) return;
@@ -12461,8 +12485,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const estRJP=jourSemJP===(sourceActif.reposHebdo||c.reposHebdo||0)&&!isFerie(j.date,c);
       if((estFNPJP||estRJP)&&getStatutPrevu(c,j)!=='non-prevu') joursEnPlus++;
     }
-    const nbAbsEnfantCeMois=fiche.jours.slice(0,fiche.jours.indexOf(j)+1).filter(jj=>jj.statut==='abs-enfant').length;
-    const absEnfantDeductible=statut==='abs-enfant'&&(nbAbsEnfantAnneeCont+nbAbsEnfantCeMois<=5);
+    // 07/09/2026 (Sophie) : déductibilité décidée au jour près, dans l'année de contrat de CE jour —
+    // même règle et même borne que le blocage de la saisie, qui les comparait différemment.
+    const absEnfantDeductible=statut==='abs-enfant'&&!!j.date&&(nbAbsEnfantJusquA(j.date)<=5);
     const estCongesNonAcq52=((statut==='conges-non'||statut==='decompte-conges')&&(c.tc==='52'||sourceActif.tc==='52'));
     const estCongesNon46Travaille=false;
     const estCongesNonDeduit=estCongesNonAcq52||estCongesNon46Travaille;
@@ -13406,6 +13431,14 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const [jyAE,jmAE,jdAE]=j.date.split('-').map(Number);
     return new Date(jyAE,jmAE-1,jdAE)>=debutAnneeCont;
   }).length;
+  // 07/09/2026 (Sophie) : total affiché (« x/5 j ») repris du même compte au jour près, arrêté au
+  // dernier jour du mois — sinon l'encart et le blocage de la saisie pouvaient s'écarter d'un ou deux
+  // jours sur un mois anniversaire.
+  const nbAbsEnfantTotalAff=(()=>{
+    const dFinMoisAE=new Date(fiche.annee,fiche.mois+1,0);
+    const dsFinMoisAE=dFinMoisAE.getFullYear()+'-'+String(dFinMoisAE.getMonth()+1).padStart(2,'0')+'-'+String(dFinMoisAE.getDate()).padStart(2,'0');
+    return nbAbsEnfantJusquA(dsFinMoisAE);
+  })();
   const donneesManquantes=(!txBrut||(c.tc!=='occ'&&!hMensu));
 
   // Indemnité de congés payés (contrats 46 sem ou moins)
@@ -13787,7 +13820,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     nbJoursTrav:Math.max(0,parseFloat(nbJoursTrav.toFixed(1))),
     th:sourceActif.th, planType:sourceActif.planType, nbJoursMoisContrat, nbJoursMoisCalc, joursEnPlus, joursEnMoins:parseFloat(joursEnMoins.toFixed(1)),
     nbAbsEnfantMois, nbAbsEnfantAnneeCont,
-    nbAbsEnfantTotal:nbAbsEnfantAnneeCont+nbAbsEnfantMois,
+    nbAbsEnfantTotal:nbAbsEnfantTotalAff,
     txNet:txNet.toFixed(2), txNetExact:txNetPrecis, salaireNet,
     indemEntretienTotal:indemEntretienTotal.toFixed(2),
     indemRepasTotal:indemRepasTotal.toFixed(2),
