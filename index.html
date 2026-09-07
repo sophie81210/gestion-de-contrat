@@ -4155,17 +4155,12 @@ function ouvrirFiche(contratId,key){
         ...((c.fiches&&c.fiches[moisPrecKeyV]&&c.fiches[moisPrecKeyV].jours)||[]),
         ...((c.fiches&&c.fiches[moisSuivKeyV]&&c.fiches[moisSuivKeyV].jours)||[])
       ];
-      const semsCongesScoreV=semDuMoisFiltrees.map(sk=>{
-        let nb=0;
-        [...fiche.jours,...joursAdjacentsV].forEach(j=>{
-          if(getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))!==sk) return;
-          if(S.congesAM) Object.values(S.congesAM).forEach(cgAm=>{if(cgAm?.jours?.[j.date]==='pose') nb++;});
-          if(isFerie(j.date,c)) nb++;
-        });
-        return {sk,nb};
-      }).filter(x=>x.nb>=5);
-      semsCongesScoreV.sort((a,b)=>b.nb-a.nb);
-      const semsViolettes=new Set(semsCongesScoreV.slice(0,5).map(x=>x.sk));
+      // 07/09/2026 (Sophie) : même règle qu'ailleurs — semaine entièrement en congés si tous ses jours
+      // du lundi au samedi sont posés ou fériés. Cet endroit réécrivait son propre classement.
+      const semsViolettes=new Set(semDuMoisFiltrees.filter(sk=>{
+        const jSemV=[...fiche.jours,...joursAdjacentsV].find(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))===sk);
+        return jSemV?estSemaineToutEnConges(jSemV.date):false;
+      }));
       // Vérifier chaque semaine contre l'agenda qui la couvre réellement (pas un seul agenda pour tout
       // le mois — un mois peut désormais être à cheval entre deux cycles d'agenda à l'anniversaire)
       // 07/09/2026 (Sophie) : les semaines de congés étaient exemptées quel que soit le contrat. Sur un
@@ -8751,17 +8746,11 @@ function validerFiche(contratId,key){
           ...((c.fiches&&c.fiches[moisPrecKeyB]&&c.fiches[moisPrecKeyB].jours)||[]),
           ...((c.fiches&&c.fiches[moisSuivKeyB]&&c.fiches[moisSuivKeyB].jours)||[])
         ];
-        const semsCongesScoreV=semDuMoisFiltrees.map(sk=>{
-          let nb=0;
-          [...c.fiches[key].jours,...joursAdjacentsB].forEach(j=>{
-            if(getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))!==sk) return;
-            if(S.congesAM) Object.values(S.congesAM).forEach(cgAm=>{if(cgAm?.jours?.[j.date]==='pose') nb++;});
-            if(isFerie(j.date,c)) nb++;
-          });
-          return {sk,nb};
-        }).filter(x=>x.nb>=5);
-        semsCongesScoreV.sort((a,b)=>b.nb-a.nb);
-        const semsViolettes=new Set(semsCongesScoreV.slice(0,5).map(x=>x.sk));
+        // 07/09/2026 (Sophie) : même règle qu'ailleurs, voir estSemaineToutEnConges.
+        const semsViolettes=new Set(semDuMoisFiltrees.filter(sk=>{
+          const jSemB=[...c.fiches[key].jours,...joursAdjacentsB].find(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))===sk);
+          return jSemB?estSemaineToutEnConges(jSemB.date):false;
+        }));
         // Vérifier chaque semaine contre l'agenda qui la couvre réellement (pas un seul agenda pour
         // tout le mois — un mois peut être à cheval entre deux cycles d'agenda à l'anniversaire)
         const semNonPointee=semDuMoisFiltrees.find(sk=>{
@@ -14744,64 +14733,54 @@ function estSemViolette(semsCongesSet, semNum, lundiDate){
   const set=semsCongesSet.get(anneeAM);
   return set?set.has(semNum):false;
 }
+// 07/09/2026 (Sophie) : remplace le classement des cinq semaines les plus chargées, qui n'était qu'une
+// approximation. La règle est une règle de COMPLÉTUDE : une semaine est entièrement en congés si tous
+// ses jours du lundi au samedi sont posés au calendrier Ass'Mat, ou couverts par un férié. Sinon elle
+// est partielle, et elle doit porter un type sur l'agenda pour couvrir ses jours travaillés.
+// Le classement pouvait griser une semaine incomplète (impossible à pointer alors qu'elle en a besoin)
+// ou en oublier une complète. Il coincidait avec la règle tant que les congés étaient posés en cinq
+// semaines pleines, ce qui est le cas courant — d'où des années sans que l'écart se voie.
+// poses/feries : ensembles précalculés facultatifs, pour éviter de rebalayer le calendrier à chaque jour.
+function estSemaineToutEnConges(dateDansSemaine, poses, feries){
+  const ds0=typeof dateDansSemaine==='string'?dateDansSemaine:dateToStr(dateDansSemaine);
+  const d0=parseDateLoc(ds0);
+  const idx0=d0.getDay()===0?6:d0.getDay()-1;
+  const lundi=new Date(d0); lundi.setDate(d0.getDate()-idx0);
+  for(let k=0;k<6;k++){ // lundi → samedi ; le dimanche ne compte jamais
+    const j=new Date(lundi); j.setDate(lundi.getDate()+k);
+    const ds=dateToStr(j);
+    const estPose=poses?poses.has(ds):isJourCongeAM(ds);
+    if(estPose) continue;
+    const estFer=feries?feries.has(ds):isFerie(ds);
+    if(estFer) continue;
+    return false;
+  }
+  return true;
+}
+
+// Renvoie l'ensemble des NUMÉROS de semaine entièrement en congés sur la période donnée (l'année
+// Ass'Mat, du 1er mai au 30 avril). Même forme de retour qu'avant, les appelants sont inchangés.
 function getSemsCongesGlobal(dateDebut, dateFin){
-  // Calcule les 5 numéros de semaine les plus chargés en congés posés + fériés
-  // Filtre sur la période de l'agenda (dateDebut à dateFin)
-  const semScores={}; // clé = numéro de semaine (ex: 32)
-  const addScore=(dateStr)=>{
-    if(dateDebut&&dateFin&&(dateStr<dateDebut||dateStr>dateFin)) return; // filtrer sur la période
-    const sk=getSemISO(dateStr); // numéro de semaine
-    if(!semScores[sk]) semScores[sk]=0;
-    semScores[sk]++;
-  };
-  // Jours posés depuis le calendrier AM
+  const res=new Set();
+  if(!dateDebut||!dateFin) return res;
+  const poses=new Set();
   if(S.congesAM){
     Object.values(S.congesAM).forEach(cgAm=>{
       if(!cgAm||!cgAm.jours) return;
-      Object.entries(cgAm.jours).forEach(([dateStr,val])=>{
-        if(val==='pose'){
-        addScore(dateStr);
-      }
-      });
+      Object.entries(cgAm.jours).forEach(([dateStr,val])=>{ if(val==='pose') poses.add(dateStr); });
     });
   }
-  // Fériés collés à un jour posé : ajoutent 0.5 au score (ne priment pas sur les jours posés)
-  const joursPosesSet=new Set();
-  if(S.congesAM){
-    Object.values(S.congesAM).forEach(cgAm=>{
-      if(!cgAm||!cgAm.jours) return;
-      Object.entries(cgAm.jours).forEach(([dateStr,val])=>{if(val==='pose') joursPosesSet.add(dateStr);});
-    });
+  const d1=parseDateLoc(dateDebut), d2=parseDateLoc(dateFin);
+  const cur=new Date(d1);
+  cur.setDate(cur.getDate()-((cur.getDay()===0?6:cur.getDay()-1))); // lundi de la première semaine
+  let garde=0;
+  while(cur<=d2&&garde<60){
+    garde++;
+    const dsLundi=dateToStr(cur);
+    if(dsLundi>=dateDebut&&estSemaineToutEnConges(cur,poses,null)) res.add(getSemISO(dsLundi));
+    cur.setDate(cur.getDate()+7);
   }
-  const addFerie=(dateStr)=>{
-    if(dateDebut&&dateFin&&(dateStr<dateDebut||dateStr>dateFin)) return; // filtrer sur la période
-    // Vérifier si un jour posé est collé (veille ou lendemain)
-    const d=new Date(dateStr);
-    const veille=new Date(d);veille.setDate(d.getDate()-1);
-    const lendemain=new Date(d);lendemain.setDate(d.getDate()+1);
-    const veilleStr=veille.getFullYear()+'-'+String(veille.getMonth()+1).padStart(2,'0')+'-'+String(veille.getDate()).padStart(2,'0');
-    const lendStr=lendemain.getFullYear()+'-'+String(lendemain.getMonth()+1).padStart(2,'0')+'-'+String(lendemain.getDate()).padStart(2,'0');
-    if(!joursPosesSet.has(veilleStr)&&!joursPosesSet.has(lendStr)) return;
-    const sk=getSemISO(dateStr); // numéro de semaine uniquement
-    if(!semScores[sk]) semScores[sk]=0;
-    semScores[sk]+=0.5;
-  };
-  const annees=new Set();
-  if(S.congesAM) Object.keys(S.congesAM).forEach(a=>{ annees.add(parseInt(a)); annees.add(parseInt(a)+1); });
-  annees.forEach(yyyy=>{
-    ['01-01','05-01','05-08','07-14','08-15','11-01','11-11','12-25'].forEach(mmdd=>{
-      addFerie(yyyy+'-'+mmdd);
-    });
-    const a=yyyy%19,b=Math.floor(yyyy/100),cc=yyyy%100,dd2=Math.floor(b/4),e=b%4,f=Math.floor((b+8)/25),g=Math.floor((b-f+1)/3),h=(19*a+b-dd2-g+15)%30,i=Math.floor(cc/4),k=cc%4,l=(32+2*e+2*i-h-k)%7,mo=Math.floor((a+11*h+22*l)/451),month=Math.floor((h+l-7*mo+114)/31),day=((h+l-7*mo+114)%31)+1;
-    const paques=new Date(yyyy,month-1,day);
-    [1,39,50].forEach(offset=>{
-      const fd=new Date(paques);fd.setDate(paques.getDate()+offset);
-      const ds=fd.getFullYear()+'-'+String(fd.getMonth()+1).padStart(2,'0')+'-'+String(fd.getDate()).padStart(2,'0');
-      addFerie(ds);
-    });
-  });
-  const sorted=Object.entries(semScores).sort((a,b)=>b[1]-a[1]||(a[0]<b[0]?-1:1));
-  return new Set(sorted.slice(0,5).map(x=>Number(x[0]))); // Set de numéros de semaine
+  return res;
 }
 
 function invaliderSemsCongesGlobal(){
