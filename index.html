@@ -7610,7 +7610,27 @@ function calcEnveloppeMoisFixeSem(c,ay,am,ficheRef){
   return {jours:jours4, minutes:minutes4, heures:minutes4/60};
 }
 
+// 07/09/2026 (Sophie, contrat regul52, rupture confirmée du 12/02/2022 dont plus aucun calcul ne
+// tenait compte) : garde-fou de validité. Toutes les branches ci-dessous construisent une date à
+// partir d'un champ saisi (dateSignif, dateFinPreavis, cddDateFin...). Si ce champ est vide ou mal
+// formé, `new Date(...)` ne renvoie pas null mais une **Invalid Date** — un objet TRUE au sens
+// booléen, dont toutes les comparaisons (d > finContrat, d < finContrat) répondent false. Elle
+// traversait donc silencieusement chaque `if(dateFin)` du fichier, y compris le contrôle censé
+// interdire la confirmation d'une rupture non calculable, et l'app se comportait ensuite comme si
+// le contrat n'avait pas de fin : aucune déduction hors contrat, heures prévues comptées, agenda
+// jamais tronqué, cycle de régularisation sans borne — pendant que la feuille continuait d'afficher
+// le statut "hors contrat" écrit lors de la confirmation. Aucune vérification de ce genre n'existait
+// nulle part dans le fichier. Une date impossible vaut désormais "pas de date", ce que tout le reste
+// du code sait déjà traiter.
 function calcDateFinContratBrute(c){
+  const _d=calcDateFinContratBruteCalc(c);
+  if(_d&&(!(_d instanceof Date)||isNaN(_d.getTime()))){
+    console.warn('[rupture] date de fin de contrat impossible à calculer — champs de la rupture incomplets ou mal formés :',c&&c.rupture);
+    return null;
+  }
+  return _d;
+}
+function calcDateFinContratBruteCalc(c){
   // 06/08/2026 (Sophie) : cœur du calcul, sans le contrôle "confirmee" ci-dessous — nécessaire pour
   // confirmerRupture, qui doit savoir si une date SERAIT déterminable avant même d'avoir confirmé
   // (avec getDateFinContrat seul, la question est sans issue : il répond toujours "non déterminable"
