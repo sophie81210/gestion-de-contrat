@@ -2505,7 +2505,42 @@ function modifierKmDirect(contratId, val, cibleId){
 // calcul — seules les écritures dans la page deviennent des valeurs de retour. But : pouvoir demander
 // ce même calcul depuis ailleurs (projection du simulateur de rupture au-delà du mois en cours) sans
 // en écrire une quatrième version. Renvoie {html, cache, mensuValide, prevuValide}.
-function calcRegulOnglet(c){
+// 07/09/2026 (Sophie) : un mois en plan min ou var dont l'agenda n'est pas pointé compte pour zéro dans
+// le salaire dû — le calcul tire le volume du type de semaine posé sur l'agenda, rien d'autre. Sert à
+// avertir dans le simulateur de rupture, où la projection porte justement sur des mois à venir dont
+// l'agenda est souvent encore vide. Renvoie false pour tout autre type de contrat.
+function moisSansAgendaRegul(c, moisKey){
+  const [ayA,amA]=moisKey.split('-').map(Number);
+  const finMoisA=new Date(ayA,amA,0);
+  const finContratA=getDateFinContrat(c);
+  for(let d=1;d<=finMoisA.getDate();d++){
+    const dA=new Date(ayA,amA-1,d);
+    const dsA=ayA+'-'+String(amA).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+    if(c.dateDeb&&dsA<c.dateDeb) continue;
+    if(finContratA&&dA>finContratA) continue;
+    const srcA=getVersionActive(c,dA);
+    if(!(srcA.th==='plan'&&(srcA.planType==='min'||srcA.planType==='var'))) continue;
+    // Min sur 52 semaines : un seul motif toute l'année, aucun agenda nécessaire (même règle que
+    // calcEnveloppeMoisVar) — jamais signalé comme incomplet.
+    if(srcA.planType==='min'&&(srcA.tc||c.tc)==='52') continue;
+    const agendasA=srcA.agendas||c.agendas||[];
+    const agA=agendasA.find(a=>{
+      const pmA=new Date(ayA,amA-1,1), dmA=new Date(ayA,amA,0);
+      return parseDateLoc(a.dateDebut)<=dmA&&parseDateLoc(a.dateFin)>=pmA;
+    });
+    const typeA=agA&&agA.semaines&&agA.semaines[getKeyAgenda(getSemISO(dsA),getSemAnnee(dsA))];
+    if(!typeA) return true; // au moins une semaine sans type posé
+  }
+  return false;
+}
+function calcRegulOnglet(c, opts){
+  // 07/09/2026 (Sophie) : opts.jusquA (mois AAAA-MM) prolonge le calcul au-delà du mois en cours,
+  // pour le simulateur de rupture qui doit projeter jusqu'à une date de fin future. Sans lui, tout se
+  // comporte exactement comme avant. Les mois projetés n'ont aucune feuille : on en fabrique une en
+  // mémoire avec creerFiche, qui construit et renvoie sans jamais rien écrire dans le contrat.
+  // Plafond de 18 mois (prudence demandée par Sophie) : un an de signification, deux mois de préavis,
+  // et de la marge — au-delà, aucune projection plutôt qu'un chiffre douteux fabriqué sur des années.
+  const optsReg=opts||{};
     const estContratRegul=c.tc!=='52'&&c.tc!=='occ';
     const aClauseRegul52Base=c.tc==='52'&&c.clauseRegul52;
     const aClauseRegul52=aClauseRegul52Base||(c.avenants||[]).some(av=>av.signe&&av.clauseRegul52&&av.dateAvenant);
@@ -2516,7 +2551,23 @@ function calcRegulOnglet(c){
       return {html:`<div class="card"><div style="text-align:center;padding:20px;color:var(--tx2)">La régularisation s'applique uniquement aux contrats de 46 semaines ou moins, ou aux contrats de 52 semaines (plan var/sem) avec la clause particulière.</div></div>`};
     } else {
       const now=new Date();
-      const moisMax=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+      const moisCourantReg=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+      const plafondProjReg=(()=>{const dP=new Date(now.getFullYear(),now.getMonth()+18,1);return dP.getFullYear()+'-'+String(dP.getMonth()+1).padStart(2,'0');})();
+      const jusquAReg=(optsReg.jusquA&&optsReg.jusquA>moisCourantReg&&optsReg.jusquA<=plafondProjReg)?optsReg.jusquA:null;
+      const moisMax=jusquAReg||moisCourantReg;
+      // Mois à projeter : ceux qui suivent le mois en cours et n'ont pas encore de feuille.
+      const fichesProjeteesReg={};
+      if(jusquAReg){
+        const [pcy,pcm]=moisCourantReg.split('-').map(Number);
+        const curProj=new Date(pcy,pcm,1); // 1er du mois SUIVANT le mois en cours
+        while(true){
+          const kProj=curProj.getFullYear()+'-'+String(curProj.getMonth()+1).padStart(2,'0');
+          if(kProj>moisMax) break;
+          if(!(c.fiches&&c.fiches[kProj])) fichesProjeteesReg[kProj]=creerFiche(c,curProj.getFullYear(),curProj.getMonth());
+          curProj.setMonth(curProj.getMonth()+1);
+        }
+      }
+      const clesProjeteesReg=Object.keys(fichesProjeteesReg);
       // Construire la liste des cycles 46 sem (chaque cycle = {moisMin, moisMax, solde:true/false})
       const tousAvenantsTries=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant).sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant));
       const cycles=[];
@@ -2556,7 +2607,7 @@ function calcRegulOnglet(c){
       [...cycles].reverse().forEach((cycle,cycleIdxRev)=>{
       cycleTotMensu=0; cycleTotPrevu=0; tableauxHtml='';
       let cycleTotMensuValide=0, cycleTotPrevuValide=0;
-      const moisTries=Object.keys(c.fiches||{}).filter(k=>k<=moisMax&&k>=cycle.moisMin&&k<=cycle.moisMax).sort();
+      const moisTries=[...new Set([...Object.keys(c.fiches||{}),...clesProjeteesReg])].filter(k=>k<=moisMax&&k>=cycle.moisMin&&k<=cycle.moisMax).sort();
       if(!moisTries.length){ return; } else {
         const [ddy,ddm,ddd]=c.dateDeb?c.dateDeb.split('-').map(Number):[new Date().getFullYear(),new Date().getMonth()+1,new Date().getDate()];
         const dateDebContrat=new Date(ddy,ddm-1,ddd);
@@ -2788,7 +2839,7 @@ function calcRegulOnglet(c){
             //   + heures réelles abs partielles (pas les heures prévues ce jour)
             //   + abs rémunérées (heures prévues)
             //   + fériés prévus au contrat
-            const ficheMois=c.fiches?.[key];
+            const ficheMois=c.fiches?.[key]||fichesProjeteesReg[key];
             // Détecter le type de passage
             const estPassageVers46Reg=avenantDuMoisReg&&avenantDuMoisReg.tc!=='52'&&avenantDuMoisReg.tc!=='occ';
             // 07/09/2026 (Sophie, contrat 52 fixe → 46 var, avenant du 15/10/2025) : ce test
@@ -3047,7 +3098,8 @@ function calcRegulOnglet(c){
           // On utilise le totGlobal car c'est le seul cycle en cours
           return diffGen;
         })():0;
-        c._regulDiffEuros=parseFloat(diffDernierCycle.toFixed(2));
+        // Jamais écrasé par une projection : cette valeur sert au récapitulatif réel, pas au simulateur.
+        if(!jusquAReg) c._regulDiffEuros=parseFloat(diffDernierCycle.toFixed(2));
         const dcGen=diffGenValide>0?'var(--vt)':diffGenValide<0?'var(--al)':'var(--tx2)';
         const htmlRegulFinal=`
           <div class="card" style="background:var(--mp);margin-bottom:12px;border-bottom:none">
@@ -3066,7 +3118,10 @@ function calcRegulOnglet(c){
             </div>
           </div>
           ${allCyclesHtml}`;
-        return {html:htmlRegulFinal, cache:true, mensuValide:totGlobalMensuValide, prevuValide:totGlobalPrevuValide};
+        return {html:htmlRegulFinal, cache:!jusquAReg, mensuValide:totGlobalMensuValide, prevuValide:totGlobalPrevuValide,
+                mensuTotal:totGlobalMensu, prevuTotal:totGlobalPrevu, diffTotal:diffGen,
+                projete:!!jusquAReg, jusquA:jusquAReg, moisProjetes:clesProjeteesReg,
+                horsPlafond:!!(optsReg.jusquA&&optsReg.jusquA>plafondProjReg)};
 
     }
 }
@@ -17656,6 +17711,7 @@ function renderRupture(c, cont){
   if(dateSit&&motif){
     const lignes=[];
     let totalNet=0, totalBrut=0;
+    let avertAgendaSimHtml=''; // 07/09/2026 : avertissements de la projection (agenda, plafond)
     const srcActifSim=getVersionActive(c,dateFinContrat||dateSit);
     if(window.DEBUG_ESTIM){
       const sDateSit=srcActifSim.tc==='52'?calcSoldeConges52(c,dateSit):calcSoldeConges46(c,dateSit);
@@ -17676,17 +17732,47 @@ function renderRupture(c, cont){
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
       if(s.montantFracRupture>0){lignes.push({label:'Jours de fractionnement non pris ('+s.joursFracRestants+' j)',net:s.montantFracRupture,brut:s.montantFracRuptureBrut});totalNet+=s.montantFracRupture;totalBrut+=s.montantFracRuptureBrut;}
       if(srcActifSim.tc!=='52'){
+        // 07/09/2026 (Sophie) : cet encart est un SIMULATEUR — par définition il repose sur des mois
+        // pas encore vécus. Il ne doit donc pas afficher la régularisation "définitive", arrêtée à la
+        // dernière feuille validée et identique quelle que soit la date simulée (elle ne servait alors
+        // à rien), mais une PROJECTION jusqu'à la date de fin simulée. Le vrai montant de rupture reste
+        // celui du tableau et de la "situation au", appuyés sur des feuilles validées — décision Sophie.
+        // Même calcul que l'onglet Régularisation, appelé avec une date de fin plus lointaine : aucune
+        // quatrième version du calcul, et les mois futurs sont valorisés comme les mois non validés le
+        // sont déjà dans le tableau, c'est-à-dire d'après l'agenda.
+        const moisFinSim=dateFinContrat?dateToStr(dateFinContrat).slice(0,7):null;
+        const regProj=moisFinSim?calcRegulOnglet(c,{jusquA:moisFinSim}):null;
         const reg=calcRegularisationDefinitive(c);
-        if(reg.diffNet>0){
+        const regNetBrut=regProj&&regProj.projete?regProj.diffTotal:reg.diffNet;
+        if(regNetBrut>0){
         // 29/07/2026 (correctif Sophie) : coefNet n'existe pas dans cette portée — coefficient en
         // vigueur à la rupture (dateSit), même référence que le reste de l'onglet.
         // 27/08/2026 (Sophie) : reg.diffNet déjà en euros nets, mois par mois au bon taux — regBrut
         // n'est plus qu'une valeur d'affichage dérivée (net/coefficient), pas un recalcul depuis des heures.
         const coefNetRegul=getParamAt('coefficients',dateToStr(dateSit)).valeur||0.7811975;
-        const regNet=reg.diffNet;
+        const regNet=parseFloat(regNetBrut.toFixed(2));
         const regBrut=coefNetRegul>0?parseFloat((regNet/coefNetRegul).toFixed(2)):0;
-        lignes.push({label:'Régularisation définitive',net:regNet,brut:regBrut});
+        const libRegulSim=(regProj&&regProj.projete)
+          ?'Régularisation estimée au '+dateFinContrat.toLocaleDateString('fr-FR')
+          :'Régularisation définitive';
+        lignes.push({label:libRegulSim,net:regNet,brut:regBrut});
         totalNet+=regNet;totalBrut+=regBrut;
+      }
+      // Avertissement agenda : un mois projeté sans type posé sur l'agenda compte pour zéro, ce qui
+      // sous-évalue silencieusement l'estimation. Ne concerne que min/var, seuls à tirer leur volume
+      // de l'agenda ; fixe et semaines types ont leurs heures dans le motif.
+      if(regProj&&regProj.projete&&regProj.moisProjetes.length){
+        const moisSansAgSim=regProj.moisProjetes.filter(kA=>moisSansAgendaRegul(c,kA));
+        if(moisSansAgSim.length){
+          const libSansAgSim=moisSansAgSim.map(kA=>{
+            const [ayA,amA]=kA.split('-').map(Number);
+            return new Date(ayA,amA-1,1).toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
+          });
+          avertAgendaSimHtml=`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin:8px 0;font-size:12px;color:#856404">⚠ Agenda non pointé sur ${moisSansAgSim.length} mois d’ici la fin de contrat : <strong>${libSansAgSim.join(', ')}</strong>.<br>Ces mois comptent pour zéro dans l’estimation ci-dessous, qui est donc trop basse. Complétez l’agenda depuis l’onglet Contrat.</div>`;
+        }
+      }
+      if(regProj&&regProj.horsPlafond){
+        avertAgendaSimHtml+=`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin:8px 0;font-size:12px;color:#856404">⚠ La date de fin simulée dépasse 18 mois : aucune projection n’est faite au-delà, l’estimation s’arrête au mois en cours.</div>`;
       }
       }
     }
@@ -17740,6 +17826,7 @@ function renderRupture(c, cont){
     const dateRef=dateFinContrat?dateFinContrat.toLocaleDateString('fr-FR'):dateSitStr;
     soldeHtml=`<div class="card" style="margin-bottom:10px;background:var(--mp)">
       <div class="ctitle">Estimation du solde de tout compte au ${dateRef}</div>
+      ${avertAgendaSimHtml}
       ${lignes.map(l=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid var(--mb)">
         <span>${l.label}</span>
         <span>${l.brutSeulement?l.brut.toFixed(2)+' € brut':l.net.toFixed(2)+' € net <span style="color:var(--tx2);font-size:11px">('+l.brut.toFixed(2)+' € brut)</span>'}</span>
