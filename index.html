@@ -2551,6 +2551,10 @@ function moisSansAgendaRegul(c, moisKey){
       if(!(anneeAmA in semsCongesCacheA)) semsCongesCacheA[anneeAmA]=getSemsCongesGlobal(anneeAmA+'-05-01',(anneeAmA+1)+'-04-30');
       const setCgA=semsCongesCacheA[anneeAmA];
       if(setCgA&&setCgA.has&&setCgA.has(semNumA)) continue;
+      // 07/09/2026 : et surtout selon la règle du CONTRAT (jours possibles tous posés ou fériés), la
+      // même que celle qui colore la semaine en violet dans l'agenda — sinon une semaine posée du
+      // lundi au vendredi sur un contrat qui ne travaille pas le samedi serait réclamée à tort.
+      if(estSemaineToutEnConges(dsA,null,null,c)) continue;
     }
     const typeA=agA&&agA.semaines&&agA.semaines[getKeyAgenda(semNumA,semAnA)];
     if(!typeA){
@@ -14745,18 +14749,50 @@ function estSemViolette(semsCongesSet, semNum, lundiDate){
 // ou en oublier une complète. Il coincidait avec la règle tant que les congés étaient posés en cinq
 // semaines pleines, ce qui est le cas courant — d'où des années sans que l'écart se voie.
 // poses/feries : ensembles précalculés facultatifs, pour éviter de rebalayer le calendrier à chaque jour.
-function estSemaineToutEnConges(dateDansSemaine, poses, feries){
+// 07/09/2026 (Sophie, même jour, après constat) : quand un CONTRAT est fourni, la règle est celle
+// qu'applique déjà la coloration de l'agenda — tous les JOURS POSSIBLES DU CONTRAT sont posés ou
+// fériés, le jour de repos hebdomadaire exclu. C'est pourquoi une semaine posée du lundi au vendredi
+// est bien violette sur un contrat qui ne travaille pas le samedi. Sans contrat (usage global, tous
+// contrats confondus), on retombe sur lundi → samedi, faute de motif de référence.
+function joursPossiblesSemaineContrat(c, dateRef){
+  const src=getVersionActive(c,dateRef);
+  const repos=src.reposHebdo||c.reposHebdo||0;
+  return Array.from({length:7},(_,i)=>i).filter(i=>{
+    if(i===repos) return false;            // i : 0=dimanche … 6=samedi
+    const idxLun=i===0?6:i-1;              // idxLun : 0=lundi … 6=dimanche
+    if(src.th==='fixe'&&src.joursFixe) return !!(src.joursFixe[idxLun]&&src.joursFixe[idxLun].d);
+    if(src.th==='sem'&&src.semTypes) return src.semTypes.some(st=>st.jours&&st.jours[idxLun]&&st.jours[idxLun].d);
+    if(src.th==='plan'&&src.planType==='min'&&src.joursMin) return !!src.joursMin[idxLun];
+    if(src.th==='plan'&&src.planType==='var'&&src.planVar) return src.planVar.some(v=>v.jours&&v.jours[idxLun]);
+    return false;
+  });
+}
+function estSemaineToutEnConges(dateDansSemaine, poses, feries, contrat){
   const ds0=typeof dateDansSemaine==='string'?dateDansSemaine:dateToStr(dateDansSemaine);
   const d0=parseDateLoc(ds0);
   const idx0=d0.getDay()===0?6:d0.getDay()-1;
   const lundi=new Date(d0); lundi.setDate(d0.getDate()-idx0);
+  const estPoseF=ds=>poses?poses.has(ds):isJourCongeAM(ds);
+  const estFerF=ds=>feries?feries.has(ds):isFerie(ds);
+  if(contrat){
+    const possibles=joursPossiblesSemaineContrat(contrat,lundi);
+    if(!possibles.length) return false;
+    let auMoinsUnPose=false;
+    for(const jourSem of possibles){
+      const dec=jourSem===0?6:jourSem-1; // position depuis le lundi
+      const j=new Date(lundi); j.setDate(lundi.getDate()+dec);
+      const ds=dateToStr(j);
+      if(estPoseF(ds)){ auMoinsUnPose=true; continue; }
+      if(estFerF(ds)) continue;
+      return false;
+    }
+    return auMoinsUnPose;
+  }
   for(let k=0;k<6;k++){ // lundi → samedi ; le dimanche ne compte jamais
     const j=new Date(lundi); j.setDate(lundi.getDate()+k);
     const ds=dateToStr(j);
-    const estPose=poses?poses.has(ds):isJourCongeAM(ds);
-    if(estPose) continue;
-    const estFer=feries?feries.has(ds):isFerie(ds);
-    if(estFer) continue;
+    if(estPoseF(ds)) continue;
+    if(estFerF(ds)) continue;
     return false;
   }
   return true;
