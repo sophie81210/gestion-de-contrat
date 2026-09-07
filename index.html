@@ -19534,6 +19534,40 @@ function signerAvenant(){
       return debAg<=debutMoisAvent;
     });
   });
+  // 07/09/2026 (Sophie, note « agenda se poursuit sur la partie plan sem 46 après un avenant plan
+  // fixe 52 ») : les agendas qui COMMENCENT après l'avenant étaient bien supprimés, mais celui qui
+  // commence avant et se termine après gardait sa date de fin, souvent un an plus loin. Il continuait
+  // donc à afficher — et surtout à être interrogé — des semaines appartenant à la nouvelle version du
+  // contrat, y compris quand celle-ci n'a pas besoin d'agenda du tout (fixe 52, min 52). Sa fin est
+  // maintenant ramenée à la veille de l'avenant, et les types pointés sur les semaines entièrement
+  // postérieures sont retirés : sans ça ils restent trouvables par clé et peuvent resservir à tort
+  // (plusieurs calculs cherchent un agenda par simple chevauchement de mois, puis lisent la clé de la
+  // semaine). La semaine qui contient l'avenant lui-même reste partagée entre les deux agendas, comme
+  // deux agendas consécutifs le font déjà partout ailleurs.
+  {
+    const pAv=av.dateAvenant.split('-').map(Number);
+    const dVeilleAv=new Date(pAv[0],pAv[1]-1,pAv[2]-1);
+    const veilleAvStr=dVeilleAv.getFullYear()+'-'+String(dVeilleAv.getMonth()+1).padStart(2,'0')+'-'+String(dVeilleAv.getDate()).padStart(2,'0');
+    const tronquerAgendas=(liste)=>{
+      (liste||[]).forEach(ag=>{
+        if(!ag||!ag.dateFin||ag.dateFin<=veilleAvStr) return;
+        ag.dateFin=veilleAvStr;
+        ag._semFin={sem:getSemISO(veilleAvStr),annee:getSemAnnee(veilleAvStr)};
+        if(ag.semaines){
+          Object.keys(ag.semaines).forEach(kSem=>{
+            const pk=kSem.split('-S');
+            const semK=parseInt(pk[1]), anK=parseInt(pk[0]);
+            if(!semK||!anK) return;
+            const lundiK=getDateFromSemISO(semK,anK);
+            const lundiKStr=lundiK.getFullYear()+'-'+String(lundiK.getMonth()+1).padStart(2,'0')+'-'+String(lundiK.getDate()).padStart(2,'0');
+            if(lundiKStr>veilleAvStr) delete ag.semaines[kSem];
+          });
+        }
+      });
+    };
+    tronquerAgendas(c.agendas);
+    c.avenants.forEach(avPrec=>{ if(avPrec.id!==avid&&avPrec.signe) tronquerAgendas(avPrec.agendas); });
+  }
 
   // Créer l'agenda si nécessaire
   if(contratNeedAgenda(av)&&(!av.agendas||!av.agendas.length)){
