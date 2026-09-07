@@ -2656,11 +2656,6 @@ function renderDetTab(id,tab){
       }
       // Tout le HTML des cycles (du plus récent au plus ancien)
       let allCyclesHtml='';
-      // 07/09/2026 (demande Sophie) : un mois en plan min ou var dont le planning n'a jamais été
-      // enregistré affiche 0 en salaire dû — le chiffre est juste au sens du calcul, mais il ne veut
-      // rien dire tant que le planning n'est pas confirmé. Une étoile après le nom du mois le signale,
-      // avec une légende en haut du tableau dès qu'au moins un mois est concerné.
-      let aPlanningNonEnrRegul=false;
       let totGlobalMensu=0, totGlobalPrevu=0;
       // 25/08/2026 (Sophie) : le total général en haut de l'onglet ne doit refléter que l'état à la
       // dernière fiche validée — jamais les mois futurs/non validés, contrairement aux tableaux par
@@ -3102,16 +3097,8 @@ function renderDetTab(id,tab){
             if(ficheMois&&ficheMois.valide){ cycleTotMensuValide+=montantMensu; cycleTotPrevuValide+=montantPrevu; }
             const diff=montantPrevu-montantMensu;
             const dc=diff>0?'var(--vt)':diff<0?'var(--al)':'var(--tx2)';
-            // Étoile "planning à enregistrer" : uniquement pour un mois en plan min ou var (les seuls
-            // dont le salaire dû dépende d'un planning enregistré). Le type est cherché au début ET à
-            // la fin du mois, pour couvrir un avenant tombant en cours de mois.
-            const srcDebMoisAst=getVersionActive(c,new Date(ay2,am2-1,1));
-            const srcFinMoisAst=getVersionActive(c,new Date(ay2,am2,0));
-            const estMinVarAst=[srcDebMoisAst,srcFinMoisAst].some(sA=>sA.th==='plan'&&(sA.planType==='min'||sA.planType==='var'));
-            const planningAEnrAst=estMinVarAst&&planningNonEnregistrePourMois(c,key);
-            if(planningAEnrAst) aPlanningNonEnrRegul=true;
             return `<tr style="border-bottom:1px solid var(--mb)">
-              <td style="padding:7px 4px;font-size:13px">${ficheMois&&ficheMois.valide?'<span style="color:var(--vt)" title="Feuille validée">✓</span> ':''}${moisLabel}${planningAEnrAst?'<span title="Planning non enregistré : le salaire dû de ce mois n’est pas fiable" style="color:var(--al);font-weight:700"> *</span>':''}</td>
+              <td style="padding:7px 4px;font-size:13px">${ficheMois&&ficheMois.valide?'<span style="color:var(--vt)" title="Feuille validée">✓</span> ':''}${moisLabel}</td>
               <td style="padding:7px 4px;font-size:13px;text-align:center">${montantMensu.toFixed(2)} €</td>
               <td style="padding:7px 4px;font-size:13px;text-align:center">${montantPrevu.toFixed(2)} €</td>
             </tr>`;
@@ -3187,7 +3174,6 @@ function renderDetTab(id,tab){
               </div>
             </div>
           </div>
-          ${aPlanningNonEnrRegul?'<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404"><strong>*</strong> : planning à enregistrer — le salaire dû de ces mois ne sera juste qu’une fois leur planning enregistré depuis l’onglet Planning.</div>':''}
           ${allCyclesHtml}`;
         c._regulHtml=cont.innerHTML;
         c._regulDirty=false;
@@ -17650,29 +17636,6 @@ function renderRupture(c, cont){
   else if(motif==='retrait-force'&&rp.dateSignif) dateFinContrat=new Date(rp.dateSignif);
   else if(motif==='fin-occasionnel'&&rp.dateSignif) dateFinContrat=new Date(rp.dateSignif);
 
-  // 07/09/2026 (demande Sophie) : dès que la date de fin de contrat est connue, signaler les mois en
-  // plan min ou var, antérieurs à cette date, dont le planning n’a jamais été enregistré. Leur salaire
-  // dû vaut 0 tant que le planning n’est pas confirmé : la régularisation reprise dans le solde de
-  // tout compte est alors fausse, sans que rien ne le signale. Même repère que l’étoile posée sur
-  // l’onglet Régularisation, et même fonction de détection que le bouton Enregistrer du planning.
-  let avertPlanningRupHtml='';
-  if(dateFinContrat){
-    const moisFinRup=dateToStr(dateFinContrat).slice(0,7);
-    const moisAEnrRup=Object.keys(c.fiches||{}).filter(kR=>kR<=moisFinRup).sort().filter(kR=>{
-      const [ayR,amR]=kR.split('-').map(Number);
-      const estMinVarR=[getVersionActive(c,new Date(ayR,amR-1,1)),getVersionActive(c,new Date(ayR,amR,0))]
-        .some(sR=>sR.th==='plan'&&(sR.planType==='min'||sR.planType==='var'));
-      return estMinVarR&&planningNonEnregistrePourMois(c,kR);
-    });
-    if(moisAEnrRup.length){
-      const libMoisRup=moisAEnrRup.map(kR=>{
-        const [ayR,amR]=kR.split('-').map(Number);
-        return new Date(ayR,amR-1,1).toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
-      });
-      const listeRup=libMoisRup.length>12?libMoisRup.slice(0,12).join(', ')+', …':libMoisRup.join(', ');
-      avertPlanningRupHtml=`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin:8px 0;font-size:12px;color:#856404">⚠ Planning non enregistré sur ${moisAEnrRup.length} mois avant la fin de contrat : <strong>${listeRup}</strong>.<br>Leur salaire dû compte pour 0 tant que le planning n’est pas enregistré depuis l’onglet Planning — la régularisation ci-dessous est donc incomplète.</div>`;
-    }
-  }
 
   // 01/09/2026 (Sophie) : calculé ici (avant confirmeeHtml et indemRuptureEncartHtml) pour pouvoir
   // aussi masquer le bouton "Annuler la confirmation" et la carte "Indemnité de rupture" une fois la
@@ -17767,7 +17730,6 @@ function renderRupture(c, cont){
     const dateRef=dateFinContrat?dateFinContrat.toLocaleDateString('fr-FR'):dateSitStr;
     soldeHtml=`<div class="card" style="margin-bottom:10px;background:var(--mp)">
       <div class="ctitle">Estimation du solde de tout compte au ${dateRef}</div>
-      ${avertPlanningRupHtml}
       ${lignes.map(l=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid var(--mb)">
         <span>${l.label}</span>
         <span>${l.brutSeulement?l.brut.toFixed(2)+' € brut':l.net.toFixed(2)+' € net <span style="color:var(--tx2);font-size:11px">('+l.brut.toFixed(2)+' € brut)</span>'}</span>
