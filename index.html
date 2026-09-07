@@ -2553,8 +2553,15 @@ function calcRegulOnglet(c, opts){
       const now=new Date();
       const moisCourantReg=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
       const plafondProjReg=(()=>{const dP=new Date(now.getFullYear(),now.getMonth()+18,1);return dP.getFullYear()+'-'+String(dP.getMonth()+1).padStart(2,'0');})();
-      const jusquAReg=(optsReg.jusquA&&optsReg.jusquA>moisCourantReg&&optsReg.jusquA<=plafondProjReg)?optsReg.jusquA:null;
-      const moisMax=jusquAReg||moisCourantReg;
+      // 07/09/2026 (Sophie, test Enael : rupture simulee au 15/10/2022, donc dans le PASSE) : la borne
+      // vaut dans les deux sens. Vers l'avant elle projette (mois fabriques en memoire, plafond 18
+      // mois) ; vers l'arriere elle ARRETE le calcul a cette date, ce qui est exactement le parametre
+      // de limitation prevu de longue date et jamais raccorde. Ma premiere version ne gerait que le
+      // futur : une date passee retombait sur le calcul non borne et le simulateur restait fige sur
+      // la valeur de la "situation au", sans rien projeter ni signaler.
+      const borneReg=(optsReg.jusquA&&optsReg.jusquA<=plafondProjReg)?optsReg.jusquA:null;
+      const jusquAReg=(borneReg&&borneReg>moisCourantReg)?borneReg:null; // seul le futur fabrique des mois
+      const moisMax=borneReg||moisCourantReg;
       // Mois à projeter : ceux qui suivent le mois en cours et n'ont pas encore de feuille.
       const fichesProjeteesReg={};
       if(jusquAReg){
@@ -3099,7 +3106,7 @@ function calcRegulOnglet(c, opts){
           return diffGen;
         })():0;
         // Jamais écrasé par une projection : cette valeur sert au récapitulatif réel, pas au simulateur.
-        if(!jusquAReg) c._regulDiffEuros=parseFloat(diffDernierCycle.toFixed(2));
+        if(!borneReg) c._regulDiffEuros=parseFloat(diffDernierCycle.toFixed(2));
         const dcGen=diffGenValide>0?'var(--vt)':diffGenValide<0?'var(--al)':'var(--tx2)';
         const htmlRegulFinal=`
           <div class="card" style="background:var(--mp);margin-bottom:12px;border-bottom:none">
@@ -3118,9 +3125,15 @@ function calcRegulOnglet(c, opts){
             </div>
           </div>
           ${allCyclesHtml}`;
-        return {html:htmlRegulFinal, cache:!jusquAReg, mensuValide:totGlobalMensuValide, prevuValide:totGlobalPrevuValide,
+        // moisCycleCourant : les mois réellement pris en compte pour le cycle en cours, bornés comme
+        // demandé — c'est sur eux que l'appelant vérifie si l'agenda est pointé, pas seulement sur les
+        // mois fabriqués (un mois passé sans agenda compte pour zéro tout autant).
+        const moisCycleCourantReg=dernierCycleEnCours
+          ?[...new Set([...Object.keys(c.fiches||{}),...clesProjeteesReg])].filter(k=>k<=moisMax&&k>=dernierCycleEnCours.moisMin&&k<=dernierCycleEnCours.moisMax).sort()
+          :[];
+        return {html:htmlRegulFinal, cache:!borneReg, mensuValide:totGlobalMensuValide, prevuValide:totGlobalPrevuValide,
                 mensuTotal:totGlobalMensu, prevuTotal:totGlobalPrevu, diffTotal:diffGen,
-                projete:!!jusquAReg, jusquA:jusquAReg, moisProjetes:clesProjeteesReg,
+                borne:!!borneReg, jusquA:borneReg, moisProjetes:clesProjeteesReg, moisCycleCourant:moisCycleCourantReg,
                 horsPlafond:!!(optsReg.jusquA&&optsReg.jusquA>plafondProjReg)};
 
     }
@@ -17743,7 +17756,7 @@ function renderRupture(c, cont){
         const moisFinSim=dateFinContrat?dateToStr(dateFinContrat).slice(0,7):null;
         const regProj=moisFinSim?calcRegulOnglet(c,{jusquA:moisFinSim}):null;
         const reg=calcRegularisationDefinitive(c);
-        const regNetBrut=regProj&&regProj.projete?regProj.diffTotal:reg.diffNet;
+        const regNetBrut=regProj&&regProj.borne?regProj.diffTotal:reg.diffNet;
         if(regNetBrut>0){
         // 29/07/2026 (correctif Sophie) : coefNet n'existe pas dans cette portée — coefficient en
         // vigueur à la rupture (dateSit), même référence que le reste de l'onglet.
@@ -17752,7 +17765,7 @@ function renderRupture(c, cont){
         const coefNetRegul=getParamAt('coefficients',dateToStr(dateSit)).valeur||0.7811975;
         const regNet=parseFloat(regNetBrut.toFixed(2));
         const regBrut=coefNetRegul>0?parseFloat((regNet/coefNetRegul).toFixed(2)):0;
-        const libRegulSim=(regProj&&regProj.projete)
+        const libRegulSim=(regProj&&regProj.borne)
           ?'Régularisation estimée au '+dateFinContrat.toLocaleDateString('fr-FR')
           :'Régularisation définitive';
         lignes.push({label:libRegulSim,net:regNet,brut:regBrut});
@@ -17761,14 +17774,15 @@ function renderRupture(c, cont){
       // Avertissement agenda : un mois projeté sans type posé sur l'agenda compte pour zéro, ce qui
       // sous-évalue silencieusement l'estimation. Ne concerne que min/var, seuls à tirer leur volume
       // de l'agenda ; fixe et semaines types ont leurs heures dans le motif.
-      if(regProj&&regProj.projete&&regProj.moisProjetes.length){
-        const moisSansAgSim=regProj.moisProjetes.filter(kA=>moisSansAgendaRegul(c,kA));
+      if(regProj&&regProj.borne&&regProj.moisCycleCourant.length){
+        const moisSansAgSim=regProj.moisCycleCourant.filter(kA=>moisSansAgendaRegul(c,kA));
         if(moisSansAgSim.length){
-          const libSansAgSim=moisSansAgSim.map(kA=>{
+          const libSansAgSim=moisSansAgSim.slice(0,8).map(kA=>{
             const [ayA,amA]=kA.split('-').map(Number);
             return new Date(ayA,amA-1,1).toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
           });
-          avertAgendaSimHtml=`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin:8px 0;font-size:12px;color:#856404">⚠ Agenda non pointé sur ${moisSansAgSim.length} mois d’ici la fin de contrat : <strong>${libSansAgSim.join(', ')}</strong>.<br>Ces mois comptent pour zéro dans l’estimation ci-dessous, qui est donc trop basse. Complétez l’agenda depuis l’onglet Contrat.</div>`;
+          const listeAgSim=moisSansAgSim.length>8?libSansAgSim.join(', ')+', …':libSansAgSim.join(', ');
+          avertAgendaSimHtml=`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin:8px 0;font-size:12px;color:#856404">⚠ Agenda non pointé sur ${moisSansAgSim.length} mois jusqu’à la fin de contrat : <strong>${listeAgSim}</strong>.<br>Ces mois comptent pour zéro dans l’estimation ci-dessous, qui est donc trop basse. Complétez l’agenda depuis l’onglet Contrat.</div>`;
         }
       }
       if(regProj&&regProj.horsPlafond){
