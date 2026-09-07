@@ -4717,7 +4717,18 @@ function ouvrirFiche(contratId,key){
       if(window.DEBUG_CGAM&&srcJour.th==='sem')console.log('[CGAM-couleurSem]',j.date,'| semKey:',j.semKey,'| agendaJour trouvé:',!!agendaJour,'| typeSemJour:',typeSemJour,'| srcJour.th:',srcJour.th,'| srcJour.semTypes noms:',(srcJour.semTypes||[]).map(st=>st.nom));
       const COULEUR_TRAVAILLEE={bg:eclaircir('#6B8060',0.5),brd:'#4E5F46'};
       const COULEUR_OFF={bg:eclaircir('#C99B9B',0.5),brd:'#A87878'};
-      if(typeSemJour==='off'){
+      // 07/09/2026 (Sophie, albane) : « les colonnes jours restent dans la couleur du type sur la
+      // partie hors contrat, elles ne devraient pas ». C'est cette couleur qui l'a mise sur la piste
+      // du vrai défaut de calcul : l'agenda couvre encore les semaines postérieures à la rupture, un
+      // type y est donc trouvé et sa couleur s'affichait — exactement comme son volume s'imposait au
+      // calcul. Le calcul est corrigé ; la couleur doit suivre, sinon elle continue d'annoncer un
+      // type qui ne s'applique plus. Un jour hors contrat, avant l'embauche comme après la fin, ne
+      // porte plus aucune couleur de type.
+      const finContratCoul=getDateFinContrat(c);
+      const horsContratCoul=!!((c.dateDeb&&j.date<c.dateDeb)||(finContratCoul&&j.date>dateToStr(finContratCoul)));
+      if(horsContratCoul){
+        // aucune couleur de type : couleurVolume reste 'transparent'
+      } else if(typeSemJour==='off'){
         couleurVolume=COULEUR_OFF.bg;
         couleurVolumeBrd=COULEUR_OFF.brd;
       } else if(srcJour.th==='fixe'||srcJour.planType==='min'){
@@ -10745,6 +10756,7 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
 
   // Jours possibles dans la semaine (union de tous les volumes)
   const joursPossiblesSem=Array.from({length:7},(_,i)=>planVarTh.some(v=>v.jours&&v.jours[i]));
+  const semainesApresFinPV=new Set(); // semaines entièrement postérieures à la fin de contrat, comptées à la moyenne
   const nbJoursPossiblesSem=joursPossiblesSem.filter(Boolean).length||1;
 
   // Tous les agendas du contrat (contrat + avenants)
@@ -10759,6 +10771,26 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
     if(!joursDesSem.length) return;
     const dateEx=joursDesSem[0].date;
     const semAn=getSemAnnee(dateEx);
+    // 07/09/2026 (Sophie) : même règle que pour plan sem, validée sur albane le même jour — une
+    // semaine ENTIÈREMENT postérieure à la fin de contrat vaut la moyenne pondérée ÷ jours union,
+    // jamais le volume encore pointé dans l'agenda pour cette semaine. Placé avant toute recherche
+    // de volume, et avant le garde-fou qui saute une semaine dont tous les jours du mois sont hors
+    // contrat : c'est exactement le cas de la semaine coupée par la fin du mois, qui valait zéro
+    // dans les théoriques pendant que la déduction, elle, la comptait.
+    const finContratPV=getDateFinContrat(c);
+    if(finContratPV){
+      const lundiPV=parseDateLoc(dateEx);
+      lundiPV.setDate(lundiPV.getDate()-((lundiPV.getDay()===0?7:lundiPV.getDay())-1));
+      if(lundiPV>finContratPV){
+        joursDesSem.forEach(jj=>{
+          const idxPV=jj.jourSemaine===0?6:jj.jourSemaine-1;
+          if(joursPossiblesSem[idxPV]) hTheoriques+=hSemMoyPV/nbJoursPossiblesSem;
+        });
+        semainesApresFinPV.add(semAn+'-S'+String(semNum).padStart(2,'0'));
+        if(window.DEBUG_CGAM)console.log('[CGAM-semApresFinVar]',dateEx,'| semaine entièrement hors contrat | jours du mois:',joursDesSem.length,'| cumul théoriques:',hTheoriques);
+        return;
+      }
+    }
     const semKey=semAn+'-S'+String(semNum).padStart(2,'0');
     const agKeyTh=getKeyAgenda(semNum,semAn);
 
@@ -11033,6 +11065,7 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
   fiche.jours.forEach(jj=>{
     if(window.DEBUG_CGAM&&jj.statut==='hors-contrat')console.log('[CGAM-jourHCVar]',jj.date,'| dans joursHCExclus:',!!(joursHCExclus&&joursHCExclus.has(jj.date)),'| semaine déjà vue:',semTheoriquesVues.has(getSemAnnee(jj.date)+'-S'+String(getSemISO(jj.date)).padStart(2,'0')),'| joursPossiblesSem:',joursPossiblesSem,'| hSemMoyPV:',hSemMoyPV,'| nbJoursPossiblesSem:',nbJoursPossiblesSem);
     if(!joursHCExclus||!joursHCExclus.has(jj.date)) return;
+    if(semainesApresFinPV.has(getSemAnnee(jj.date)+'-S'+String(getSemISO(jj.date)).padStart(2,'0'))) return; // déjà comptée à la moyenne ci-dessus
     if(semTheoriquesVues.has(getSemAnnee(jj.date)+'-S'+String(getSemISO(jj.date)).padStart(2,'0'))) return; // déjà comptée en entier par la semaine à cheval ci-dessus
     const idx=jj.jourSemaine===0?6:jj.jourSemaine-1;
     if(joursPossiblesSem[idx]){
