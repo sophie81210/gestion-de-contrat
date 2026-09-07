@@ -7619,6 +7619,44 @@ function calcEnveloppeMoisFixeSem(c,ay,am,ficheRef){
   return {jours:jours4, minutes:minutes4, heures:minutes4/60};
 }
 
+// 07/09/2026 (Sophie, contrat albane, simulation de rupture au 05/09/2026) : règle posée en début
+// de session — « tous les types de contrat utilisent la moyenne pour les semaines entières hors
+// contrat : début de contrat, avenant et rupture ». Elle n'était appliquée qu'au début de contrat,
+// et par accident : avant la date de début il n'existe aucun agenda, donc aucun type de semaine
+// n'est trouvé et le calcul retombe de lui-même sur la moyenne. Après une rupture, l'agenda couvre
+// encore ces semaines (il est créé pour une année entière) : un type EST trouvé, et son volume
+// propre l'emportait. Constaté sur septembre 2026 : 41 + 38,75 + 41 + 18,25 = 139h déduites, soit
+// les volumes des types pointés, au lieu de 39,29 × 3 + 23,574 = 141,44h à la moyenne.
+// Renvoie la valeur du jour, ou null si la règle ne s'applique pas (semaine pas entièrement après
+// la fin de contrat, ou type de contrat sans notion de moyenne distincte du volume — fixe et plan
+// min n'ont qu'un seul rythme, leur volume EST déjà la moyenne).
+function valeurJourSemaineApresFinContrat(c, src, dateStr, idxLun){
+  const fin=getDateFinContrat(c);
+  if(!fin) return null;
+  const d=parseDateLoc(dateStr);
+  const lundi=new Date(d); lundi.setDate(d.getDate()-((d.getDay()===0?7:d.getDay())-1));
+  if(lundi<=fin) return null;               // la semaine touche encore le contrat : règle inchangée
+  let moyenne=0, union=null;
+  if(src.th==='sem'&&src.semTypes&&src.semTypes.length){
+    let totH=0, totS=0;
+    src.semTypes.forEach(st=>{
+      const h=(st.jours||[]).reduce((t,jj)=>t+(jj&&jj.d&&jj.f?(toM(jj.f)-toM(jj.d))/60:0),0);
+      totH+=h*(st.nb||0); totS+=(st.nb||0);
+    });
+    if(!totS) return null;
+    moyenne=totH/totS;
+    union=Array.from({length:7},(_,i)=>src.semTypes.some(st=>st.jours&&st.jours[i]&&st.jours[i].d));
+  } else if(src.th==='plan'&&src.planType==='var'&&src.planVar&&src.planVar.length){
+    let totH=0, totS=0;
+    src.planVar.forEach(v=>{ totH+=(v.h||0)*(v.s||0); totS+=(v.s||0); });
+    if(!totS) return null;
+    moyenne=totH/totS;
+    union=Array.from({length:7},(_,i)=>src.planVar.some(v=>v.jours&&v.jours[i]));
+  } else return null;
+  const nb=union.filter(Boolean).length;
+  if(!nb) return null;
+  return union[idxLun]?moyenne/nb:0;        // un jour hors de l'union ne vaut rien
+}
 // 07/09/2026 (Sophie, contrat regul52, rupture confirmée du 12/02/2022 dont plus aucun calcul ne
 // tenait compte) : garde-fou de validité. Toutes les branches ci-dessous construisent une date à
 // partir d'un champ saisi (dateSignif, dateFinPreavis, cddDateFin...). Si ce champ est vide ou mal
@@ -10197,6 +10235,10 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
   const tousAgendas=[...(sourceActif.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
 
   let hTheoriques=0;
+  // 07/09/2026 (Sophie, albane, simulation de rupture au 05/09/2026) : semaines entièrement
+  // postérieures à la fin de contrat, traitées ici à la moyenne — voir le bloc plus bas. Mémorisées
+  // pour que la reprise finale ne les recompte pas.
+  const semainesApresFinTh=new Set();
 
   // Parcourir toutes les semaines du mois
   const semaines=new Set(fiche.jours.map(j=>getSemISO(j.date)+'-'+getSemAnnee(j.date)));
@@ -10210,6 +10252,30 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
     const dateEx=joursDesSem[0].date;
     const semKey=semAn+'-S'+String(semNum).padStart(2,'0');
     const agKeyTh=getKeyAgenda(semNum,parseInt(semAn));
+    // 07/09/2026 (Sophie, albane, simulation de rupture au 05/09/2026) : une semaine ENTIÈREMENT
+    // postérieure à la fin de contrat vaut la moyenne hebdomadaire ÷ jours union, jamais le volume
+    // du type encore pointé dans l'agenda. Cette règle s'appliquait déjà au début de contrat, mais
+    // par accident : avant la date de début aucun agenda n'existe, donc aucun type n'est trouvé et
+    // le calcul retombait de lui-même sur la moyenne (reprise finale plus bas). Après une rupture
+    // l'agenda couvre encore ces semaines, un type EST trouvé, et son volume l'emportait. Pire, la
+    // semaine coupée par la fin du mois était purement et simplement sautée (tous ses jours du mois
+    // exclus) et valait zéro, pendant que la déduction, elle, la comptait — les deux calculs ne
+    // disaient plus la même chose. Constaté sur septembre 2026 : 30,75 + 41 + 38,75 + 41 + 0 =
+    // 151,50h au lieu de 30,75 + 39,29 × 3 + 23,574 = 172,19h.
+    const finContratTh=getDateFinContrat(c);
+    if(finContratTh){
+      const lundiSemTh=parseDateLoc(dateEx);
+      lundiSemTh.setDate(lundiSemTh.getDate()-((lundiSemTh.getDay()===0?7:lundiSemTh.getDay())-1));
+      if(lundiSemTh>finContratTh){
+        joursDesSem.forEach(jj=>{
+          const idxTh=jj.jourSemaine===0?6:jj.jourSemaine-1;
+          if(joursPossiblesSem[idxTh]) hTheoriques+=hSemMoyPS/nbJoursPossiblesSem;
+        });
+        semainesApresFinTh.add(agKeyTh);
+        if(window.DEBUG_CGAM)console.log('[CGAM-semApresFin]',dateEx,'| semaine entièrement hors contrat | jours du mois:',joursDesSem.length,'| cumul théoriques:',hTheoriques);
+        return;
+      }
+    }
 
     // Trouver l'agenda
     const agPourSem=tousAgendas.find(ag=>new Date(ag.dateDebut)<=new Date(dateEx)&&new Date(ag.dateFin)>=new Date(dateEx))||agendaMois;
@@ -10424,6 +10490,7 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
     if(!joursHCExclus||!joursHCExclus.has(jj.date)) return;
     const semNumJJ=getSemISO(jj.date), semAnJJ=getSemAnnee(jj.date);
     const agKeyJJ=getKeyAgenda(semNumJJ,semAnJJ);
+    if(semainesApresFinTh.has(agKeyJJ)) return; // déjà comptée à la moyenne ci-dessus
     const agPourSemJJ=tousAgendas.find(ag=>ag.semaines&&ag.semaines[agKeyJJ]);
     const typeSemJJ=agPourSemJJ&&agPourSemJJ.semaines[agKeyJJ];
     if(typeSemJJ) return; // semaine déjà traitée intégralement par le bloc type
@@ -12956,13 +13023,18 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           // le type précis en priorité (même principe que calcHTheoriquesPlanVar et le compteur jours
           // max déjà établi), jours union seulement si vraiment aucun type identifiable.
           const srcHCplanvar=getVersionActive(c,new Date(j.date));
+          const vMoyHCpv=valeurJourSemaineApresFinContrat(c,srcHCplanvar,j.date,jourIdxHCplanvar);
           const planVarHC2=srcHCplanvar.planVar||c.planVar;
           const agendasHCplanvar=srcHCplanvar.agendas||c.agendas||[];
           const agHCplanvar=agendasHCplanvar.find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date))||agendaMois;
           const agKeyHCplanvar=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
           const typeSemHCplanvar=agHCplanvar&&agHCplanvar.semaines&&agHCplanvar.semaines[agKeyHCplanvar];
           const volHCplanvar=typeSemHCplanvar&&planVarHC2?planVarHC2.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemHCplanvar):null;
-          if(volHCplanvar&&!(volHCplanvar.jours&&volHCplanvar.jours[jourIdxHCplanvar])){
+          if(vMoyHCpv!==null){
+            // Semaine entièrement postérieure à la fin de contrat : moyenne hebdomadaire ÷ jours
+            // union, quel que soit le type encore pointé dans l'agenda pour cette semaine.
+            hPrev=vMoyHCpv;
+          } else if(volHCplanvar&&!(volHCplanvar.jours&&volHCplanvar.jours[jourIdxHCplanvar])){
             // Type connu mais ce jour précis hors de son motif à lui : ne vaut rien, jamais une
             // valeur calculée sur l'union d'autres types qui ne concernent pas cette semaine.
             hPrev=0;
@@ -13072,13 +13144,19 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           const srcHCsem=getVersionActive(c,new Date(j.date));
           const semTypesHC=srcHCsem.semTypes||c.semTypes||[];
           const jourIdxHCsem=j.jourSemaine===0?6:j.jourSemaine-1;
+          const vMoyHCsem=valeurJourSemaineApresFinContrat(c,srcHCsem,j.date,jourIdxHCsem);
           const agKeyHCsem=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
           const agendasHCsem=srcHCsem.agendas||c.agendas||[];
           const agHCsem=agendasHCsem.find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date))||agendaMois;
           const typeSemHCsem=agHCsem&&agHCsem.semaines&&agHCsem.semaines[agKeyHCsem];
           const stHCsem=typeSemHCsem?semTypesHC.find(st=>st.nom===typeSemHCsem):null;
           if(window.DEBUG_CGAM)console.log('[CGAM-semHC-detail]',j.date,'| typeSemHCsem (pointé):',typeSemHCsem,'| stHCsem trouvé:',!!stHCsem,'| dans motif ce jour:',!!(stHCsem&&stHCsem.jours&&stHCsem.jours[jourIdxHCsem]&&stHCsem.jours[jourIdxHCsem].d));
-          if(stHCsem&&!(stHCsem.jours&&stHCsem.jours[jourIdxHCsem]&&stHCsem.jours[jourIdxHCsem].d)){
+          if(vMoyHCsem!==null){
+            // Semaine entièrement postérieure à la fin de contrat : moyenne hebdomadaire ÷ jours
+            // union, quel que soit le type encore pointé dans l'agenda pour cette semaine.
+            hPrev=vMoyHCsem;
+            if(window.DEBUG_CGAM)console.log('[CGAM-semHC-detail]',j.date,'→ semaine entièrement hors contrat | moyenne/jours union | hPrev:',hPrev);
+          } else if(stHCsem&&!(stHCsem.jours&&stHCsem.jours[jourIdxHCsem]&&stHCsem.jours[jourIdxHCsem].d)){
             // 05/08/2026 (Sophie, repéré directement dans la trace) : un type EST pointé pour cette
             // semaine mais ce jour précis n'est pas dans SON motif à lui (ex. lundi, hors du motif
             // "mardi au vendredi") — ça ne veut pas dire "aucun type identifiable", donc ça ne doit
