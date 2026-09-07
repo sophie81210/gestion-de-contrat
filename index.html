@@ -2519,7 +2519,6 @@ function moisSansAgendaRegul(c, moisKey){
   const [ayA,amA]=moisKey.split('-').map(Number);
   const finMoisA=new Date(ayA,amA,0);
   const finContratA=getDateFinContrat(c);
-  const semsCongesCacheA={};
   for(let d=1;d<=finMoisA.getDate();d++){
     const dA=new Date(ayA,amA-1,d);
     const dsA=ayA+'-'+String(amA).padStart(2,'0')+'-'+String(d).padStart(2,'0');
@@ -2546,16 +2545,13 @@ function moisSansAgendaRegul(c, moisKey){
     // (semaine >= 18 : même année, sinon année précédente). Les contrats 52 en sont exclus : ils
     // n'ont jamais de semaine auto-exemptée, tout doit y être pointé.
     const semNumA=getSemISO(dsA), semAnA=getSemAnnee(dsA);
-    if((srcA.tc||c.tc)!=='52'){
-      const anneeAmA=semNumA>=18?semAnA:semAnA-1;
-      if(!(anneeAmA in semsCongesCacheA)) semsCongesCacheA[anneeAmA]=getSemsCongesGlobal(anneeAmA+'-05-01',(anneeAmA+1)+'-04-30');
-      const setCgA=semsCongesCacheA[anneeAmA];
-      if(setCgA&&setCgA.has&&setCgA.has(semNumA)) continue;
-      // 07/09/2026 : et surtout selon la règle du CONTRAT (jours possibles tous posés ou fériés), la
-      // même que celle qui colore la semaine en violet dans l'agenda — sinon une semaine posée du
-      // lundi au vendredi sur un contrat qui ne travaille pas le samedi serait réclamée à tort.
-      if(estSemaineToutEnConges(dsA,null,null,c)) continue;
-    }
+    // 07/09/2026 (Sophie, « pour qu'elle soit violette il faudra que pour plan sem et var aucun jour
+    // de tous les motifs ne le couvre ») : une semaine entièrement en congés est exemptée de pointage.
+    // On applique ici EXACTEMENT la règle qui colore la semaine en violet dans l'agenda — tous les
+    // jours possibles du contrat posés ou fériés, les jours possibles étant l'UNION de tous les
+    // motifs (toutes les semaines types, tous les volumes du plan var). Les contrats 52 en sont
+    // exclus : ils n'ont jamais de semaine auto-exemptée, tout doit y être pointé.
+    if((srcA.tc||c.tc)!=='52'&&estSemaineToutEnConges(dsA,null,null,c)) continue;
     const typeA=agA&&agA.semaines&&agA.semaines[getKeyAgenda(semNumA,semAnA)];
     if(!typeA){
       // Trace temporaire (DEBUG_REGUL_COMPARE) : dire QUEL jour déclenche l'avertissement et
@@ -14800,7 +14796,7 @@ function estSemaineToutEnConges(dateDansSemaine, poses, feries, contrat){
 
 // Renvoie l'ensemble des NUMÉROS de semaine entièrement en congés sur la période donnée (l'année
 // Ass'Mat, du 1er mai au 30 avril). Même forme de retour qu'avant, les appelants sont inchangés.
-function getSemsCongesGlobal(dateDebut, dateFin){
+function getSemsCongesGlobal(dateDebut, dateFin, contrat){
   const res=new Set();
   if(!dateDebut||!dateFin) return res;
   const poses=new Set();
@@ -14817,7 +14813,7 @@ function getSemsCongesGlobal(dateDebut, dateFin){
   while(cur<=d2&&garde<60){
     garde++;
     const dsLundi=dateToStr(cur);
-    if(dsLundi>=dateDebut&&estSemaineToutEnConges(cur,poses,null)) res.add(getSemISO(dsLundi));
+    if(dsLundi>=dateDebut&&estSemaineToutEnConges(cur,poses,null,contrat||null)) res.add(getSemISO(dsLundi));
     cur.setDate(cur.getDate()+7);
   }
   return res;
@@ -14887,7 +14883,7 @@ function renderAgendas(c){
       // Map année AM → Set de semaines violettes
       semsCongesSet=new Map();
       for(let am=anneeAmDebut;am<=anneeAmFin;am++){
-        semsCongesSet.set(am, getSemsCongesGlobal(am+'-05-01',(am+1)+'-04-30'));
+        semsCongesSet.set(am, getSemsCongesGlobal(am+'-05-01',(am+1)+'-04-30',agSource2||c));
       }
     }
     if(!window._semsCongesSet) window._semsCongesSet={};
@@ -15281,7 +15277,7 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
   if(!estPlanSemOuVar2){
     semsCongesSet=new Map();
     for(let am=anneeAmDebut2;am<=anneeAmFin2;am++){
-      semsCongesSet.set(am, getSemsCongesGlobal(am+'-05-01',(am+1)+'-04-30'));
+      semsCongesSet.set(am, getSemsCongesGlobal(am+'-05-01',(am+1)+'-04-30',source||c));
     }
   }
 
@@ -15552,7 +15548,7 @@ function validerModifAgenda(cid,agid){
   if(!estPSVValid){
     semsCongesSet=new Map();
     for(let am=anneeAmDebut3;am<=anneeAmFin3;am++){
-      semsCongesSet.set(am, getSemsCongesGlobal(am+'-05-01',(am+1)+'-04-30'));
+      semsCongesSet.set(am, getSemsCongesGlobal(am+'-05-01',(am+1)+'-04-30',source||c));
     }
   }
   const warnings=getAgendaWarnings(source,ag,semaines,semsCongesSet);
