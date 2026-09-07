@@ -7690,7 +7690,7 @@ function calcSoldeToutCompte(c, key){
   
   // Régularisation définitive (46 sem)
   let regul=null;
-  if(srcActifSolde.tc!=='52'&&srcActifSolde.tc!=='occ'){
+  if(aCycleRegulRupture(c)){
     const reg=calcRegularisationDefinitive(c);
     if(reg.diffNet>0){
       // 27/08/2026 (Sophie) : reg.diffNet est déjà en euros nets, calculé mois par mois au bon taux —
@@ -16416,6 +16416,18 @@ function calcSoldeConges46(c, dateRupture){
   return {joursNonVerses, montantNonVersesBrut:parseFloat(montantNonVersesBrut.toFixed(2)), montantNonVersesNet:parseFloat(montantNonVersesNet.toFixed(2)), joursEnCours, montantEnCoursBrut:parseFloat(montantEnCoursBrut.toFixed(2)), montantEnCoursNet:parseFloat(montantEnCoursNet.toFixed(2)), dixiemeEnCoursNet, maintienEnCoursNet, joursFracRestants:soldeFracSC46.joursFracRestants, montantFracRupture:soldeFracSC46.montantFracRupture};
 }
 
+// 07/09/2026 (Sophie) : un contrat de 52 semaines AVEC la clause de régularisation est dans un cycle,
+// exactement comme un 46 — sa régularisation est due à la rupture, et versée dès que le contrat bascule
+// sur un plan qui n'en nécessite plus. L'onglet Régularisation le savait depuis le 11/08 ; les trois
+// endroits de l'onglet Rupture, eux, écartaient tout contrat en 52, clause ou pas. La clause peut être
+// portée par le contrat de base OU par n'importe quel avenant signé.
+function aCycleRegulRupture(c){
+  if(!c) return false;
+  const srcRup=getVersionActive(c,getDateFinContrat(c)||new Date());
+  if(srcRup.tc==='occ') return false;
+  if(srcRup.tc!=='52') return true;
+  return !!((c.tc==='52'&&c.clauseRegul52)||(c.avenants||[]).some(av=>av.signe&&av.clauseRegul52&&av.dateAvenant));
+}
 function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
   const moisTries=Object.keys(c.fiches||{}).filter(k=>{
     if(!c.fiches[k].valide) return false;
@@ -16468,7 +16480,11 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
       const debutMoisRegC=ay2+'-'+String(am2).padStart(2,'0')+'-01';
       const finMoisDateRegC=new Date(ay2,am2,0);
       const finMoisRegC=finMoisDateRegC.getFullYear()+'-'+String(finMoisDateRegC.getMonth()+1).padStart(2,'0')+'-'+String(finMoisDateRegC.getDate()).padStart(2,'0');
-      hPrevu=calcHPrevuReg(c,false,debutMoisRegC,finMoisRegC);
+      // 07/09/2026 (Sophie) : la clause était forcée à « non », au motif que les trois appelants
+      // écartaient déjà tc==='52'. Ce raisonnement oubliait la clause : un 52 qui la porte est bien
+      // dans un cycle, et ses congés, couverts par la mensualisation, doivent compter dans le dû.
+      const clause52RegC=!!((c.tc==='52'&&c.clauseRegul52)||(c.avenants||[]).some(av=>av.signe&&av.clauseRegul52&&av.dateAvenant));
+      hPrevu=calcHPrevuReg(c,clause52RegC,debutMoisRegC,finMoisRegC);
     } else {
       (fiche.jours||[]).forEach(j=>{
         const semKey=getSemISO(j.date);
@@ -17350,6 +17366,11 @@ function renderRuptureCDD(c, cont){
       const s=calcSoldeConges46(c,dFinCdd||dateSit||new Date());
       if(s.montantNonVersesBrut>0){lignes.push({label:'Congés acquis non versés',net:s.montantNonVersesNet,brut:s.montantNonVersesBrut});totalNet+=s.montantNonVersesNet;totalBrut+=s.montantNonVersesBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
+    }
+    // 07/09/2026 (Sophie) : sorti de la branche 46 — un contrat de 52 semaines AVEC la clause de
+    // régularisation est dans un cycle lui aussi, sa régularisation est due à la rupture, et elle
+    // n'apparaîtrait jamais tant qu'elle restait enfermée du côté 46.
+    if(aCycleRegulRupture(c)){
       const reg=calcRegularisationDefinitive(c);
       if(reg.diffNet>0){
         // 27/08/2026 (Sophie) : reg.diffNet déjà en euros nets, mois par mois au bon taux — plus
@@ -17782,7 +17803,12 @@ function renderRupture(c, cont){
       if(s.montantNonVersesBrut>0){lignes.push({label:'Congés acquis non versés',net:s.montantNonVersesNet,brut:s.montantNonVersesBrut});totalNet+=s.montantNonVersesNet;totalBrut+=s.montantNonVersesBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
       if(s.montantFracRupture>0){lignes.push({label:'Jours de fractionnement non pris ('+s.joursFracRestants+' j)',net:s.montantFracRupture,brut:s.montantFracRuptureBrut});totalNet+=s.montantFracRupture;totalBrut+=s.montantFracRuptureBrut;}
-      if(srcActifSim.tc!=='52'){
+    }
+    // 07/09/2026 (Sophie) : bloc sorti de la branche 46 — un contrat de 52 semaines AVEC la clause est
+    // dans un cycle de régularisation lui aussi, et la sienne n'apparaîtrait jamais tant qu'elle
+    // restait enfermée ici.
+    if(aCycleRegulRupture(c)){
+      {
         // 07/09/2026 (Sophie) : cet encart est un SIMULATEUR — par définition il repose sur des mois
         // pas encore vécus. Il ne doit donc pas afficher la régularisation "définitive", arrêtée à la
         // dernière feuille validée et identique quelle que soit la date simulée (elle ne servait alors
