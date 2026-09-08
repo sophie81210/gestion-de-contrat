@@ -8289,9 +8289,26 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
     html+=ligneG('R\u00E9gularisation cong\u00E9s (10\u00E8me)',regul52.diff.toFixed(2)+' \u20AC net',true,'var(--vt)');
   }
-  if(!masquerBase&&(recap.nbAbsEnfantTotal||0)>0){
+  const _absEnfLignes=recap.absEnfantParAnnee&&recap.absEnfantParAnnee.length
+    ?recap.absEnfantParAnnee
+    :((recap.nbAbsEnfantTotal||0)>0?[{finAnnee:null,nb:recap.nbAbsEnfantTotal}]:[]);
+  if(!masquerBase&&_absEnfLignes.length){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:1px solid var(--mb)"></td></tr>';
-    html+=ligneG('Absence maladie de l&rsquo;enfant', recap.nbAbsEnfantTotal+'/5 j', false, 'var(--tx2)');
+    // La précision « jusqu'au ... » n'apparaît que s'il y a plusieurs années de contrat dans la
+    // période affichée — sur un mois ordinaire, la ligne reste celle d'avant.
+    const _plusieursAnneesAE=_absEnfLignes.length>1;
+    _absEnfLignes.forEach(l=>{
+      // finAnnee est la borne EXCLUSIVE (le jour anniversaire suivant) : la date affichée est la
+      // veille, dernier jour réel de cette année de contrat.
+      let _dateLibAE='';
+      if(l.finAnnee){
+        const [_fy,_fm,_fd]=l.finAnnee.split('-').map(Number);
+        const _veilleAE=new Date(_fy,_fm-1,_fd-1);
+        _dateLibAE=String(_veilleAE.getDate()).padStart(2,'0')+'/'+String(_veilleAE.getMonth()+1).padStart(2,'0')+'/'+_veilleAE.getFullYear();
+      }
+      const _lib='Absence maladie de l&rsquo;enfant'+((_plusieursAnneesAE&&_dateLibAE)?' (jusqu'au '+_dateLibAE+')':'');
+      html+=ligneG(_lib, l.nb+'/5 j', false, 'var(--tx2)');
+    });
   }
   return html;
 }
@@ -13584,6 +13601,32 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const dsFinMoisAE=dFinMoisAE.getFullYear()+'-'+String(dFinMoisAE.getMonth()+1).padStart(2,'0')+'-'+String(dFinMoisAE.getDate()).padStart(2,'0');
     return nbAbsEnfantJusquA(dsFinMoisAE);
   })();
+  // 07/09/2026 (Sophie, mois de mars 2024 cumulant l'anniversaire du contrat et un avenant) : le
+  // compteur « x/5 j » était UN seul nombre, celui de l'année de contrat du dernier jour du mois,
+  // recopié tel quel dans les deux encarts du mois d'avenant. Deux conséquences : les jours situés
+  // AVANT l'anniversaire appartiennent à l'année précédente et disparaissaient complètement de
+  // l'affichage (ligne absente alors que les jours sont posés et déduits) ; et l'encart du 1er au 12
+  // affichait un jour qui ne s'y trouve même pas. Le blocage de la saisie, lui, comptait déjà année
+  // par année au jour près — d'où un blocage juste et un affichage faux.
+  // Désormais : une ligne par année de contrat effectivement présente dans la période AFFICHÉE,
+  // chacune identifiée par la fin de son année de contrat, et comptée jusqu'à la fin de cette
+  // période (pas la fin du mois) pour que chaque encart soit cohérent avec lui-même. Aucune ligne
+  // pour une année sans jour dans la période (décisions Sophie, 07/09/2026).
+  const absEnfantParAnneeAff=(()=>{
+    const dFinP=dateFinPeriode||(()=>{const d=new Date(fiche.annee,fiche.mois+1,0);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');})();
+    const dDebP=dateDebPeriode||(fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0')+'-01');
+    const parFin={};
+    datesAbsEnfantCont.forEach(ds=>{
+      if(ds<dDebP||ds>dFinP) return;            // jour hors de la période affichée
+      const b=bornesAnneeAbsEnfant(ds);
+      if(!parFin[b.fin]) parFin[b.fin]=b;
+    });
+    return Object.values(parFin).sort((a,b)=>a.fin<b.fin?-1:1).map(b=>{
+      // Dernier jour à prendre en compte : la fin de la période, sans dépasser l'année de contrat
+      const borne=dFinP<b.fin?dFinP:b.fin;
+      return {finAnnee:b.fin, nb:datesAbsEnfantCont.filter(ds=>ds>=b.deb&&ds<b.fin&&ds<=borne).length};
+    }).filter(x=>x.nb>0);
+  })();
   const donneesManquantes=(!txBrut||(c.tc!=='occ'&&!hMensu));
 
   // Indemnité de congés payés (contrats 46 sem ou moins)
@@ -13966,6 +14009,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     th:sourceActif.th, planType:sourceActif.planType, nbJoursMoisContrat, nbJoursMoisCalc, joursEnPlus, joursEnMoins:parseFloat(joursEnMoins.toFixed(1)),
     nbAbsEnfantMois, nbAbsEnfantAnneeCont,
     nbAbsEnfantTotal:nbAbsEnfantTotalAff,
+    absEnfantParAnnee:absEnfantParAnneeAff,
     txNet:txNet.toFixed(2), txNetExact:txNetPrecis, salaireNet,
     indemEntretienTotal:indemEntretienTotal.toFixed(2),
     indemRepasTotal:indemRepasTotal.toFixed(2),
