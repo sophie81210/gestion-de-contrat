@@ -17323,8 +17323,15 @@ async function sauvegarderRupture(cid){
   // 2) le résultat de l'écriture n'était pas regardé : « Rupture enregistrée » s'affichait même quand
   //    rien n'avait été écrit. Une rupture perdue de cette façon explique très bien qu'on retrouve
   //    ensuite une fiche de rupture incomplète alors qu'on l'a manifestement saisie.
+  // 08/09/2026 (Sophie, « setDoc called with invalid data, unsupported field value: undefined ») :
+  // le passage par JSON est indispensable — un contrat compressé peut porter des champs à undefined
+  // (planning ou modifPlanningAutoriseesMois jamais renseignés), et Firestore les REFUSE, là où
+  // JSON.stringify les supprime purement et simplement. _flushSaveFirestore le faisait déjà ; ce
+  // chemin-ci, ajouté le 07/09, l'avait oublié — d'où un refus d'écriture à chaque enregistrement de
+  // rupture, et une file d'écritures en attente qui finissait saturée (« Write stream exhausted »).
   const _cComprRup=getContratsCompresses().filter(x=>String(x.id)===String(c.id));
-  const _resRup=await fbSaveData(window.FB_USER?.uid,{contrats:_cComprRup.length?_cComprRup:[c],params:{},congesAM:S.congesAM||{}});
+  const _payloadRup=JSON.parse(JSON.stringify({contrats:_cComprRup.length?_cComprRup:[c],params:{},congesAM:S.congesAM||{}}));
+  const _resRup=await fbSaveData(window.FB_USER?.uid,_payloadRup);
   const cont=document.getElementById('det-content');
   renderRupture(c,cont);
   if(_resRup&&_resRup.ok===false){
