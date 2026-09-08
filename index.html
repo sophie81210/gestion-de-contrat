@@ -13616,17 +13616,24 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // période (pas la fin du mois) pour que chaque encart soit cohérent avec lui-même. Aucune ligne
   // pour une année sans jour dans la période (décisions Sophie, 07/09/2026).
   const absEnfantParAnneeAff=(()=>{
-    const dFinP=dateFinPeriode||(()=>{const d=new Date(fiche.annee,fiche.mois+1,0);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');})();
-    const dDebP=dateDebPeriode||(fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0')+'-01');
+    // 07/09/2026, second essai : le premier filtrait par dateDebPeriode/dateFinPeriode, mais sur un
+    // mois d'avenant calcRecapFiche se rappelle elle-même avec une fiche déjà découpée ET des bornes
+    // à null (voir l'appel récursif plus haut) — le filtre ne s'appliquait donc jamais et les deux
+    // encarts affichaient la même chose. On part maintenant des jours réellement présents dans la
+    // fiche reçue : sur une portion d'avenant, ce sont exactement les jours de cette portion.
+    const joursFiche=(fiche.jours||[]).filter(j=>j.date);
+    if(!joursFiche.length) return [];
+    const borneAE=joursFiche.map(j=>j.date).sort().slice(-1)[0]; // dernier jour de la période affichée
     const parFin={};
-    datesAbsEnfantCont.forEach(ds=>{
-      if(ds<dDebP||ds>dFinP) return;            // jour hors de la période affichée
-      const b=bornesAnneeAbsEnfant(ds);
+    joursFiche.forEach(j=>{
+      if(j.statut!=='abs-enfant') return;
+      const b=bornesAnneeAbsEnfant(j.date);
       if(!parFin[b.fin]) parFin[b.fin]=b;
     });
     return Object.values(parFin).sort((a,b)=>a.fin<b.fin?-1:1).map(b=>{
-      // Dernier jour à prendre en compte : la fin de la période, sans dépasser l'année de contrat
-      const borne=dFinP<b.fin?dFinP:b.fin;
+      // Compté sur TOUTES les fiches du contrat (l'année d'acquisition déborde du mois), arrêté au
+      // dernier jour de la période affichée pour que chaque encart soit cohérent avec lui-même.
+      const borne=borneAE<b.fin?borneAE:b.fin;
       return {finAnnee:b.fin, nb:datesAbsEnfantCont.filter(ds=>ds>=b.deb&&ds<b.fin&&ds<=borne).length};
     }).filter(x=>x.nb>0);
   })();
