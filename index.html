@@ -9013,10 +9013,19 @@ function _validerFicheSuite(contratId,key,c){
   // à la validation — c'est le seul moment garanti où toutes les heures du mois sont remplies (à
   // l'ouverture, la fiche est souvent encore vide, donc rien à détecter). Informatif seulement, la
   // validation continue normalement : le montant est déjà corrigé automatiquement dans le calcul.
-  if(c.indemType==='nego'&&c.indemMontant){
+  // 08/09/2026 (Sophie) : le message nommait le montant du CONTRAT DE BASE, quel que soit le mois —
+  // d'où un avertissement parlant de 0,60 €/jour sur un contrat dont la fiche affiche 0,50 €/heure,
+  // incompréhensible. C'est la version en vigueur au mois concerné qui doit être citée, la même que
+  // celle qui sert désormais au calcul.
+  const [ayIE,amIE]=key.split('-').map(Number);
+  const srcIEval=getVersionActive(c,new Date(ayIE,amIE-1,1));
+  const ieTypeVal=srcIEval.indemType||c.indemType;
+  const ieMontantVal=srcIEval.indemType?srcIEval.indemMontant:c.indemMontant;
+  const iePerVal=srcIEval.indemType?srcIEval.indemPer:c.indemPer;
+  if(ieTypeVal==='nego'&&ieMontantVal){
     const recapIndemVal=calcRecapFiche(c,c.fiches[key]);
     if(recapIndemVal.indemNegoJoursBascule>0){
-      alerte(`Le montant négocié de l'indemnité d'entretien (${c.indemMontant}€/${c.indemPer==='journalier'?'jour':'heure'}) est inférieur au minimum légal certains jours ce mois-ci — le montant a été ajusté automatiquement sur le légal ces jours-là. Pense à vérifier si le montant négocié doit être remonté (fiche contrat, ligne Indem. entretien).`);
+      alerte(`Le montant négocié de l'indemnité d'entretien (${ieMontantVal}€/${iePerVal==='journalier'?'jour':'heure'}) est inférieur au minimum légal certains jours ce mois-ci — le montant a été ajusté automatiquement sur le légal ces jours-là. Pense à vérifier si le montant négocié doit être remonté (fiche contrat, ligne Indem. entretien).`);
     }
   }
   // Vérifier que la fiche précédente est validée
@@ -13382,12 +13391,22 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       let hPourIndem=0;
       if(j.heureDebReel&&j.heureFinReel) hPourIndem=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
       if(hPourIndem>0){
-        if(c.indemType==='legal'){
+        // 08/09/2026 (Sophie, contrat 46fixe-52sem) : l'indemnité d'entretien était lue sur le
+        // CONTRAT DE BASE pour tous les mois, avenant compris. Sur ce contrat le contrat initial
+        // porte 0,60 €/jour et l'avenant 0,50 €/heure : depuis mars 2024, les journées étaient donc
+        // valorisées avec le montant ET l'unité de la version d'origine. Sur une journée de 10h,
+        // 0,60 €/jour tombe sous le légal et bascule à 4,15 €, là où le négocié de l'avenant vaut
+        // 5,00 € — soit 0,85 € perdus par jour travaillé. La version en vigueur ce jour-là fait foi.
+        const srcIE=getVersionActive(c,parseDateLoc(dateStr));
+        const ieType=srcIE.indemType||c.indemType;
+        const ieMontant=srcIE.indemType?srcIE.indemMontant:c.indemMontant;
+        const iePer=srcIE.indemType?srcIE.indemPer:c.indemPer;
+        if(ieType==='legal'){
           const indem=getParamAt('indemEntretien',dateStr);
           const tauxH=indem.parHeure||0.425;
           const forfait=indem.parJour||2.65;
           indemEntretienTotal+=Math.max(forfait, tauxH*hPourIndem);
-        } else if(c.indemType==='nego'&&c.indemMontant){
+        } else if(ieType==='nego'&&ieMontant){
           // 27/07/2026 (décision Sophie) : le négocié reste la référence tant qu'il dépasse le
           // légal DE CE JOUR précis (le légal lui-même varie déjà selon les heures du jour, via le
           // plus grand entre forfait et taux horaire) — jamais un seuil unique fixé pour tout le
@@ -13395,7 +13414,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           // toucher aux autres jours ni au montant négocié lui-même.
           const indemJ=getParamAt('indemEntretien',dateStr);
           const legalJ=Math.max(indemJ.parJour||2.65,(indemJ.parHeure||0.425)*hPourIndem);
-          const negoJ=c.indemPer==='journalier'?c.indemMontant:c.indemMontant*hPourIndem;
+          const negoJ=iePer==='journalier'?ieMontant:ieMontant*hPourIndem;
           if(legalJ>negoJ) indemNegoJoursBascule++;
           indemEntretienTotal+=Math.max(negoJ,legalJ);
         }
