@@ -8857,10 +8857,30 @@ function validerFiche(contratId,key){
     // On regarde désormais la POSE elle-même, dans le calendrier Ass'Mat : si le dernier jour du mois
     // précédent et le 1er de ce mois sont tous deux posés, la pose est continue, quels que soient les
     // statuts que les feuilles leur donnent.
-    const finMoisPrecAntV=new Date(keyAnneeAntV,keyMoisAntV-1,0);
-    const dsFinPrecAntV=dateToStr(finMoisPrecAntV);
     const dsPremierAntV=key+'-01';
-    const poseContinueAntV=isJourCongeAM(dsFinPrecAntV)&&isJourCongeAM(dsPremierAntV);
+    // 09/09/2026, second essai (Sophie : « j'ai pu valider janvier sans cocher la case ») : exiger que le
+    // dernier jour du mois précédent soit posé ne marche pas non plus — ce jour-là est souvent un dimanche,
+    // donc hors pose. Cas réel : pose du 26 au 30 décembre 2023, le 31 est un dimanche non posé, et janvier
+    // reprend posé dès le 1er. On remonte donc jour par jour depuis le 1er du mois, jusqu'à sept jours en
+    // arrière : si on rencontre un jour POSÉ avant de rencontrer une journée prévue ou travaillée, la pose
+    // est continue. C'est exactement la règle du décompte, qui se poursuit jusqu'à la première journée prévue.
+    const statutsPoseAntV=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges','conges-6j','conges-6j-fin'];
+    const premierJourEstPoseAntV=isJourCongeAM(dsPremierAntV)||(ficheCourAntV.jours[0]&&statutsPoseAntV.includes(ficheCourAntV.jours[0].statut));
+    let poseContinueAntV=false;
+    if(premierJourEstPoseAntV){
+      const statutJourPrecAntV=ds=>{
+        const fJ=c.fiches&&c.fiches[ds.slice(0,7)];
+        const jJ=fJ&&(fJ.jours||[]).find(x=>x.date===ds);
+        return jJ?(jJ.statut||''):'';
+      };
+      for(let recul=1;recul<=7;recul++){
+        const dRecul=new Date(keyAnneeAntV,keyMoisAntV-1,1-recul);
+        const dsRecul=dateToStr(dRecul);
+        if(isJourCongeAM(dsRecul)){ poseContinueAntV=true; break; }
+        const stR=statutJourPrecAntV(dsRecul);
+        if(['prevu','travaille','reprise'].includes(stR)) break;
+      }
+    }
     const posePrecedenteADejaAnticipeV=!!(fichePrecAntV&&fichePrecAntV.jours&&fichePrecAntV.jours.some(j=>j.statut==='conges-anticipe'||j.statut==='decompte-anticipe'));
     if(poseContinueAntV&&posePrecedenteADejaAnticipeV&&!ficheCourAntV.anticipeActif){
       alerte('Cette pose de congés a commencé par de l\u2019anticipé le mois précédent — cochez « Prise de congés par anticipation » sur cette feuille avant de valider.');
