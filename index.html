@@ -8334,6 +8334,14 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
     const _hIndCg=_txNetIndCg>0?parseFloat(recap.indemCongeMois||0)/_txNetIndCg:0;
     html+='<tr><td colspan="2" style="padding:2px 4px 6px;font-size:11px;font-style:italic;color:var(--tx2)">soit '+recap.indemCongeNbJours+' jours et '+_hIndCg.toFixed(2)+' h de congés payés</td></tr>';
   }
+  // 11/09/2026 (Sophie) : fiche de mai — expliquer pourquoi les congés pris ce mois-ci n'y sont pas
+  // payés, plutôt que de laisser l'encart muet.
+  if(parseInt(recap.indemCongeReportMai||0)>0){
+    const _nbRepMai=parseInt(recap.indemCongeReportMai);
+    html+='<tr><td colspan="2" style="padding:6px 4px;font-size:11px;font-style:italic;color:var(--tx2)">'+
+      _nbRepMai+(_nbRepMai>1?' jours de congés pris':' jour de congés pris')+" en mai : la convention collective arrête le calcul de "+
+      "l'indemnité au 31 mai, elle ne peut donc pas être versée ce mois-ci. Elle est réglée sur le versement suivant.</td></tr>";
+  }
   // 03/09/2026 (Sophie) : ligne à part pour les jours de fractionnement pris ce mois — jamais fusionnée
   // avec l'indemnité de congés normale ci-dessus, puisque ce sont deux droits distincts (l'indemnité
   // normale peut déjà être réglée depuis juin, le fractionnement ne se détermine qu'au 31 octobre).
@@ -13754,6 +13762,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   let indemCongeNbJours=0;
   let indemFractionnementMois=0;
   let indemFractionnementNbJours=0;
+  // 11/09/2026 (Sophie) : nombre de jours de congés posés en mai dont le paiement est reporté sur la
+  // fiche de juin — sert uniquement à afficher la phrase d'explication sur la fiche de mai.
+  let indemCongeReportMai=0;
   if(sourceActif.tc!=='52'&&sourceActif.tc!=='occ'&&sourceActif.dateCg&&periodeAv!=='avant'){
     const moisKey=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0');
     const anneeAm=getAnneeAmPourDate(moisKey);
@@ -13761,27 +13772,60 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const ind=calcIndemniteConges(c,anneeAcq);
     if(ind){
       if(sourceActif.dateCg==='chaque'){
-        // Compter les jours acquis déjà payés dans les fiches précédentes validées
+        // Compter les jours acquis déjà payés dans les fiches précédentes validées.
+        // 11/09/2026 (Sophie) : borné à la PÉRIODE DE PRISE de l'année réglée, du 1er mai au 30 avril
+        // suivant. Sans cette borne, le compteur additionnait les jours de TOUTES les années depuis le
+        // début du contrat puis les comparait aux seuls jours acquis de l'année en cours : dès la
+        // deuxième année le total dépassait le droit annuel, le solde tombait à zéro et plus AUCUN
+        // congé n'était payé en mode « à chaque prise ». C'est le même cumul depuis l'origine qui
+        // avait déjà été corrigé dans calcCongesContrat (attribution année par année, la plus
+        // ancienne d'abord) sans que ce bloc-ci soit aligné dessus.
         let dejaPayesAcq=0;
         const moisKeyCur=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0');
+        const debutPriseAcq=(anneeAcq+1)+'-05-01';
+        const finPriseAcq=(anneeAcq+2)+'-04-30';
         Object.entries(c.fiches||{}).forEach(([k,f])=>{
           if(!f.valide||k>=moisKeyCur) return;
-          dejaPayesAcq+=f.jours.filter(j=>j.statut==='conges-acq').length;
+          dejaPayesAcq+=f.jours.filter(j=>j.statut==='conges-acq'&&j.date>=debutPriseAcq&&j.date<=finPriseAcq).length;
         });
         const totalAcquis=ind.acquis||0;
         const resteAPayer=Math.max(0,totalAcquis-dejaPayesAcq);
         const totalCeMoisAcq=fiche.jours.filter(j=>j.statut==='conges-acq').length;
         const nbAcqMois=Math.min(totalCeMoisAcq, resteAPayer);
-        if(nbAcqMois>0){
+        // 11/09/2026 (Sophie) : plus AUCUN versement d'indemnité de congés sur une fiche de MAI.
+        // La CCN arrête le calcul de l'indemnité au 31 mai (art. 48-1-1-5) et l'assiette du 10ème
+        // comprend les indemnités versées pendant la période de référence : payer en mai gonflerait
+        // l'assiette de l'année qui se clôt ce même 31 mai, et le calcul tournerait en rond. Les
+        // jours de mai sont donc reportés sur la fiche de JUIN (rattrapage juste en dessous), comme
+        // le mode « prise principale » le fait déjà de son côté. Remplace le paiement en maintien
+        // qui était fait ici, et bouche le trou constaté sur 52min-46fixe : congés pris en mai 2024,
+        // payés ni en mai ni en juin.
+        // Le comptage du mois de mai n'est volontairement pas repris pour la phrase d'explication :
+        // sur une fiche de mai, getAnneeAmPourDate désigne l'année précédente (décalage volontaire,
+        // voir la note du rattrapage plus bas), donc ce solde-là ne veut rien dire. La phrase se base
+        // simplement sur le nombre de jours de congés posés dans le mois (plus bas, tous modes).
+        if(nbAcqMois>0&&fiche.mois!==4){
           indemCongeNbJours=nbAcqMois;
-          if(fiche.mois===4&&sourceActif.tc!=='52'){
-            // Mai pour 46 sem : paiement en maintien de salaire (taux mai × hSemMoy/6)
-            const nbSemContrat=getNbSemReel(sourceActif,c);
-            const hSemMoy=parseFloat(hMensu||0)*12/nbSemContrat;
-            const hJourMai=hSemMoy/6;
-            indemCongeMois=parseFloat((hJourMai*txNetPrecis*nbAcqMois).toFixed(2));
-          } else {
-            indemCongeMois=parseFloat((ind.montantJournalierNet*nbAcqMois).toFixed(2));
+          indemCongeMois=parseFloat((ind.montantJournalierNet*nbAcqMois).toFixed(2));
+        }
+        // Rattrapage des jours de mai sur la fiche de juin. Ces jours relèvent de la MÊME année
+        // d'acquisition que le versement de juin : l'année de prise court du 1er mai au 30 avril, donc
+        // un jour posé en mai 2025 consomme les droits acquis du 01/06/2024 au 31/05/2025 — ceux que
+        // `ind` porte déjà sur la fiche de juin 2025. Vérifié sur les données réelles : le compteur
+        // « pris » de chaque année suit bien mai → avril. ⚠️ Ne pas se fier à getAnneeAmPourDate ici,
+        // qui découpe en juin → mai : ce décalage d'un mois est volontaire, il empêche la fiche de mai
+        // de se redemander son propre résultat via calcIndemniteConges → calcBrutTotal → calcRecapFiche.
+        // Mai étant le premier mois de la période de prise, aucun jour acquis ne peut l'avoir précédé :
+        // le seul plafond utile est le nombre de jours acquis de l'année.
+        if(fiche.mois===5){
+          const moisMaiPrec=fiche.annee+'-05';
+          const fMai=(c.fiches||{})[moisMaiPrec];
+          if(fMai&&fMai.valide){
+            const nbMai=Math.min(fMai.jours.filter(j=>j.statut==='conges-acq').length,ind.acquis||0);
+            if(nbMai>0){
+              indemCongeNbJours+=nbMai;
+              indemCongeMois=parseFloat((indemCongeMois+ind.montantJournalierNet*nbMai).toFixed(2));
+            }
           }
         }
         // 04/09/2026 (Sophie) : indemnité de fractionnement retirée — jours de repos posés sans
@@ -14030,6 +14074,14 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     }
   }
 
+  // 11/09/2026 (Sophie) : aucune indemnité de congés n'est versée sur une fiche de MAI, quel que soit
+  // le mode de paiement — « à chaque prise » reporte désormais sur juin, « prise principale » le
+  // faisait déjà, « en une fois » verse en juin par nature. On mémorise ici le nombre de jours
+  // concernés pour pouvoir l'expliquer sur la fiche plutôt que de laisser un mois vide inexpliqué.
+  if(fiche.mois===4&&!indemCongeMois&&sourceActif.tc!=='52'&&sourceActif.tc!=='occ'&&sourceActif.dateCg){
+    indemCongeReportMai=fiche.jours.filter(j=>j.statut==='conges-acq').length;
+  }
+
   // Calcul "dont congés payés" pour contrats 52 sem
   // Plan sem et plan var : heures de la semaine concernée / 6
   // Autres : moyenne hebdo / 6
@@ -14162,7 +14214,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     indemEntretienTotal:indemEntretienTotal.toFixed(2),
     indemRepasTotal:indemRepasTotal.toFixed(2),
     indemKmTotal:indemKmTotal.toFixed(2),
-    indemCongeMois, indemCongeNbJours, indemFractionnementMois, indemFractionnementNbJours,
+    indemCongeMois, indemCongeNbJours, indemCongeReportMai, indemFractionnementMois, indemFractionnementNbJours,
     montantCongesPayesMois, nbCongesPayesMois, montantCongesPayesAcqSeul,
     montantCongesNonAcquis, nbCongesNonAcquis,
     regul52Fiche,
