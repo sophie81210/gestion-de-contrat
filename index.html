@@ -13812,8 +13812,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           }
         }
       } else if(sourceActif.dateCg==='juin'&&fiche.mois===5){
-        indemCongeNbJours=ind.acquis;
-        indemCongeMois=ind.meilleurNet;
+        // 10/09/2026 (Sophie) : retrancher ce que la mensualisation d'un 52 a déjà payé sur cette
+        // année — sans quoi les jours posés pendant la période 52 sont payés une seconde fois.
+        const dejaSous52J=montantCongesVersesSous52(c,anneeAcq);
+        indemCongeNbJours=Math.max(0,ind.acquis-dejaSous52J.jours);
+        indemCongeMois=parseFloat(Math.max(0,ind.meilleurNet-dejaSous52J.montant).toFixed(2));
       } else if(sourceActif.dateCg==='principale'){
         // Prise principale = première prise avec ≥12 jours consécutifs entre mai et octobre
         // Indemnité versée sur le mois de début de la prise principale
@@ -13890,8 +13893,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             // Compter les jours acquis de la prise principale (tous les jours acq mai-oct)
             const nbJoursPrincipale=joursAcqValides.length;
             if(nbJoursPrincipale>0){
-              indemCongeNbJours=nbJoursPrincipale;
-              indemCongeMois=ind.meilleurNet;
+              // 10/09/2026 (Sophie) : même déduction qu'au mode « en une fois au mois de juin » — ce
+              // que la mensualisation d'un 52 a déjà payé sur cette année de référence ne doit pas
+              // être versé une seconde fois avec l'indemnité. C'est le défaut constaté sur
+              // 52fixe-46fixe : 16 jours pris sous 52, repayés en entier en août 2024.
+              const dejaSous52P=montantCongesVersesSous52(c,anneeAcq);
+              indemCongeNbJours=Math.max(0,nbJoursPrincipale-dejaSous52P.jours);
+              indemCongeMois=parseFloat(Math.max(0,ind.meilleurNet-dejaSous52P.montant).toFixed(2));
             }
           }
         }
@@ -18444,6 +18452,34 @@ function renderRupture(c, cont){
 }
 
 
+// 10/09/2026 (Sophie) : ce que la mensualisation d'un contrat 52 a DÉJÀ payé, sur une année de
+// référence donnée, pour les jours de congés qui y ont été posés. Sur un contrat passé de 52 à 46,
+// ces jours-là sont couverts par la mensualisation du 52 ; l'indemnité versée ensuite sous le 46 ne
+// doit donc porter que sur le solde, sinon ils sont payés deux fois.
+// La formule est reprise telle quelle de genCumul, qui l'affichait déjà sous « Dont jours anticipés
+// versés sous contrat 52 » — mais genCumul n'est appelée nulle part, ce calcul juste ne servait à rien.
+// Valorisation : moyenne hebdomadaire de la version en vigueur la VEILLE du jour posé, divisée par 6,
+// au taux net de cette veille — même convention que la ligne « dont congés payés » des feuilles.
+function montantCongesVersesSous52(c, anneeRef){
+  let montant=0, jours=0;
+  const debutA=new Date(anneeRef,5,1), finA=new Date(anneeRef+1,4,31);
+  Object.values(c.fiches||{}).forEach(f=>{
+    (f.jours||[]).forEach(j=>{
+      if(!['conges-acq','conges-anticipe','decompte-acq','decompte-anticipe'].includes(j.statut)) return;
+      const [jy,jm,jd]=j.date.split('-').map(Number);
+      const dateJ=new Date(jy,jm-1,jd);
+      if(dateJ<debutA||dateJ>finA) return;
+      if(getVersionActive(c,dateJ).tc!=='52') return;
+      const veille=new Date(jy,jm-1,jd); veille.setDate(veille.getDate()-1);
+      const srcV=getVersionActive(c,veille);
+      const txNetV=(srcV.txBrut||0)*(getParamAt('coefficients',dateToStr(veille)).valeur||0.7811975);
+      const hSemMoyV=(srcV.hMensu||0)*12/(srcV.nbSem||52);
+      montant+=(hSemMoyV/6)*txNetV;
+      jours++;
+    });
+  });
+  return {montant:parseFloat(montant.toFixed(2)), jours};
+}
 function calcIndemniteConges(c, anneeRef){
   // Retourne null si conditions non remplies
   const cg=c.conges?.[anneeRef];
