@@ -13898,7 +13898,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
               // être versé une seconde fois avec l'indemnité. C'est le défaut constaté sur
               // 52fixe-46fixe : 16 jours pris sous 52, repayés en entier en août 2024.
               const dejaSous52P=montantCongesVersesSous52(c,anneeAcq);
-              indemCongeNbJours=Math.max(0,nbJoursPrincipale-dejaSous52P.jours);
+              // Jours annoncés : ceux de l'année qui restent à payer — les jours acquis moins ceux
+              // déjà réglés par la mensualisation du 52. Jamais les jours de la prise principale, qui
+              // ne sont qu'une partie de l'année et donnaient zéro dès que la déduction les dépassait.
+              indemCongeNbJours=Math.max(0,ind.acquis-dejaSous52P.jours);
               indemCongeMois=parseFloat(Math.max(0,ind.meilleurNet-dejaSous52P.montant).toFixed(2));
             }
           }
@@ -18465,7 +18468,12 @@ function montantCongesVersesSous52(c, anneeRef){
   const debutA=new Date(anneeRef,5,1), finA=new Date(anneeRef+1,4,31);
   Object.values(c.fiches||{}).forEach(f=>{
     (f.jours||[]).forEach(j=>{
-      if(!['conges-acq','conges-anticipe','decompte-acq','decompte-anticipe'].includes(j.statut)) return;
+      // 10/09/2026 (Sophie : « il n'y a que 16 jours pris en anticipé ») : seuls les jours ANTICIPÉS
+      // comptent. Un jour de congés ACQUIS posé pendant l'année N consomme le solde d'une année
+      // ANTÉRIEURE, déjà soldée par sa propre indemnité — le retrancher de l'indemnité de N revenait
+      // à faire payer à N ce qui relevait d'une autre année. Sur ce contrat, 8 jours acquis posés en
+      // août 2023 consommaient le solde de 2022/2023 et étaient pourtant déduits de 2023/2024.
+      if(!['conges-anticipe','decompte-anticipe'].includes(j.statut)) return;
       const [jy,jm,jd]=j.date.split('-').map(Number);
       const dateJ=new Date(jy,jm-1,jd);
       if(dateJ<debutA||dateJ>finA) return;
