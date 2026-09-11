@@ -20141,6 +20141,50 @@ function ouvrirPassageCDI(cid){
   },100);
 }    
          
+// 11/09/2026 (Sophie) : un avenant ne doit pas prendre effet au milieu d'une période de congés — la pose
+// serait coupée entre deux versions du contrat, alors que le décompte, les statuts et le paiement des
+// congés raisonnent tous sur une pose entière. Le garde-fou existant (plus bas dans signerAvenant) ne
+// refusait qu'une date tombant exactement sur un jour posé : un dimanche au milieu de la pose, un férié
+// inclus dans la pose, ou un jour entre la fin de la pose et le jour de reprise passaient.
+// Règle : on remonte depuis la veille de la date d'effet, et on avance depuis la date d'effet, en sautant
+// les jours neutres (repos, férié, non prévu, hors contrat). Si l'on tombe des deux côtés sur un jour de
+// congés — posé au calendrier de l'assistante maternelle, ou marqué congés / décompte sur la fiche — la
+// date coupe une pose. Renvoie alors le premier et le dernier jour de congés de la pose, et la première
+// date d'effet possible après elle, pour que le message donne les vraies bornes.
+function avenantCoupeUnePoseCg(c,dateEffetStr){
+  const posesAmAv={};
+  Object.values(S.congesAM||{}).forEach(am=>Object.entries(am.jours||{}).forEach(([ds,st])=>{ if(st==='pose') posesAmAv[ds]=true; }));
+  const statutEffectifAv=ds=>{
+    const f=c.fiches&&c.fiches[ds.slice(0,7)];
+    const j=f&&(f.jours||[]).find(x=>x.date===ds);
+    return j?(j.statut||getStatutPrevu(c,j)||''):null;
+  };
+  const estCongesAv=ds=>{
+    if(posesAmAv[ds]) return true;
+    const st=statutEffectifAv(ds);
+    return !!st&&(/^conges|^decompte/.test(st)||st==='fractionnement');
+  };
+  const estNeutreAv=ds=>{
+    const st=statutEffectifAv(ds);
+    if(st!==null) return ['repos','ferie','ferie-non','non-prevu','hors-contrat'].includes(st);
+    const d=parseDateLoc(ds);
+    const srcAv=getVersionActive(c,d)||{};
+    return d.getDay()===(srcAv.reposHebdo??c.reposHebdo??0)||isFerie(ds,c);
+  };
+  const decaleAv=(ds,nb)=>{ const d=parseDateLoc(ds); d.setDate(d.getDate()+nb); return dateToStr(d); };
+  let avant=null, ds=decaleAv(dateEffetStr,-1);
+  for(let i=0;i<21;i++,ds=decaleAv(ds,-1)){ if(estCongesAv(ds)){ avant=ds; break; } if(!estNeutreAv(ds)) break; }
+  if(!avant) return null;
+  let apres=null; ds=dateEffetStr;
+  for(let i=0;i<21;i++,ds=decaleAv(ds,1)){ if(estCongesAv(ds)){ apres=ds; break; } if(!estNeutreAv(ds)) break; }
+  if(!apres) return null;
+  let debut=avant; ds=decaleAv(avant,-1);
+  for(let i=0;i<90;i++,ds=decaleAv(ds,-1)){ if(estCongesAv(ds)) debut=ds; else if(!estNeutreAv(ds)) break; }
+  let fin=apres; ds=decaleAv(apres,1);
+  for(let i=0;i<90;i++,ds=decaleAv(ds,1)){ if(estCongesAv(ds)) fin=ds; else if(!estNeutreAv(ds)) break; }
+  return {debut,fin,premiereDatePossible:decaleAv(fin,1)};
+}
+
 function signerAvenant(){
   if(!S.enAvenant){toast('Erreur : pas d\'avenant en cours');return;}
   if(typeof calc==='function') calc();
@@ -20190,6 +20234,14 @@ function signerAvenant(){
   if(S.congesAM&&Object.values(S.congesAM).some(am=>am.jours&&am.jours[av.dateAvenant]==='pose')){
     toast('⚠ Impossible de signer : la date d\'effet ('+av.dateAvenant+') tombe sur un jour de congés posé.');
     return;
+  }
+  // 11/09/2026 (Sophie) : même principe étendu à toute la période de congés (voir avenantCoupeUnePoseCg).
+  {
+    const coupeAv=avenantCoupeUnePoseCg(c,av.dateAvenant);
+    if(coupeAv){
+      alerte('La date d’effet du '+dateISOversTexte(av.dateAvenant)+' tombe au milieu d’une période de congés, du '+dateISOversTexte(coupeAv.debut)+' au '+dateISOversTexte(coupeAv.fin)+'.<br><br>Un avenant ne peut pas couper une pose en deux : le décompte et le paiement des congés raisonnent sur la pose entière.<br><br>Choisissez une date d’effet avant le '+dateISOversTexte(coupeAv.debut)+', ou à partir du '+dateISOversTexte(coupeAv.premiereDatePossible)+'.');
+      return;
+    }
   }
 
   // Vérifications complétude — mêmes contrôles que la signature du contrat initial, sauf les champs
