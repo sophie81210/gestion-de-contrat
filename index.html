@@ -5108,6 +5108,15 @@ function getAnneeAmPourDate(key){
   return am>=6?ay:ay-1;
 }
 
+// 11/09/2026 (Sophie) : dès que la case ou le nombre de jours change, recalculer les compteurs puis les
+// statuts de la période de prise qui reçoit le report (1er mai N+2 → 30 avril N+3 pour les droits N/N+1).
+// Sans ça, les jours déjà posés sur cette période gardaient leur ancien statut (« non acquis ») jusqu'à la
+// prochaine validation. Pas de sauvegarde ici : l'enregistrement suit juste après, pour ce contrat seul.
+function rafraichirReportArret(c,anneeAcq){
+  calcCongesContrat(c);
+  const cleAmRecoitReport=anneeAcq+2;
+  if(S.congesAM&&S.congesAM[cleAmRecoitReport]) majFichesCgAm(cleAmRecoitReport,false);
+}
 // 17/08/2026 (Sophie) : report manuel de jours perdus pour arrêt maladie (onglet congés du contrat)
 function toggleArretReporte(contratId,anneeAcq,checked){
   const c=S.contrats.find(x=>x.id==contratId);
@@ -5115,6 +5124,7 @@ function toggleArretReporte(contratId,anneeAcq,checked){
   if(!c.conges||!c.conges[anneeAcq]) return;
   c.conges[anneeAcq].arretReporte=checked;
   if(!checked) c.conges[anneeAcq].arretReporteJours=0;
+  rafraichirReportArret(c,anneeAcq);
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
   _contratsModifies.add(contratId);
@@ -5129,6 +5139,7 @@ function modifierArretReporteJours(contratId,anneeAcq,val,maxJours){
   if(isNaN(nb)||nb<0) nb=0;
   nb=Math.min(nb,maxJours||0);
   c.conges[anneeAcq].arretReporteJours=nb;
+  rafraichirReportArret(c,anneeAcq);
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
   _contratsModifies.add(contratId);
@@ -10039,6 +10050,11 @@ function calcCongesContrat(c, dateRefOverride){
       });
     });
 
+    // 11/09/2026 (Sophie) : l'année est reconstruite de zéro à chaque passage — les deux champs du
+    // report pour arrêt maladie, saisis à la main dans l'onglet Congés, étaient donc effacés au premier
+    // recalcul venu (vérifié : case cochée avec 3 jours, perdue dès le recalcul suivant) et le report
+    // n'a jamais pu servir. Ils sont repris de la version précédente de l'année.
+    const ancienCgReport=c.conges[anneeRef]||{};
     c.conges[anneeRef]={
       acquis,pris:prisDansRef,
       restants:Math.max(0,acquis-prisDansRef),
@@ -10047,6 +10063,8 @@ function calcCongesContrat(c, dateRefOverride){
       estTerminee,joursComptes:Math.round(totalSemaines*joursMax),joursArret:joursArretTotal,
       anneeRef,anneeRefFin:anneeRef+1
     };
+    if(ancienCgReport.arretReporte) c.conges[anneeRef].arretReporte=true;
+    if(ancienCgReport.arretReporteJours) c.conges[anneeRef].arretReporteJours=ancienCgReport.arretReporteJours;
   }
   // Recalculer les pris par année d'acquisition (pas par date de pose)
   // Collecter tous les jours conges-acq et conges-anticipe dans l'ordre chronologique
@@ -10085,31 +10103,47 @@ function calcCongesContrat(c, dateRefOverride){
   // Réinitialiser prisDansAMSuivante
   anneesRef.forEach(ar=>{c.conges[ar].prisDansAMSuivante=0;});
 
+  // 11/09/2026 (Sophie) : report pour arrêt maladie — jours non pris d'une année, sauvés par la case de
+  // l'onglet Congés, qui passent en tête de l'année suivante. Créé au premier jour de la période de prise
+  // de l'année qui le reçoit : à ce moment la période de l'année d'origine est terminée (elle s'arrête le
+  // 30 avril, la suivante commence le 1er mai), donc son solde est définitif. Plafonné à ce solde.
+  const reportsRecusCg={};
+  const reportsSortantsCg={};
+  const reportRecuCg=ar=>{
+    if(ar in reportsRecusCg) return reportsRecusCg[ar];
+    const origineRepCg=c.conges[ar-1];
+    let compteRep=null;
+    if(origineRepCg&&origineRepCg.arretReporte&&(origineRepCg.arretReporteJours||0)>0){
+      const joursRep=Math.min(origineRepCg.arretReporteJours,Math.max(0,restantParAnnee[ar-1]||0));
+      if(joursRep>0){
+        compteRep={origine:ar-1,jours:joursRep,pris:0,restants:joursRep};
+        reportsSortantsCg[ar-1]=joursRep;
+      }
+    }
+    reportsRecusCg[ar]=compteRep;
+    return compteRep;
+  };
+
   tousJoursConges.forEach(j=>{
     if(j.statut==='conges-acq'||j.statut==='decompte-acq'){
       const dateJ=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
-      const moisJ=dateJ.getMonth()+1; // 1-12
-      let attribue=false;
-      if(c.tc==='52'&&moisJ===5){
-        // Pour 52 sem : les conges-acq de mai appartiennent à l'année dont la période d'acquisition se termine en mai
-        // = anneeRef tel que anneeRef+1 == année du jour (ex: mai 2025 → anneeRef 2024)
-        const arMai=dateJ.getFullYear()-1;
-        if(c.conges[arMai]&&restantParAnnee[arMai]>0){
-          c.conges[arMai].pris++;
-          restantParAnnee[arMai]--;
-          c.conges[arMai].prisDansAMSuivante++;
-          attribue=true;
-        }
-      }
-      if(!attribue){
-        // FIFO standard
-        for(const ar of anneesRef){
-          if(restantParAnnee[ar]>0){
-            c.conges[ar].pris++;
-            restantParAnnee[ar]--;
-            if(j.date>=String(ar+1)+'-05-01') c.conges[ar].prisDansAMSuivante++;
-            break;
-          }
+      // 11/09/2026 (Sophie) : chaque jour acquis est rattaché à l'UNIQUE année dont la période de prise
+      // (1er mai → 30 avril suivant) le contient — et non plus à « l'année la plus ancienne à qui il
+      // reste des jours ». Au 1er mai, ce qui reste de l'année précédente n'est plus disponible (règle
+      // confirmée Sophie : les jours non pris ne sont pas repris), sauf report pour arrêt maladie, qui
+      // est consommé EN PREMIER. Remplace aussi l'ancienne règle de mai réservée aux contrats créés en
+      // 52 (type d'origine, jamais mis à jour par un avenant), qui n'en était qu'un cas particulier.
+      // Mesuré avant modification sur les 15 contrats : aucun jour ne tombait dans une année expirée.
+      const arPrise=dateJ.getMonth()>=4?dateJ.getFullYear()-1:dateJ.getFullYear()-2;
+      if(c.conges[arPrise]){
+        const repPrise=reportRecuCg(arPrise);
+        if(repPrise&&repPrise.restants>0){
+          repPrise.pris++;
+          repPrise.restants--;
+        } else if(restantParAnnee[arPrise]>0){
+          c.conges[arPrise].pris++;
+          restantParAnnee[arPrise]--;
+          c.conges[arPrise].prisDansAMSuivante++;
         }
       }
     } else if(j.statut==='conges-anticipe'||j.statut==='decompte-anticipe'){
@@ -10129,18 +10163,22 @@ function calcCongesContrat(c, dateRefOverride){
   });
 
   // Recalculer les restants
+  // 11/09/2026 (Sophie) : le report pour arrêt maladie n'est plus ajouté sans le dire aux restants de
+  // l'année suivante. Il forme un petit compte à part (reportArret : jours, pris, restants), affiché en
+  // tête de l'encart de l'année qui le reçoit et consommé en premier (plus haut) ; l'année d'origine voit
+  // ces jours sortir de son solde. `restants` garde son sens habituel — tout ce qui reste à poser sur la
+  // période de prise de l'année, report compris — pour ne rien changer aux autres calculs qui le lisent
+  // (rupture, avertissement de janvier, programmation des poses). Aucun suivi du délai légal de 15 mois :
+  // à la charge de l'utilisatrice, comme avant.
+  anneesRef.forEach(ar=>{ reportRecuCg(ar); });
   anneesRef.forEach(ar=>{
-    // 17/08/2026 (Sophie) : report de jours perdus pour arrêt maladie (saisie manuelle, case
-    // optionnelle sur l'année d'où ils viennent — aucun suivi du délai légal de 15 mois côté app,
-    // à la charge de l'utilisatrice). Ajouté au solde de l'année SUIVANTE seulement une fois la
-    // période de prise de l'année précédente terminée (30 avril suivant), jamais avant.
-    const cgPrecAr=c.conges[ar-1];
-    let reportArretIn=0;
-    if(cgPrecAr&&cgPrecAr.arretReporteJours){
-      const finPosePrecAr=new Date(ar+1,3,30);
-      if(new Date()>=finPosePrecAr) reportArretIn=cgPrecAr.arretReporteJours;
-    }
-    c.conges[ar].restants=Math.max(0,(c.conges[ar].acquis||0)+reportArretIn-c.conges[ar].pris);
+    const cgAr=c.conges[ar];
+    const soldePropreAr=Math.max(0,(cgAr.acquis||0)-cgAr.pris);
+    const recuAr=reportsRecusCg[ar];
+    cgAr.soldeAvantReport=soldePropreAr;
+    if(recuAr) cgAr.reportArret={origine:recuAr.origine,jours:recuAr.jours,pris:recuAr.pris,restants:recuAr.restants};
+    else delete cgAr.reportArret;
+    cgAr.restants=Math.max(0,soldePropreAr-(reportsSortantsCg[ar]||0))+(recuAr?recuAr.restants:0);
   });
 
   c.congesCourants=c.conges[anneeRefDebut]||{acquis:0,pris:0,restants:0};
@@ -13789,9 +13827,23 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           dejaPayesAcq+=f.jours.filter(j=>j.statut==='conges-acq'&&j.date>=debutPriseAcq&&j.date<=finPriseAcq).length;
         });
         const totalAcquis=ind.acquis||0;
-        const resteAPayer=Math.max(0,totalAcquis-dejaPayesAcq);
+        // 11/09/2026 (Sophie) : report pour arrêt maladie — ses jours ouvrent la période de prise (ils
+        // sont décomptés en premier) et se paient au taux de LEUR année d'origine, puisque ce sont ses
+        // jours (règle confirmée Sophie). Les jours de la période sont donc répartis dans l'ordre :
+        // d'abord le report, puis les droits de l'année, chacun plafonné à son propre nombre de jours.
+        const reportCgChaque=(c.conges&&c.conges[anneeAcq]&&c.conges[anneeAcq].reportArret)||null;
+        const joursReportChaque=reportCgChaque?(reportCgChaque.jours||0):0;
+        const indOrigineReport=joursReportChaque>0?calcIndemniteConges(c,anneeAcq-1):null;
+        const tauxReportChaque=indOrigineReport?indOrigineReport.montantJournalierNet:ind.montantJournalierNet;
+        const repartirJoursChaque=(nbJoursMois,dejaAvant)=>{
+          const rep=Math.max(0,Math.min(nbJoursMois,joursReportChaque-dejaAvant));
+          const propresAvant=Math.max(0,dejaAvant-joursReportChaque);
+          const propres=Math.min(nbJoursMois-rep,Math.max(0,totalAcquis-propresAvant));
+          return {rep,propres};
+        };
         const totalCeMoisAcq=fiche.jours.filter(j=>j.statut==='conges-acq').length;
-        const nbAcqMois=Math.min(totalCeMoisAcq, resteAPayer);
+        const partCeMois=repartirJoursChaque(totalCeMoisAcq,dejaPayesAcq);
+        const nbAcqMois=partCeMois.rep+partCeMois.propres;
         // 11/09/2026 (Sophie) : plus AUCUN versement d'indemnité de congés sur une fiche de MAI.
         // La CCN arrête le calcul de l'indemnité au 31 mai (art. 48-1-1-5) et l'assiette du 10ème
         // comprend les indemnités versées pendant la période de référence : payer en mai gonflerait
@@ -13806,7 +13858,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         // simplement sur le nombre de jours de congés posés dans le mois (plus bas, tous modes).
         if(nbAcqMois>0&&fiche.mois!==4){
           indemCongeNbJours=nbAcqMois;
-          indemCongeMois=parseFloat((ind.montantJournalierNet*nbAcqMois).toFixed(2));
+          indemCongeMois=parseFloat((ind.montantJournalierNet*partCeMois.propres+tauxReportChaque*partCeMois.rep).toFixed(2));
         }
         // Rattrapage des jours de mai sur la fiche de juin. Ces jours relèvent de la MÊME année
         // d'acquisition que le versement de juin : l'année de prise court du 1er mai au 30 avril, donc
@@ -13821,10 +13873,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           const moisMaiPrec=fiche.annee+'-05';
           const fMai=(c.fiches||{})[moisMaiPrec];
           if(fMai&&fMai.valide){
-            const nbMai=Math.min(fMai.jours.filter(j=>j.statut==='conges-acq').length,ind.acquis||0);
+            const partMai=repartirJoursChaque(fMai.jours.filter(j=>j.statut==='conges-acq').length,0);
+            const nbMai=partMai.rep+partMai.propres;
             if(nbMai>0){
               indemCongeNbJours+=nbMai;
-              indemCongeMois=parseFloat((indemCongeMois+ind.montantJournalierNet*nbMai).toFixed(2));
+              indemCongeMois=parseFloat((indemCongeMois+ind.montantJournalierNet*partMai.propres+tauxReportChaque*partMai.rep).toFixed(2));
             }
           }
         }
@@ -18790,15 +18843,25 @@ function buildCgAcquisEncarts(c, anneeAcq){
 
   const acquisPris=Math.max(0,(cg.pris||0)-nbAnticipes);
   html+=`<div style="background:${bg};border-radius:8px;padding:10px 12px;margin-bottom:8px">
-    <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:6px">${titre}</div>
-    <div style="${ls}"><span>Jours acquis</span><span style="${vs}">${cg.acquis||0} j</span></div>`;
+    <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:6px">${titre}</div>`;
+  // 11/09/2026 (Sophie) : report pour arrêt maladie reçu de l'année précédente — en tête de l'encart,
+  // puisque ces jours ouvrent le décompte, avec dessous ce qui en a été pris et ce qui en reste.
+  const repAffCg=cg.reportArret;
+  if(repAffCg&&repAffCg.jours>0){
+    html+=`<div style="background:#eef2ea;border-radius:6px;padding:6px 8px;margin:0 0 6px">
+      <div style="${ls}"><span>Report arrêt maladie (droits ${repAffCg.origine}/${repAffCg.origine+1})</span><span style="${vs}">${repAffCg.jours} j</span></div>
+      <div style="${ls}"><span>Jours reportés pris</span><span style="${vs}">${repAffCg.pris} j</span></div>
+      <div style="${ls};border-bottom:none"><span>Jours reportés restants</span><span style="${vs}">${repAffCg.restants} j</span></div>
+    </div>`;
+  }
+  html+=`<div style="${ls}"><span>Jours acquis</span><span style="${vs}">${cg.acquis||0} j</span></div>`;
   if(nbAnticipes>0){
     html+=`<div style="background:${bgAnticipe};border-radius:6px;padding:6px 8px;margin:4px 0">
       <div style="${ls};border-bottom:none"><span>Jours anticipés pris</span><span style="font-weight:600;color:#e8935a">${nbAnticipes} j</span></div>
     </div>`;
   }
   html+=`<div style="${ls}"><span>Jours acquis pris</span><span style="${vs}">${acquisPris} j</span></div>
-  <div style="${ls};border-bottom:none"><span>Jours restants</span><span style="${vs}">${cg.restants||0} j</span></div>`;
+  <div style="${ls};border-bottom:none"><span>Jours restants</span><span style="${vs}">${Math.max(0,(cg.restants||0)-((cg.reportArret&&cg.reportArret.restants)||0))} j</span></div>`;
   // 11/08/2026 (Sophie) : régularisation maintien/10ème, existait déjà dans genCumul (correctement,
   // affichée dans les 2 cas) mais absente de cet onglet — même logique importée ici telle quelle.
   if(c.tc==='52'&&(cg.acquis||0)>0&&(cg.restants||0)===0){
@@ -18875,21 +18938,21 @@ function buildCgAcquisEncarts(c, anneeAcq){
     // 17/08/2026 (Sophie) : report manuel de jours perdus pour arrêt maladie — l'app ne peut pas le
     // détecter elle-même (les jours de congés pendant un arrêt sont décochés du calendrier AM), donc
     // saisie par l'utilisatrice, plafonnée au solde de CETTE année, sans suivi du délai légal de 15
-    // mois (à la charge de l'utilisatrice). Ajouté au solde de l'année suivante uniquement une fois le
-    // 30 avril de fin de prise passé (voir la recalculation de `restants`).
+    // mois (à la charge de l'utilisatrice). 11/09/2026 (Sophie) : ces jours forment désormais un compte
+    // à part en tête de l'encart de l'année suivante, décompté en premier (voir calcCongesContrat).
     const arretReporteVal=cg.arretReporteJours||0;
-    const soldeMaxReport=cg.restants||0;
+    const soldeMaxReport=cg.soldeAvantReport!==undefined?cg.soldeAvantReport:(cg.restants||0);
     html+=`<div style="border-top:1px solid rgba(0,0,0,0.08);margin-top:6px;padding-top:6px">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;font-weight:600">
         <input type="checkbox" ${cg.arretReporte?'checked':''} style="width:15px;height:15px;accent-color:var(--m)"
           onchange="toggleArretReporte(${c.id},${anneeAcq},this.checked)">
-        Jours perdus reportés pour arrêt maladie
+        Jours non pris pour arrêt maladie
       </label>
       ${cg.arretReporte?`<div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
         <input type="number" min="0" max="${soldeMaxReport}" step="1" value="${arretReporteVal}"
           style="width:60px;padding:3px 6px;border:1px solid var(--mb);border-radius:4px;font-size:12px"
           onchange="modifierArretReporteJours(${c.id},${anneeAcq},this.value,${soldeMaxReport})">
-        <span style="font-size:11px;color:var(--tx2)">j (plafonné au solde au 30/04/${anneeAcq+2} : ${soldeMaxReport} j) — ajoutés au compteur ${anneeAcq+1}/${anneeAcq+2} le 30/04/${anneeAcq+2}</span>
+        <span style="font-size:11px;color:var(--tx2)">j (plafonné au solde : ${soldeMaxReport} j) — reportés en tête de l'encart ${anneeAcq+1}/${anneeAcq+2}, décomptés en premier</span>
       </div>`:''}
     </div>`;
   }
@@ -21448,6 +21511,10 @@ if(tousNonPrevus){
                 quotaAcquis+=Math.max(0,Math.floor(cg.acqBrut||0)-anticipeValideCgQA-anticipeProvisoireCgQA);
               }
             }
+            // 11/09/2026 (Sophie) : les jours reportés pour arrêt maladie font partie des droits
+            // utilisables de l'année qui les reçoit. Sans cette ligne, ils s'affichaient au solde mais
+            // étaient refusés au moment de poser (passés en « non acquis »).
+            if(cg.reportArret&&cg.reportArret.jours>0) quotaAcquis+=cg.reportArret.jours;
           }
         });
       }
