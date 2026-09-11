@@ -18751,12 +18751,14 @@ function genOngletCongesContrat(c){
 
     const acquis=cg?.acquis||0;
     const restants=cg?.restants||0;
+    // 11/09/2026 (Sophie) : période de prise close → ce qui reste est « non pris », plus « restant ».
+    const priseCloseListeCg=periodePriseCloseCg(c,anneeAcq);
     const label=`Acquisition juin ${anneeAcq} → mai ${anneeAcq+1}`;
     html+=`<div style="border:1px solid var(--mb);border-radius:8px;margin-bottom:10px;overflow:hidden">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#d9ccd6;cursor:pointer" onclick="toggleCgContrat('${id}','${containerId}')">
         <div>
           <div style="font-weight:700;font-size:14px;color:var(--m)">${label}</div>
-          <div style="font-size:12px;color:var(--tx2)">${acquis} j acquis · ${nbAcq > 0 ? nbAcq+' j posés acquis · ' : ''}${nbAnticipe > 0 ? nbAnticipe+' j posés anticipés · ' : ''}${restants > 0 ? restants+' j restants' : 'soldé'}</div>
+          <div style="font-size:12px;color:var(--tx2)">${acquis} j acquis · ${nbAcq > 0 ? nbAcq+' j posés acquis · ' : ''}${nbAnticipe > 0 ? nbAnticipe+' j posés anticipés · ' : ''}${restants > 0 ? restants+(priseCloseListeCg?' j non pris':' j restants') : 'soldé'}</div>
         </div>
         <span style="font-size:20px;color:var(--tx2)" id="${id}-arrow">›</span>
       </div>
@@ -18793,6 +18795,57 @@ function toggleCgContrat(id, containerId){
   }
   el.style.display=open?'none':'block';
   if(arrow) arrow.textContent=open?'›':'⌄';
+}
+
+// 11/09/2026 (Sophie) : période de prise terminée pour les droits N/N+1 (1er mai N+1 → 30 avril N+2) ?
+// Ce qui reste n'est alors plus « à poser » : ce sont des jours non pris, que l'app ne reprend jamais
+// (règle Sophie). Deux garde-fous, sans lesquels l'app afficherait des « non pris » faux :
+//  - toutes les fiches de la période doivent être validées — sinon des jours pris sur une fiche non
+//    validée ne sont pas encore comptés ;
+//  - le contrat ne doit pas s'être terminé avant la fin de la période — ses jours restants ont alors été
+//    réglés par l'indemnité compensatrice de la rupture, ce ne sont pas des jours non pris.
+function periodePriseCloseCg(c,anneeAcq){
+  const finPriseCg=(anneeAcq+2)+'-04-30';
+  if(dateToStr(new Date())<=finPriseCg) return false;
+  const dateFinCtrCg=getDateFinContrat(c);
+  if(dateFinCtrCg&&dateToStr(dateFinCtrCg)<finPriseCg) return false;
+  const moisDebCg=(anneeAcq+1)+'-05', moisFinCg=(anneeAcq+2)+'-04';
+  return Object.entries(c.fiches||{}).every(([k,f])=>k<moisDebCg||k>moisFinCg||f.valide);
+}
+// 11/09/2026 (Sophie) : ligne « Jours restants » de l'encart, ou « Jours non pris » une fois la période
+// de prise close. On laisse une trace du nombre et de la valeur, pour que l'employeur et l'assistante
+// maternelle puissent s'arranger entre eux s'ils le souhaitent ; l'app ne les paie pas. Pour un 46 réglé
+// en une fois (juin ou prise principale), l'indemnité de l'année a déjà couvert tous les jours acquis :
+// seul le repos est perdu. En « à chaque prise » et en 52, on indique la valeur de ces jours.
+function ligneRestantsOuNonPrisCg(c,anneeAcq,cg,ls,vs){
+  const repRestCg=(cg.reportArret&&cg.reportArret.restants)||0;
+  const propresCg=Math.max(0,(cg.restants||0)-repRestCg);
+  if(!periodePriseCloseCg(c,anneeAcq)||propresCg+repRestCg===0){
+    return `<div style="${ls};border-bottom:none"><span>Jours restants</span><span style="${vs}">${propresCg} j</span></div>`;
+  }
+  const nbNonPrisCg=propresCg+repRestCg;
+  let mentionCg='';
+  if(nbNonPrisCg>0){
+    const srcClotCg=getVersionActive(c,new Date(anneeAcq+1,4,31))||{};
+    const en46Cg=srcClotCg.tc!=='52'&&srcClotCg.tc!=='occ';
+    if(en46Cg&&(srcClotCg.dateCg==='juin'||srcClotCg.dateCg==='principale')){
+      mentionCg='repos non pris — indemnité déjà versée';
+    } else {
+      let valeurCg=0;
+      if(en46Cg){
+        const indAnCg=calcIndemniteConges(c,anneeAcq);
+        const indOrCg=repRestCg>0?calcIndemniteConges(c,anneeAcq-1):null;
+        const tauxAnCg=indAnCg?indAnCg.montantJournalierNet:0;
+        valeurCg=propresCg*tauxAnCg+repRestCg*(indOrCg?indOrCg.montantJournalierNet:tauxAnCg);
+      } else {
+        const srcFinCg=getVersionActive(c,new Date(anneeAcq+2,3,30))||{};
+        const hJourCg=(parseFloat(srcFinCg.hMensu||0)*12/(parseFloat(srcFinCg.nbSem||52)))/6;
+        valeurCg=nbNonPrisCg*hJourCg*parseFloat(srcFinCg.txNet||0);
+      }
+      if(valeurCg>0) mentionCg='valeur '+valeurCg.toFixed(2)+' €, non versée';
+    }
+  }
+  return `<div style="${ls};border-bottom:none"><span>Jours non pris au 30/04/${anneeAcq+2}${mentionCg?'<br><span style="font-size:11px;font-weight:400;color:var(--tx2)">'+mentionCg+'</span>':''}</span><span style="${vs}">${nbNonPrisCg} j</span></div>`;
 }
 
 function buildCgAcquisEncarts(c, anneeAcq){
@@ -18860,8 +18913,8 @@ function buildCgAcquisEncarts(c, anneeAcq){
       <div style="${ls};border-bottom:none"><span>Jours anticipés pris</span><span style="font-weight:600;color:#e8935a">${nbAnticipes} j</span></div>
     </div>`;
   }
-  html+=`<div style="${ls}"><span>Jours acquis pris</span><span style="${vs}">${acquisPris} j</span></div>
-  <div style="${ls};border-bottom:none"><span>Jours restants</span><span style="${vs}">${Math.max(0,(cg.restants||0)-((cg.reportArret&&cg.reportArret.restants)||0))} j</span></div>`;
+  html+=`<div style="${ls}"><span>Jours acquis pris</span><span style="${vs}">${acquisPris} j</span></div>`;
+  html+=ligneRestantsOuNonPrisCg(c,anneeAcq,cg,ls,vs);
   // 11/08/2026 (Sophie) : régularisation maintien/10ème, existait déjà dans genCumul (correctement,
   // affichée dans les 2 cas) mais absente de cet onglet — même logique importée ici telle quelle.
   if(c.tc==='52'&&(cg.acquis||0)>0&&(cg.restants||0)===0){
