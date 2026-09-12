@@ -21061,17 +21061,28 @@ function toggleCgAm(anneeDebut,dateStr){
   const semNumToggle=getSemISO(dateStr);
   const semAnneeToggle=getSemAnnee(dateStr);
   const semKeyToggle=getKeyAgenda(semNumToggle,semAnneeToggle);
-  const semsViolettesToggle=getSemsCongesGlobal(anneeDebut+'-05-01',(anneeDebut+1)+'-04-30');
-  if(semsViolettesToggle&&semsViolettesToggle.has&&semsViolettesToggle.has(semNumToggle)){
-    S.contrats.forEach(ct=>{
-      const tousSourcesToggle=[ct,...(ct.avenants||[])];
-      tousSourcesToggle.forEach(src=>{
-        (src.agendas||[]).forEach(ag=>{
-          if(ag.semaines&&ag.semaines[semKeyToggle]!==undefined) delete ag.semaines[semKeyToggle];
-        });
+  // 12/09/2026 (Sophie) : la semaine est jugée violette contrat par contrat, avec les jours de CE
+  // contrat — la règle de l'affichage des agendas (estSemaineToutEnConges avec le contrat). Avant, un
+  // seul test du lundi au samedi pour tous les contrats : une semaine où tous les jours du contrat
+  // étaient posés mais pas le samedi s'affichait violette et gardait pourtant son type, qui continuait
+  // de compter dans les calculs (ex. 52var-46sem-52fixe, semaine du 30/12/2024 : « Semaine type 1 »
+  // restée sur une semaine de congés — 30 h au lieu de 35 h dans les heures théoriques, et le vendredi
+  // en congé non acquis qui ne retirait rien à l'acquisition). Et les contrats 52 semaines ne sont
+  // jamais touchés : ils n'ont pas de semaine violette (règle du 18/07/2026, renderAgendas), leur type
+  // reste pointé et sert à valoriser les jours de congés — l'ancien test les effaçait aussi.
+  const lundiToggle=parseDateLoc(dateStr);
+  lundiToggle.setDate(lundiToggle.getDate()-(lundiToggle.getDay()===0?6:lundiToggle.getDay()-1));
+  S.contrats.forEach(ct=>{
+    const srcToggle=getVersionActive(ct,lundiToggle);
+    if(!srcToggle||(srcToggle.tc||ct.tc)==='52') return;
+    if(!estSemaineToutEnConges(dateStr,null,null,ct)) return;
+    const tousSourcesToggle=[ct,...(ct.avenants||[])];
+    tousSourcesToggle.forEach(src=>{
+      (src.agendas||[]).forEach(ag=>{
+        if(ag.semaines&&ag.semaines[semKeyToggle]!==undefined) delete ag.semaines[semKeyToggle];
       });
     });
-  }
+  });
   // 20/08/2026 (Sophie) : invalidation désormais SYSTÉMATIQUE, plus seulement quand la semaine
   // cochée/décochée franchit elle-même le seuil violette — une pose couvrant plusieurs semaines
   // peut faire basculer une semaine VOISINE (pas celle du jour touché) sans que ce test local le
