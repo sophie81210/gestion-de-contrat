@@ -10649,7 +10649,12 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
             } else if(statsCongésCheval.includes(stJour)){
               // 52 sem : heures réelles du jour selon le type de semaine réel (agenda)
               // 46 sem : aucune donnée de planning sur ces semaines de congés, hSemMoyPS/6 reste nécessaire
-              const ajoutCongesCheval=est52Ch?hJourReelCh:hSemMoyPS/nbJoursPossiblesSem;
+              // 12/09/2026 (Sophie) : en 46, un jour de congé qui n'est dans aucun motif (ex. samedi, ou
+              // lundi quand aucune semaine type n'a de lundi) ne compte rien — même règle que les semaines
+              // violettes (nbJoursDecompteNoType plus haut). Il comptait la moyenne par jour (8 h pour
+              // 46sem-52fixe-46sem) : janvier 2022 178 h au lieu de 170 h (samedi 01/01), août 2024
+              // 163,75 h au lieu de 155 h, décembre 2025 161,25 h au lieu de 152,50 h. Aucun salaire touché.
+              const ajoutCongesCheval=est52Ch?hJourReelCh:(joursPossiblesSem[jourIdx]?hSemMoyPS/nbJoursPossiblesSem:0);
               hCheval+=ajoutCongesCheval;
               if(window.DEBUG_CGAM)console.log('[CGAM-chevalSemJour]',jourStr,'| branche: congés (stJour='+stJour+') | ajouté:',ajoutCongesCheval,'| hCheval cumulé:',hCheval);
             } else if(est52Ch&&stJour==='non-prevu'&&hJourReelCh>0&&jourContratDeplaceModifTh(c,jourStr)){
@@ -22883,15 +22888,36 @@ function verifier12JoursConsecutifs(anneeAm){
   return false;
 }
 
-function enregistrerCgAm(){
+// 12/09/2026 (Sophie, 46sem-52fixe-46sem : le type de la semaine du 27/12/2021, effacé par le nettoyage
+// des semaines violettes, revenait à chaque actualisation alors que les congés, eux, restaient
+// enregistrés — et « ✓ Congés enregistrés » s'affichait quand même) : chaque contrat était envoyé BRUT
+// et la réponse de la base n'était jamais lue (fbSaveData ne lève jamais d'erreur, il renvoie
+// {ok:false}), si bien qu'un refus passait inaperçu. Désormais, comme la sauvegarde principale et
+// l'enregistrement de la rupture : contrat nettoyé (getContratsCompresses + passage par JSON), réponse
+// attendue pour chaque contrat, et message avec le nom du contrat et la raison en cas de refus. Pendant
+// l'envoi, _saveEnCours fait demander confirmation si l'on quitte ou actualise la page.
+async function enregistrerCgAm(){
   invaliderSemsCongesGlobal();
   saveCongesAM();
+  const echecsCgAm=[];
   if(window.FB_USER&&window.fbSaveData){
-    S.contrats.filter(c=>c.fiches&&c.signe&&!estContratCloture(c)).forEach(c=>{
-      window.fbSaveData(window.FB_USER.uid,{
-        contrats:[c],params:{},congesAM:S.congesAM||{}
-      }).catch(e=>console.error('Save enregistrerCgAm:',e));
-    });
+    const idsCgAm=new Set(S.contrats.filter(c=>c.fiches&&c.signe&&!estContratCloture(c)).map(c=>String(c.id)));
+    const contratsCgAm=getContratsCompresses().filter(x=>idsCgAm.has(String(x.id)));
+    const btnCgAm=document.getElementById('btn-save-cgam');
+    if(btnCgAm) btnCgAm.disabled=true;
+    toast('⏳ Enregistrement en cours…');
+    _saveEnCours=true;
+    try{
+      const resultatsCgAm=await Promise.all(contratsCgAm.map(cc=>{
+        const payloadCgAm=JSON.parse(JSON.stringify({contrats:[cc],params:S.params||{},congesAM:S.congesAM||{}}));
+        return window.fbSaveData(window.FB_USER.uid,payloadCgAm)
+          .then(r=>({nom:cc.nom,r}),e=>({nom:cc.nom,r:{ok:false,err:e&&e.message}}));
+      }));
+      resultatsCgAm.forEach(({nom,r})=>{ if(!r||r.ok===false) echecsCgAm.push(nom+' : '+((r&&r.err)||'erreur inconnue')); });
+    }finally{
+      _saveEnCours=false;
+      if(btnCgAm) btnCgAm.disabled=false;
+    }
   }
   S.cgAmModifie=false;
   // Vérifier 12 jours consécutifs mai-octobre pour chaque année AM — en ignorant les années vides
@@ -22907,6 +22933,11 @@ function enregistrerCgAm(){
       avertissements.push('⚠ '+anneeAm+'/'+(anneeAm+1)+' : aucune prise de 12 jours consécutifs entre mai et octobre.');
     }
   });
+  if(echecsCgAm.length>0){
+    const escCgAm=t=>String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    alerte('Les congés sont enregistrés, mais '+(echecsCgAm.length>1?'ces contrats n’ont':'ce contrat n’a')+' PAS pu être enregistré'+(echecsCgAm.length>1?'s':'')+' sur le serveur — ses modifications d’agenda et de feuilles seront perdues à l’actualisation :<br><br>'+echecsCgAm.map(escCgAm).join('<br>')+(avertissements.length?'<br><br>'+avertissements.map(escCgAm).join('<br>'):''));
+    return;
+  }
   if(avertissements.length>0){
     setTimeout(()=>alert('Congés enregistrés.\n\n'+avertissements.join('\n')),300);
   } else {
