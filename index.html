@@ -10425,6 +10425,17 @@ function getHJourFerie(c, sourceActif, dateStr, agendaMois, estSemConges){
   return 0;
 }
 
+// 12/09/2026 (Sophie) : en modifications autorisées, les heures théoriques restent celles du contrat.
+// Un jour de la semaine type décoché sur le planning (jour déplacé ailleurs) garde ses heures dans sa
+// semaine : il ne passe à 0 h que parce que le planning l'a vidé, pas parce que la semaine est plus
+// courte. Le jour qui le reçoit, lui, ne rapporte rien s'il n'est pas un jour de la semaine type — la
+// semaine d'arrivée ne gagne donc rien. Avant : un mardi de 10 h déplacé au mercredi suivant faisait
+// perdre 10 h au mois en plan sem 52 (46fixe-52sem, avril 2024 : 106 h → 96 h). Même règle que pour
+// l'acquisition des congés (calcCongesContrat, « jour du contrat déplacé ailleurs »).
+function jourContratDeplaceModifTh(c, jourStr){
+  return !!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[jourStr.slice(0,7)]&&c.planning&&c.planning[jourStr]&&c.planning[jourStr].coche===false);
+}
+
 function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriquesVues, joursHCExclus){
   // Calcule les heures théoriques pour un contrat plan sem
   // Logique : par semaine selon le type dans l'agenda. Semaines off = hSemMoy. Décompte = hSemMoy/6.
@@ -10630,7 +10641,9 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
             const jourIdx=jourIdxHC2;
             const stJourSem=stJourSemHC;
             const hJourReelCh=hJourReelChHC;
-            const est52Ch=c.tc==='52'||sourceActif.tc==='52';
+            // 12/09/2026 (Sophie) : type de contrat de la période (avenant), jamais celui du contrat de
+            // départ — un contrat parti en 52 puis passé en sem 46 par avenant se calculait comme un 52.
+            const est52Ch=(sourceActif.tc||c.tc)==='52';
             if(stJour==='conges-am'){
               // 0h quel que soit le contrat
             } else if(statsCongésCheval.includes(stJour)){
@@ -10639,6 +10652,10 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
               const ajoutCongesCheval=est52Ch?hJourReelCh:hSemMoyPS/nbJoursPossiblesSem;
               hCheval+=ajoutCongesCheval;
               if(window.DEBUG_CGAM)console.log('[CGAM-chevalSemJour]',jourStr,'| branche: congés (stJour='+stJour+') | ajouté:',ajoutCongesCheval,'| hCheval cumulé:',hCheval);
+            } else if(est52Ch&&stJour==='non-prevu'&&hJourReelCh>0&&jourContratDeplaceModifTh(c,jourStr)){
+              // 12/09/2026 (Sophie) : jour du contrat déplacé ailleurs en modifications autorisées — voir
+              // jourContratDeplaceModifTh.
+              hCheval+=hJourReelCh;
             } else if(est52Ch&&['conges-6j','conges-6j-fin','non-prevu'].includes(stJour)){
               // 0h plan-sem 52
             } else {
@@ -10651,7 +10668,7 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
           if(window.DEBUG_CGAM)console.log('[CGAM-chevalSemDetail]',dateEx,'| hCheval:',hCheval,'| joursHCExclus:',joursHCExclus?[...joursHCExclus]:null);
           hTheoriques+=hCheval;
         } else {
-          if(c.tc==='52'||sourceActif.tc==='52'){
+          if((sourceActif.tc||c.tc)==='52'){ // 12/09/2026 (Sophie) : type de la période, voir est52Ch
             // Plan sem 52 non à cheval : calcul jour par jour, heures réelles selon le type de semaine
             const statsCongésPS52=['conges-acq','conges-non','conges-anticipe','decompte-acq','decompte-anticipe','decompte-conges'];
             const reposHPS52=sourceActif.reposHebdo||c.reposHebdo||0;
@@ -10676,6 +10693,11 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
                 continue;
               }
               const stJour=jourFiche?.statut||getStatutPrevu(sourceActif||c,jourFiche||{date:jourStr,jourSemaine:jourDate.getDay()===0?0:jourDate.getDay()});
+              if(stJour==='non-prevu'&&hJourReel>0&&jourContratDeplaceModifTh(c,jourStr)){
+                // 12/09/2026 (Sophie) : jour du contrat déplacé ailleurs — voir jourContratDeplaceModifTh
+                hSem52+=hJourReel;
+                continue;
+              }
               if(statsCongésPS52.includes(stJour)){
                 // Congé/decompte : heures réelles que ce jour aurait eu selon le type de semaine réel (agenda)
                 hSem52+=hJourReel;
@@ -11784,7 +11806,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         hPrevuParSemaine[semKey]=hMinRef;
       }
     }
-    if((sourceActif.th==='sem'||c.th==='sem')&&(c.tc==='52'||sourceActif.tc==='52')&&!hPrevuParSemaine[semKey]){
+    // 12/09/2026 (Sophie) : type de contrat de la période (avenant), jamais celui du contrat de départ.
+    if((sourceActif.th==='sem'||c.th==='sem')&&(sourceActif.tc||c.tc)==='52'&&!hPrevuParSemaine[semKey]){
       const agKeyPS2=getKeyAgenda(semKey,getSemAnnee(j.date));
       const tousAgendasPS2=[...(sourceActif.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
       const agPS2=tousAgendasPS2.find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date))||agendaMois;
@@ -12253,7 +12276,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     });
     }
     // Pour plan-sem 52 : compléter les semaines à cheval avec les heures totales du type
-    if(sourceActif.th==='sem'&&sourceActif.semTypes&&(c.tc==='52'||sourceActif.tc==='52')){
+    // 12/09/2026 (Sophie) : type de contrat de la période (avenant), jamais celui du contrat de départ.
+    if(sourceActif.th==='sem'&&sourceActif.semTypes&&(sourceActif.tc||c.tc)==='52'){
       const tousAgendasCh=[...(sourceActif.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
       Object.keys(hThParSem).forEach(sk=>{
         // sk est un nombre (getSemISO retourne un nombre)
@@ -12834,7 +12858,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // 07/09/2026 (Sophie) : déductibilité décidée au jour près, dans l'année de contrat de CE jour —
     // même règle et même borne que le blocage de la saisie, qui les comparait différemment.
     const absEnfantDeductible=statut==='abs-enfant'&&!!j.date&&(nbAbsEnfantJusquA(j.date)<=5);
-    const estCongesNonAcq52=((statut==='conges-non'||statut==='decompte-conges')&&(c.tc==='52'||sourceActif.tc==='52'));
+    // 12/09/2026 (Sophie) : type de contrat de la période — sous un avenant 46 d'un contrat parti en 52,
+    // un congé non acquis était retenu sur le salaire comme en 52 ; en 46 il ne l'est jamais.
+    const estCongesNonAcq52=((statut==='conges-non'||statut==='decompte-conges')&&(sourceActif.tc||c.tc)==='52');
     const estCongesNon46Travaille=false;
     const estCongesNonDeduit=estCongesNonAcq52||estCongesNon46Travaille;
     const absDeduites=['abs-non','abs-am','ferie-non','abs-partielle']; // arret traité séparément
