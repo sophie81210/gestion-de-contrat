@@ -9206,6 +9206,31 @@ function deverrouillerFiche(contratId,key){
   return lundi;
 }
          
+// 12/09/2026 (Sophie) : mois en modifications autorisées — une absence ne doit jamais être compensée par
+// un jour déplacé. Une semaine qui a reçu un jour déplacé d'une autre semaine a plus de jours prévus que son
+// maximum ; sans cette règle, ce jour en trop « bouchait » une absence de la même semaine (sur le jour
+// ajouté comme sur un jour du contrat), et l'absence disparaissait de l'acquisition. Chaque absence retire
+// donc un jour, dans la limite du nombre de jours reçus en trop. Ex. : mardi déplacé au mercredi de la
+// semaine suivante, puis une absence non rémunérée dans cette semaine-là → même résultat qu'une absence dans
+// une semaine normale. Utilisée par la formule fixe/sem/min, pas par le plan var (voir la note dans
+// calcContribSemaineVarPV) ; renvoie le nombre de jours à retirer.
+function penaliteSemaineModifieeCg(c,joursSub,jMax){
+  if(!c.modifPlanningAutoriseesMois||!joursSub.some(jm=>c.modifPlanningAutoriseesMois[jm.date.slice(0,7)])) return 0;
+  // Seuls les jours prévus et les vraies absences comptent ici, jamais les jours de congés : une pose se
+  // décompte sur les jours ouvrables quel que soit le contrat, une semaine de congés a donc « plus de jours »
+  // que son maximum sans avoir rien reçu (vérifié : sinon une semaine d'août de 52var-46sem-52fixe, 3 jours
+  // acquis et 3 non acquis, perdait des jours sans aucun déplacement).
+  const absencesPen=['abs-non','abs-enfant','abs-am','arret'];
+  const prevusPen=['prevu','abs-partielle','abs-rem'].concat(absencesPen);
+  let nbAbsPen=0, nbPrevusPen=0;
+  joursSub.forEach(jm=>{
+    const stPen=jm.statut||getStatutPrevu(c,jm);
+    if(absencesPen.includes(stPen)) nbAbsPen++;
+    if(prevusPen.includes(stPen)) nbPrevusPen++;
+  });
+  return Math.min(nbAbsPen,Math.max(0,nbPrevusPen-(jMax||0)));
+}
+
 function calcCongesContrat(c, dateRefOverride){
   if(!c.fiches||!c.dateDeb) return;
   if(!c.conges) c.conges={};
@@ -9396,7 +9421,13 @@ function calcCongesContrat(c, dateRefOverride){
 
       if(semTerminee){
         // Pour plan var : calcul par semaine avec jours possibles réels
-        if(c.th==='plan'&&c.planType==='var'){
+        // 12/09/2026 (Sophie) : les deux formules (plan var d'un côté, fixe/sem/min de l'autre) sont
+        // toujours définies, et chaque morceau de semaine passe par celle de SA version (voir le calcul
+        // de la semaine plus bas). Auparavant le choix était fait une fois pour toutes d'après le contrat
+        // d'origine : les semaines d'un avenant sem d'un contrat né en plan var étaient comptées avec les
+        // volumes plan var du départ.
+        let fnVarPVSem=null;
+        {
           // 03/08/2026 (nouveau, confirmé Sophie) : la logique de la semaine est extraite dans une
           // fonction locale prenant en paramètre le sous-ensemble de jours à évaluer, pour pouvoir
           // scinder proprement une semaine à cheval sur un avenant (démarrant un autre jour qu'un
@@ -9436,22 +9467,23 @@ function calcCongesContrat(c, dateRefOverride){
             if(volAgendaPV){
               jMaxSem=volAgendaPV.j||joursMax;
               joursPatternPV=volAgendaPV.jours||null;
-            } else if(c.planVar){
+            } else if(sourcePV.planVar||c.planVar){
+              const planVarSem=sourcePV.planVar||c.planVar;
               const joursIdx=joursActifs.map(j=>{
                 const jj=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])).getDay();
                 return jj===0?6:jj-1;
               });
-              const volMatch=c.planVar.find(v=>v.jours&&joursIdx.every(idx=>v.jours[idx]));
+              const volMatch=planVarSem.find(v=>v.jours&&joursIdx.every(idx=>v.jours[idx]));
               if(volMatch){
                 jMaxSem=volMatch.j||joursMax;
                 joursPatternPV=volMatch.jours||null;
               } else {
-                const joursPossiblesUnionPV=Array.from({length:7},(_,idx)=>c.planVar.some(v=>v.jours&&v.jours[idx]));
+                const joursPossiblesUnionPV=Array.from({length:7},(_,idx)=>planVarSem.some(v=>v.jours&&v.jours[idx]));
                 jMaxSem=joursPossiblesUnionPV.filter(Boolean).length||joursMax;
                 joursPatternPV=joursPossiblesUnionPV;
               }
             }
-            const joursPossiblesIdxCgPV=Array.from({length:7},(_,i)=>i).filter(i=>c.planVar&&c.planVar.some(v=>v.jours&&v.jours[i]));
+            const joursPossiblesIdxCgPV=Array.from({length:7},(_,i)=>i).filter(i=>{const pvSemI=sourcePV.planVar||c.planVar;return !!pvSemI&&pvSemI.some(v=>v.jours&&v.jours[i]);});
             const semaineCompleteCgPV=joursPossiblesIdxCgPV.length>0&&joursPossiblesIdxCgPV.every(dow=>{
               const jourMatch=joursSub.find(jj=>{
                 const dJ=new Date(jj.date.split('-')[0],parseInt(jj.date.split('-')[1])-1,parseInt(jj.date.split('-')[2]));
@@ -9467,7 +9499,8 @@ function calcCongesContrat(c, dateRefOverride){
               if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) sj='fractionnement';
               const cocheCgPV=!!(c.planning&&c.planning[j.date]&&c.planning[j.date].coche);
               if(sj==='travaille'){
-                joursTravaillePV++;
+                // 12/09/2026 (Sophie) : jour travaillé en plus — plus compté pour l'acquisition (voir la
+                // même règle dans calcContribSemaineFSMPV). joursTravaillePV reste à 0.
               } else if(['prevu','abs-partielle','abs-rem'].includes(sj)){
                 joursNormauxPV++;
               } else if(sj==='fractionnement'){
@@ -9551,8 +9584,8 @@ function calcCongesContrat(c, dateRefOverride){
             // redonnerait crédit pour le motif hebdomadaire complet dès qu'un jour est travaillé cette
             // semaine-là, au lieu du seul jour travaillé (via joursTravaillePV, compté séparément).
             const compteEffectifPV=(joursConges16PV===0&&absArretSub===0&&jMaxSemAjustePV>0&&typeSemPV!=='off')?Math.max(jMaxSemAjustePV,joursNormauxPV):joursNormauxPV;
-            const totalJAnnuelPV=(c.planVar||[]).reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
-            const nbSemAnnuelPV=(c.planVar||[]).reduce((t,v)=>t+(v.s||0),0);
+            const totalJAnnuelPV=(sourcePV.planVar||c.planVar||[]).reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
+            const nbSemAnnuelPV=(sourcePV.planVar||c.planVar||[]).reduce((t,v)=>t+(v.s||0),0);
             const moyenneJourSemPV=nbSemAnnuelPV>0?totalJAnnuelPV/nbSemAnnuelPV:jMaxSem;
             // 20/08/2026 (Sophie) : même principe que calcContribSemaineFSMPV — normaux et congés
             // partagent la même garantie hebdo (jMaxSemAjustePV), plafonnés ENSEMBLE plutôt que
@@ -9561,7 +9594,13 @@ function calcCongesContrat(c, dateRefOverride){
             // reste correcte sans double-compter le plancher garanti.
             const baseComptePV=compteEffectifPV+joursConges16PV;
             const jourExtraPV=Math.max(0,baseComptePV-jMaxSemAjustePV)+joursTravaillePV;
-            const contribNormPV=(Math.min(baseComptePV,jMaxSemAjustePV)/jMaxSem)+(moyenneJourSemPV>0?jourExtraPV/moyenneJourSemPV:0);
+            let contribNormPV=(Math.min(baseComptePV,jMaxSemAjustePV)/jMaxSem)+(moyenneJourSemPV>0?jourExtraPV/moyenneJourSemPV:0);
+            // 12/09/2026 (Sophie) : penaliteSemaineModifieeCg n'est volontairement PAS appliquée au plan var.
+            // La règle veut qu'une absence sur un jour ajouté par déplacement donne le même résultat qu'une
+            // absence sur le jour d'origine ; or en plan var une absence dans une semaine ordinaire ne réduit
+            // pas l'acquisition tant que la semaine garde autant de jours possibles que le volume (plancher
+            // jMaxSemAjustePV ci-dessus). Appliquer la pénalité ici rendrait la semaine modifiée plus sévère
+            // qu'une semaine ordinaire. Question du plancher posée séparément à Sophie.
             // 20/08/2026 (Sophie) : même principe que calcContribSemaineFSMPV — plafonner au max de
             // la semaine (jMaxSem) avant division, par cohérence, même si joursActifs limite déjà
             // normalement le compte aux jours du volume actif.
@@ -9575,28 +9614,9 @@ function calcCongesContrat(c, dateRefOverride){
             const prorataPlafonnePV=estSemUniquementCongesFeriePV?Math.min(prorata,1):prorata;
             return {contrib:prorataPlafonnePV,contribArret:contribArretPV};
           };
-          // Semaine à cheval sur un avenant : les jours de "jours" relèvent-ils tous de la même
-          // version du contrat, ou certains d'une version différente (avenant démarrant en milieu de
-          // semaine) ? Comparer chaque jour à la version du premier suffit à détecter le cas.
-          const dJ0=new Date(jours[0].date.split('-')[0],parseInt(jours[0].date.split('-')[1])-1,parseInt(jours[0].date.split('-')[2]));
-          const versionRefPV=getVersionActive(c,dJ0);
-          const dateBasculeAvPV=jours.slice(1).find(j=>{
-            const dJx=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
-            return getVersionActive(c,dJx)!==versionRefPV;
-          })?.date;
-          if(!dateBasculeAvPV){
-            const rSeule=calcContribSemaineVarPV(jours);
-            totalSemaines+=rSeule.contrib;
-            totalSemainesArret+=rSeule.contribArret;
-          } else {
-            const joursAvantAvPV=jours.filter(j=>j.date<dateBasculeAvPV);
-            const joursApresAvPV=jours.filter(j=>j.date>=dateBasculeAvPV);
-            const rAvantPV=calcContribSemaineVarPV(joursAvantAvPV);
-            const rApresPV=calcContribSemaineVarPV(joursApresAvPV);
-            totalSemaines+=rAvantPV.contrib+rApresPV.contrib;
-            totalSemainesArret+=rAvantPV.contribArret+rApresPV.contribArret;
-          }
-        } else {
+          fnVarPVSem=calcContribSemaineVarPV;
+        }
+        {
           // Pour fixe/sem/min
           // 03/08/2026 (nouveau, confirmé Sophie) : même principe que pour var juste au-dessus — la
           // logique de la semaine est extraite dans une fonction locale prenant en paramètre le
@@ -9635,7 +9655,7 @@ function calcCongesContrat(c, dateRefOverride){
             let typeSemActif46=null;
             if(sourceSem.joursFixe) joursMaxSem=sourceSem.joursFixe.filter(j=>j).length||joursMax;
             else if(sourceSem.semTypes){
-              if(c.tc==='52'||sourceSem.tc==='52'){
+              if((sourceSem.tc||c.tc)==='52'){
                 const tousAgSem=[...(sourceSem.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
                 const semNumAcq=getSemISO(joursSub[0].date);
                 const semAnAcq=getSemAnnee(joursSub[0].date);
@@ -9676,8 +9696,9 @@ function calcCongesContrat(c, dateRefOverride){
             const absArretSub=joursSub.filter(j=>j.statut==='arret').length;
 
             let semaineCompleteCgMin=true;
-            if(c.th==='plan'&&c.planType==='min'){
-              const joursPossiblesIdxCgMin=Array.from({length:7},(_,i)=>i).filter(i=>c.joursMin&&c.joursMin[i]);
+            if(sourceSem.th==='plan'&&sourceSem.planType==='min'){
+              const joursMinSem=sourceSem.joursMin||c.joursMin;
+              const joursPossiblesIdxCgMin=Array.from({length:7},(_,i)=>i).filter(i=>joursMinSem&&joursMinSem[i]);
               semaineCompleteCgMin=joursPossiblesIdxCgMin.length>0&&joursPossiblesIdxCgMin.every(dow=>{
                 const jourMatch=joursSub.find(jj=>{
                   const dJ=new Date(jj.date.split('-')[0],parseInt(jj.date.split('-')[1])-1,parseInt(jj.date.split('-')[2]));
@@ -9693,7 +9714,7 @@ function calcCongesContrat(c, dateRefOverride){
               let statutJ=j.statut||getStatutPrevu(c,j);
               if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) statutJ='fractionnement';
               const cocheCgMin=!!(c.planning&&c.planning[j.date]&&c.planning[j.date].coche);
-              const gateMinOk=!(c.th==='plan'&&c.planType==='min')||semaineCompleteCgMin||cocheCgMin;
+              const gateMinOk=!(sourceSem.th==='plan'&&sourceSem.planType==='min')||semaineCompleteCgMin||cocheCgMin;
               const [jpy,jpm,jpd]=j.date.split('-').map(Number);
               const sourceCgProt=getVersionActive(c,new Date(jpy,jpm-1,jpd));
               // 11/08/2026 (Sophie) : une "semaine employeur" (off) pour fixe/sem n'a jamais de statut
@@ -9711,11 +9732,30 @@ function calcCongesContrat(c, dateRefOverride){
                 const agCgProt=agendasCgProt.find(ag=>parseDateLoc(ag.dateDebut)<=dateJCgProt&&parseDateLoc(ag.dateFin)>=dateJCgProt);
                 return !!(agCgProt&&agCgProt.semaines&&agCgProt.semaines[j.semKey]==='off');
               })();
+              // 12/09/2026 (Sophie) : mois en modifications autorisées (fixe / sem) — la semaine compte
+              // d'après le contrat, pas d'après le planning modifié. Un jour du contrat décoché, donc
+              // déplacé ailleurs, compte comme présent dans sa semaine, qui n'est pas réduite ; la semaine
+              // qui reçoit le jour est ramenée à une semaine par le plafond. Mais une absence qui réduirait
+              // la semaine sur un jour du contrat la réduit aussi sur un jour ajouté : ce jour remplaçait
+              // un jour du contrat (ex. mardi déplacé au mercredi suivant, mercredi en absence non
+              // rémunérée → même résultat qu'une absence le mardi). Les jours du contrat sont lus en
+              // ignorant le planning (getHeuresPrevues, 4e paramètre) ; les absences, elles, sont retirées
+              // par penaliteSemaineModifieeCg, commune aux trois formules.
+              if((sourceSem.th==='fixe'||sourceSem.th==='sem')&&c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[j.date.slice(0,7)]&&c.planning&&c.planning[j.date]){
+                const pdModifJ=c.planning[j.date];
+                const hContratJ=getHeuresPrevues(c,new Date(jpy,jpm-1,jpd),null,true);
+                const estJourContratJ=!!(hContratJ&&hContratJ.debut&&hContratJ.fin&&!hContratJ.isOff);
+                if(estJourContratJ&&pdModifJ.coche===false&&statutJ==='non-prevu'){ joursNormaux++; return; }
+              }
               if(estSemaineOffCg&&!j.heureDebReel&&statutJ!=='travaille'&&statutJ!=='reprise'){
                 // rien à compter cette semaine-là (sauf un jour réellement travaillé malgré tout,
                 // qui garde son heureDebReel et passe par les branches normales ci-dessous)
               } else if(['travaille','reprise'].includes(statutJ)){
-                joursTravailleFSM++;
+                // 12/09/2026 (Sophie) : un jour travaillé en plus du contrat ne compte plus pour
+                // l'acquisition (Code du travail L3141-3 et L3141-4, CCN 48-1-1-2 : 2,5 jours par mois de
+                // travail effectif, quelle que soit la durée hebdomadaire). Il reste payé, donc compté dans
+                // le dixième. Il ne vient jamais combler une absence (règle Sophie). joursTravailleFSM reste
+                // donc à 0.
               } else if(['prevu','abs-partielle','abs-rem'].includes(statutJ)){
                 joursNormaux++;
               } else if(statutJ==='fractionnement'){
@@ -9726,7 +9766,7 @@ function calcCongesContrat(c, dateRefOverride){
                 // pose, s'il n'est pas prévu, ne compte pas — comme un non-prévu ordinaire.
                 if(getStatutPrevu(c,j)==='prevu') joursNormaux++;
               } else if(statutJ==='non-prevu'&&j.heureDebReel){
-                joursTravailleFSM++;
+                // 12/09/2026 (Sophie) : idem, jour non prévu travaillé — plus compté pour l'acquisition.
               } else if(['conges-acq','conges-anticipe'].includes(statutJ)){
                 const [jcy,jcm,jcd]=j.date.split('-').map(Number);
                 const sourceCg=getVersionActive(c,new Date(jcy,jcm-1,jcd));
@@ -9784,7 +9824,7 @@ function calcCongesContrat(c, dateRefOverride){
             // réellement, parce que joursMaxSemAjusteMin (déclarée avec let à l'intérieur du bloc)
             // sortait de portée avant d'atteindre ce log, sans lien avec le calcul réel.
             let joursMaxSemAjusteMinLog='(n/a)';
-            if(c.th==='plan'&&c.planType==='min'&&joursConges16===0&&absArretSub===0&&!estSemaineOffMin){
+            if(sourceSem.th==='plan'&&sourceSem.planType==='min'&&joursConges16===0&&absArretSub===0&&!estSemaineOffMin){
               const sourceMinPl=getVersionActive(c,new Date(joursSub[0].date.split('-')[0],parseInt(joursSub[0].date.split('-')[1])-1,parseInt(joursSub[0].date.split('-')[2])));
               const joursPatternMinPl=sourceMinPl.joursMin||c.joursMin;
               const moisTouchesMinG=[...new Set(joursSub.map(j=>j.date.slice(0,7)))];
@@ -9906,9 +9946,12 @@ function calcCongesContrat(c, dateRefOverride){
               contributionNormale=(Math.min(baseCompte,joursMaxSem)/joursMaxSem)+(joursMaxSem>0?jourExtraFM/joursMaxSem:0);
               contributionConges=0;
             }
+            const penaliteModifFSM=penaliteSemaineModifieeCg(c,joursSub,joursMaxSem);
             const contributionArret=absArretSub*(0.8)/joursMaxSem;
-            const prorata=Math.max(0,contributionNormale+contributionConges);
-            const estSemUniquementCongesFerie=(c.th==='sem'||(c.th==='plan'&&c.planType==='min'))&&
+            const prorata=penaliteModifFSM>0
+              ?Math.max(0,Math.min(1,contributionNormale+contributionConges)-penaliteModifFSM/joursMaxSem)
+              :Math.max(0,contributionNormale+contributionConges);
+            const estSemUniquementCongesFerie=(sourceSem.th==='sem'||(sourceSem.th==='plan'&&sourceSem.planType==='min'))&&
               joursSub.every(jCap=>{
                 const stCap=jCap.statut||getStatutPrevu(c,jCap);
                 return ['conges-acq','conges-anticipe','conges-non','conges-am','ferie','ferie-non','repos'].includes(stCap);
@@ -9918,57 +9961,45 @@ function calcCongesContrat(c, dateRefOverride){
             return {contrib:prorataPlafonne,contribArret:contributionArret};
           };
 
-          // 17/08/2026 (Sophie) : diagnostic temporaire — semaine à cheval sur 2 mois calendaires
-          // (ex. 25 nov → 1er déc), pour voir l'ordre RÉEL des jours tels que poussés dans le tableau
-          // (peut dépendre de l'ordre de parcours des mois) et le résultat du découpage éventuel.
-          if(window.DEBUG_CGAM){
-            const moisTouchesCheval=[...new Set(jours.map(j=>j.date.slice(0,7)))];
-            if(moisTouchesCheval.length>1){
-              console.log('[CGAM-semaineCheval]','jours bruts (ordre réel du tableau):',jours.map(j=>j.date+':'+j.statut).join(', '));
-            }
-          }
-          const dJ0FSM=new Date(jours[0].date.split('-')[0],parseInt(jours[0].date.split('-')[1])-1,parseInt(jours[0].date.split('-')[2]));
-          const versionRefFSM=getVersionActive(c,dJ0FSM);
-          const dateBasculeAvFSM=jours.slice(1).find(j=>{
-            const dJx=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
-            return getVersionActive(c,dJx)!==versionRefFSM;
-          })?.date;
-          if(window.DEBUG_CGAM){
-            const moisTouchesCheval2=[...new Set(jours.map(j=>j.date.slice(0,7)))];
-            if(moisTouchesCheval2.length>1){
-              console.log('[CGAM-semaineCheval]','dateBasculeAvFSM:',dateBasculeAvFSM||'(aucune, pas de découpage)');
-            }
-          }
-          let rFSM;
-          if(!dateBasculeAvFSM){
-            rFSM=calcContribSemaineFSMPV(jours);
-          } else {
-            const joursAvantAvFSM=jours.filter(j=>j.date<dateBasculeAvFSM);
-            const joursApresAvFSM=jours.filter(j=>j.date>=dateBasculeAvFSM);
-            const rAvantFSM=calcContribSemaineFSMPV(joursAvantAvFSM);
-            const rApresFSM=calcContribSemaineFSMPV(joursApresAvFSM);
-            rFSM={contrib:rAvantFSM.contrib+rApresFSM.contrib,contribArret:rAvantFSM.contribArret+rApresFSM.contribArret};
-            if(window.DEBUG_CGAM){
-              console.log('[CGAM-splitAvenant]','semaine',jours[0]?.date,'→',jours[jours.length-1]?.date,'| bascule:',dateBasculeAvFSM);
-              console.log('[CGAM-splitAvenant]','AVANT:',joursAvantAvFSM.map(j=>j.date+':'+j.statut).join(', '),'| contrib:',rAvantFSM.contrib,'| contribArret:',rAvantFSM.contribArret);
-              console.log('[CGAM-splitAvenant]','APRES:',joursApresAvFSM.map(j=>j.date+':'+j.statut).join(', '),'| contrib:',rApresFSM.contrib,'| contribArret:',rApresFSM.contribArret);
-              console.log('[CGAM-splitAvenant]','TOTAL semaine (somme des 2):',rFSM.contrib,'/',rFSM.contribArret);
-            }
-          }
-          if(rFSM.contrib>0||rFSM.contribArret>0){
-            totalSemaines+=rFSM.contrib;
-            totalSemainesArret+=rFSM.contribArret;
+          // 12/09/2026 (Sophie) : la semaine est découpée en morceaux de même version du contrat, et
+          // chaque morceau est calculé avec la formule de SA version (plan var, ou fixe/sem/min). Les
+          // versions sont reconnues par leur date d'avenant : getVersionActive rend un objet neuf à
+          // chaque appel pour un avenant, si bien que l'ancien découpage, qui comparait les objets,
+          // coupait TOUTES les semaines passées sous un avenant après leur premier jour.
+          // Puis la semaine entière est plafonnée à une semaine (règle Sophie : une semaine ne compte
+          // jamais plus d'une semaine) — y compris une semaine d'avenant, dont les deux morceaux,
+          // calculés chacun avec son propre maximum, dépassent facilement 1 une fois additionnés.
+          const joursTriesSem=[...jours].sort((a,b)=>a.date<b.date?-1:(a.date>b.date?1:0));
+          const morceauxSem=[];
+          joursTriesSem.forEach(j=>{
+            const vJ=getVersionActive(c,parseDateLoc(j.date));
+            const cleV=(vJ&&vJ.dateAvenant)||'initial';
+            const der=morceauxSem[morceauxSem.length-1];
+            if(der&&der.cle===cleV) der.jours.push(j); else morceauxSem.push({v:vJ,cle:cleV,jours:[j]});
+          });
+          let contribSem=0, contribArretSem=0;
+          morceauxSem.forEach(m=>{
+            const r=(m.v&&m.v.th==='plan'&&m.v.planType==='var')?fnVarPVSem(m.jours):calcContribSemaineFSMPV(m.jours);
+            contribSem+=r.contrib;
+            contribArretSem+=r.contribArret;
+          });
+          contribSem=Math.min(1,contribSem);
+          if(contribSem>0||contribArretSem>0){
+            totalSemaines+=contribSem;
+            totalSemainesArret+=contribArretSem;
           }
         }
       } else {
         // Semaine en cours : jours effectivement travaillés / joursMax
-        const joursTravailles=jours.filter(j=>j.heureDebReel).length;
+        // 12/09/2026 (Sophie) : les jours travaillés en plus du contrat ne comptent pas, et la semaine en
+        // cours ne compte jamais pour plus d'une semaine (plafond appliqué plus bas).
+        const joursTravailles=jours.filter(j=>j.heureDebReel&&j.statut!=='travaille'&&j.statut!=='reprise').length;
         const dateRepSemC=new Date(jours[0].date.split('-')[0],parseInt(jours[0].date.split('-')[1])-1,parseInt(jours[0].date.split('-')[2]));
         const sourceSemC=getVersionActive(c,dateRepSemC);
         let joursMaxSemC=joursMax;
         if(sourceSemC.joursFixe) joursMaxSemC=sourceSemC.joursFixe.filter(j=>j).length||joursMax;
         else if(sourceSemC.semTypes){
-          if(c.tc==='52'||sourceSemC.tc==='52'){
+          if((sourceSemC.tc||c.tc)==='52'){
             const tousAgSemC=[...(sourceSemC.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
             const semNumAcqC=getSemISO(jours[0].date);
             const semAnAcqC=getSemAnnee(jours[0].date);
@@ -9982,7 +10013,7 @@ function calcCongesContrat(c, dateRefOverride){
             joursMaxSemC=sourceSemC.semTypes[0].jours.filter(j=>j).length||joursMax;
           }
         }
-        totalSemaines+=joursTravailles/joursMaxSemC;
+        totalSemaines+=Math.min(1,joursTravailles/joursMaxSemC);
         if(window.DEBUG_CGAM)console.log('[CGAM-semaineEnCours]',c.nom||c.prenom||c.id,'|',jours[0]?.date,'-',jours[jours.length-1]?.date,'| joursTravailles (heureDebReel):',joursTravailles,'| joursMaxSemC:',joursMaxSemC,'| contrib:',joursTravailles/joursMaxSemC,'| statuts:',jours.map(jj=>jj.date+':'+(jj.statut||getStatutPrevu(c,jj))+(jj.heureDebReel?'[reel]':'')).join(', '));
       }
     });
