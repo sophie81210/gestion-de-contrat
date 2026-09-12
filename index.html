@@ -9583,7 +9583,28 @@ function calcCongesContrat(c, dateRefOverride){
             // raison que pour min (joursMaxSemAjusteMin plus haut) : sans ce garde-fou, ce plancher
             // redonnerait crédit pour le motif hebdomadaire complet dès qu'un jour est travaillé cette
             // semaine-là, au lieu du seul jour travaillé (via joursTravaillePV, compté séparément).
-            const compteEffectifPV=(joursConges16PV===0&&absArretSub===0&&jMaxSemAjustePV>0&&typeSemPV!=='off')?Math.max(jMaxSemAjustePV,joursNormauxPV):joursNormauxPV;
+            let compteEffectifPV=(joursConges16PV===0&&absArretSub===0&&jMaxSemAjustePV>0&&typeSemPV!=='off')?Math.max(jMaxSemAjustePV,joursNormauxPV):joursNormauxPV;
+            // 12/09/2026 (Sophie) : plan var — « la semaine vaut 1 − absence » (règle Sophie). Le plancher
+            // ci-dessus retirait bien les jours d'absence non payée des jours POSSIBLES, mais tant qu'il en
+            // restait autant que le volume (4 jours possibles pour un volume de 3), il restait plein : l'absence
+            // ne coûtait rien. Les congés non acquis, eux, n'étaient jamais retirés. Désormais :
+            //  - chaque absence non rémunérée (abs-non, abs-enfant) retire un jour de la garantie de la semaine,
+            //    et aucun jour prévu en plus (déplacement en modifications autorisées) ne peut la compenser ;
+            //  - les congés non acquis retirent les jours prévus qui manquent, jamais les jours travaillés : une
+            //    pose se décompte sur les jours ouvrables, parfois hors des jours qui auraient été travaillés
+            //    (ex. 52var-46sem-52fixe, semaine du 21/08/2023 : 3 jours non acquis et 3 jours travaillés sur
+            //    un volume de 3, la semaine reste pleine).
+            // Mesuré avant application : seule 52var-46sem-52fixe 2023/2024 bouge, 30,00 → 29,60 (30 arrondi).
+            {
+              const statutAbsPV=jj=>jj.statut||getStatutPrevu(c,jj);
+              const nbAbsNonPayeesPV=joursSub.filter(jj=>['abs-non','abs-enfant'].includes(statutAbsPV(jj))).length;
+              const nbCongesNonAcquisPV=joursSub.filter(jj=>statutAbsPV(jj)==='conges-non').length;
+              if((nbAbsNonPayeesPV>0||nbCongesNonAcquisPV>0)&&absArretSub===0&&typeSemPV!=='off'&&jMaxSemAjustePV+nbAbsNonPayeesPV>0){
+                const garantieSemPV=Math.min(jMaxSem,jMaxSemAjustePV+nbAbsNonPayeesPV);
+                const joursEffectifsPV=Math.max(0,Math.min(garantieSemPV,Math.max(joursNormauxPV+joursConges16PV,garantieSemPV-nbCongesNonAcquisPV))-nbAbsNonPayeesPV);
+                compteEffectifPV=joursEffectifsPV-joursConges16PV;
+              }
+            }
             const totalJAnnuelPV=(sourcePV.planVar||c.planVar||[]).reduce((t,v)=>t+(v.j||0)*(v.s||0),0);
             const nbSemAnnuelPV=(sourcePV.planVar||c.planVar||[]).reduce((t,v)=>t+(v.s||0),0);
             const moyenneJourSemPV=nbSemAnnuelPV>0?totalJAnnuelPV/nbSemAnnuelPV:jMaxSem;
@@ -9595,12 +9616,9 @@ function calcCongesContrat(c, dateRefOverride){
             const baseComptePV=compteEffectifPV+joursConges16PV;
             const jourExtraPV=Math.max(0,baseComptePV-jMaxSemAjustePV)+joursTravaillePV;
             let contribNormPV=(Math.min(baseComptePV,jMaxSemAjustePV)/jMaxSem)+(moyenneJourSemPV>0?jourExtraPV/moyenneJourSemPV:0);
-            // 12/09/2026 (Sophie) : penaliteSemaineModifieeCg n'est volontairement PAS appliquée au plan var.
-            // La règle veut qu'une absence sur un jour ajouté par déplacement donne le même résultat qu'une
-            // absence sur le jour d'origine ; or en plan var une absence dans une semaine ordinaire ne réduit
-            // pas l'acquisition tant que la semaine garde autant de jours possibles que le volume (plancher
-            // jMaxSemAjustePV ci-dessus). Appliquer la pénalité ici rendrait la semaine modifiée plus sévère
-            // qu'une semaine ordinaire. Question du plancher posée séparément à Sophie.
+            // 12/09/2026 (Sophie) : penaliteSemaineModifieeCg n'est pas appliquée au plan var : la règle
+            // « 1 − absence » (compteEffectifPV, plus haut) retire déjà chaque absence de la garantie de la
+            // semaine, sans qu'un jour reçu par déplacement puisse la compenser. La pénalité la compterait deux fois.
             // 20/08/2026 (Sophie) : même principe que calcContribSemaineFSMPV — plafonner au max de
             // la semaine (jMaxSem) avant division, par cohérence, même si joursActifs limite déjà
             // normalement le compte aux jours du volume actif.
@@ -9918,7 +9936,14 @@ function calcCongesContrat(c, dateRefOverride){
                 }
                 joursMaxSemAjusteMin=Math.max(0,Math.min(joursMaxSem,joursMaxSemAjusteMinBase)-reductionAbsNonMin);
               }
-              if(joursMaxSemAjusteMin>0) joursNormaux=Math.max(joursNormaux,joursMaxSemAjusteMin);
+              // 12/09/2026 (Sophie) : les congés non acquis retirent aussi les jours prévus qui manquent (même règle
+              // qu'en plan var). Le plancher ne retirait que les absences non rémunérées, si bien qu'une semaine
+              // de congés non acquis comptait pleine. Jamais les jours effectivement travaillés.
+              {
+                const nbCongesNonAcquisMin=joursSub.filter(jj=>(jj.statut||getStatutPrevu(c,jj))==='conges-non').length;
+                const plancherMinHorsCn=Math.max(0,joursMaxSemAjusteMin-nbCongesNonAcquisMin);
+                if(plancherMinHorsCn>0) joursNormaux=Math.max(joursNormaux,plancherMinHorsCn);
+              }
               joursMaxSemAjusteMinLog=joursMaxSemAjusteMin;
             }
 
