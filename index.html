@@ -8317,7 +8317,7 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
   }
 
   if(parseFloat(recap.indemCongeMois||0)>0){
-    html+=ligneG('Indemnité congés payés'+pastilleAide('paiement-conges'), recap.indemCongeMois.toFixed(2)+' €', true, 'var(--m)', true);
+    html+=ligneG('Indemnité congés payés'+pastilleAide(recap.indemCongeAvenant?'conge-avenant':'paiement-conges'), recap.indemCongeMois.toFixed(2)+' €', true, 'var(--m)', true); // 13/09/2026 : notice du changement de contrat quand le versement en découle
     const _txNetIndCg=parseFloat(recap.txNet||0);
     const _hIndCg=_txNetIndCg>0?parseFloat(recap.indemCongeMois||0)/_txNetIndCg:0;
     html+='<tr><td colspan="2" style="padding:2px 4px 6px;font-size:11px;font-style:italic;color:var(--tx2)">soit '+recap.indemCongeNbJours+' jours et '+_hIndCg.toFixed(2)+' h de congés payés</td></tr>';
@@ -8484,7 +8484,7 @@ function buildRecapCumul(r1,r2,solde,c){
   let html='';
   const montantCongesPayesMoisC=parseFloat(r1.indemCongeMois||0)+parseFloat(r2.indemCongeMois||0);
   const nbCongesPayesMoisC=parseFloat(r1.indemCongeNbJours||0)+parseFloat(r2.indemCongeNbJours||0);
-  if(montantCongesPayesMoisC>0) html+=ligneG('Jours de congés payés', nbCongesPayesMoisC+' j', true);
+  if(montantCongesPayesMoisC>0) html+=ligneG('Jours de congés payés'+((r1.indemCongeAvenant||r2.indemCongeAvenant)?pastilleAide('conge-avenant'):''), nbCongesPayesMoisC+' j', true);
   html+=ligneG('Jours d\'activité', nbJoursTrav.toFixed(1)+' j', true);
   html+=ligneG('Heures normales', hNormales.toFixed(2)+' h', true);
   if(hComp>0||hSup>0) html+=ligneG('Taux horaire net', (parseFloat(r1.txNet||r2.txNet||0)).toFixed(2)+' \u20AC', true);
@@ -13878,6 +13878,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // Indemnité de congés payés (contrats 46 sem ou moins)
   let indemCongeMois=0;
   const indemCongeParAnnee={}; // 13/09/2026 : { année de droits : montant versé sur cette feuille }
+  // 13/09/2026 (Sophie) : vrai quand le versement de cette feuille tient à un changement de contrat 46 / 52
+  // (règlement à l'avenant, solde après un avenant 52 → 46, déduction de ce que le 52 a payé) — la ligne
+  // de la feuille de présence porte alors la pastille de la notice « conge-avenant ».
+  let indemCongeAvenant=false;
   let indemCongeNbJours=0;
   let indemFractionnementMois=0;
   let indemFractionnementNbJours=0;
@@ -13906,6 +13910,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const finMoisAffCg=dateToStr(new Date(fiche.annee,fiche.mois+1,1));
     const deja52Cg=ind?montantCongesVersesSous52(c,anneeAcq,dateAv5246||finMoisAffCg):{montant:0,jours:0};
     if(ind&&dateAv5246&&deja52Cg.jours>=(ind.acquis||0)) ind=null;
+    if(ind&&(dateAv5246||deja52Cg.jours>0)) indemCongeAvenant=true;
     if(ind){
       if(sourceActif.dateCg==='chaque'){
         // Compter les jours acquis déjà payés dans les fiches précédentes validées.
@@ -14094,6 +14099,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       indemCongeMois=parseFloat((indemCongeMois+m1Av).toFixed(2));
       indemCongeNbJours+=jours1Av.length;
       indemCongeParAnnee[anneeEnCours4652]=parseFloat(((indemCongeParAnnee[anneeEnCours4652]||0)+m1Av).toFixed(2));
+      indemCongeAvenant=true;
     }
     if(amAv4652!==5){
       const anneePrec4652=anneeEnCours4652-1;
@@ -14117,6 +14123,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           indemCongeMois=parseFloat((indemCongeMois+m2Av).toFixed(2));
           indemCongeNbJours+=impayes2Av.length;
           indemCongeParAnnee[anneePrec4652]=parseFloat(((indemCongeParAnnee[anneePrec4652]||0)+m2Av).toFixed(2));
+          indemCongeAvenant=true;
         }
       }
     }
@@ -14272,7 +14279,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     indemEntretienTotal:indemEntretienTotal.toFixed(2),
     indemRepasTotal:indemRepasTotal.toFixed(2),
     indemKmTotal:indemKmTotal.toFixed(2),
-    indemCongeMois, indemCongeNbJours, indemCongeParAnnee, indemCongeReportMai, indemFractionnementMois, indemFractionnementNbJours,
+    indemCongeMois, indemCongeNbJours, indemCongeParAnnee, indemCongeAvenant, indemCongeReportMai, indemFractionnementMois, indemFractionnementNbJours,
     montantCongesPayesMois, nbCongesPayesMois, montantCongesPayesAcqSeul,
     montantCongesNonAcquis, nbCongesNonAcquis,
     regul52Fiche,
@@ -19211,10 +19218,10 @@ function buildCgAcquisEncarts(c, anneeAcq){
         const restePar52Cg=!!(dateAv4652Cg&&!cg.soldeVerse46&&((cg.restants||0)>0||joursCongesAnneeCg(c,anneeAcq).some(j=>j.date>=dateAv4652Cg)));
         if(!(dS.montant>0)&&!(verse46Cg>0)&&!restePar52Cg) return '';
         let lignesCg='';
-        if(dS.montant>0) lignesCg+=`<div style="${ls2}"><span>Déjà versé en maintien de salaire (${dS.jours} j sous contrat sur 52 semaines)</span><span style="${vs2}">− ${dS.montant.toFixed(2)} €</span></div>`;
+        if(dS.montant>0) lignesCg+=`<div style="${ls2}"><span>Déjà versé en maintien de salaire<br>(${dS.jours} j sous contrat sur 52 semaines)</span><span style="${vs2}">− ${dS.montant.toFixed(2)} €</span></div>`;
         if(verse46Cg>0) lignesCg+=`<div style="${ls2}"><span>Déjà versé sur les feuilles de présence</span><span style="${vs2}">− ${verse46Cg.toFixed(2)} €</span></div>`;
         if(restePar52Cg){
-          lignesCg+=`<div style="${ls2};border-bottom:none;color:var(--vt)"><span>Jours restants à partir du ${dateISOversTexte(dateAv4652Cg)} : payés par la mensualisation du contrat sur 52 semaines</span><span></span></div>`;
+          lignesCg+=`<div style="${ls2};border-bottom:none;color:var(--vt)"><span>Jours restants à partir du ${dateISOversTexte(dateAv4652Cg)} : payés par la mensualisation du contrat sur 52 semaines${pastilleAide('conge-avenant')}</span><span></span></div>`;
         } else {
           const reste=Math.max(0,indemnite.meilleurNet-dS.montant-verse46Cg);
           lignesCg+=`<div style="${ls2};border-bottom:none;color:var(--vt)"><span>Restant à verser</span><span style="${vs2};color:var(--vt)">${reste.toFixed(2)} €</span></div>`;
@@ -23099,6 +23106,7 @@ const AIDE_CONFIG = {
   'feuille-presence': { titre:'Feuille de présence', fichier:'feuille-presence.html' },
   'majorations': { titre:'Majorations', fichier:'majorations.html' },
   'paiement-conges': { titre:'Paiement des congés', fichier:'paiement-conges.html' },
+  'conge-avenant': { titre:'Congés et changement de contrat (46 / 52 semaines)', fichier:'conge-avenant.html' },
   'ICCP': { titre:'Indemnité compensatrice de congés payés', fichier:'ICCP.html' },
   'rupture': { titre:'Rupture', fichier:'rupture.html' },
   'planning': { titre:'Planning', fichier:'planning.html' },
