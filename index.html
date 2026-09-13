@@ -2596,6 +2596,109 @@ function moisSansAgendaRegul(c, moisKey){
   }
   return false;
 }
+// 13/09/2026 (Sophie) : heures dues d'un jour fixe/sem pour la régularisation — extrait tel quel de
+// hReelPortion (onglet Régularisation), pour servir aussi au calcul des heures sup dues (hSupDuReg).
+// Historique des règles (voir aussi calcRegulDiffEurosAuto et calcRegularisationDefinitive) :
+// - 03/09/2026 : congés acquis/anticipés/AM exclus seulement hors clause 52 (couverts par la
+//   mensualisation avec la clause — août 2021, 150 h attendues) ; congés non acquis toujours exclus
+//   (régul52, décembre 2021).
+// - 04/09/2026 : rien après la date de fin de contrat ; fractionnement (repos posé, couvert par la
+//   mensualisation) et absence non rémunérée d'un autre contrat en fractionnement recalculés ici.
+// - Férié prévu passé en « travaillé » (pour sa majoration) : heures retrouvées depuis le motif du contrat.
+// - 25/08/2026 : férié tombé dans une pose de congés = jour de congés ordinaire (getHJourCongesNonDeduit —
+//   25 décembre 2025, jour union, tombé à zéro en plan sem).
+// - Absence partielle : heures réelles saisies, jamais les prévues.
+function hDuJourRegFS(c, clause52, j){
+  const dateFinCHR=getDateFinContrat(c);
+  if(dateFinCHR&&j.date>dateToStr(dateFinCHR)) return 0;
+  let statut=j.statut||getStatutPrevu(c,j);
+  if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) statut='fractionnement';
+  else if(estJourAbsNonFractionnement(c,j)) statut='abs-non';
+  if(statut==='travaille'&&isFerie(j.date,c)){
+    const prevusFerieHR=getHeuresPrevues(c,new Date(j.date));
+    return (prevusFerieHR&&prevusFerieHR.debut&&prevusFerieHR.fin)?Math.max(0,(toMins(prevusFerieHR.fin)-toMins(prevusFerieHR.debut))/60):0;
+  }
+  if(statut==='ferie'&&!(j.heureDebPrev&&j.heureFinPrev)){
+    const hJourFerieReg=getHJourCongesNonDeduit(c,j.date,j.jourSemaine);
+    return hJourFerieReg>0?hJourFerieReg:0;
+  }
+  if(['conges-acq','conges-anticipe','conges-am','decompte-conges'].includes(statut)&&!clause52) return 0;
+  if(['conges-non','abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat','travaille','reprise','fractionnement'].includes(statut)) return 0;
+  if(statut==='abs-partielle') return (j.heureDebReel&&j.heureFinReel)?Math.max(0,(toMins(j.heureFinReel)-toMins(j.heureDebReel))/60):0;
+  if(j.heureDebPrev&&j.heureFinPrev) return Math.max(0,(toMins(j.heureFinPrev)-toMins(j.heureDebPrev))/60);
+  return 0;
+}
+// 13/09/2026 (Sophie) : heures dues d'un morceau de semaine [a, b] (même mois, même version du contrat) :
+// fixe/sem jour par jour (hDuJourRegFS) ; var/min comme calcHPrevuReg — sauf dans une semaine coupée par un
+// avenant, valorisée en jours possibles (volume ÷ jours possibles du motif, par jour possible du morceau,
+// hors absences et congés), la règle de l'avenant rappelée dans calcHPrevuReg : appelée sur un morceau
+// d'une semaine d'avenant, calcHPrevuReg y compte aussi les jours de l'autre côté de l'avenant
+// (52var-46sem-52fixe, semaine du 11 mars 2024 : 7,50 h au-delà de 45 h qui n'existaient pas).
+function hDuMorceauReg(c, clause52, a, b, semaineAvenant, fichesExtra){
+  if(!a||!b||a>b) return 0;
+  const src=getVersionActive(c,parseDateLoc(a))||c;
+  const estVM=src.th==='plan'&&(src.planType==='var'||src.planType==='min');
+  if(estVM&&!semaineAvenant) return calcHPrevuReg(c,clause52,a,b);
+  const dfcM=getDateFinContrat(c), finCM=dfcM?dateToStr(dfcM):null;
+  let h=0;
+  for(let d=parseDateLoc(a);dateToStr(d)<=b;d.setDate(d.getDate()+1)){
+    const ds=dateToStr(d), kM=ds.slice(0,7);
+    const fM=(c.fiches&&c.fiches[kM])||(fichesExtra&&fichesExtra[kM]);
+    const jM=fM&&(fM.jours||[]).find(x=>x.date===ds);
+    if(!estVM){ if(jM) h+=hDuJourRegFS(c,clause52,jM); continue; }
+    if(finCM&&ds>finCM) continue;
+    const agM=(src.agendas||c.agendas||[]).find(x=>parseDateLoc(x.dateDebut)<=d&&parseDateLoc(x.dateFin)>=d);
+    const typeM=agM&&agM.semaines&&agM.semaines[getKeyAgenda(getSemISO(ds),getSemAnnee(ds))];
+    if(!typeM||typeM==='off') continue;
+    let volM=0, motifM=null;
+    if(src.planType==='var'){ const vM=(src.planVar||[]).find((x,i)=>(x.nom||'Volume '+(i+1))===typeM); if(vM){ volM=vM.h||0; motifM=vM.jours; } }
+    else { volM=src.hMin||0; motifM=src.joursMin; }
+    if(!volM||!motifM||!motifM[(d.getDay()+6)%7]) continue;
+    if(!clause52&&isJourCongeAM(ds)) continue;
+    if(jM&&(estJourAbsNonFractionnement(c,jM)||['abs-non','abs-enfant','arret','abs-am','ferie-non'].includes(jM.statut))) continue;
+    h+=volM/(motifM.filter(Boolean).length||1);
+  }
+  return h;
+}
+// 13/09/2026 (Sophie) : régularisation — heures au-delà de 45 h dans chaque semaine civile, sur les heures
+// DUES de la semaine entière (prévu moins absences : jamais les jours « travaillé » ni les heures en plus,
+// déjà payés dans le mois), attribuées à la période [debStr, finStr] au prorata de ses heures dues. Le
+// salaire dû y ajoute leur majoration ; le salaire mensualisé, la majoration des heures sup mensualisées
+// (majMensuRecapReg). Au bout de 12 mois conformes au contrat, les deux se compensent.
+function hSupDuReg(c, clause52, debStr, finStr, fichesExtra){
+  if(!debStr||!finStr||debStr>finStr) return 0;
+  const avDatesS=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant).map(av=>av.dateAvenant);
+  const dfcS=getDateFinContrat(c), ruptS=dfcS?dateToStr(dfcS):null;
+  const veilleS=x=>{ const v=parseDateLoc(x); v.setDate(v.getDate()-1); return dateToStr(v); };
+  let total=0;
+  const d0=parseDateLoc(debStr), fin=parseDateLoc(finStr);
+  const l=new Date(d0.getFullYear(),d0.getMonth(),d0.getDate()-((d0.getDay()+6)%7));
+  for(;l<=fin;l.setDate(l.getDate()+7)){
+    const lStr=dateToStr(l), dStr=dateToStr(new Date(l.getFullYear(),l.getMonth(),l.getDate()+6));
+    // Morceaux de la semaine : coupée à chaque avenant et au changement de mois — sauf la semaine de début
+    // de contrat ou de rupture, que calcHPrevuReg compte d'un seul tenant.
+    const avSem=avDatesS.filter(x=>x>lStr&&x<=dStr);
+    const limiteS=(c.dateDeb&&lStr<c.dateDeb&&dStr>=c.dateDeb)||(ruptS&&lStr<=ruptS&&dStr>ruptS);
+    const coupuresS=[...avSem];
+    if(!limiteS&&dStr.slice(0,7)+'-01'>lStr) coupuresS.push(dStr.slice(0,7)+'-01');
+    const bornesS=[lStr,...[...new Set(coupuresS)].sort()];
+    let hSem=0, hPart=0;
+    bornesS.forEach((a,i)=>{
+      const b=i<bornesS.length-1?veilleS(bornesS[i+1]):dStr;
+      hSem+=hDuMorceauReg(c,clause52,a,b,avSem.length>0,fichesExtra);
+      const pa=a<debStr?debStr:a, pb=b>finStr?finStr:b;
+      if(pa<=pb) hPart+=hDuMorceauReg(c,clause52,pa,pb,avSem.length>0,fichesExtra);
+    });
+    if(hSem>45&&hPart>0) total+=(hSem-45)*Math.min(1,hPart/hSem);
+  }
+  return total;
+}
+// 13/09/2026 (Sophie) : majoration des heures sup mensualisées versée sur la feuille (ou la partie de
+// feuille) — le salaire mensualisé de la régularisation la compte, comme le salaire dû compte celle des
+// heures au-delà de 45 h (hSupDuReg). Sa part retenue lors d'une absence est dans montantAbsences.
+function majMensuRecapReg(r){
+  return r?(parseFloat(r.hMensuMaj||0)*parseFloat(r.txNetExact||0)*(parseFloat(r.majSup||0)/100)):0;
+}
 function calcRegulOnglet(c, opts){
   // 07/09/2026 (Sophie) : opts.jusquA (mois AAAA-MM) prolonge le calcul au-delà du mois en cours,
   // pour le simulateur de rupture qui doit projeter jusqu'à une date de fin future. Sans lui, tout se
@@ -2944,8 +3047,8 @@ function calcRegulOnglet(c, opts){
               // 46→46 : cumuler avant + après avenant (zone régularisable = tout le mois, rien ne se perd)
               const recapAvant=ficheMois?calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant'):null;
               const recapApres=ficheMois?calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres'):null;
-              const mensuAvant=recapAvant?parseFloat(((recapAvant.hMensu||0)*(recapAvant.txNetExact||0)-(recapAvant.montantAbsences||0)).toFixed(2)):0;
-              const mensuApres=recapApres?parseFloat(((recapApres.hMensu||0)*(recapApres.txNetExact||0)-(recapApres.montantAbsences||0)).toFixed(2)):0;
+              const mensuAvant=recapAvant?parseFloat(((recapAvant.hMensu||0)*(recapAvant.txNetExact||0)+majMensuRecapReg(recapAvant)-(recapAvant.montantAbsences||0)).toFixed(2)):0;
+              const mensuApres=recapApres?parseFloat(((recapApres.hMensu||0)*(recapApres.txNetExact||0)+majMensuRecapReg(recapApres)-(recapApres.montantAbsences||0)).toFixed(2)):0;
               montantMensu=parseFloat((mensuAvant+mensuApres).toFixed(2));
               txNetMois=parseFloat(recapApres?.txNetExact||0);
               debutMoisRegul=debutMoisComplet; finMoisRegul=finMoisComplet;
@@ -2959,19 +3062,22 @@ function calcRegulOnglet(c, opts){
               const debApresSD=maxD(avenantDuMoisReg.dateAvenant,portionDebSD), finApresSD=minD(finMoisComplet,portionFinSD);
               const hReelAvant=debAvantSD<=finAvantSD?hReelPortion(debAvantSD,finAvantSD):0;
               const hReelApres=debApresSD<=finApresSD?hReelPortion(debApresSD,finApresSD):0;
-              montantPrevuOverride=parseFloat((hReelAvant*(recapAvant?.txNetExact||0)+hReelApres*(recapApres?.txNetExact||0)).toFixed(2));
+              // 13/09/2026 (Sophie) : + majoration des heures au-delà de 45 h dues (hSupDuReg), chaque moitié à son taux
+              const hSupAvantSD=debAvantSD<=finAvantSD?hSupDuReg(c,cycle.clause52,debAvantSD,finAvantSD,fichesProjeteesReg):0;
+              const hSupApresSD=debApresSD<=finApresSD?hSupDuReg(c,cycle.clause52,debApresSD,finApresSD,fichesProjeteesReg):0;
+              montantPrevuOverride=parseFloat(((hReelAvant+hSupAvantSD*((recapAvant?.majSup||0)/100))*(recapAvant?.txNetExact||0)+(hReelApres+hSupApresSD*((recapApres?.majSup||0)/100))*(recapApres?.txNetExact||0)).toFixed(2));
             } else if(avenantDuMoisReg&&estPassageVers46Reg){
               // occ→46 ou 52→46 : partie après avenant reste régularisable, avant avenant définitivement perdu
               const recapMois=ficheMois?calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres'):null;
               txNetMois=parseFloat(recapMois?.txNetExact||0);
-              montantMensu=parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)-(recapMois?.montantAbsences||0)).toFixed(2));
+              montantMensu=parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)+majMensuRecapReg(recapMois)-(recapMois?.montantAbsences||0)).toFixed(2));
               debutMoisRegul=avenantDuMoisReg.dateAvenant; finMoisRegul=finMoisComplet;
               zoneDeb=avenantDuMoisReg.dateAvenant; zoneFin=finMoisComplet;
             } else if(avenantDuMoisReg){
               // 46→52 : partie avant avenant reste régularisable, après avenant définitivement perdu
               const recapMois=ficheMois?calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant'):null;
               txNetMois=parseFloat(recapMois?.txNetExact||0);
-              montantMensu=parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)-(recapMois?.montantAbsences||0)).toFixed(2));
+              montantMensu=parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)+majMensuRecapReg(recapMois)-(recapMois?.montantAbsences||0)).toFixed(2));
               debutMoisRegul=debutMoisComplet; finMoisRegul=veilleAvenantReg||finMoisComplet;
               zoneDeb=debutMoisComplet; zoneFin=veilleAvenantReg||finMoisComplet;
             } else if(portionAnniv==='avant'||portionAnniv==='apres'){
@@ -2985,7 +3091,9 @@ function calcRegulOnglet(c, opts){
               const hMensuRegComplet=calcHMensuReg(debutMoisComplet,finMoisComplet,hPrevuComplet,false);
               const recapMoisComplet=ficheMois?calcRecapFiche(c,ficheMois):null;
               const txNetMoisComplet=parseFloat(recapMoisComplet?.txNetExact||0);
-              const montantMensuComplet=Math.max(0,hMensuRegComplet*txNetMoisComplet-((recapMoisComplet?.montantAbsences||0)-(recapMoisComplet?.montantAbsMaj||0)));
+              // 13/09/2026 (Sophie) : majoration des heures sup mensualisées comprise, des deux côtés (voir hSupDuReg) —
+              // montantAbsences entier retiré, sa part de majoration comprise.
+              const montantMensuComplet=Math.max(0,hMensuRegComplet*txNetMoisComplet+majMensuRecapReg(recapMoisComplet)-(recapMoisComplet?.montantAbsences||0));
               const hTheoPortion=calcHTheoReg(debutMois,finMois);
               const ratioPortion=hTheoComplet>0?(hTheoPortion/hTheoComplet):0;
               montantMensu=parseFloat((montantMensuComplet*ratioPortion).toFixed(2));
@@ -2996,7 +3104,8 @@ function calcRegulOnglet(c, opts){
               // Mois normal
               const recapMois=ficheMois?calcRecapFiche(c,ficheMois):null;
               txNetMois=parseFloat(recapMois?.txNetExact||0);
-              montantMensu=parseFloat(Math.max(0,hMensuReg*txNetMois-((recapMois?.montantAbsences||0)-(recapMois?.montantAbsMaj||0))).toFixed(2));
+              // 13/09/2026 (Sophie) : majoration des heures sup mensualisées comprise, des deux côtés (voir hSupDuReg)
+              montantMensu=parseFloat(Math.max(0,hMensuReg*txNetMois+majMensuRecapReg(recapMois)-(recapMois?.montantAbsences||0)).toFixed(2));
             }
             // 17/08/2026 (Sophie) : anniversaire ET avenant le même mois — la part encore
             // régularisable calculée ci-dessus (calcul avenant inchangé) se répartit en plus entre les
@@ -3036,73 +3145,18 @@ function calcRegulOnglet(c, opts){
               if(ficheMois&&estPlanMinVarQ){
                 hR=calcHPrevuReg(c, cycle.clause52, debQ, finQ);
               } else if(ficheMois){
-                // 03/09/2026 (Sophie) : statuts congés séparés des autres exclusions et exclus
-                // seulement si !clause52 — même principe déjà appliqué dans calcHPrevuReg, jamais
-                // répliqué ici jusqu'à présent. Pour une clause 52 sem, les congés sont couverts par
-                // la mensualisation et doivent compter normalement dans le "dû" (les horaires sont
-                // connus) — bug confirmé Sophie, exemple chiffré : août 2021, 150h attendues, 319,53€
-                // obtenus au lieu de ~599,96€ (deux semaines de congés complètement exclues).
-                // 03/09/2026 (Sophie) : conges-non retiré de cette liste — contrairement aux congés
-                // acquis/anticipé (couverts par la mensualisation), les jours non-acquis sont pris
-                // AU-DELÀ de ce qui est réellement accumulé et ne doivent jamais compter dans le
-                // salaire dû, clause52 ou non (bug confirmé Sophie : décembre 2021, régul52, jours
-                // non-acquis comptés à tort).
-                const statutsCongesHR=['conges-acq','conges-anticipe','conges-am','decompte-conges'];
-                const statutsExclus=['conges-non','abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat','travaille','reprise','fractionnement'];
+                // 13/09/2026 (Sophie) : règles du jour extraites telles quelles dans hDuJourRegFS (avec leurs notes
+                // datées), partagées avec le calcul des heures sup dues (hSupDuReg).
                 ficheMois.jours.forEach(j=>{
                   if(j.date<debQ||j.date>finQ) return;
-                  // 04/09/2026 (Sophie, test sur un contrat réel) : jamais de vérification de la date de fin de
-                  // contrat ici — le mois de rupture comptait les heures dues de tout le mois, y
-                  // compris après la rupture, alors que calcRecapFiche (mensualisé) les exclut déjà.
-                  // Même correctif que calcHPrevuReg, juste posé au-dessus pour fixe/sem.
-                  const dateFinCHR=getDateFinContrat(c);
-                  if(dateFinCHR&&j.date>dateToStr(dateFinCHR)) return;
-                  let statut=j.statut||getStatutPrevu(c,j);
-                  // 04/09/2026 (Sophie) : fractionnement (repos posé, couvert par la mensualisation,
-                  // jamais des heures réellement dues en plus) et déduction abs-non cross-contrat
-                  // (autre contrat en fractionnement ce jour, rien ici) — même principe que partout
-                  // ailleurs : recalcul local, jamais vu sans cette injection explicite.
-                  if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) statut='fractionnement';
-                  else if(estJourAbsNonFractionnement(c,j)) statut='abs-non';
-                  // Jour férié normalement prévu, passé en "travaillé" (statut nécessaire pour que la
-                  // majoration férié s'applique) : ce statut n'entretient jamais d'heures prévues et est
-                  // exclu ci-dessous — on retrouve ici les heures qui auraient été dues, recalculées
-                  // depuis le motif structurel du contrat pour cette date.
-                  if(statut==='travaille'&&isFerie(j.date,c)){
-                    const prevusFerieHR=getHeuresPrevues(c,new Date(j.date));
-                    if(prevusFerieHR&&prevusFerieHR.debut&&prevusFerieHR.fin){
-                      hR+=Math.max(0,(toMins(prevusFerieHR.fin)-toMins(prevusFerieHR.debut))/60);
-                    }
-                    return;
-                  }
-                  // 25/08/2026 (Sophie) : un férié tombant DANS une pose de congés (statut "ferie",
-                  // pas "travaille") reçoit le même traitement qu'un jour de congés ordinaire —
-                  // moyenne hebdo / jours union, s'il tombe sur un jour union (getHJourCongesNonDeduit,
-                  // déjà utilisée ailleurs pour ce même calcul). Même correctif que celui posé dans
-                  // calcRegulDiffEurosAuto (pour l'avenant 46→52) — bug identique, deux fonctions
-                  // séparées à corriger chacune (exemple chiffré Sophie : 25 décembre 2025, jeudi, jour
-                  // union, tombé à zéro depuis le passage en plan sem — heureDebPrev/heureFinPrev
-                  // restent null pour un jour férié en plan sem, contrairement au plan fixe).
-                  if(statut==='ferie'&&!(j.heureDebPrev&&j.heureFinPrev)){
-                    const hJourFerieReg=getHJourCongesNonDeduit(c,j.date,j.jourSemaine);
-                    if(hJourFerieReg>0) hR+=hJourFerieReg;
-                    return;
-                  }
-                  if(statutsCongesHR.includes(statut)&&!cycle.clause52) return;
-                  if(statutsExclus.includes(statut)) return;
-                  if(statut==='abs-partielle'){
-                    // Heures réelles saisies (pas les prévues)
-                    if(j.heureDebReel&&j.heureFinReel){
-                      hR+=Math.max(0,(toMins(j.heureFinReel)-toMins(j.heureDebReel))/60);
-                    }
-                  } else if(j.heureDebPrev&&j.heureFinPrev){
-                    hR+=Math.max(0,(toMins(j.heureFinPrev)-toMins(j.heureDebPrev))/60);
-                  }
+                  hR+=hDuJourRegFS(c,cycle.clause52,j);
                 });
               }
               return hR;
             }
-            const montantPrevu=montantPrevuOverride!==null?montantPrevuOverride:parseFloat((hReelPortion(debutMoisRegul,finMoisRegul)*txNetMois).toFixed(2));
+            // 13/09/2026 (Sophie) : salaire dû = heures dues + majoration de celles au-delà de 45 h par semaine (hSupDuReg)
+            const majSupRegP=((getVersionActive(c,parseDateLoc(debutMoisRegul<=finMoisRegul?debutMoisRegul:debutMoisComplet))||{}).majSup||0)/100;
+            const montantPrevu=montantPrevuOverride!==null?montantPrevuOverride:parseFloat(((hReelPortion(debutMoisRegul,finMoisRegul)+hSupDuReg(c,cycle.clause52,debutMoisRegul,finMoisRegul,fichesProjeteesReg)*majSupRegP)*txNetMois).toFixed(2));
             if(window.DEBUG_REGUL_COMPARE)console.log('[TEMP-fnB]',key,'| montantMensu:',montantMensu,'| montantPrevu:',montantPrevu,'| txNetMois:',txNetMois,'| debutMoisRegul/finMoisRegul:',debutMoisRegul,finMoisRegul);
             totMensu+=montantMensu; totPrevu+=montantPrevu;
             cycleTotMensu+=montantMensu; cycleTotPrevu+=montantPrevu;
@@ -4035,22 +4089,22 @@ function calcRegulDiffEurosAuto(c, moisMaxForce){
     if(avenantDuMoisReg&&estPassage46vers46Reg){
       const rA=calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant');
       const rP=calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres');
-      montantMensu=parseFloat((((rA.hMensu||0)*(rA.txNetExact||0)-(rA.montantAbsences||0))+((rP.hMensu||0)*(rP.txNetExact||0)-(rP.montantAbsences||0))).toFixed(2));
+      montantMensu=parseFloat((((rA.hMensu||0)*(rA.txNetExact||0)+majMensuRecapReg(rA)-(rA.montantAbsences||0))+((rP.hMensu||0)*(rP.txNetExact||0)+majMensuRecapReg(rP)-(rP.montantAbsences||0))).toFixed(2));
       txNetMois=parseFloat(rP?.txNetExact||0);
     } else if(avenantDuMoisReg&&estPassageVers46Reg){
       const r=calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres');
       txNetMois=parseFloat(r?.txNetExact||0);
-      montantMensu=parseFloat(((r?.hMensu||0)*(r?.txNetExact||0)-(r?.montantAbsences||0)).toFixed(2));
+      montantMensu=parseFloat(((r?.hMensu||0)*(r?.txNetExact||0)+majMensuRecapReg(r)-(r?.montantAbsences||0)).toFixed(2));
       debutMoisRegul=avenantDuMoisReg.dateAvenant;
     } else if(avenantDuMoisReg){
       const r=calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant');
       txNetMois=parseFloat(r?.txNetExact||0);
-      montantMensu=parseFloat(((r?.hMensu||0)*(r?.txNetExact||0)-(r?.montantAbsences||0)).toFixed(2));
+      montantMensu=parseFloat(((r?.hMensu||0)*(r?.txNetExact||0)+majMensuRecapReg(r)-(r?.montantAbsences||0)).toFixed(2));
       finMoisRegul=veilleAvenantReg||finMois;
     } else {
       const r=calcRecapFiche(c,ficheMois);
       txNetMois=parseFloat(r?.txNetExact||0);
-      montantMensu=parseFloat(Math.max(0,(r?.hMensu||0)*txNetMois-(r?.montantAbsences||0)).toFixed(2));
+      montantMensu=parseFloat(Math.max(0,(r?.hMensu||0)*txNetMois+majMensuRecapReg(r)-(r?.montantAbsences||0)).toFixed(2));
     }
     // 01/09/2026 (Sophie) : troisième implémentation séparée du même calcul ("Situation au [date]",
     // via c._regulDiffEuros) — divergeait de calcHPrevuReg (référence confirmée juste par Sophie sur
@@ -4106,7 +4160,8 @@ function calcRegulDiffEurosAuto(c, moisMaxForce){
       else if(j.heureDebPrev&&j.heureFinPrev)hReel+=Math.max(0,(toMins(j.heureFinPrev)-toMins(j.heureDebPrev))/60);
     });
     }
-    const montantPrevu=parseFloat((hReel*txNetMois).toFixed(2));
+    // 13/09/2026 (Sophie) : majoration des heures au-delà de 45 h, des deux côtés (voir hSupDuReg)
+    const montantPrevu=parseFloat(((hReel+hSupDuReg(c,false,debutMoisRegul,finMoisRegul)*((srcAgReg.majSup||0)/100))*txNetMois).toFixed(2));
     if(window.DEBUG_REGUL_COMPARE)console.log('[TEMP-fnA]',key,'| montantMensu:',montantMensu,'| montantPrevu:',montantPrevu,'| txNetMois:',txNetMois,'| hReel:',hReel);
     totGenMensu+=montantMensu;totGenPrevu+=montantPrevu;
   });
@@ -8345,7 +8400,7 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
   }
   // ── Section heures complémentaires et majorées ──
   const hasHComp=parseFloat(recap.hBaseComp||0)>0||parseFloat(recap.hMajFerie||0)>0||parseFloat(recap.hMajRepos||0)>0||parseFloat(recap.hMaj1erMai||0)>0;
-  const hasMaj=parseFloat(recap.hComp||0)>0||parseFloat(recap.hSup||0)>0||parseFloat(recap.montantMajComp||0)>0||parseFloat(recap.montantMajSup||0)>0||parseFloat(recap.montantMajFerieNP||0)>0||parseFloat(recap.montantMajFeriePrevu2||0)>0||parseFloat(recap.montantMajRepos||0)>0||parseFloat(recap.montantMaj1erMai||0)>0;
+  const hasMaj=parseFloat(recap.hComp||0)>0||parseFloat(recap.hSup||0)>0||parseFloat(recap.hSupDeplace||0)>0||parseFloat(recap.montantMajComp||0)>0||parseFloat(recap.montantMajSup||0)>0||parseFloat(recap.montantMajFerieNP||0)>0||parseFloat(recap.montantMajFeriePrevu2||0)>0||parseFloat(recap.montantMajRepos||0)>0||parseFloat(recap.montantMaj1erMai||0)>0;
   if(hasHComp||hasMaj){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:1px solid var(--mb)"></td></tr>';
     html+='<tr><td colspan="2" style="padding:4px 4px 2px;font-weight:700;color:var(--m);font-size:12px">Heures complémentaires et majorées</td></tr>';
@@ -8359,6 +8414,9 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
     html+='<tr><td colspan="2" style="padding:4px 4px 2px;font-weight:700;color:var(--m);font-size:12px">Majorations'+pastilleAide('majorations')+'</td></tr>';
     if(parseFloat(recap.hComp||0)>0) html+=ligneG('Majoration heures complémentaires', parseFloat(recap.hCompMaj||0).toFixed(2)+' h — '+(parseFloat(recap.montantMajComp||0)>0?'+'+parseFloat(recap.montantMajComp).toFixed(2)+' €':'0.00 €'));
     if(parseFloat(recap.hSup||0)>0) html+=ligneG('Majoration heures supplémentaires', parseFloat(recap.hSup).toFixed(2)+' h — '+(parseFloat(recap.montantMajSup||0)>0?'+'+parseFloat(recap.montantMajSup).toFixed(2)+' €':'0.00 €'));
+    // 13/09/2026 (Sophie) : heures au-delà de 45 h dues au planning modifié (jour déplacé) — base déjà dans
+    // la mensualisation, majoration seule
+    if(parseFloat(recap.hSupDeplace||0)>0) html+=ligneG('Majoration heures sup (planning modifié)', parseFloat(recap.hSupDeplace).toFixed(2)+' h — +'+parseFloat(recap.montantMajSupDeplace||0).toFixed(2)+' €');
     const totalMajFerie=(parseFloat(recap.montantMajFeriePrevu2||0)+parseFloat(recap.montantMajFerieNP||0));
     const totalHMajFerie=(parseFloat(recap.hMajFerie||0)+parseFloat(recap.hMajFeriePrevu||0));
     if(totalMajFerie>0) html+=ligneG('Majoration férié', totalHMajFerie.toFixed(2)+' h — +'+totalMajFerie.toFixed(2)+' €');
@@ -8456,15 +8514,15 @@ function buildRecapPajemploi(recap,c,regulExterne){
   const _txNetE2=parseFloat(recap.txNet||0);
   const _indemCongeMoisE2=parseFloat(recap.indemCongeMois||0);
   const _hCongesPayesDecl=_txNetE2>0?_indemCongeMoisE2/_txNetE2:0;
-  const _hNormDecl=recap.isOcc?parseFloat(recap.hBase||0):Math.max(0,(recap.hMensuNorm||recap.hMensu||0)-((recap.hAbsDeduit||0)-(recap.hAbsDeduitHS||0))+_hRegul46)+_hCongesPayesDecl;
+  const _hNormDecl=recap.isOcc?parseFloat(recap.hBase||0):Math.max(0,(recap.hMensuNorm||recap.hMensu||0)-((recap.hAbsDeduit||0)-(recap.hAbsDeduitHS||0))-parseFloat(recap.hSupDeplace||0)+_hRegul46)+_hCongesPayesDecl;
   html+=ligneG('Heures normales', _hNormDecl.toFixed(2)+' h', true, '', (_hasRegul&&_hRegul46>0)||_hCongesPayesDecl>0);
   if(_hasRegul&&_hRegul46>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--tx2)">dont '+_hRegul46.toFixed(2)+' h régularisées</td></tr>';
   if(_hCongesPayesDecl>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--tx2)">dont '+_hCongesPayesDecl.toFixed(2)+' h de congés payés</td></tr>';
-  if(parseFloat(recap.hComp||0)>0||parseFloat(recap.hSup||0)>0||parseFloat(recap.hMensuMaj||0)>0) html+=ligneG('Taux horaire net', recap.txNet+' \u20AC', true);
+  if(parseFloat(recap.hComp||0)>0||parseFloat(recap.hSup||0)>0||parseFloat(recap.hSupDeplace||0)>0||parseFloat(recap.hMensuMaj||0)>0) html+=ligneG('Taux horaire net', recap.txNet+' \u20AC', true);
   const _hCompDecl=parseFloat(recap.hComp||0);
   if(_hCompDecl>0) html+=ligneG('Heures complémentaires', _hCompDecl.toFixed(2)+' h', true);
   const _hAbsDeduitHS2=parseFloat(recap.hAbsDeduitHS||0);
-  const _hSupDecl=Math.max(0,_hMajE2-_hAbsDeduitHS2+parseFloat(recap.hSup||0));
+  const _hSupDecl=Math.max(0,_hMajE2-_hAbsDeduitHS2+parseFloat(recap.hSup||0)+parseFloat(recap.hSupDeplace||0));
   if(_hSupDecl>0) html+=ligneG('Heures supplémentaires', _hSupDecl.toFixed(2)+' h', true);
   const _regul52Diff=recap.regul52Fiche?parseFloat(recap.regul52Fiche.diff||0):0;
   html+=ligneG('Salaire net', (parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)+parseFloat(recap.indemFractionnementMois||0)+_diffEuros+_regul52Diff).toFixed(2)+' €', true, 'var(--m)', _hasRegul&&_diffEuros>0);
@@ -8498,10 +8556,14 @@ function buildRecapCumul(r1,r2,solde,c){
   // Pour le cumul : si r1 est occ utiliser nbJoursTravReels (filtré par période), sinon nbJoursTrav
   const nbJoursTrav=(r1.isOcc?parseFloat(r1.nbJoursTravReels||0):parseFloat(r1.nbJoursTrav||0))
     +parseFloat(r2.nbJoursTrav||0)+_cumulJoursRegul;
-  const hNormales=Math.max(0,(r1.hMensu||0)-(r1.hAbsDeduit||0))+Math.max(0,(r2.hMensu||0)-(r2.hAbsDeduit||0))+_cumulHRegul;
+  // 13/09/2026 (Sophie) : heures normales = mensualisation HORS heures sup mensualisées, comme la carte
+  // Pajemploi d'un mois ordinaire (buildRecapPajemploi) — hMensu les comptait une seconde fois, déjà
+  // présentes dans « Heures supplémentaires » juste en dessous. Même chose pour hSupDeplace.
+  const _hNormCumul=r=>Math.max(0,(r.hMensuNorm||r.hMensu||0)-((r.hAbsDeduit||0)-(r.hAbsDeduitHS||0))-parseFloat(r.hSupDeplace||0));
+  const hNormales=_hNormCumul(r1)+_hNormCumul(r2)+_cumulHRegul;
   const hComp=parseFloat(r1.hComp||0)+parseFloat(r2.hComp||0);
-  const _hSup1=Math.max(0,parseFloat(r1.hMensuMaj||0)-parseFloat(r1.hAbsDeduitHS||0)+parseFloat(r1.hSup||0));
-  const _hSup2=Math.max(0,parseFloat(r2.hMensuMaj||0)-parseFloat(r2.hAbsDeduitHS||0)+parseFloat(r2.hSup||0));
+  const _hSup1=Math.max(0,parseFloat(r1.hMensuMaj||0)-parseFloat(r1.hAbsDeduitHS||0)+parseFloat(r1.hSup||0)+parseFloat(r1.hSupDeplace||0));
+  const _hSup2=Math.max(0,parseFloat(r2.hMensuMaj||0)-parseFloat(r2.hAbsDeduitHS||0)+parseFloat(r2.hSup||0)+parseFloat(r2.hSupDeplace||0));
   const hSup=_hSup1+_hSup2;
   const _regul52DiffC=(r1.regul52Fiche?parseFloat(r1.regul52Fiche.diff||0):0)+(r2.regul52Fiche?parseFloat(r2.regul52Fiche.diff||0):0);
   const salaireNet=parseFloat(r1.salaireNet||0)+parseFloat(r2.salaireNet||0)+_cumulDiffEuros+_regul52DiffC;
@@ -8521,7 +8583,7 @@ function buildRecapCumul(r1,r2,solde,c){
   const montantBaseRepos=parseFloat(r1.montantBaseRepos||0)+parseFloat(r2.montantBaseRepos||0);
   const montantBase1erMai=parseFloat(r1.montantBase1erMai||0)+parseFloat(r2.montantBase1erMai||0);
   const montantMajComp=parseFloat(r1.montantMajComp||0)+parseFloat(r2.montantMajComp||0);
-  const montantMajSup=parseFloat(r1.montantMajSup||0)+parseFloat(r2.montantMajSup||0);
+  const montantMajSup=parseFloat(r1.montantMajSup||0)+parseFloat(r2.montantMajSup||0)+parseFloat(r1.montantMajSupDeplace||0)+parseFloat(r2.montantMajSupDeplace||0);
   const montantMajFerieNP=parseFloat(r1.montantMajFerieNP||0)+parseFloat(r2.montantMajFerieNP||0);
   const montantMajFeriePrevu2=parseFloat(r1.montantMajFeriePrevu2||0)+parseFloat(r2.montantMajFeriePrevu2||0);
   const montantMajRepos=parseFloat(r1.montantMajRepos||0)+parseFloat(r2.montantMajRepos||0);
@@ -11791,6 +11853,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const hParSemainePrecMois={};
   const hReelParSemainePrecMois={}; // purement réel, contrepartie de hParSemainePrecMois
   const hPrevSaisieParSemainePrecMois={}; // report du prévu du mois précédent (semaine à cheval)
+  // 13/09/2026 (Sophie) : part planifiée (prévu) des heures comptées pour le seuil de 45 h — voir hSupDeplace
+  const hPlanParSemaine={}, hPlanParSemainePrecMois={};
   const moisPrecStr=fiche.mois===0
     ?(fiche.annee-1)+'-12'
     :fiche.annee+'-'+String(fiche.mois).padStart(2,'0');
@@ -11902,6 +11966,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         hReelParSemaine[semKey]+=hJourPrec;
         if(!hReelParSemainePrecMois[semKey]) hReelParSemainePrecMois[semKey]=0;
         hReelParSemainePrecMois[semKey]+=hJourPrec;
+        const hPrevJourPrecP=j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:0;
+        hPlanParSemaine[semKey]=(hPlanParSemaine[semKey]||0)+Math.min(hPrevJourPrecP,hJourPrec);
+        hPlanParSemainePrecMois[semKey]=(hPlanParSemainePrecMois[semKey]||0)+Math.min(hPrevJourPrecP,hJourPrec);
       }
       // Report du prévu saisi le mois précédent pour cette même semaine à cheval (pour ne pas fausser
       // le ratio de répartition du dépassement hebdo entre les jours des deux mois)
@@ -11929,6 +11996,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       // Si le jour est payé sur la base du prévu (réel < prévu, pas de déduction), compter le prévu pour le seuil
       // Si dépassement (réel > prévu), compter le réel
       hParSemaine[semKey]+=Math.max(hReelJ,hPrevJ);
+      hPlanParSemaine[semKey]=(hPlanParSemaine[semKey]||0)+hPrevJ;
       // Compteur séparé, purement réel (sans max), pour la répartition proportionnelle du dépassement
       // hebdomadaire entre les jours de la semaine (ratioJour) — sinon un jour payé sur la base du
       // prévu (réel < prévu) fausserait le ratio des autres jours de la même semaine
@@ -12006,7 +12074,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       }
     }
     // 12/09/2026 (Sophie) : type de contrat de la période (avenant), jamais celui du contrat de départ.
-    if((sourceActif.th==='sem'||c.th==='sem')&&(sourceActif.tc||c.tc)==='52'&&!hPrevuParSemaine[semKey]){
+    // 13/09/2026 (Sophie) : plus réservé au 52 — en 46, sans volume de semaine, le seuil des heures sup
+    // retombait à 45 h : les heures sup mensualisées d'une semaine de 50 h ressortaient en heures sup
+    // ponctuelles (payées deux fois) dès que les heures réelles étaient saisies.
+    if((sourceActif.th==='sem'||c.th==='sem')&&!hPrevuParSemaine[semKey]){
       const agKeyPS2=getKeyAgenda(semKey,getSemAnnee(j.date));
       const tousAgendasPS2=[...(sourceActif.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
       const agPS2=tousAgendasPS2.find(ag=>new Date(ag.dateDebut)<=new Date(j.date)&&new Date(ag.dateFin)>=new Date(j.date))||agendaMois;
@@ -13777,6 +13848,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   let hSupNormal=0;
   let hSupCheval=0;
   const hSupParSemaine={}; // HS par semaine pour calcul hCompMaj
+  // 13/09/2026 (Sophie) : mois en modifications autorisées — une semaine qui dépasse 45 h (ou son volume
+  // structurel) parce qu'un jour y a été déplacé ou que le planning a été redistribué dans le mois : le mois
+  // n'a pas une heure de plus, la base de ces heures est déjà payée par la mensualisation, seule la
+  // majoration est due (hSupDeplace). Les heures au-delà du planning (réel > prévu, jour « travaillé »)
+  // restent des heures sup ponctuelles payées en entier (hSup).
+  const modifMoisHS=(sourceActif.tc||c.tc)!=='occ'&&!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0')]);
+  let hSupDeplace=0;
   window._hCompVersHS={};
   // Détecter les semaines contenant une absence non rémunérée :
   // pour ces semaines, le seuil reste fixé à 45h (pas le structurel hPrevSem),
@@ -13794,6 +13872,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const hAbsSem=hAbsParSemaine[semKey]||0;
     const hSeuilComp=Math.max(0,hPrevSem-hAbsSem);
     const seuilSup=semsAvecAbsNonRem.has(parseInt(semKey))?45:Math.max(45,hPrevSem);
+    const seuilStructHS=Math.max(45,hPrevSem);
+    const hPlanSem=hPlanParSemaine[semKey]||0;
     const hPrecMois=hParSemainePrecMois[semKey]||0;
     if(hPrecMois>0){
       // Fin de semaine à cheval : hSem inclut les heures du mois précédent via fichePrec
@@ -13806,8 +13886,15 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const hCompMajPrecMois=Math.max(0,Math.min(hPrecMois,seuilSup)-hSeuilComp);
       // Si des HC du mois précédent deviennent HS ce mois, déduire leur maj HC
       const hCompVersHS=Math.min(hCompMajPrecMois,hSupMaj);
-      hSup+=hSupMaj;
-      hSupCheval+=hSupMaj;
+      let hSupPlanMois=0;
+      if(modifMoisHS){
+        const hSupPlanTot=Math.max(0,hPlanSem-seuilStructHS);
+        const hSupPlanDeja=Math.max(0,(hPlanParSemainePrecMois[semKey]||0)-seuilStructHS);
+        hSupPlanMois=Math.min(hSupMaj,Math.max(0,hSupPlanTot-hSupPlanDeja));
+      }
+      hSup+=hSupMaj-hSupPlanMois;
+      hSupDeplace+=hSupPlanMois;
+      hSupCheval+=hSupMaj-hSupPlanMois;
       hSupParSemaine[semKey]=(hSupParSemaine[semKey]||0)+hSupMaj;
       // HS à cheval ne réduisent pas hCompMaj de ce mois
       if(!window._hCompVersHS) window._hCompVersHS={};
@@ -13815,8 +13902,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     } else {
       // Semaine normale ou début de semaine à cheval : calcul standard
       const hSupSem=Math.max(0,hSem-seuilSup);
-      hSup+=hSupSem;
-      hSupNormal+=hSupSem;
+      const hSupPlanSem=modifMoisHS?Math.min(hSupSem,Math.max(0,hPlanSem-seuilStructHS)):0;
+      hSup+=hSupSem-hSupPlanSem;
+      hSupDeplace+=hSupPlanSem;
+      hSupNormal+=hSupSem-hSupPlanSem;
       hSupParSemaine[semKey]=(hSupParSemaine[semKey]||0)+hSupSem;
     }
   });
@@ -13957,6 +14046,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const montantMajSupBrut=parseFloat((hSup*majSup*txNetPrecis).toFixed(2));
   const montantMajCompDejaPayee=parseFloat((hCompVersHSTotal*majCompPct*txNetPrecis).toFixed(2));
   const montantMajSup=parseFloat((estEnvMensuelleV?(hSup*majSup*txNetPrecis):Math.max(0,montantMajSupBrut-montantMajCompDejaPayee)).toFixed(2));
+  const montantMajSupDeplace=parseFloat((hSupDeplace*majSup*txNetPrecis).toFixed(2)); // 13/09/2026 : majoration seule (voir hSupDeplace)
   const montantMajFerieNP=parseFloat((hMajFerie*majFeriePct*txNetPrecis).toFixed(2));
   const montantMajFeriePrevu2=parseFloat((hMajFeriePrevu*majFeriePct*txNetPrecis).toFixed(2));
   const montantMajRepos=parseFloat((hMajRepos*majReposPct*txNetPrecis).toFixed(2));
@@ -13966,14 +14056,14 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // hMensuMaj réduit de l'absence éventuellement déduite sur la part HS (hAbsDeduitHS), pour que
   // l'exonération reflète les heures sup réellement payées ce mois, pas le volume contractuel brut
   const hMensuMajExo=Math.max(0,hMensuMaj-(typeof hAbsDeduitHS!=='undefined'?hAbsDeduitHS:0));
-  const hExoBrut=(hComp*(1+majCompPct)+hSup*(1+majSup)+hMensuMajExo*(1+majSup)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))*txBrut;
+  const hExoBrut=(hComp*(1+majCompPct)+hSup*(1+majSup)+hSupDeplace*(1+majSup)+hMensuMajExo*(1+majSup)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))*txBrut;
   const montantExo=parseFloat((hExoBrut*0.1131).toFixed(2));
 
   // ── Totaux comp/sup ──
   const hTotalComp=hComp+hMajFerie+hMajRepos+hMaj1erMai;
   const montantTotalComp=parseFloat((montantBaseComp+montantBaseFerieNP+montantBaseRepos+montantBase1erMai+montantMajComp+montantMajFerieNP+montantMajRepos+montantMaj1erMai).toFixed(2));
   // Note : montantBaseComp inclut déjà hSup en base
-  const montantTotalSup=parseFloat((montantMajSup).toFixed(2)); // sup = majoration uniquement
+  const montantTotalSup=parseFloat((montantMajSup+montantMajSupDeplace).toFixed(2)); // sup = majoration uniquement
 
   // ── Rétrocompat retour (pour calcBrutTotal et régularisation) ──
   const montantCompBrutMaj=(hComp*(1+majCompPct)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))*txBrut;
@@ -13982,8 +14072,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // comme hExoBrut ci-dessus — il en manquait avant, ce qui faisait retomber toute la part
   // d'exonération des heures sup mensualisées dans exoCompPart (mélangée à tort avec les heures
   // complémentaires, jamais isolée). exoMensuSupPart l'isole maintenant correctement à part.
-  const denomExoNet=(hComp*(1+majCompPct)+hSup*(1+majSup)+hMensuMajExo*(1+majSup)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))||1;
-  const exoSupPart=parseFloat((montantExo*(hSup*(1+majSup)/denomExoNet)).toFixed(2));
+  const denomExoNet=(hComp*(1+majCompPct)+hSup*(1+majSup)+hSupDeplace*(1+majSup)+hMensuMajExo*(1+majSup)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hMaj1erMai*(1+maj1erMaiPct))||1;
+  const exoSupPart=parseFloat((montantExo*((hSup+hSupDeplace)*(1+majSup)/denomExoNet)).toFixed(2));
   const exoMensuSupPart=parseFloat((montantExo*(hMensuMajExo*(1+majSup)/denomExoNet)).toFixed(2));
   // 24/08/2026 (Sophie) : brut des heures sup mensualisées (absence déduite), exposé séparément pour
   // le calcul de la part "heures sup" de l'indemnité de congés (méthode 10ème) — même heures que
@@ -14023,7 +14113,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   } else {
     // hComp = base jours ouvrables (hors HS), hSup = base + majoration (payées entièrement ici)
     salaireNetBrut=hMensuNorm*txNetPrecis+hMensuMaj*txNetMajR
-      +hComp*(1+majComp)*txNetPrecis+hSup*(1+majSup)*txNetPrecis - montantAbsences
+      +hComp*(1+majComp)*txNetPrecis+hSup*(1+majSup)*txNetPrecis+hSupDeplace*majSup*txNetPrecis - montantAbsences
       +hMajFerie*(1+majFeriePct)*txNetPrecis+hMajFeriePrevu*majFeriePct*txNetPrecis+hMajRepos*(1+majReposPct)*txNetPrecis+hMaj1erMai*(1+maj1erMaiPct)*txNetPrecis;
   }
   const salaireNet=parseFloat(Math.max(0,salaireNetBrut).toFixed(2));
@@ -14449,7 +14539,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   }
 
   const _recapResult={
-    donneesManquantes, hMensu, hComp:hComp.toFixed(2), hSup:hSup.toFixed(2),
+    donneesManquantes, hMensu, hComp:hComp.toFixed(2), hSup:hSup.toFixed(2), hSupDeplace:hSupDeplace.toFixed(2), montantMajSupDeplace,
     coefNetR, // 27/07/2026 (correctif Sophie) : coefficient daté déjà calculé ci-dessus, exposé pour
     // que l'affichage (buildRecapHtml etc.) le réutilise au lieu d'en recalculer un non daté
     indemNegoJoursBascule, // 27/07/2026 : nombre de jours du mois où le négocié est passé sous le
@@ -17325,8 +17415,13 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
     // 110-130€ par rapport à "Situation au"/"onglet Régularisation", qui calculaient déjà euro par
     // euro, mois par mois, au bon taux à chaque fois — cette fonction était la seule des trois à ne
     // pas le faire.
-    const montantMensuMoisC=parseFloat((hMensuNetMoisH*_txNetRegulMois).toFixed(2));
-    const montantPrevuMoisC=parseFloat((hPrevuNetMoisH*_txNetRegulMois).toFixed(2));
+    // 13/09/2026 (Sophie) : majoration des heures sup comptée des deux côtés (voir hSupDuReg) — côté mensualisé,
+    // celle des heures sup mensualisées, sa part retenue lors des absences déduite ; côté dû, celle des heures
+    // au-delà de 45 h par semaine.
+    const clause52Def=!!((c.tc==='52'&&c.clauseRegul52)||(c.avenants||[]).some(av=>av.signe&&av.clauseRegul52&&av.dateAvenant));
+    const finMoisDef=veilleAvenantStr||(key+'-'+String(new Date(ay2,am2,0).getDate()).padStart(2,'0'));
+    const montantMensuMoisC=parseFloat((hMensuNetMoisH*_txNetRegulMois+majMensuRecapReg(recapMois)-parseFloat(recapMois.montantAbsMaj||0)).toFixed(2));
+    const montantPrevuMoisC=parseFloat(((hPrevuNetMoisH+hSupDuReg(c,clause52Def,key+'-01',finMoisDef)*((recapMois.majSup||0)/100))*_txNetRegulMois).toFixed(2));
     if(window.DEBUG_REGUL_COMPARE)console.log('[TEMP-fnC]',key,'| montantMensu:',montantMensuMoisC,'| montantPrevu:',montantPrevuMoisC,'| txNetMois:',_txNetRegulMois,'| hMensuNetMoisH:',hMensuNetMoisH,'| hPrevuNetMoisH:',hPrevuNetMoisH);
     totalMensuNet+=montantMensuMoisC;
     totalPrevuNet+=montantPrevuMoisC;
