@@ -8158,7 +8158,9 @@ function renderFicheSolde(c){
 function calcRegul52Annee(c, anneeRef, moisAttendu){
   const cg=c.conges&&c.conges[anneeRef];
   if(!cg||!(cg.acquis>0)||cg.restants!==0) return null;
-  if(((getVersionActive(c,new Date(anneeRef+1,4,31))||{}).tc||c.tc)!=='52') return null;
+  // 13/09/2026 (Sophie) : année close sous le 46 → pas de comparaison du 52, mais la garantie de l'indemnité
+  // du 46 si ses derniers jours ont été pris sous le 52 (calcGarantie46Annee).
+  if(((getVersionActive(c,new Date(anneeRef+1,4,31))||{}).tc||c.tc)!=='52') return calcGarantie46Annee(c,anneeRef,moisAttendu);
   const jours=joursCongesAnneeCg(c,anneeRef);
   if(!jours.length) return null;
   const derniere=jours.map(j=>j.date).sort().pop();
@@ -8188,22 +8190,7 @@ function calcRegul52Annee(c, anneeRef, moisAttendu){
       maintienVerse+=valeurJourMaintien46Cg(c,avSuivant||j.date);
       return;
     }
-    const [jy,jm,jd]=j.date.split('-').map(Number);
-    const src=getVersionActive(c,new Date(jy,jm-1,1));
-    const hMensuSrc=parseFloat(src.hMensu||c.hMensu||0);
-    const hJourCg=(hMensuSrc*12/(parseFloat(src.nbSem||52)))/6;
-    const dateVeille=new Date(jy,jm-1,jd);
-    dateVeille.setDate(dateVeille.getDate()-1);
-    const srcV=getVersionActive(c,dateVeille);
-    const coefNetV52=getParamAt('coefficients',dateToStr(dateVeille)).valeur||0.7811975; // 27/07/2026
-    // (correctif Sophie) : coefficient du jour concerné (veille du congé), pas celui d'aujourd'hui
-    const hMensuMajV=parseFloat(srcV.hMensuMaj||0);
-    const hMensuTotV=parseFloat(srcV.hMensu||hMensuSrc||0);
-    const majSupV=(srcV.majSup||0)/100;
-    const partMaj=hMensuTotV>0?hMensuMajV/hMensuTotV:0;
-    const txNetNormV=parseFloat(srcV.txBrut||0)*coefNetV52;
-    const txNetMajV=parseFloat(srcV.txBrut||0)*(1+majSupV)*coefNetV52;
-    maintienVerse+=hJourCg*((1-partMaj)*txNetNormV+partMaj*txNetMajV);
+    maintienVerse+=valeurJourMaintien52Cg(c,j.date);
   });
   maintienVerse=parseFloat(maintienVerse.toFixed(2));
   const coefNet=getParamAt('coefficients',dernierMois+'-01').valeur||0.7811975; // 27/07/2026 (correctif
@@ -8214,13 +8201,63 @@ function calcRegul52Annee(c, anneeRef, moisAttendu){
   return {anneeRef, dernierMois, maintienVerse, dixiemeBrut, dixiemeNet, diff};
 }
 
+// Valeur d'un jour de congé payé par la mensualisation d'un contrat 52 : moyenne hebdomadaire de la version du
+// mois ÷ 6, au taux net de la veille (part normale et part majorée) — la formule de la comparaison du 52.
+function valeurJourMaintien52Cg(c, dateStr){
+  const [jy,jm,jd]=dateStr.split('-').map(Number);
+  const src=getVersionActive(c,new Date(jy,jm-1,1));
+  const hMensuSrc=parseFloat(src.hMensu||c.hMensu||0);
+  const hJourCg=(hMensuSrc*12/(parseFloat(src.nbSem||52)))/6;
+  const dateVeille=new Date(jy,jm-1,jd);
+  dateVeille.setDate(dateVeille.getDate()-1);
+  const srcV=getVersionActive(c,dateVeille);
+  const coefNetV52=getParamAt('coefficients',dateToStr(dateVeille)).valeur||0.7811975; // 27/07/2026
+  // (correctif Sophie) : coefficient du jour concerné (veille du congé), pas celui d'aujourd'hui
+  const hMensuMajV=parseFloat(srcV.hMensuMaj||0);
+  const hMensuTotV=parseFloat(srcV.hMensu||hMensuSrc||0);
+  const majSupV=(srcV.majSup||0)/100;
+  const partMaj=hMensuTotV>0?hMensuMajV/hMensuTotV:0;
+  const txNetNormV=parseFloat(srcV.txBrut||0)*coefNetV52;
+  const txNetMajV=parseFloat(srcV.txBrut||0)*(1+majSupV)*coefNetV52;
+  return hJourCg*((1-partMaj)*txNetNormV+partMaj*txNetMajV);
+}
+
+// 13/09/2026 (Sophie) : garantie de l'indemnité du 46. Année close sous le 46 (indemnité calculée au 31/05)
+// dont les derniers jours sont pris sous le 52 après un avenant 46 → 52 (avenant en juin, prise principale
+// après l'avenant, paiement à chaque prise) : le choix d'un paiement autre qu'en juin ne doit pas faire perdre
+// d'argent. Après la dernière prise, on compare l'indemnité du 46 à ce qui a réellement été versé pour ces
+// jours — feuilles du 46, plus la mensualisation du 52 pour les jours pris sous lui. S'il manque quelque
+// chose, le complément est versé sur la feuille suivante ; si le 52 a versé plus, rien n'est repris.
+// 52var-46sem-52fixe 2024/2025 : 653,29 € dus, 559,97 € (46) + 26,66 € (4 jours sous le 52) → 66,66 €.
+// Pas si l'année était déjà entièrement payée par le 46 (compteur à zéro, soldeVerse46).
+function calcGarantie46Annee(c, anneeRef, moisAttendu){
+  const cg=c.conges&&c.conges[anneeRef];
+  if(!cg||!(cg.acquis>0)||cg.restants!==0||cg.soldeVerse46) return null;
+  if(!avenantVers52PendantPriseCg(c,anneeRef)) return null;
+  const jours=joursCongesAnneeCg(c,anneeRef);
+  if(!jours.length) return null;
+  const derniere=jours.map(j=>j.date).sort().pop();
+  if(!estJourSous52Cg(c,derniere)) return null;
+  const dernierMois=derniere.slice(0,7);
+  if(moisAttendu&&dernierMois!==moisAttendu) return null;
+  const ind=calcIndemniteConges(c,anneeRef);
+  if(!ind) return null;
+  const jours52=jours.filter(j=>estJourSous52Cg(c,j.date));
+  const maintien52=parseFloat(jours52.reduce((t,j)=>t+valeurJourMaintien52Cg(c,j.date),0).toFixed(2));
+  // tout ce que les feuilles ont versé au titre du 46 jusqu'au mois de la dernière prise, validées ou non
+  const verse46=montantVerse46Annee(c,anneeRef,{jusqua:dernierMois,memeNonValidees:true});
+  const maintienVerse=parseFloat((verse46+maintien52).toFixed(2));
+  const diff=parseFloat(Math.max(0,ind.meilleurNet-maintienVerse).toFixed(2));
+  return {anneeRef, dernierMois, motif:'garantie46', garantie:ind.meilleurNet, verse46, maintien52, jours52:jours52.length, maintienVerse, dixiemeNet:ind.meilleurNet, diff};
+}
+
 // Complément à verser sur la feuille qui suit le mois `key` de la dernière prise (voir calcRecapFiche).
 function calcRegul52(c, key){
   if(!c.conges) return null;
   const annees=Object.keys(c.conges).map(Number).filter(n=>n>2000);
   for(const anneeRef of annees){
     const r=calcRegul52Annee(c,anneeRef,key);
-    if(r&&r.diff>0) return {diff:r.diff, maintienVerse:r.maintienVerse, dixiemeNet:r.dixiemeNet, anneeRef};
+    if(r&&r.diff>0) return {diff:r.diff, maintienVerse:r.maintienVerse, dixiemeNet:r.dixiemeNet, anneeRef, motif:r.motif||null};
   }
   return null;
 }
@@ -8288,7 +8325,7 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
       }
     }
     } // fin if(!masquerBase)
-    if(recap.regul52Fiche) html+=ligneG('Régularisation congés '+recap.regul52Fiche.anneeRef+'/'+(recap.regul52Fiche.anneeRef+1)+' (10ème)', recap.regul52Fiche.diff.toFixed(2)+' € net', true, 'var(--m)');
+    if(recap.regul52Fiche) html+=ligneG('Régularisation congés '+recap.regul52Fiche.anneeRef+'/'+(recap.regul52Fiche.anneeRef+1)+(recap.regul52Fiche.motif==='garantie46'?pastilleAide('conge-avenant'):' (10ème)'), recap.regul52Fiche.diff.toFixed(2)+' € net', true, 'var(--m)'); // 13/09/2026 : garantie du 46
     if(_hasRegul&&_diffEuros>0) html+=ligneG('Régularisation de salaire', _diffEuros.toFixed(2)+' € net', true, 'var(--m)');
     if(!masquerBase&&parseFloat(recap.montantCongesNonAcquis||0)>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--tx2)">dont congés non acquis ('+recap.nbCongesNonAcquis+' jours) — '+recap.montantCongesNonAcquis.toFixed(2)+' € déduits'+pastilleAide('deduction-conges')+'</td></tr>';
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
@@ -8491,8 +8528,8 @@ function buildRecapCumul(r1,r2,solde,c){
   if(hComp>0) html+=ligneG('Heures complémentaires', hComp.toFixed(2)+' h', true);
   if(hSup>0) html+=ligneG('Heures supplémentaires', hSup.toFixed(2)+' h', true);
   html+=ligneG('Salaire net', salaireNet.toFixed(2)+' €', true, 'var(--m)');
-  if(r1.regul52Fiche) html+=ligneG('Régularisation congés '+r1.regul52Fiche.anneeRef+'/'+(r1.regul52Fiche.anneeRef+1)+' (10ème)', parseFloat(r1.regul52Fiche.diff||0).toFixed(2)+' € net', true, 'var(--m)');
-  if(r2.regul52Fiche) html+=ligneG('Régularisation congés '+r2.regul52Fiche.anneeRef+'/'+(r2.regul52Fiche.anneeRef+1)+' (10ème)', parseFloat(r2.regul52Fiche.diff||0).toFixed(2)+' € net', true, 'var(--m)');
+  if(r1.regul52Fiche) html+=ligneG('Régularisation congés '+r1.regul52Fiche.anneeRef+'/'+(r1.regul52Fiche.anneeRef+1)+(r1.regul52Fiche.motif==='garantie46'?pastilleAide('conge-avenant'):' (10ème)'), parseFloat(r1.regul52Fiche.diff||0).toFixed(2)+' € net', true, 'var(--m)');
+  if(r2.regul52Fiche) html+=ligneG('Régularisation congés '+r2.regul52Fiche.anneeRef+'/'+(r2.regul52Fiche.anneeRef+1)+(r2.regul52Fiche.motif==='garantie46'?pastilleAide('conge-avenant'):' (10ème)'), parseFloat(r2.regul52Fiche.diff||0).toFixed(2)+' € net', true, 'var(--m)');
   const indemOccC=parseFloat(r1.indemCgOcc||0)+parseFloat(r2.indemCgOcc||0);
   if(indemOccC>0) html+=ligneG('Indemnité congés contrat occasionnel', indemOccC.toFixed(2)+' € (10%)', true, 'var(--m)');
   if(indemE>0) html+=ligneG('Indemnité d\'entretien', indemE.toFixed(2)+' €', true);
@@ -18713,7 +18750,8 @@ function avenantVers52PendantPriseCg(c, anneeRef){
 // 13/09/2026 (Sophie) : ce que les feuilles de présence VALIDÉES ont versé au titre de l'indemnité 46 de
 // l'année N (indemCongeParAnnee ; une feuille figée avant ce champ voit tout son versement rattaché à
 // l'année qu'elle règle d'habitude). Un mois coupé par un avenant compte ses deux parties, comme la feuille.
-function montantVerse46Annee(c, anneeRef){
+function montantVerse46Annee(c, anneeRef, opts){
+  const o=opts||{};
   let total=0;
   const ajouter=(r,key)=>{
     if(!r||!(+r.indemCongeMois>0)) return;
@@ -18721,7 +18759,8 @@ function montantVerse46Annee(c, anneeRef){
     if(getAnneeAmPourDate(key)-1===anneeRef) total+=+r.indemCongeMois;
   };
   Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
-    if(!fiche.valide) return;
+    if(!fiche.valide&&!o.memeNonValidees) return;
+    if(o.jusqua&&key>o.jusqua) return;
     const av=(c.avenants||[]).find(a=>a.signe&&a.dateAvenant&&a.dateAvenant>key+'-01'&&a.dateAvenant<=key+'-31');
     if(av){
       const vA=parseDateLoc(av.dateAvenant); vA.setDate(vA.getDate()-1);
@@ -19103,7 +19142,7 @@ function buildCgAcquisEncarts(c, anneeAcq){
   // désormais exactement la comparaison qui sert au complément (calcRegul52Annee) ; l'encart
   // « Complément congés payés (net) » qui la répétait quand un complément est dû a été retiré plus bas.
   const regulAnCg=calcRegul52Annee(c,anneeAcq);
-  if(regulAnCg){
+  if(regulAnCg&&regulAnCg.motif!=='garantie46'){ // la garantie du 46 s'affiche dans l'encart du 46
     const couleurTitreCgOnglet=regulAnCg.diff>0?'#854F0B':'#2e7d32';
     html52+=`<div style="background:#f2eef1;border-radius:8px;padding:10px 12px;margin-bottom:8px">
       <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:6px">Régularisation congés payés (net)</div>
@@ -19220,7 +19259,12 @@ function buildCgAcquisEncarts(c, anneeAcq){
         let lignesCg='';
         if(dS.montant>0) lignesCg+=`<div style="${ls2}"><span>Déjà versé en maintien de salaire<br>(${dS.jours} j sous contrat sur 52 semaines)</span><span style="${vs2}">− ${dS.montant.toFixed(2)} €</span></div>`;
         if(verse46Cg>0) lignesCg+=`<div style="${ls2}"><span>Déjà versé sur les feuilles de présence</span><span style="${vs2}">− ${verse46Cg.toFixed(2)} €</span></div>`;
-        if(restePar52Cg){
+        const garantieCg=restePar52Cg?calcRegul52Annee(c,anneeAcq):null;
+        if(garantieCg&&garantieCg.motif==='garantie46'){
+          // 13/09/2026 (Sophie) : tous les jours sont pris — la garantie de l'indemnité du 46 remplace le texte
+          lignesCg+=`<div style="${ls2}"><span>Versé par la mensualisation du contrat sur 52 semaines<br>(${garantieCg.jours52} j pris sous le 52)</span><span style="${vs2}">− ${garantieCg.maintien52.toFixed(2)} €</span></div>`;
+          lignesCg+=`<div style="${ls2};border-bottom:none;color:var(--vt)"><span>${garantieCg.diff>0?'Complément à verser':'Aucun complément dû'}${pastilleAide('conge-avenant')}</span><span style="${vs2};color:var(--vt)">${garantieCg.diff>0?garantieCg.diff.toFixed(2)+' €':'—'}</span></div>`;
+        } else if(restePar52Cg){
           lignesCg+=`<div style="${ls2};border-bottom:none;color:var(--vt)"><span>Jours restants à partir du ${dateISOversTexte(dateAv4652Cg)} : payés par la mensualisation du contrat sur 52 semaines${pastilleAide('conge-avenant')}</span><span></span></div>`;
         } else {
           const reste=Math.max(0,indemnite.meilleurNet-dS.montant-verse46Cg);
