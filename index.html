@@ -678,6 +678,12 @@ input[type=time].fi{width:auto;min-width:92px}
       <button class="btn bp" onclick="addParamRow('indem')" style="margin-top:4px">+ Ajouter</button>
     </div>
     <button class="btn" style="background:#2d6a4f;color:#fff;width:100%;padding:12px" onclick="saveParams()">Enregistrer les paramètres</button>
+    <div class="card" style="margin-top:14px">
+      <div class="ctitle">Contrôle des données figées</div>
+      <div style="font-size:12px;color:var(--tx2);margin-bottom:8px">Recalcule, sans rien modifier, les feuilles validées et les années de congés figées de ce compte avec le code actuel, et liste ce qui diffère.</div>
+      <button class="btn bs" onclick="lancerControleFige()">Contrôler</button>
+      <div id="controle-fige-resultat" style="font-size:12px;margin-top:8px;line-height:1.5"></div>
+    </div>
   </div>
 </div>  
 <script>
@@ -1315,6 +1321,9 @@ else S.params=JSON.parse(localStorage.getItem('cam_params')||'null')||JSON.parse
      // paramètres sont là.
      if(S.enEd&&typeof calcSal==='function'){ try{ calcSal(); }catch(e){} }
      migrerFiches();
+     // 13/09/2026 (Sophie) : figer une fois pour toutes les feuilles validées qui n'ont pas encore leurs
+     // copies, avec les chiffres qu'elles affichent aujourd'hui (voir figerFichesValidees).
+     try{ if(figerFichesValidees()>0) setTimeout(()=>{ try{ saveToFirestore(); }catch(e){} },0); }catch(e){ console.error('Figer les feuilles validées :',e); }
       localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
       localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM||{}));
       initToutesLesFiches();
@@ -8825,6 +8834,119 @@ function majFicheRepas(contratId,key,idx,ri,checked){
   }
 }
 
+// 13/09/2026 (Sophie) : une feuille validée correspond à ce qui a été payé et déclaré — elle ne doit plus
+// jamais bouger, même quand le code des calculs change. figerFiche calcule et range tout de suite ses copies
+// figées : le mois entier, et les deux parties d'un mois coupé par un avenant, avec les mêmes paramètres que
+// la feuille affichée (renderFiche). Une copie déjà présente n'est jamais recalculée. Renvoie vrai si une
+// copie a été ajoutée.
+function figerFiche(c, key){
+  const f=c.fiches&&c.fiches[key];
+  if(!f||!f.valide) return false;
+  let ajout=false;
+  try{
+    if(!f._recapCache){ calcRecapFiche(c,f); ajout=true; }
+    const av=(c.avenants||[]).find(a=>a.signe&&a.dateAvenant&&a.dateAvenant>=key+'-01'&&a.dateAvenant<=key+'-31');
+    if(av){
+      const vAv=parseDateLoc(av.dateAvenant); vAv.setDate(vAv.getDate()-1);
+      const finMoisAv=dateToStr(new Date(+key.slice(0,4),+key.slice(5,7),0));
+      if(!f._recapCacheAvant){ calcRecapFiche(c,f,key+'-01',dateToStr(vAv),key+'-01',av.dateAvenant,'avant',f); ajout=true; }
+      if(!f._recapCacheApres){ calcRecapFiche(c,f,av.dateAvenant,finMoisAv,av.dateAvenant,av.dateAvenant,'apres',f); ajout=true; }
+    }
+  }catch(e){ console.error('figerFiche',c.nom,key,e); }
+  return ajout;
+}
+// 13/09/2026 (Sophie) : au chargement, fige une fois pour toutes les feuilles validées qui n'ont pas encore
+// leurs copies (validées avant le blocage et jamais rouvertes, ou mois d'avenant dont les deux parties
+// n'étaient jamais conservées) — avec les chiffres qu'elles affichent aujourd'hui. Renvoie le nombre de
+// contrats concernés (à enregistrer).
+function figerFichesValidees(){
+  let nbContrats=0;
+  (S.contrats||[]).forEach(c=>{
+    const cles=Object.keys(c.fiches||{}).filter(k=>{
+      const f=c.fiches[k]; if(!f.valide) return false;
+      if(!f._recapCache) return true;
+      return (c.avenants||[]).some(a=>a.signe&&a.dateAvenant&&a.dateAvenant>=k+'-01'&&a.dateAvenant<=k+'-31')&&!(f._recapCacheAvant&&f._recapCacheApres);
+    }).sort();
+    if(!cles.length) return;
+    try{ calcCongesContrat(c); }catch(e){}
+    let ajout=false;
+    cles.forEach(k=>{ if(figerFiche(c,k)) ajout=true; });
+    if(ajout){ nbContrats++; _contratsModifies.add(c.id); }
+  });
+  return nbContrats;
+}
+// Toutes les feuilles existantes du mois deb au mois fin (clés AAAA-MM) sont validées, et la période est
+// complète : la feuille de fin existe, ou le contrat s'est terminé avant elle sur une feuille validée.
+function periodeValideeCg(c, deb, fin){
+  const cles=Object.keys(c.fiches||{}).filter(k=>k>=deb&&k<=fin);
+  if(!cles.length||!cles.every(k=>c.fiches[k].valide)) return false;
+  if(c.fiches[fin]) return true;
+  const dFinP=getDateFinContrat(c);
+  if(!dFinP) return false;
+  const moisFinP=dateToStr(dFinP).slice(0,7);
+  return moisFinP<fin&&!!(c.fiches[moisFinP]&&c.fiches[moisFinP].valide);
+}
+// 13/09/2026 (Sophie) : contrôle des données figées — recalcule, SANS RIEN MODIFIER, chaque feuille validée
+// et chaque année de congés figée avec le code actuel, et liste ce qui diffère. Sert à voir tout de suite si
+// une correction du code aurait changé le passé. Porte sur les données du compte connecté.
+function controlerDonneesFigees(){
+  const ecarts=[];
+  const valeurs=r=>({salaire:+r.salaireNet||0,indemnite:+r.indemCongeMois||0,regul:r.regul52Fiche?(+r.regul52Fiche.diff||0):0,heures:+r.hTheoriques||0});
+  const libelles={salaire:'salaire net',indemnite:'indemnité de congés',regul:'régularisation congés',heures:'heures théoriques'};
+  (S.contrats||[]).forEach(c=>{
+    Object.keys(c.fiches||{}).sort().forEach(key=>{
+      const f=c.fiches[key]; if(!f.valide) return;
+      const copie={...f}; delete copie._recapCache; delete copie._recapCacheAvant; delete copie._recapCacheApres;
+      const comparer=(fige,recalc,partie)=>{
+        if(!fige||!recalc) return;
+        const a=valeurs(fige), b=valeurs(recalc);
+        Object.keys(a).forEach(k=>{ if(Math.abs(a[k]-b[k])>0.005) ecarts.push(c.nom+' — '+MOIS[f.mois]+' '+f.annee+(partie?' ('+partie+')':'')+' : '+libelles[k]+' figé '+a[k].toFixed(2)+', recalculé '+b[k].toFixed(2)); });
+      };
+      try{
+        comparer(f._recapCache,calcRecapFiche(c,copie),'');
+        const av=(c.avenants||[]).find(a=>a.signe&&a.dateAvenant&&a.dateAvenant>=key+'-01'&&a.dateAvenant<=key+'-31');
+        if(av){
+          const vAv=parseDateLoc(av.dateAvenant); vAv.setDate(vAv.getDate()-1);
+          const finMoisAv=dateToStr(new Date(+key.slice(0,4),+key.slice(5,7),0));
+          comparer(f._recapCacheAvant,calcRecapFiche(c,copie,key+'-01',dateToStr(vAv),key+'-01',av.dateAvenant,'avant',copie),'avant l’avenant');
+          comparer(f._recapCacheApres,calcRecapFiche(c,copie,av.dateAvenant,finMoisAv,av.dateAvenant,av.dateAvenant,'apres',copie),'après l’avenant');
+        }
+      }catch(e){ ecarts.push(c.nom+' — '+key+' : erreur au recalcul ('+e.message+')'); }
+    });
+    const figes=c.congesFiges;
+    if(figes&&Object.keys(figes).length){
+      try{
+        c.congesFiges={};
+        calcCongesContrat(c);
+        Object.keys(figes).forEach(ar=>{
+          const cgR=c.conges[ar]||{}, fg=figes[ar]||{};
+          [['acquis','acquisition'],['pris','prise'],['restants','prise']].forEach(([k,bloc])=>{
+            const v=fg[bloc]&&fg[bloc][k];
+            if(v!==undefined&&v!==null&&v!==cgR[k]) ecarts.push(c.nom+' — congés '+ar+'/'+(+ar+1)+' : jours '+k+' figés '+v+', recalculés '+cgR[k]);
+          });
+          if(fg.indemnite){
+            const ir=calcIndemniteConges(c,+ar,{sansFige:true});
+            if(ir&&Math.abs(ir.meilleurNet-fg.indemnite.meilleurNet)>0.005) ecarts.push(c.nom+' — congés '+ar+'/'+(+ar+1)+' : indemnité figée '+fg.indemnite.meilleurNet.toFixed(2)+', recalculée '+ir.meilleurNet.toFixed(2));
+          }
+        });
+      }catch(e){ ecarts.push(c.nom+' — congés : erreur au recalcul ('+e.message+')'); }
+      finally{ c.congesFiges=figes; try{ calcCongesContrat(c); }catch(e){} }
+    }
+  });
+  return ecarts;
+}
+function lancerControleFige(){
+  const el=document.getElementById('controle-fige-resultat');
+  if(el) el.innerHTML='Contrôle en cours…';
+  setTimeout(()=>{
+    let ec=[];
+    try{ ec=controlerDonneesFigees(); }catch(e){ ec=['Erreur : '+e.message]; }
+    if(el) el.innerHTML=ec.length
+      ?('<b>'+ec.length+' écart(s)</b> — rien n’a été modifié :<br>'+ec.map(x=>'• '+String(x).replace(/&/g,'&amp;').replace(/</g,'&lt;')).join('<br>'))
+      :'Aucun écart : les feuilles validées et les années de congés figées correspondent au calcul actuel.';
+  },20);
+}
+
 function validerFiche(contratId,key){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c||!c.fiches||!c.fiches[key])return;
@@ -9131,6 +9253,13 @@ function _validerFicheSuite(contratId,key,c){
   majFichesCgAm(anneeAmVal, false);
   const anneeAmValSuivante=getAnneeAmPourDate(key.split('-')[0]+'-'+(parseInt(key.split('-')[1])+1<13?String(parseInt(key.split('-')[1])+1).padStart(2,'0'):'01'));
   if(anneeAmValSuivante!==anneeAmVal) majFichesCgAm(anneeAmValSuivante, false);
+  // 13/09/2026 (Sophie) : figer la feuille tout de suite (et les deux parties d'un mois d'avenant), après
+  // les derniers recalculs — plus rien n'attend un premier affichage.
+  if(figerFiche(c,key)){
+    _contratsModifies.add(c.id);
+    localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+    saveToFirestore();
+  }
   toast('Feuille de '+MOIS[c.fiches[key].mois]+' validée !');
   // Avertissement 30 avril à la validation de janvier
   const [kvy,kvm]=key.split('-').map(Number);
@@ -9196,6 +9325,12 @@ function deverrouillerFiche(contratId,key){
   delete c.fiches[key]._recapCache;
   delete c.fiches[key]._recapCacheAvant;
   delete c.fiches[key]._recapCacheApres;
+  // 13/09/2026 (Sophie) : dégeler les compteurs de congés des années dont une période contient ce mois —
+  // période d'acquisition (juin → mai) : toute l'année ; période de prise (mai → avril) : les jours pris.
+  if(c.congesFiges) Object.keys(c.congesFiges).map(Number).forEach(ar=>{
+    if(key>=ar+'-06'&&key<=(ar+1)+'-05') delete c.congesFiges[ar];
+    else if(key>=(ar+1)+'-05'&&key<=(ar+2)+'-04'&&c.congesFiges[ar]) delete c.congesFiges[ar].prise;
+  });
   c._regulDirty=true;
   S.ficheModifiee=false;
   calcCongesContrat(c);
@@ -10135,6 +10270,10 @@ function calcCongesContrat(c, dateRefOverride){
     };
     if(ancienCgReport.arretReporte) c.conges[anneeRef].arretReporte=true;
     if(ancienCgReport.arretReporteJours) c.conges[anneeRef].arretReporteJours=ancienCgReport.arretReporteJours;
+    // 13/09/2026 (Sophie) : jours acquis figés quand toute la période d'acquisition est validée (voir plus
+    // bas) — un changement du code ne doit plus les faire bouger.
+    const figeAcqCg=c.congesFiges&&c.congesFiges[anneeRef]&&c.congesFiges[anneeRef].acquisition;
+    if(figeAcqCg) Object.assign(c.conges[anneeRef],figeAcqCg);
   }
   // Recalculer les pris par année d'acquisition (pas par date de pose)
   // Collecter tous les jours conges-acq et conges-anticipe dans l'ordre chronologique
@@ -10267,6 +10406,27 @@ function calcCongesContrat(c, dateRefOverride){
     cgAr.restants=0;
   });
 
+  // 13/09/2026 (Sophie) : les mois passés sont bouclés, on n'y revient pas — les compteurs d'une année close
+  // ne doivent plus bouger parce que le code a changé. Jours acquis figés quand toutes les feuilles de juin à
+  // mai sont validées (appliqués plus haut, avant l'attribution des jours pris) ; jours pris et restants
+  // figés quand toute la période de prise (mai → avril) est validée. Déverrouiller une feuille de ces
+  // périodes dégèle l'année (deverrouillerFiche). Jamais de nouveau gel pendant une simulation de rupture.
+  if(!c.congesFiges) c.congesFiges={};
+  const copieFigeCg=v=>(v&&typeof v==='object')?JSON.parse(JSON.stringify(v)):null;
+  anneesRef.forEach(ar=>{
+    const cgAr=c.conges[ar]; if(!cgAr) return;
+    const fgAr=c.congesFiges[ar]||{};
+    if(fgAr.prise){
+      Object.entries(fgAr.prise).forEach(([k,v])=>{ if(v===null) delete cgAr[k]; else cgAr[k]=(typeof v==='object')?copieFigeCg(v):v; });
+    }
+    if(!dateRefOverride){
+      if(!fgAr.acquisition&&cgAr.estTerminee&&periodeValideeCg(c,ar+'-06',(ar+1)+'-05'))
+        fgAr.acquisition={acquis:cgAr.acquis,acqBrut:cgAr.acqBrut,bonusEnfants:cgAr.bonusEnfants,joursComptes:cgAr.joursComptes,joursArret:cgAr.joursArret};
+      if(fgAr.acquisition&&!fgAr.prise&&periodeValideeCg(c,(ar+1)+'-05',(ar+2)+'-04'))
+        fgAr.prise={pris:cgAr.pris,restants:cgAr.restants,prisDansAMSuivante:cgAr.prisDansAMSuivante,soldeAvantReport:cgAr.soldeAvantReport,reportArret:copieFigeCg(cgAr.reportArret),soldeVerse46:copieFigeCg(cgAr.soldeVerse46)};
+    }
+    if(fgAr.acquisition||fgAr.prise) c.congesFiges[ar]=fgAr;
+  });
   c.congesCourants=c.conges[anneeRefDebut]||{acquis:0,pris:0,restants:0};
 }
 
@@ -14356,7 +14516,12 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       return parseFloat((totalNet*0.1).toFixed(2));
     })()
   };
-  if(fiche&&fiche.valide) fiche[_cacheKeyRecap]=_recapResult;
+  // 13/09/2026 (Sophie) : la copie figée se range sur la VRAIE feuille. Une partie de mois d'avenant se
+  // calcule sur une copie de la feuille réduite à ses jours (ficheFiltre) : sa copie figée y était rangée,
+  // donc perdue aussitôt — les mois d'avenant validés étaient recalculés à chaque affichage (52fixe-46fixe,
+  // mars 2024 : 139,99 € devenus 0 € après une correction du code).
+  const ficheCacheRecap=ficheComplete||fiche;
+  if(ficheCacheRecap&&ficheCacheRecap.valide) ficheCacheRecap[_cacheKeyRecap]=_recapResult;
   return _recapResult;
 }
 
@@ -18806,6 +18971,11 @@ function calcIndemniteConges(c, anneeRef, opts){
   // Retourne null si conditions non remplies
   // 13/09/2026 (Sophie) : opts.ignorerRegime — calcule quand même une année close sous le 52, pour
   // l'avenant 52 → 46 postérieur au 31/05 (avenantVers46ApresClotureCg) : même calcul, arrêté au 31/05.
+  // 13/09/2026 (Sophie) : indemnité figée dès que les jours acquis de l'année le sont (toute la période
+  // d'acquisition validée) — les versements suivants (prise principale, chaque prise) se font sur le même
+  // montant que ceux déjà faits, même si le code change entre-temps. opts.sansFige : contrôle.
+  const figeIndCg=!(opts&&(opts.ignorerRegime||opts.sansFige))&&c.congesFiges&&c.congesFiges[anneeRef]&&c.congesFiges[anneeRef].indemnite;
+  if(figeIndCg) return {...figeIndCg};
   const cg=c.conges?.[anneeRef];
   if(!cg?.estTerminee) return null;
   const keyMai=(anneeRef+1)+'-05';
@@ -18898,7 +19068,9 @@ function calcIndemniteConges(c, anneeRef, opts){
   const nomMethode=maintien>=dixieme?'Méthode du maintien de salaire':'Méthode du 10ème';
   const montantJournalierBrut=cg.acquis>0?parseFloat((meilleur/cg.acquis).toFixed(4)):0;
   const montantJournalierNet=parseFloat((montantJournalierBrut*coefNet).toFixed(4));
-  return{maintien,dixieme,meilleurBrut:meilleur,meilleurNet,maintienNet,dixiemeNet,nomMethode,montantJournalierBrut,montantJournalierNet,acquis:cg.acquis,exoRetenue};
+  const resultatIndCg={maintien,dixieme,meilleurBrut:meilleur,meilleurNet,maintienNet,dixiemeNet,nomMethode,montantJournalierBrut,montantJournalierNet,acquis:cg.acquis,exoRetenue};
+  if(!(opts&&(opts.ignorerRegime||opts.sansFige))&&c.congesFiges&&c.congesFiges[anneeRef]&&c.congesFiges[anneeRef].acquisition) c.congesFiges[anneeRef].indemnite={...resultatIndCg};
+  return resultatIndCg;
 }
 function genOngletCongesContrat(c){
   const annees=[];
