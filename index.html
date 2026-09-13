@@ -2218,6 +2218,13 @@ function modifierKmDirect(contratId, val, cibleId){
 // seules dependances de fermeture (c, cycle.clause52) sont maintenant des parametres
 // explicites, pour que les deux appelants ne puissent plus jamais diverger.
         function calcHPrevuReg(c, clause52, dateDebStr, dateFinStr){
+          // 14/09/2026 (Sophie, point 25) : une période qui contient un avenant se calcule en deux morceaux, un de
+          // chaque côté — la semaine de l'avenant est ainsi valorisée par chaque côté pour ses propres jours.
+          const avDansPeriode=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant&&av.dateAvenant>dateDebStr&&av.dateAvenant<=dateFinStr).map(av=>av.dateAvenant).sort()[0];
+          if(avDansPeriode){
+            const vAvP=parseDateLoc(avDansPeriode); vAvP.setDate(vAvP.getDate()-1);
+            return calcHPrevuReg(c,clause52,dateDebStr,dateToStr(vAvP))+calcHPrevuReg(c,clause52,avDansPeriode,dateFinStr);
+          }
           let hPrevu=0;
           const semainesCompteesVM=new Set(); // semaines var/min déjà comptées (une seule fois chacune)
 
@@ -2270,7 +2277,9 @@ function modifierKmDirect(contratId, val, cibleId){
                 if(window.DEBUG_REGUL_COMPARE) console.log('[TEMP-hprevureg-semaine]',lundiSemStr,'→',dimSemStr,'| typeSem:',typeSem,'| dateRuptureC:',dateRuptureC,'| semaineApresRupture:',!!(dateRuptureC&&lundiSemStr>dateRuptureC));
                 if(!(dateRuptureC&&lundiSemStr>dateRuptureC)&&typeSem&&typeSem!=='off'){
                   const dateDebC=c.dateDeb;
-                  const dateAvenantC=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant)?.dateAvenant;
+                  // 14/09/2026 (Sophie, point 25) : l'avenant qui tombe DANS cette semaine, quel qu'il soit — seul le
+                  // premier avenant du contrat était repéré, les suivants jamais.
+                  const dateAvenantC=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant).map(av=>av.dateAvenant).find(dAvC=>lundiSemStr<=dAvC&&dimSemStr>=dAvC);
                   let limiteDebut=null, limiteEstAvenant=false;
                   if(dateDebC&&lundiSemStr<dateDebC&&dimSemStr>=dateDebC) limiteDebut=dateDebC;
                   else if(dateAvenantC&&lundiSemStr<=dateAvenantC&&dimSemStr>=dateAvenantC){ limiteDebut=dateAvenantC; limiteEstAvenant=true; }
@@ -2366,7 +2375,11 @@ function modifierKmDirect(contratId, val, cibleId){
                         const jd=new Date(lundiSem); jd.setDate(lundiSem.getDate()+d);
                         const jdStr=fmtSem(jd);
                         if(!joursPattern[d]) continue;
-                        if(limiteDebut&&jdStr<limiteDebut) continue;
+                        // 14/09/2026 (Sophie, point 25) : partie AVANT l'avenant (la période s'arrête avant lui) — ses
+                        // propres jours, ceux d'avant l'avenant ; seuls ceux d'après étaient comptés (46var-52sem,
+                        // semaine du 11 mars 2024 : 8 h dues du lundi au jeudi au lieu de 32 h).
+                        if(limiteEstAvenant&&dateFinStr<limiteDebut){ if(jdStr>=limiteDebut) continue; }
+                        else if(limiteDebut&&jdStr<limiteDebut) continue;
                         if(limiteFin&&jdStr>limiteFin) continue;
                         joursSousContratHP++;
                       }
@@ -2774,6 +2787,7 @@ function calcRegulOnglet(c, opts){
       }
       // Tout le HTML des cycles (du plus récent au plus ancien)
       let allCyclesHtml='';
+      const anneesRegDetail=[]; // 14/09/2026 (point 24) : lignes de chaque année, pour les PDF
       let totGlobalMensu=0, totGlobalPrevu=0;
       // 25/08/2026 (Sophie) : le total général en haut de l'onglet ne doit refléter que l'état à la
       // dernière fiche validée — jamais les mois futurs/non validés, contrairement aux tableaux par
@@ -2934,6 +2948,7 @@ function calcRegulOnglet(c, opts){
           const label='Année '+(tIdx+1)+' ('+anneeDebut.toLocaleDateString('fr-FR',{day:'numeric',month:'short',year:'numeric'})+' → '+anneeFinDate.toLocaleDateString('fr-FR',{day:'numeric',month:'short',year:'numeric'})+')';
           const labelPdf=label;
           let totMensu=0,totPrevu=0;
+          const lignesDataReg=[]; // 14/09/2026 (point 24)
 
           const lignes=moisList.map(item=>{
             const key=typeof item==='string'?item:item.key;
@@ -3164,6 +3179,7 @@ function calcRegulOnglet(c, opts){
             totMensu+=montantMensu; totPrevu+=montantPrevu;
             cycleTotMensu+=montantMensu; cycleTotPrevu+=montantPrevu;
             if(ficheMois&&ficheMois.valide){ cycleTotMensuValide+=montantMensu; cycleTotPrevuValide+=montantPrevu; }
+            lignesDataReg.push({mois:moisLabel,mensu:montantMensu,prevu:montantPrevu,valide:!!(ficheMois&&ficheMois.valide)}); // 14/09/2026 (point 24)
             const diff=montantPrevu-montantMensu;
             const dc=diff>0?'var(--vt)':diff<0?'var(--al)':'var(--tx2)';
             return `<tr style="border-bottom:1px solid var(--mb)">
@@ -3175,6 +3191,7 @@ function calcRegulOnglet(c, opts){
 
           const diffT=totPrevu-totMensu;
           const clesRegul=moisList.map(item=>typeof item==='string'?item:item.key);
+          anneesRegDetail.push({label,moisDeb:clesRegul[0],moisFin:clesRegul[clesRegul.length-1],lignes:lignesDataReg,totMensu,totPrevu}); // 14/09/2026 (point 24)
           const idTuileRegul=tileRegulId+'-'+tIdx;
           const ouverteRegul=tIdx===tIdxAOuvrir;
           tableauxHtml+=`<div class="card" style="margin-bottom:10px">
@@ -3251,7 +3268,7 @@ function calcRegulOnglet(c, opts){
         const moisCycleCourantReg=dernierCycleEnCours
           ?[...new Set([...Object.keys(c.fiches||{}),...clesProjeteesReg])].filter(k=>k<=moisMax&&k>=dernierCycleEnCours.moisMin&&k<=dernierCycleEnCours.moisMax).sort()
           :[];
-        return {html:htmlRegulFinal, cache:!borneReg, mensuValide:totGlobalMensuValide, prevuValide:totGlobalPrevuValide,
+        return {html:htmlRegulFinal, cache:!borneReg, mensuValide:totGlobalMensuValide, prevuValide:totGlobalPrevuValide, annees:anneesRegDetail,
                 mensuTotal:totGlobalMensu, prevuTotal:totGlobalPrevu, diffTotal:diffGen,
                 borne:!!borneReg, jusquA:borneReg, moisProjetes:clesProjeteesReg, moisCycleCourant:moisCycleCourantReg,
                 horsPlafond:!!(optsReg.jusquA&&optsReg.jusquA>plafondProjReg)};
@@ -4073,7 +4090,15 @@ function calcRegulDiffEurosAuto(c, moisMaxForce){
       return dV.getFullYear()+'-'+String(dV.getMonth()+1).padStart(2,'0')+'-'+String(dV.getDate()).padStart(2,'0');
     })():null;
     const estPassageVers46Reg=avenantDuMoisReg&&avenantDuMoisReg.tc!=='52'&&avenantDuMoisReg.tc!=='occ';
-    const estPassage46vers46Reg=estPassageVers46Reg&&(()=>{const srcAv=getVersionActive(c,new Date(debutMois));return srcAv.tc!=='occ';})();
+    // 14/09/2026 (Sophie) : même règle que l'onglet Régularisation (corrigée le 07/09) — un passage 52 → 46 n'est
+    // pas un 46 → 46 : la partie d'avant, en 52, n'appartient pas au cycle (sauf clause de régularisation 52).
+    // Cette fonction la cumulait encore avec la partie 46 (52var-46sem-52fixe, mars 2024).
+    const estPassage46vers46Reg=estPassageVers46Reg&&(()=>{
+      const srcAv=getVersionActive(c,new Date(debutMois));
+      if(srcAv.tc==='occ') return false;
+      if(srcAv.tc==='52') return !!((c.tc==='52'&&c.clauseRegul52)||(c.avenants||[]).some(av=>av.signe&&av.clauseRegul52&&av.dateAvenant));
+      return true;
+    })();
     // 25/08/2026 (Sophie) : résolution agendaMois, même schéma que le reste de l'app (parseDateLoc,
     // comparaison sur le mois entier — pas juste une date précise, sinon mauvais agenda trouvé quand
     // plusieurs se chevauchent). Utile pour détecter une semaine "off" (isAbsenceEmployeur) sur ce
@@ -5320,21 +5345,15 @@ function imprimerCgAm(anneeDebut){
 function imprimerRegulAnnee(cid, moisDeb, moisFin, label){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c) return;
-  const MOIS_FR=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+  // 14/09/2026 (Sophie, point 24) : mêmes chiffres que la tuile de l'onglet Régularisation (calcRegulOnglet). Ce PDF
+  // refaisait son propre calcul : « Salaire dû » = salaire net de la feuille au lieu des heures dues moins les
+  // absences, sans les cas avenant / anniversaire.
+  const resReg=calcRegulOnglet(c)||{};
+  const anReg=(resReg.annees||[]).find(a=>a.label===label&&a.moisDeb===moisDeb&&a.moisFin===moisFin)||(resReg.annees||[]).find(a=>a.label===label);
+  if(!anReg){ alerte('Cette année est introuvable dans la régularisation.'); return; }
   let lignesHtml='';
-  let totMensu=0,totPrevu=0;
-  const moisTries=Object.keys(c.fiches||{}).filter(k=>k>=moisDeb&&k<=moisFin).sort();
-  moisTries.forEach(key=>{
-    const fiche=c.fiches[key];
-    if(!fiche) return;
-    const [ay,am]=key.split('-').map(Number);
-    const recap=calcRecapFiche(c,fiche);
-    const txNet=parseFloat(recap?.txNetExact||0);
-    const mensu=parseFloat(Math.max(0,(recap?.hMensu||0)*txNet-(recap?.montantAbsences||0)).toFixed(2));
-    const reel=parseFloat((recap?.salaireNet||0).toFixed(2));
-    totMensu+=mensu; totPrevu+=reel;
-    lignesHtml+=`<tr><td style="padding:6px 8px;border-bottom:1px solid #eee">${MOIS_FR[am-1]} ${ay}</td><td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right">${mensu.toFixed(2)} €</td><td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right">${reel.toFixed(2)} €</td></tr>`;
-  });
+  anReg.lignes.forEach(l=>{ lignesHtml+=`<tr><td style="padding:6px 8px;border-bottom:1px solid #eee">${l.mois}</td><td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right">${l.mensu.toFixed(2)} €</td><td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right">${l.prevu.toFixed(2)} €</td></tr>`; });
+  const totMensu=anReg.totMensu, totPrevu=anReg.totPrevu;
   const diff=totPrevu-totMensu;
   const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Régularisation ${label}</title>
   <style>body{font-family:Arial,sans-serif;font-size:13px;margin:20px}h2{color:#7c3aed}table{width:100%;border-collapse:collapse}th{background:#f0e8ff;padding:8px;text-align:left}td{padding:6px 8px}tfoot td{font-weight:700;background:#f8f4ff;padding:8px}</style>
@@ -5352,23 +5371,17 @@ function imprimerRegulAnnee(cid, moisDeb, moisFin, label){
 function imprimerRegulTotal(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c) return;
-  // Récupérer tout l'HTML de l'onglet régul et l'imprimer
-  const cont=document.querySelector('[data-cid="'+cid+'"]')?.querySelector('.tab-content');
-  // Fallback : recalculer tout
-  const MOIS_FR=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
-  let lignesHtml='', totMensu=0, totPrevu=0;
-  const moisTries=Object.keys(c.fiches||{}).sort();
-  moisTries.forEach(key=>{
-    const fiche=c.fiches[key];
-    if(!fiche) return;
-    const [ay,am]=key.split('-').map(Number);
-    const recap=calcRecapFiche(c,fiche);
-    const txNet=parseFloat(recap?.txNetExact||0);
-    const mensu=parseFloat(Math.max(0,(recap?.hMensu||0)*txNet-(recap?.montantAbsences||0)).toFixed(2));
-    const reel=parseFloat((recap?.salaireNet||0).toFixed(2));
-    totMensu+=mensu; totPrevu+=reel;
-    lignesHtml+=`<tr><td style="padding:6px 8px;border-bottom:1px solid #eee">${MOIS_FR[am-1]} ${ay}</td><td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right">${mensu.toFixed(2)} €</td><td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right">${reel.toFixed(2)} €</td></tr>`;
+  // 14/09/2026 (Sophie, point 24) : mêmes chiffres que l'onglet Régularisation — chaque année avec ses lignes et son
+  // total, puis le total général des feuilles validées, comme en haut de l'onglet. Même défaut corrigé que
+  // imprimerRegulAnnee (« Salaire dû » = salaire net de la feuille).
+  const resReg=calcRegulOnglet(c)||{};
+  let lignesHtml='';
+  (resReg.annees||[]).slice().sort((x,y)=>x.moisDeb.localeCompare(y.moisDeb)).forEach(an=>{
+    lignesHtml+=`<tr><td colspan="3" style="padding:8px;font-weight:700;background:#faf7ff">${an.label}</td></tr>`;
+    an.lignes.forEach(l=>{ lignesHtml+=`<tr><td style="padding:6px 8px;border-bottom:1px solid #eee">${l.mois}</td><td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right">${l.mensu.toFixed(2)} €</td><td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right">${l.prevu.toFixed(2)} €</td></tr>`; });
+    lignesHtml+=`<tr><td style="padding:6px 8px;border-bottom:1px solid #eee;font-style:italic">Total de l’année</td><td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;font-style:italic">${an.totMensu.toFixed(2)} €</td><td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;font-style:italic">${an.totPrevu.toFixed(2)} €</td></tr>`;
   });
+  const totMensu=resReg.mensuValide||0, totPrevu=resReg.prevuValide||0; // feuilles validées, comme l'onglet
   const diff=totPrevu-totMensu;
   const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Régularisation complète — ${c.nom}</title>
   <style>body{font-family:Arial,sans-serif;font-size:13px;margin:20px}h2{color:#7c3aed}table{width:100%;border-collapse:collapse}th{background:#f0e8ff;padding:8px;text-align:left}tfoot td{font-weight:700;background:#f8f4ff;padding:8px}</style>
@@ -5376,7 +5389,7 @@ function imprimerRegulTotal(cid){
   <h2>${c.nom} — Régularisation complète</h2>
   <table><thead><tr><th>Mois</th><th style="text-align:right">Salaire mensualisé</th><th style="text-align:right">Salaire dû</th></tr></thead>
   <tbody>${lignesHtml}</tbody>
-  <tfoot><tr><td>Total général</td><td style="text-align:right">${totMensu.toFixed(2)} €</td><td style="text-align:right">${totPrevu.toFixed(2)} €</td></tr>
+  <tfoot><tr><td>Total général (feuilles validées)</td><td style="text-align:right">${totMensu.toFixed(2)} €</td><td style="text-align:right">${totPrevu.toFixed(2)} €</td></tr>
   <tr><td colspan="2">Régularisation à verser</td><td style="text-align:right;color:${diff>0?'green':'red'}">${diff>0?'+':''}${diff.toFixed(2)} €</td></tr></tfoot>
   </table>
   <script>window.onload=function(){window.print();}<\/script></body></html>`;
@@ -9726,6 +9739,9 @@ function calcCongesContrat(c, dateRefOverride){
             joursActifs.forEach(j=>{
               let sj=j.statut||getStatutPrevu(c,j);
               if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) sj='fractionnement';
+              // 14/09/2026 (Sophie) : un férié passé en « travaillé » (pour sa majoration) reste un férié pour
+              // l'acquisition — compté s'il tombe sur un jour prévu, comme le férié non travaillé.
+              if(sj==='travaille'&&isFerie(j.date,c)) sj='ferie';
               const cocheCgPV=!!(c.planning&&c.planning[j.date]&&c.planning[j.date].coche);
               if(sj==='travaille'){
                 // 12/09/2026 (Sophie) : jour travaillé en plus — plus compté pour l'acquisition (voir la
@@ -9994,6 +10010,10 @@ function calcCongesContrat(c, dateRefOverride){
                 const estJourContratJ=!!(hContratJ&&hContratJ.debut&&hContratJ.fin&&!hContratJ.isOff);
                 if(estJourContratJ&&pdModifJ.coche===false&&statutJ==='non-prevu'){ joursNormaux++; return; }
               }
+              // 14/09/2026 (Sophie) : un férié passé en « travaillé » (pour sa majoration) reste un férié pour
+              // l'acquisition — compté s'il tombe sur un jour prévu, comme le férié non travaillé. Pas en
+              // semaine d'absence de l'employeur, où aucun jour n'est prévu.
+              if(statutJ==='travaille'&&isFerie(j.date,c)&&!estSemaineOffCg) statutJ='ferie';
               if(estSemaineOffCg&&!j.heureDebReel&&statutJ!=='travaille'&&statutJ!=='reprise'){
                 // rien à compter cette semaine-là (sauf un jour réellement travaillé malgré tout,
                 // qui garde son heureDebReel et passe par les branches normales ci-dessous)
@@ -17332,14 +17352,19 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
     const [ay2,am2]=key.split('-').map(Number);
     const source=getVersionActive(c,new Date(ay2,am2-1,1));
     // Détecter si ce mois est à cheval sur un avenant 46→52
-    const avenantMois=(c.avenants||[]).find(av=>av.signe&&av.tc==='52'&&av.dateAvenant&&av.dateAvenant.slice(0,7)===key);
+    // 14/09/2026 (Sophie) : un VRAI passage 46 → 52 (la veille, le contrat n'était pas en 52) — un avenant 52 → 52
+    // (changement de taux, d'horaires) était pris pour un passage 46 → 52 : mois coupé à tort à la veille.
+    const avenantMois=(c.avenants||[]).find(av=>av.signe&&av.tc==='52'&&av.dateAvenant&&av.dateAvenant.slice(0,7)===key&&(()=>{const vAvM=parseDateLoc(av.dateAvenant); vAvM.setDate(vAvM.getDate()-1); return ((getVersionActive(c,vAvM)||{}).tc||c.tc)!=='52';})());
     const veilleAvenantStr=avenantMois?(()=>{
       const [avy,avm,avd]=avenantMois.dateAvenant.split('-').map(Number);
       const dV=new Date(avy,avm-1,avd-1);
       return dV.getFullYear()+'-'+String(dV.getMonth()+1).padStart(2,'0')+'-'+String(dV.getDate()).padStart(2,'0');
     })():null;
     // Heures payées = hMensu - hAbsDeduit (en heures équivalentes)
-    const recapMois=avenantMois?calcRecapFiche(c,fiche,null,veilleAvenantStr,null,avenantMois.dateAvenant,'avant'):calcRecapFiche(c,fiche);
+    // 14/09/2026 (Sophie, point 21) : date de référence = veille de l'avenant, comme calcRegulDiffEurosAuto et
+    // l'onglet Régularisation. Sans elle, la partie d'AVANT l'avenant était calculée avec le contrat d'APRÈS
+    // (46fixe-52sem, mars 2024 : 99,67 h mensualisées au lieu de 68,33 h, 166,10 € au lieu de 34,16 €).
+    const recapMois=avenantMois?calcRecapFiche(c,fiche,null,veilleAvenantStr,veilleAvenantStr,avenantMois.dateAvenant,'avant'):calcRecapFiche(c,fiche);
     // Déduction sur la seule mensu de base (jamais la majoration structurelle HS, exclue de la
     // régularisation des deux côtés pour rester cohérent — voir discussion du jour) : montantAbsences
     // moins montantAbsMaj, converti en heures au taux normal
@@ -17371,9 +17396,12 @@ function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
       // écartaient déjà tc==='52'. Ce raisonnement oubliait la clause : un 52 qui la porte est bien
       // dans un cycle, et ses congés, couverts par la mensualisation, doivent compter dans le dû.
       const clause52RegC=!!((c.tc==='52'&&c.clauseRegul52)||(c.avenants||[]).some(av=>av.signe&&av.clauseRegul52&&av.dateAvenant));
-      hPrevu=calcHPrevuReg(c,clause52RegC,debutMoisRegC,finMoisRegC);
+      // 14/09/2026 (Sophie, point 21) : mois d'un avenant 46 → 52, le dû s'arrête à la veille comme le mensualisé
+      hPrevu=calcHPrevuReg(c,clause52RegC,debutMoisRegC,veilleAvenantStr||finMoisRegC);
     } else {
       (fiche.jours||[]).forEach(j=>{
+        // 14/09/2026 (Sophie, point 21) : mois d'un avenant 46 → 52, le dû s'arrête à la veille comme le mensualisé
+        if(veilleAvenantStr&&j.date>veilleAvenantStr) return;
         const semKey=getSemISO(j.date);
         const agKey=getKeyAgenda(semKey,getSemAnnee(j.date));
         const typeSem=ag&&ag.semaines&&ag.semaines[agKey];
@@ -18188,7 +18216,9 @@ function renderRuptureCDD(c, cont){
 
   // ─── Solde congés ───
   let soldeCongesHtml='';
-  if(c.tc==='52'){
+  // 14/09/2026 (Sophie, point 26) : type du contrat EN VIGUEUR à la date du solde, jamais celui de départ
+  // (c.tc) — un contrat passé de 52 à 46 par avenant était soldé comme un 52. Même choix que le simulateur.
+  if(((getVersionActive(c,dateSit||new Date())||{}).tc||c.tc)==='52'){
     const s=calcSoldeConges52(c,dateSit||new Date());
     soldeCongesHtml=`<div class="card" style="margin-bottom:10px">
       <div class="ctitle" style="display:flex;align-items:center;justify-content:space-between">Solde des congés${pastilleAide('ICCP')}</div>
@@ -18285,7 +18315,8 @@ function renderRuptureCDD(c, cont){
     const dateFinCdd=c.cddTerme==='precis'?c.cddDateFin:c.cddDateMin;
     const dFinCdd=dateFinCdd?new Date(dateFinCdd):null;
     const coefNet=getParamAt('coefficients',dateToStr(rp.dateSignif?new Date(rp.dateSignif):(dFinCdd||dateSit||new Date()))).valeur||0.7811975;
-    if(c.tc==='52'){
+    // 14/09/2026 (Sophie, point 26) : type du contrat en vigueur à la fin, pas celui de départ
+    if(((getVersionActive(c,dFinCdd||dateSit||new Date())||{}).tc||c.tc)==='52'){
       const s=calcSoldeConges52(c,dFinCdd||dateSit||new Date());
       if(s.montantAcquisBrut>0){lignes.push({label:'Solde congés acquis',net:s.montantAcquisNet,brut:s.montantAcquisBrut});totalNet+=s.montantAcquisNet;totalBrut+=s.montantAcquisBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
@@ -18467,7 +18498,8 @@ function renderRupture(c, cont){
   // reste légitime — c'est la situation à la dernière feuille validée — mais elle devient une section
   // de la carte "Situation au", plus une carte à elle seule.
   let soldeCongesHtml='';
-  if(c.tc==='52'){
+  // 14/09/2026 (Sophie, point 26) : type du contrat en vigueur à la date de situation, pas celui de départ
+  if(((getVersionActive(c,dateSit||new Date())||{}).tc||c.tc)==='52'){
     const s=calcSoldeConges52(c,dateSit||new Date());
     soldeCongesHtml=`<div style="margin-bottom:14px">
       <div style="font-size:13px;font-weight:600;color:var(--tx2);margin-bottom:4px;display:flex;align-items:center;justify-content:space-between">Solde des congés${pastilleAide('ICCP')}</div>
