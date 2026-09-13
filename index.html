@@ -13877,6 +13877,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
 
   // Indemnité de congés payés (contrats 46 sem ou moins)
   let indemCongeMois=0;
+  const indemCongeParAnnee={}; // 13/09/2026 : { année de droits : montant versé sur cette feuille }
   let indemCongeNbJours=0;
   let indemFractionnementMois=0;
   let indemFractionnementNbJours=0;
@@ -13899,7 +13900,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const indNormalCg=calcIndemniteConges(c,anneeAcq);
     const dateAv5246=indNormalCg?null:avenantVers46ApresClotureCg(c,anneeAcq);
     let ind=indNormalCg;
-    if(!ind&&dateAv5246&&moisKey>=dateAv5246.slice(0,7)) ind=calcIndemniteConges(c,anneeAcq,{ignorerRegime:true,dateVersion:parseDateLoc(dateAv5246)});
+    if(!ind&&dateAv5246&&moisKey>=dateAv5246.slice(0,7)) ind=calcIndemniteConges(c,anneeAcq,{ignorerRegime:true});
     // Ce que la mensualisation d'un 52 a déjà payé sur cette année : jusqu'à l'avenant 52 → 46
     // postérieur au 31/05, sinon jusqu'à la fin du mois affiché.
     const finMoisAffCg=dateToStr(new Date(fiche.annee,fiche.mois+1,1));
@@ -13921,7 +13922,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const finPriseAcq=(anneeAcq+2)+'-04-30';
         Object.entries(c.fiches||{}).forEach(([k,f])=>{
           if(!f.valide||k>=moisKeyCur) return;
-          dejaPayesAcq+=f.jours.filter(j=>j.statut==='conges-acq'&&j.date>=debutPriseAcq&&j.date<=finPriseAcq&&!estJourSous52Cg(c,j.date)).length;
+          // 13/09/2026 (Sophie) : les jours de décompte post-pose sont payés comme les autres (du 1er au
+          // dernier jour décompté, jamais les « congés Ass'Mat » non décomptés).
+          dejaPayesAcq+=f.jours.filter(j=>(j.statut==='conges-acq'||j.statut==='decompte-acq')&&j.date>=debutPriseAcq&&j.date<=finPriseAcq&&!estJourSous52Cg(c,j.date)).length;
         });
         // 13/09/2026 (Sophie, « cp 52-46 ») : les jours pris sous un contrat 52 sont payés par sa
         // mensualisation — ni comptés ni payés ici (jours du mois, rattrapage de mai, anticipés de juin) —
@@ -13943,7 +13946,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           const propres=Math.min(nbJoursMois-rep,Math.max(0,totalAcquis-propresAvant));
           return {rep,propres};
         };
-        const totalCeMoisAcq=fiche.jours.filter(j=>j.statut==='conges-acq'&&!estJourSous52Cg(c,j.date)).length;
+        const totalCeMoisAcq=fiche.jours.filter(j=>(j.statut==='conges-acq'||j.statut==='decompte-acq')&&!estJourSous52Cg(c,j.date)).length; // 13/09/2026 : décompte compris
         const partCeMois=repartirJoursChaque(totalCeMoisAcq,dejaPayesAcq);
         const nbAcqMois=partCeMois.rep+partCeMois.propres;
         // 11/09/2026 (Sophie) : plus AUCUN versement d'indemnité de congés sur une fiche de MAI.
@@ -13975,7 +13978,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           const moisMaiPrec=fiche.annee+'-05';
           const fMai=(c.fiches||{})[moisMaiPrec];
           if(fMai&&fMai.valide){
-            const partMai=repartirJoursChaque(fMai.jours.filter(j=>j.statut==='conges-acq'&&!estJourSous52Cg(c,j.date)).length,0);
+            const partMai=repartirJoursChaque(fMai.jours.filter(j=>(j.statut==='conges-acq'||j.statut==='decompte-acq')&&!estJourSous52Cg(c,j.date)).length,0);
             const nbMai=partMai.rep+partMai.propres;
             if(nbMai>0){
               indemCongeNbJours+=nbMai;
@@ -13996,7 +13999,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             if(!f.valide) return;
             f.jours.forEach(j=>{
               if(j.date>=limiteMai||j.date<limiteJuinPrec) return;
-              if(j.statut!=='conges-anticipe') return;
+              if(j.statut!=='conges-anticipe'&&j.statut!=='decompte-anticipe') return; // 13/09/2026 : décompte compris
               // 20/08/2026 (Sophie) : ne compter que les anticipés pris alors que le régime actif
               // ce jour-là n'était pas 52 — un anticipé pris sous 52 est déjà couvert par la
               // mensu ; le repayer ici serait un double paiement (confirmé par Sophie, cas réel
@@ -14056,6 +14059,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     }
   }
 
+  // 13/09/2026 (Sophie) : versement du bloc ci-dessus rattaché à l'année qu'il règle — la carte de l'onglet
+  // Congés s'en sert pour dire ce qui a déjà été versé (montantVerse46Annee).
+  if(indemCongeMois>0){
+    const anneeAcqBloc46=getAnneeAmPourDate(fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0'))-1;
+    indemCongeParAnnee[anneeAcqBloc46]=indemCongeMois;
+  }
+
   // 13/09/2026 (Sophie, onglet « cp 52-46 » du plan de tests) : avenant 46 → 52 — ce que le 46 doit
   // encore payer au mois de l'avenant, pour les jours pris sous lui. Remplace le « Cas 1 » du 20/08, qui
   // ne payait que les jours anticipés, au taux du contrat du mois — donc celui du 52 quand l'avenant
@@ -14077,10 +14087,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const moisAv4652=dateAv4652.slice(0,7);
     const sous46Av=j=>!estJourSous52Cg(c,j.date);
     const anneeEnCours4652=amAv4652>=6?ayAv4652:ayAv4652-1;
-    const jours1Av=joursCongesAnneeCg(c,anneeEnCours4652,{avant:dateAv4652,sansDecompte:true}).filter(sous46Av);
+    // 13/09/2026 (Sophie) : les jours de décompte sont payés comme les autres.
+    const jours1Av=joursCongesAnneeCg(c,anneeEnCours4652,{avant:dateAv4652}).filter(sous46Av);
     if(jours1Av.length){
-      indemCongeMois=parseFloat((indemCongeMois+jours1Av.length*valeurJourMaintien46Cg(c,dateAv4652)).toFixed(2));
+      const m1Av=parseFloat((jours1Av.length*valeurJourMaintien46Cg(c,dateAv4652)).toFixed(2));
+      indemCongeMois=parseFloat((indemCongeMois+m1Av).toFixed(2));
       indemCongeNbJours+=jours1Av.length;
+      indemCongeParAnnee[anneeEnCours4652]=parseFloat(((indemCongeParAnnee[anneeEnCours4652]||0)+m1Av).toFixed(2));
     }
     if(amAv4652!==5){
       const anneePrec4652=anneeEnCours4652-1;
@@ -14088,7 +14101,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       if(indPrec4652){
         const srcClot4652=getVersionActive(c,new Date(anneePrec4652+1,4,31))||{};
         const moisJuin4652=(anneePrec4652+1)+'-06';
-        const jours2Av=joursCongesAnneeCg(c,anneePrec4652,{avant:dateAv4652,sansDecompte:true}).filter(sous46Av);
+        const jours2Av=joursCongesAnneeCg(c,anneePrec4652,{avant:dateAv4652}).filter(sous46Av);
         let impayes2Av=[];
         if(srcClot4652.dateCg==='juin'){
           if(moisAv4652===moisJuin4652) impayes2Av=jours2Av;
@@ -14096,12 +14109,14 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           const pm4652=moisVersementPrincipaleCg(c,anneePrec4652,null).mois;
           if(!(pm4652&&pm4652<moisAv4652)) impayes2Av=jours2Av;
         } else if(srcClot4652.dateCg==='chaque'){
-          const moisPaie4652=j=>(j.statut==='conges-anticipe'||j.date.slice(5,7)==='05')?moisJuin4652:j.date.slice(0,7);
+          const moisPaie4652=j=>(j.statut==='conges-anticipe'||j.statut==='decompte-anticipe'||j.date.slice(5,7)==='05')?moisJuin4652:j.date.slice(0,7);
           impayes2Av=jours2Av.filter(j=>moisPaie4652(j)>=moisAv4652);
         }
         if(impayes2Av.length){
-          indemCongeMois=parseFloat((indemCongeMois+indPrec4652.montantJournalierNet*impayes2Av.length).toFixed(2));
+          const m2Av=parseFloat((indPrec4652.montantJournalierNet*impayes2Av.length).toFixed(2));
+          indemCongeMois=parseFloat((indemCongeMois+m2Av).toFixed(2));
           indemCongeNbJours+=impayes2Av.length;
+          indemCongeParAnnee[anneePrec4652]=parseFloat(((indemCongeParAnnee[anneePrec4652]||0)+m2Av).toFixed(2));
         }
       }
     }
@@ -14114,8 +14129,12 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // le mode de paiement — « à chaque prise » reporte désormais sur juin, « prise principale » le
   // faisait déjà, « en une fois » verse en juin par nature. On mémorise ici le nombre de jours
   // concernés pour pouvoir l'expliquer sur la fiche plutôt que de laisser un mois vide inexpliqué.
+  // 13/09/2026 (Sophie) : seulement quand un paiement était prévu ce mois-ci — mode « à chaque prise », ou
+  // prise principale commencée en mai. En mode juin, ou quand la principale vient plus tard, rien ne devait
+  // être versé en mai : la phrase n'avait pas lieu d'être (52var-46sem-52fixe, mai 2025).
   if(fiche.mois===4&&!indemCongeMois&&sourceActif.tc!=='52'&&sourceActif.tc!=='occ'&&sourceActif.dateCg){
-    indemCongeReportMai=fiche.jours.filter(j=>j.statut==='conges-acq').length;
+    const paiementPrisePrevuMai=sourceActif.dateCg==='chaque'||(sourceActif.dateCg==='principale'&&(moisVersementPrincipaleCg(c,fiche.annee-1,fiche.annee+'-05').debut||'').slice(5,7)==='05');
+    if(paiementPrisePrevuMai) indemCongeReportMai=fiche.jours.filter(j=>j.statut==='conges-acq'||j.statut==='decompte-acq').length;
   }
 
   // Calcul "dont congés payés" pour contrats 52 sem
@@ -14253,7 +14272,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     indemEntretienTotal:indemEntretienTotal.toFixed(2),
     indemRepasTotal:indemRepasTotal.toFixed(2),
     indemKmTotal:indemKmTotal.toFixed(2),
-    indemCongeMois, indemCongeNbJours, indemCongeReportMai, indemFractionnementMois, indemFractionnementNbJours,
+    indemCongeMois, indemCongeNbJours, indemCongeParAnnee, indemCongeReportMai, indemFractionnementMois, indemFractionnementNbJours,
     montantCongesPayesMois, nbCongesPayesMois, montantCongesPayesAcqSeul,
     montantCongesNonAcquis, nbCongesNonAcquis,
     regul52Fiche,
@@ -18649,9 +18668,9 @@ function moisVersementPrincipaleCg(c, anneeAcq, moisCourantKey){
       }
     }
   }
-  if(!debutPrincipale) return {mois:null,joursAcqValides};
+  if(!debutPrincipale) return {mois:null,joursAcqValides,debut:null};
   const moisDebutPrincipale=debutPrincipale.slice(0,7);
-  return {mois:moisDebutPrincipale.endsWith('-05')?an+'-06':moisDebutPrincipale,joursAcqValides};
+  return {mois:moisDebutPrincipale.endsWith('-05')?an+'-06':moisDebutPrincipale,joursAcqValides,debut:debutPrincipale};
 }
 // Année N close sous le 46 dont l'indemnité ENTIÈRE a été versée (mode juin, avenant après juin ; ou
 // prise principale déjà payée) avant un avenant vers le 52 pendant sa période de prise : ce qui n'était
@@ -18674,6 +18693,37 @@ function soldeVerse46AvantAvenantCg(c, anneeRef){
     return (pm&&pm<moisAv)?av.dateAvenant:null;
   }
   return null;
+}
+
+// 13/09/2026 (Sophie) : avenant 46 → 52 signé pendant la période de prise de l'année N, après le 31/05.
+function avenantVers52PendantPriseCg(c, anneeRef){
+  const debut=(anneeRef+1)+'-06-01', fin=(anneeRef+2)+'-04-30';
+  const av=(c.avenants||[]).filter(a=>a.signe&&a.dateAvenant&&a.dateAvenant>=debut&&a.dateAvenant<=fin&&a.tc==='52')
+    .sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant))
+    .find(a=>{ const v=parseDateLoc(a.dateAvenant); v.setDate(v.getDate()-1); return ((getVersionActive(c,v)||{}).tc||c.tc)!=='52'; });
+  return av?av.dateAvenant:null;
+}
+// 13/09/2026 (Sophie) : ce que les feuilles de présence VALIDÉES ont versé au titre de l'indemnité 46 de
+// l'année N (indemCongeParAnnee ; une feuille figée avant ce champ voit tout son versement rattaché à
+// l'année qu'elle règle d'habitude). Un mois coupé par un avenant compte ses deux parties, comme la feuille.
+function montantVerse46Annee(c, anneeRef){
+  let total=0;
+  const ajouter=(r,key)=>{
+    if(!r||!(+r.indemCongeMois>0)) return;
+    if(r.indemCongeParAnnee){ total+=+(r.indemCongeParAnnee[anneeRef]||0); return; }
+    if(getAnneeAmPourDate(key)-1===anneeRef) total+=+r.indemCongeMois;
+  };
+  Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
+    if(!fiche.valide) return;
+    const av=(c.avenants||[]).find(a=>a.signe&&a.dateAvenant&&a.dateAvenant>key+'-01'&&a.dateAvenant<=key+'-31');
+    if(av){
+      const vA=parseDateLoc(av.dateAvenant); vA.setDate(vA.getDate()-1);
+      const finM=new Date(+key.slice(0,4),+key.slice(5,7),0);
+      ajouter(calcRecapFiche(c,fiche,key+'-01',dateToStr(vA),key+'-01',av.dateAvenant,'avant'),key);
+      ajouter(calcRecapFiche(c,fiche,av.dateAvenant,dateToStr(finM),av.dateAvenant,av.dateAvenant,'apres'),key);
+    } else ajouter(calcRecapFiche(c,fiche),key);
+  });
+  return parseFloat(total.toFixed(2));
 }
 
 // 10/09/2026 (Sophie) : ce que la mensualisation d'un contrat 52 a DÉJÀ payé, sur une année de
@@ -18716,11 +18766,10 @@ function calcIndemniteConges(c, anneeRef, opts){
   if(!c.fiches?.[keyMai]?.valide) return null;
 
   const dateMai=new Date(anneeRef+1,4,31);
-  // 13/09/2026 (Sophie) : opts.dateVersion — version dont le salaire sert à la méthode du maintien. Après
-  // un avenant 52 → 46 postérieur au 31/05, les jours qui restent seront pris sous le 46 : c'est son
-  // salaire que le salarié aurait perçu pendant ces congés (et c'est ce que faisait déjà l'ancien
-  // règlement à l'avenant, au taux et aux heures du 46). Le 10ème, lui, reste celui de la période.
-  const sourceM=getVersionActive(c,(opts&&opts.dateVersion)||dateMai);
+  // 13/09/2026 (Sophie) : même après un avenant 52 → 46 postérieur au 31/05, le 46 calcule comme il l'aurait
+  // fait au 31/05 — salaire en vigueur au 31/05 (celui du 52), 10ème sur les salaires de juin à mai
+  // (congés payés par le 52 compris).
+  const sourceM=getVersionActive(c,dateMai);
   // 20/08/2026 (Sophie) : le régime qui détermine si CETTE année doit une indemnité, c'est celui actif
   // à SA propre clôture (dateMai) — jamais c.tc (origine, jamais mis à jour par un avenant) ni le
   // régime d'aujourd'hui. Une année close en 46 reste due même après un avenant vers 52 plus tard
@@ -19059,10 +19108,13 @@ function buildCgAcquisEncarts(c, anneeAcq){
   // 13/09/2026 (Sophie) : année close sous le 46 dont l'indemnité entière a été versée avant un avenant
   // vers le 52 — le compteur tombe à zéro à l'avenant (soldeVerse46AvantAvenantCg).
   if(cg.soldeVerse46){
+    const indSoldeCg=calcIndemniteConges(c,anneeAcq);
+    const montantSoldeCg=indSoldeCg?parseFloat((cg.soldeVerse46.jours*indSoldeCg.montantJournalierNet).toFixed(2)):0;
     html52+=`<div style="background:#f2eef1;border-radius:8px;padding:10px 12px;margin-bottom:8px">
-      <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:6px">Solde réglé par l’indemnité du 46</div>
-      <div style="${ls};border-bottom:none"><span>Jours restants à l’avenant du ${dateISOversTexte(cg.soldeVerse46.date)}</span><span style="${vs}">${cg.soldeVerse46.jours} j</span></div>
-      <div style="font-size:11px;color:var(--tx2);margin-top:4px">L’indemnité de toute l’année a déjà été versée : ces jours sont soldés et le compteur tombe à 0. Posés ensuite sous le 52, ils ne sont plus payés (congés non acquis, ou anticipés de l’année suivante si la case est cochée).</div>
+      <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:6px">Solde réglé le mois de l’avenant</div>
+      <div style="${ls}"><span>Jours restants à l’avenant du ${dateISOversTexte(cg.soldeVerse46.date)}</span><span style="${vs}">${cg.soldeVerse46.jours} j</span></div>
+      <div style="${ls};border-bottom:none"><span>Montant correspondant</span><span style="${vs}">${montantSoldeCg.toFixed(2)} €</span></div>
+      <div style="font-size:11px;color:var(--tx2);margin-top:4px">L’indemnité de toute l’année a déjà été versée : ces jours sont soldés et le compteur tombe à 0.</div>
     </div>`;
   }
   if(nbAnticipesProg>0||nbAcqProg>0){
@@ -19129,7 +19181,7 @@ function buildCgAcquisEncarts(c, anneeAcq){
   const dateAv5246Cg=avenantVers46ApresClotureCg(c,anneeAcq);
   let indemnite=calcIndemniteConges(c, anneeAcq);
   if(!indemnite&&dateAv5246Cg){
-    const indApres52Cg=calcIndemniteConges(c,anneeAcq,{ignorerRegime:true,dateVersion:parseDateLoc(dateAv5246Cg)});
+    const indApres52Cg=calcIndemniteConges(c,anneeAcq,{ignorerRegime:true});
     if(indApres52Cg&&montantCongesVersesSous52(c,anneeAcq,dateAv5246Cg).jours<(indApres52Cg.acquis||0)) indemnite=indApres52Cg;
   }
   if(indemnite){
@@ -19146,11 +19198,28 @@ function buildCgAcquisEncarts(c, anneeAcq){
         // annonçait le montant de l'année sans dire qu'une part était déjà versée — on ne pouvait
         // donc pas comprendre ce que la feuille verserait réellement. Les deux lignes n'apparaissent
         // que s'il y a effectivement eu un versement sous 52.
-        const dS=montantCongesVersesSous52(c,anneeAcq,dateAv5246Cg||undefined);
-        if(!(dS.montant>0)) return '';
-        const reste=Math.max(0,indemnite.meilleurNet-dS.montant);
-        return `<div style="${ls2}"><span>Déjà versé en maintien de salaire (${dS.jours} j sous contrat 52)</span><span style="${vs2}">− ${dS.montant.toFixed(2)} €</span></div>
-      <div style="${ls2};border-bottom:none;color:var(--vt)"><span>Restant à verser</span><span style="${vs2};color:var(--vt)">${reste.toFixed(2)} €</span></div>`;
+        // 13/09/2026 (Sophie) : on retire aussi ce que les feuilles de présence ont déjà versé au titre du
+        // 46 (52fixe-46fixe : 386,63 € versés en août 2024 et toujours annoncés « à verser »). Après un
+        // avenant vers le 52 pendant la période de prise, le 46 a payé les jours pris sous lui ; les jours
+        // restants passent par la mensualisation du 52 (sauf si toute l'année était déjà payée : compteur à
+        // zéro). « Déjà versé par le 52 » ne compte que les jours pris sous le 52 AVANT que le 46 règle
+        // l'année — jamais ceux pris après un avenant vers le 52, qui ne sont pas encore payés.
+        const dateAv4652Cg=avenantVers52PendantPriseCg(c,anneeAcq);
+        const dS=montantCongesVersesSous52(c,anneeAcq,dateAv5246Cg||dateAv4652Cg||undefined);
+        const verse46Cg=montantVerse46Annee(c,anneeAcq);
+        // … seulement s'il restait des jours à prendre à l'avenant (46fixe-52sem 2022/2023 : tout était pris avant).
+        const restePar52Cg=!!(dateAv4652Cg&&!cg.soldeVerse46&&((cg.restants||0)>0||joursCongesAnneeCg(c,anneeAcq).some(j=>j.date>=dateAv4652Cg)));
+        if(!(dS.montant>0)&&!(verse46Cg>0)&&!restePar52Cg) return '';
+        let lignesCg='';
+        if(dS.montant>0) lignesCg+=`<div style="${ls2}"><span>Déjà versé en maintien de salaire (${dS.jours} j sous contrat sur 52 semaines)</span><span style="${vs2}">− ${dS.montant.toFixed(2)} €</span></div>`;
+        if(verse46Cg>0) lignesCg+=`<div style="${ls2}"><span>Déjà versé sur les feuilles de présence</span><span style="${vs2}">− ${verse46Cg.toFixed(2)} €</span></div>`;
+        if(restePar52Cg){
+          lignesCg+=`<div style="${ls2};border-bottom:none;color:var(--vt)"><span>Jours restants à partir du ${dateISOversTexte(dateAv4652Cg)} : payés par la mensualisation du contrat sur 52 semaines</span><span></span></div>`;
+        } else {
+          const reste=Math.max(0,indemnite.meilleurNet-dS.montant-verse46Cg);
+          lignesCg+=`<div style="${ls2};border-bottom:none;color:var(--vt)"><span>Restant à verser</span><span style="${vs2};color:var(--vt)">${reste.toFixed(2)} €</span></div>`;
+        }
+        return lignesCg;
       })()}
     </div>`;
   } else if(c.rupture?.confirmee&&(getVersionActive(c,getDateFinContrat(c)||new Date())||{}).tc==='52'){
@@ -21659,6 +21728,17 @@ if(tousNonPrevus){
       const premierTravReprise=premierJourTravaille(c,debutRechercheReprise,limitePTStr,true);
      // Limiter dernierDecompte au jour avant le début de la prochaine période
       let dernierDecompte=dernierJourDecompte(c,fin,joursPoses,data.jours);
+      // 13/09/2026 (Sophie) : un avenant qui tombe pendant le décompte post-pose l'interrompt — aucun jour
+      // de décompte ne démarre sous le nouveau contrat (52var-46sem-52fixe : avenant du 26/08/2025 tombé
+      // sur le décompte de la pose d'août, le 26 était décompté sous le 52).
+      {
+        const avDansDecompte=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant&&av.dateAvenant>fin&&av.dateAvenant<=dernierDecompte).map(av=>av.dateAvenant).sort()[0];
+        if(avDansDecompte){
+          const vDecompte=parseDateLoc(avDansDecompte); vDecompte.setDate(vDecompte.getDate()-1);
+          const vDecompteStr=dateToStr(vDecompte);
+          if(vDecompteStr<dernierDecompte) dernierDecompte=vDecompteStr;
+        }
+      }
       const idxPeriode=periodes.findIndex(p=>p.debut===debut&&p.fin===fin);
       if(idxPeriode>=0&&idxPeriode<periodes.length-1){
         const debutPeriodeSuivante=periodes[idxPeriode+1].debut;
