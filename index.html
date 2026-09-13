@@ -4560,9 +4560,10 @@ function ouvrirFiche(contratId,key){
     return dateAv>=debutMois&&dateAv<=finMois;
   });
 
-  let recap, recap2, dateDebAv;
+  let recap, recap2, dateDebAv, avSansAvant=false;
   if(avenantDuMois){
     dateDebAv=avenantDuMois.dateAvenant;
+    avSansAvant=avenantSansPartieAvant(c,dateDebAv);
     const veille=new Date(dateDebAv);
     veille.setDate(veille.getDate()-1);
     const veilleStr=veille.getFullYear()+'-'+String(veille.getMonth()+1).padStart(2,'0')+'-'+String(veille.getDate()).padStart(2,'0');
@@ -5044,7 +5045,7 @@ function ouvrirFiche(contratId,key){
       return legendHtml;
     })():''}
    ${avenantDuMois?`
-    ${parseInt(dateDebAv.split('-')[2])>1?`
+    ${!avSansAvant?`
     <div class="card" style="margin-top:10px">
       <div class="ctitle">Période du 1er au ${new Date(dateDebAv.split('-')[0],dateDebAv.split('-')[1]-1,dateDebAv.split('-')[2]-1).getDate()} ${label}</div>
       <table id="recap1-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
@@ -5053,9 +5054,9 @@ function ouvrirFiche(contratId,key){
     </div>
     `:''}
     <div class="card" style="margin-top:10px">
-      <div class="ctitle">Période du ${parseInt(dateDebAv.split('-')[2])>1?parseInt(dateDebAv.split('-')[2]):1} au ${new Date(parseInt(annee),mois+1,0).getDate()} ${label}</div>
+      <div class="ctitle">Période du ${!avSansAvant?parseInt(dateDebAv.split('-')[2]):1} au ${new Date(parseInt(annee),mois+1,0).getDate()} ${label}</div>
       <table id="recap2-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
-        ${parseInt(dateDebAv.split('-')[2])===1?buildRecapHtml(recap, null, null, c, true):''}
+        ${avSansAvant?buildRecapHtml(recap, null, null, c, true):''}
         ${buildRecapHtml(recap2, null, null, c)}
       </table>
     </div>
@@ -7335,14 +7336,17 @@ function enregistrerFiche(contratId,key){
     const veille=new Date(dateDebAv);
     veille.setDate(veille.getDate()-1);
     const veilleStr=veille.getFullYear()+'-'+String(veille.getMonth()+1).padStart(2,'0')+'-'+String(veille.getDate()).padStart(2,'0');
-    const recap=calcRecapFiche(c,fiche,debutMoisStr,veilleStr,debutMoisStr,dateDebAv,'avant');
-    const recap2=calcRecapFiche(c,fiche,dateDebAv,finMoisStr,dateDebAv,dateDebAv,'apres');
+    const recap=calcRecapFiche(c,fiche,debutMoisStr,veilleStr,debutMoisStr,dateDebAv,'avant',fiche);
+    const recap2=calcRecapFiche(c,fiche,dateDebAv,finMoisStr,dateDebAv,dateDebAv,'apres',fiche);
     const el1=document.getElementById('recap1-'+contratId+'-'+key);
     const el2=document.getElementById('recap2-'+contratId+'-'+key);
     const elC=document.getElementById('recap-'+contratId+'-'+key);
+    // 13/09/2026 (Sophie) : même rendu qu'à l'ouverture de la feuille — la partie « avant » d'un avenant sans
+    // vraie partie avant (voir avenantSansPartieAvant) reste dans l'encart unique, et la carte Pajemploi
+    // garde son solde ; le rafraîchissement les perdait jusqu'au rechargement de la page.
     if(el1) el1.innerHTML=buildRecapHtml(recap, null, null, c);
-    if(el2) el2.innerHTML=buildRecapHtml(recap2, null, null, c);
-    if(elC) elC.innerHTML=buildRecapCumul(recap,recap2);
+    if(el2) el2.innerHTML=(avenantSansPartieAvant(c,dateDebAv)?buildRecapHtml(recap, null, null, c, true):'')+buildRecapHtml(recap2, null, null, c);
+    if(elC) elC.innerHTML=buildRecapCumul(recap,recap2,calcSoldeToutCompte(c, key),c);
   } else {
     const recap=calcRecapFiche(c,fiche);
     const el=document.getElementById('recap-'+contratId+'-'+key);
@@ -7984,7 +7988,7 @@ function calcFicheSolde(c){
   const txBrut=parseFloat(source.txBrut||c.txBrut||0);
   const txNet=parseFloat(txBrut*coefNet||0);
   const nbSem=parseFloat(source.nbSem||52);
-  const hSemMoy=hMensu*12/nbSem;
+  const hSemMoy=hMensuValoriseeCg(source,c)*12/nbSem; // 13/09/2026 : majoration des heures sup mensualisées comprise
   const hJourCg=hSemMoy/6;
 
   // ── PARTIE 1 : Bilan dernier mois + régul congés déjà pris ──
@@ -8031,7 +8035,7 @@ function calcFicheSolde(c){
         const dateVeille=new Date(jy,jm-1,jd);
         dateVeille.setDate(dateVeille.getDate()-1);
         const srcV=getVersionActive(c,dateVeille);
-        const hSemV=(parseFloat(srcV.hMensu||hMensu)*12)/(parseFloat(srcV.nbSem||nbSem));
+        const hSemV=(hMensuValoriseeCg(srcV,c)*12)/(parseFloat(srcV.nbSem||nbSem));
         maintienVerse+=hSemV/6*(parseFloat(srcV.txBrut||txBrut)*coefNet);
       });
       maintienVerse=parseFloat(maintienVerse.toFixed(2));
@@ -16944,7 +16948,7 @@ function calcSoldeConges52(c, dateRupture){
   const sourcePrecRupture=getVersionActive(c,dateRefIccp);
   const txBrut=sourcePrecRupture.txBrut||0;
   const nbSem=sourcePrecRupture.nbSem||52;
-  const hHebdo=(sourcePrecRupture.hMensu||0)*12/nbSem;
+  const hHebdo=hMensuValoriseeCg(sourcePrecRupture)*12/nbSem; // 13/09/2026 : majoration des heures sup mensualisées comprise
   const hJour=hHebdo/6;
   calcCongesContrat(c,dateRefIccp);
 
@@ -17163,7 +17167,7 @@ function calcSoldeConges46(c, dateRupture){
   const totalBrutDepuisJuin=calcBrutTotal(c,dateJuin,dateSit);
   const dixiemeEnCours=parseFloat((totalBrutDepuisJuin*0.1).toFixed(2));
   const sourceActuelle=getVersionActive(c,dateSit);
-  const hHebdo=(sourceActuelle.hMensu||0)*12/getNbSemReel(sourceActuelle,c);
+  const hHebdo=hMensuValoriseeCg(sourceActuelle)*12/getNbSemReel(sourceActuelle,c); // 13/09/2026 : majoration des heures sup mensualisées comprise
   const txBrut=sourceActuelle.txBrut||0;
   const maintienEnCours=parseFloat((joursEnCours*hHebdo/6*txBrut).toFixed(2));
   montantEnCoursBrut=Math.max(dixiemeEnCours,maintienEnCours);
@@ -18684,7 +18688,7 @@ function renderRupture(c, cont){
       if(semainesEqPr>0){
         const joursAcqPr=parseFloat(((semainesEqPr/4)*2.5).toFixed(2));
         const srcPr=getVersionActive(c,dateSit);
-        const hSemMoyPr=(srcPr.hMensu||0)*12/getNbSemReel(srcPr,c);
+        const hSemMoyPr=hMensuValoriseeCg(srcPr)*12/getNbSemReel(srcPr,c); // 13/09/2026 : majoration des heures sup mensualisées comprise
         const hJourPr=hSemMoyPr/6;
         const montantBrutPr=parseFloat((joursAcqPr*hJourPr*(srcPr.txBrut||0)).toFixed(2));
         const coefNetPr=getParamAt('coefficients',dateToStr(dateSit)).valeur||0.7811975;
@@ -18801,6 +18805,16 @@ function joursCongesAnneeCg(c, anneeRef, opts){
   });
   return res;
 }
+// 13/09/2026 (Sophie) : un jour de congé payé au maintien vaut le salaire que l'assistante maternelle aurait
+// perçu en travaillant — heures supplémentaires mensualisées comprises AVEC leur majoration. Les congés ne
+// font pas perdre le bénéfice des heures sup, en 46 comme en 52. Heures mensualisées « valorisées » : les
+// heures majorées comptent pour (1 + majoration). Même résultat que valeurJourMaintien52Cg (part normale au
+// taux de base + part majorée au taux majoré).
+function hMensuValoriseeCg(src, c){
+  const h=parseFloat(src.hMensu||(c&&c.hMensu)||0);
+  const hMaj=parseFloat(src.hMensuMaj||0);
+  return hMaj>0?h+hMaj*(parseFloat(src.majSup||0)/100):h;
+}
 function estJourSous52Cg(c, dateStr){
   return ((getVersionActive(c,parseDateLoc(dateStr))||{}).tc||c.tc)==='52';
 }
@@ -18812,7 +18826,7 @@ function valeurJourMaintien46Cg(c, dateStr){
   const v=parseDateLoc(dateStr); v.setDate(v.getDate()-1);
   const src=getVersionActive(c,v)||c;
   const tx=parseFloat(src.txBrut||c.txBrut||0)*(getParamAt('coefficients',dateToStr(v)).valeur||0.7811975);
-  const hSem=parseFloat(src.hMensu||c.hMensu||0)*12/(getNbSemReel(src,c)||1);
+  const hSem=hMensuValoriseeCg(src,c)*12/(getNbSemReel(src,c)||1);
   return hSem/6*tx;
 }
 // Avenant 52 → 46 signé APRÈS le 31/05 de l'année N (pendant sa période de prise) alors que l'année
@@ -18961,7 +18975,7 @@ function montantCongesVersesSous52(c, anneeRef, avant){
     const veille=new Date(jy,jm-1,jd); veille.setDate(veille.getDate()-1);
     const srcV=getVersionActive(c,veille);
     const txNetV=(srcV.txBrut||0)*(getParamAt('coefficients',dateToStr(veille)).valeur||0.7811975);
-    const hSemMoyV=(srcV.hMensu||0)*12/(srcV.nbSem||52);
+    const hSemMoyV=hMensuValoriseeCg(srcV)*12/(srcV.nbSem||52);
     montant+=(hSemMoyV/6)*txNetV;
     jours++;
   });
@@ -19015,8 +19029,6 @@ function calcIndemniteConges(c, anneeRef, opts){
     hHebdo=sourceM.hMin||0;
   }
 
-  // Méthode du maintien
-  const maintien=parseFloat((hHebdo/6*cg.acquis*txBrutM).toFixed(2));
   // 24/08/2026 (Sophie) : exonération de charges sur les heures sup mensualisées — texte BOSS
   // (réduction de cotisations salariales sur heures sup, §240) : en cas d'absence avec maintien
   // intégral de la rémunération (un congé payé en est un), les heures sup structurelles sont
@@ -19025,6 +19037,10 @@ function calcIndemniteConges(c, anneeRef, opts){
   const hMensuMajM=sourceM.hMensuMaj||0;
   const majSupM=(sourceM.majSup||c.majSup||0)/100;
   const hHebdoSup=hMensuMajM>0?parseFloat((hMensuMajM*12/getNbSemReel(sourceM,c)).toFixed(2)):0;
+  // Méthode du maintien
+  // 13/09/2026 (Sophie) : majoration des heures sup mensualisées comprise (hMensuValoriseeCg) — elle
+  // manquait, le 46 payait ces heures au taux de base alors que le 52 les maintient majorées.
+  const maintien=parseFloat(((hHebdo+hHebdoSup*majSupM)/6*cg.acquis*txBrutM).toFixed(2));
   const maintienSupBrut=parseFloat((hHebdoSup/6*cg.acquis*txBrutM*(1+majSupM)).toFixed(2));
   const maintienExo=parseFloat((maintienSupBrut*0.1131).toFixed(2));
 
@@ -19225,7 +19241,7 @@ function ligneRestantsOuNonPrisCg(c,anneeAcq,cg,ls,vs){
         valeurCg=propresCg*tauxAnCg+repRestCg*(indOrCg?indOrCg.montantJournalierNet:tauxAnCg);
       } else {
         const srcFinCg=getVersionActive(c,new Date(anneeAcq+2,3,30))||{};
-        const hJourCg=(parseFloat(srcFinCg.hMensu||0)*12/(parseFloat(srcFinCg.nbSem||52)))/6;
+        const hJourCg=(hMensuValoriseeCg(srcFinCg)*12/(parseFloat(srcFinCg.nbSem||52)))/6;
         valeurCg=nbNonPrisCg*hJourCg*parseFloat(srcFinCg.txNet||0);
       }
       if(valeurCg>0) mentionCg='valeur '+valeurCg.toFixed(2)+' €, non versée';
@@ -19506,7 +19522,7 @@ function buildCgAcquisEncarts(c, anneeAcq){
       const dateRefCg52Str=dateRefCg52.getFullYear()+'-'+String(dateRefCg52.getMonth()+1).padStart(2,'0')+'-'+String(dateRefCg52.getDate()).padStart(2,'0');
       const srcCg52=getVersionActive(c,dateRefCg52);
       const coefNetCg52=getParamAt('coefficients',dateToStr(dateRefCg52)).valeur||0.7811975;
-      const hJourCg52=((srcCg52.hMensu||0)*12/(srcCg52.nbSem||52))/6;
+      const hJourCg52=(hMensuValoriseeCg(srcCg52)*12/(srcCg52.nbSem||52))/6; // 13/09/2026 : majoration des heures sup mensualisées comprise
       const restantsCg52=Math.ceil(cg.estTerminee?(cg.restants||0):Math.max(0,(cg.acqBrut||0)-(cg.pris||0)));
       const finFenetreCg52=cg.estTerminee?new Date(anneeAcq+1,4,31):dateRefCg52;
       const brutAnnuelCg52=calcBrutTotal(c,new Date(anneeAcq,5,1),finFenetreCg52);
@@ -19975,7 +19991,7 @@ function genCumul(c){
               const dateVeille52=new Date(jy52,jm52-1,jd52);dateVeille52.setDate(dateVeille52.getDate()-1);
               const srcV52=getVersionActive(c,dateVeille52);
               const txNetV52=srcV52.txBrut*(getParamAt('coefficients',dateToStr(dateVeille52)).valeur||0.7811975); // 01/09/2026 (Sophie) : srcV52.txNet stocké (arrondi 2 décimales) retiré de la priorité, toujours recalculé frais
-              const hSemMoyV52=(srcV52.hMensu||0)*12/(srcV52.nbSem||52);
+              const hSemMoyV52=hMensuValoriseeCg(srcV52)*12/(srcV52.nbSem||52); // 13/09/2026 : majoration des heures sup mensualisées comprise
               dejaPayeSous52+=(hSemMoyV52/6)*txNetV52;
             });
           });
@@ -20029,6 +20045,13 @@ async function signerContrat(){
   // jour posé congés dans le calendrier AM.
   if(c.dateDeb&&S.congesAM&&Object.values(S.congesAM).some(am=>am.jours&&am.jours[c.dateDeb]==='pose')){
     toast('⚠ Impossible de signer : la date de début ('+c.dateDeb+') tombe sur un jour de congés posé.');
+    return;
+  }
+  // 13/09/2026 (Sophie) : pas de début de contrat sur le jour de repos hebdomadaire — le contrat commence le
+  // premier jour d'accueil. (Les contrats déjà signés ne sont pas concernés : contrôle à la signature.)
+  if(c.dateDeb&&parseDateLoc(c.dateDeb).getDay()===(c.reposHebdo||0)){
+    const lendemainDeb=parseDateLoc(c.dateDeb); lendemainDeb.setDate(lendemainDeb.getDate()+1);
+    alerte('La date de début du '+dateISOversTexte(c.dateDeb)+' tombe sur le jour de repos hebdomadaire.<br><br>Le contrat commence le premier jour d’accueil : choisissez par exemple le '+dateISOversTexte(dateToStr(lendemainDeb))+'.');
     return;
   }
   // 03/09/2026 (Sophie) : distingue maintenant CDD/CDI — avant, cette vérification ne regardait que
@@ -20566,6 +20589,18 @@ function avenantCoupeUnePoseCg(c,dateEffetStr){
   return {debut,fin,premiereDatePossible:decaleAv(fin,1)};
 }
 
+// 13/09/2026 (Sophie) : mois d'avenant sans vraie partie « avant » — la date d'effet est le 1er, ou seuls des
+// jours de repos hebdomadaire la précèdent dans le mois (effet le lundi 2, le 1er est un dimanche). La feuille
+// n'affiche alors qu'un encart pour tout le mois, au lieu d'un encart ne contenant que le jour de repos.
+function avenantSansPartieAvant(c, dateAvStr){
+  const dAv=parseDateLoc(dateAvStr);
+  if(dAv.getDate()===1) return true;
+  const veilleAv=new Date(dAv.getFullYear(),dAv.getMonth(),dAv.getDate()-1);
+  const reposAvt=((getVersionActive(c,veilleAv)||c).reposHebdo)||0;
+  for(let jr=1;jr<dAv.getDate();jr++){ if(new Date(dAv.getFullYear(),dAv.getMonth(),jr).getDay()!==reposAvt) return false; }
+  return true;
+}
+
 function signerAvenant(){
   if(!S.enAvenant){toast('Erreur : pas d\'avenant en cours');return;}
   if(typeof calc==='function') calc();
@@ -20614,6 +20649,12 @@ function signerAvenant(){
   // posé congés dans le calendrier AM.
   if(S.congesAM&&Object.values(S.congesAM).some(am=>am.jours&&am.jours[av.dateAvenant]==='pose')){
     toast('⚠ Impossible de signer : la date d\'effet ('+av.dateAvenant+') tombe sur un jour de congés posé.');
+    return;
+  }
+  // 13/09/2026 (Sophie) : pas de date d'effet sur le jour de repos hebdomadaire, comme pour le début du contrat.
+  if(parseDateLoc(av.dateAvenant).getDay()===(av.reposHebdo??c.reposHebdo??0)){
+    const lendemainAv=parseDateLoc(av.dateAvenant); lendemainAv.setDate(lendemainAv.getDate()+1);
+    alerte('La date d’effet du '+dateISOversTexte(av.dateAvenant)+' tombe sur le jour de repos hebdomadaire.<br><br>Choisissez le premier jour d’accueil, par exemple le '+dateISOversTexte(dateToStr(lendemainAv))+'.');
     return;
   }
   // 11/09/2026 (Sophie) : même principe étendu à toute la période de congés (voir avenantCoupeUnePoseCg).
