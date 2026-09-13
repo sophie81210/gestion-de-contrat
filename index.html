@@ -7256,7 +7256,10 @@ function imprimerFiche(contratId,key){
       if(j.heureDebPrev&&j.heureFinPrev){
         const prev=toM(j.heureFinPrev)-toM(j.heureDebPrev);
         const diff=reel-prev;
-        if(diff>0)hComp='+'+fmtH(diff);else if(diff<0)hDeduit='\u2212'+fmtH(-diff);
+        // 13/09/2026 (Sophie, point 22) : f\u00e9ri\u00e9 sur jour pr\u00e9vu pass\u00e9 en \u00ab travaill\u00e9 \u00bb \u2014 rien n'est d\u00e9duit
+        // quand on y travaille moins que pr\u00e9vu, seul le d\u00e9passement s'affiche (comme la feuille \u00e0 l'\u00e9cran).
+        const estFerieTravImp=isFerie(j.date,c)&&statutActuel==='travaille';
+        if(diff>0)hComp='+'+fmtH(diff);else if(diff<0&&!estFerieTravImp)hDeduit='\u2212'+fmtH(-diff);
       } else if(reel>0) hComp='+'+fmtH(reel);
     }
     const repasCell=aRepas?(j.repas||[]).map((pris,ri)=>pris&&c.repas&&c.repas[ri]?REPAS_NOM[ri]:'').filter(Boolean).join(', '):'';
@@ -8842,7 +8845,13 @@ function majFiche(contratId,key,idx,champ,val){
     let hComp2='',hDeduit2='';
     if(j2.heureDebReel&&j2.heureFinReel){
       const reel2=toM(j2.heureFinReel)-toM(j2.heureDebReel);
-      if(j2.heureDebPrev&&j2.heureFinPrev&&statut2!=='travaille'&&statut2!=='reprise'){
+      // 13/09/2026 (Sophie, point 22, 46sem6jours 05/04/2021 : « +4h00 » pour 4 h travaillées sur un férié
+      // prévu de 10 h) : même règle qu'à l'ouverture de la feuille — férié sur jour prévu passé en
+      // « travaillé », seul le dépassement du prévu s'affiche.
+      if(isFerie(j2.date,c)&&statut2==='travaille'&&j2.heureDebPrev&&j2.heureFinPrev){
+        const diffF2=reel2-(toM(j2.heureFinPrev)-toM(j2.heureDebPrev));
+        if(diffF2>0) hComp2='+'+fmtH(diffF2);
+      } else if(j2.heureDebPrev&&j2.heureFinPrev&&statut2!=='travaille'&&statut2!=='reprise'){
         const debReel2=toM(j2.heureDebReel), finReel2=toM(j2.heureFinReel);
         const debPrev2=toM(j2.heureDebPrev), finPrev2=toM(j2.heureFinPrev);
         let compAff2=0,deduitAff2=0;
@@ -13435,7 +13444,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           }
         }
         // Dépassement des heures prévues → heures comp normales
-        if(hReelJourSpec>hPrevJour) hComp+=hReelJourSpec-hPrevJour;
+        // 13/09/2026 (Sophie, point 23, 46sem6jours 24/05/2021 : 11 h réelles pour 10 h prévues) : ajoutées
+        // aussi au total de la semaine — hComp est recalculé plus bas à partir de hCompParSemaine seul,
+        // l'heure en plus disparaissait.
+        if(hReelJourSpec>hPrevJour){
+          hComp+=hReelJourSpec-hPrevJour;
+          const skFP=getSemISO(j.date); hCompParSemaine[skFP]=(hCompParSemaine[skFP]||0)+(hReelJourSpec-hPrevJour);
+        }
       } else if(estFerieNonPrevu||estReposJ){
         // Heures réelles entières majorées (avec exo)
         const hReelJourSpec=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
