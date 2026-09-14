@@ -2720,6 +2720,14 @@ function hSupDuReg(c, clause52, debStr, finStr, fichesExtra){
 function majMensuRecapReg(r){
   return r?(parseFloat(r.hMensuMaj||0)*parseFloat(r.txNetExact||0)*(parseFloat(r.majSup||0)/100)):0;
 }
+// 14/09/2026 (Sophie) : une période du contrat (contrat de départ ou avenant) entre dans la régularisation si elle
+// est en 46 semaines ou moins (hors occasionnel), ou en 52 semaines avec la clause cochée sur CETTE version.
+// Règle unique de l'onglet Régularisation, du paiement au passage et de la rupture. Seul un passage vers une
+// période non régularisable (52 fixe ou 52 sans clause) fait payer la régularisation avant la fin du contrat.
+function versionRegularisable(v){
+  const tc=(v&&v.tc)||'';
+  return (tc!=='52'&&tc!=='occ')||(tc==='52'&&!!v.clauseRegul52);
+}
 function calcRegulOnglet(c, opts){
   // 07/09/2026 (Sophie) : opts.jusquA (mois AAAA-MM) prolonge le calcul au-delà du mois en cours,
   // pour le simulateur de rupture qui doit projeter jusqu'à une date de fin future. Sans lui, tout se
@@ -2771,13 +2779,14 @@ function calcRegulOnglet(c, opts){
       if(estContratRegul||aClauseRegul52Base) cycleDebut=c.dateDeb?c.dateDeb.slice(0,7):null;
       tousAvenantsTries.forEach(av=>{
         if(av.tc==='52'){
-          if(aClauseRegul52){
-            // 11/08/2026 (Sophie) : la clause a été activée quelque part (ici ou avant) — un avenant
-            // qui reste en 52 ne referme jamais le cycle ; s'il n'est pas encore ouvert (contrat
-            // démarré ailleurs qu'en 52, clause activée par CET avenant précis), il démarre ici.
-            if(cycleDebut===null&&av.clauseRegul52) cycleDebut=av.dateAvenant.slice(0,7);
+          // 14/09/2026 (Sophie) : chaque version décide pour elle-même (versionRegularisable) — un avenant vers
+          // un 52 AVEC sa clause prolonge le cycle, ou l'ouvre ; un avenant vers un 52 SANS clause (52 fixe
+          // compris) le solde : seul cas où la régularisation se paie avant la fin du contrat. Avant, dès
+          // qu'une clause existait quelque part, aucun avenant 52 ne refermait plus jamais le cycle.
+          if(versionRegularisable(getVersionActive(c,parseDateLoc(av.dateAvenant)))){
+            if(cycleDebut===null) cycleDebut=av.dateAvenant.slice(0,7);
           } else if(cycleDebut!==null){
-            cycles.push({moisMin:cycleDebut, moisMax:av.dateAvenant.slice(0,7), solde:true});
+            cycles.push({moisMin:cycleDebut, moisMax:av.dateAvenant.slice(0,7), solde:true, clause52:aClauseRegul52});
             cycleDebut=null;
           }
         } else if(av.tc!=='occ'){
@@ -2844,11 +2853,9 @@ function calcRegulOnglet(c, opts){
               const estPlanMinVarTh=source.th==='plan'&&(source.planType==='var'||source.planType==='min');
 
               if(typeSem==='off'){
-                // Semaine off : ajouter hSemMoy une seule fois par semaine
-                if(!semJoursCpt[semKey]){
-                  semJoursCpt[semKey]=true;
-                  hTheo+=hMensuSource*12/nbSemSource;
-                }
+                // 14/09/2026 (Sophie) : une semaine non travaillée compte 0. Elle ajoutait une semaine moyenne
+                // entière : au mois anniversaire, celle à cheval sur les deux parties comptait des deux côtés
+                // (Méline, août 2026 : 500,86 € de mensualisé pour un mois à 420,72 €).
               } else if(estPlanMinVarTh){
                 // Plan var/min : agenda uniquement, volume complet de la semaine, une fois — jamais
                 // le planning (trop variable, ne représente pas la mensualisation)
@@ -3037,7 +3044,15 @@ function calcRegulOnglet(c, opts){
             //   + fériés prévus au contrat
             const ficheMois=c.fiches?.[key]||fichesProjeteesReg[key];
             // Détecter le type de passage
-            const estPassageVers46Reg=avenantDuMoisReg&&avenantDuMoisReg.tc!=='52'&&avenantDuMoisReg.tc!=='occ';
+            // 14/09/2026 (Sophie) : chaque partie du mois d'avenant compte si SA version est régularisable
+            // (versionRegularisable). Le passage se devinait du seul type d'arrivée : un 52 → 52 qui ajoute
+            // la clause gardait la partie d'avant (52 sans clause) et perdait celle d'après ; un 46 → 52 avec
+            // clause perdait celle d'après (point 5). Un avenant au 1er du mois n'a pas de partie d'avant
+            // (Constance, 01/09/2025 : une partie « avant » vide, figée sur la feuille, ajoutait 49,74 €).
+            const avenantAu1erReg=!!(avenantDuMoisReg&&avenantDuMoisReg.dateAvenant===debutMoisComplet);
+            const partieAvantRegul=!!(avenantDuMoisReg&&!avenantAu1erReg&&versionRegularisable(getVersionActive(c,parseDateLoc(veilleAvenantReg))));
+            const partieApresRegul=!!(avenantDuMoisReg&&versionRegularisable(getVersionActive(c,parseDateLoc(avenantDuMoisReg.dateAvenant))));
+            const estPassageVers46Reg=!partieAvantRegul&&partieApresRegul; // partie d'après seulement
             // 07/09/2026 (Sophie, contrat 52 fixe → 46 var, avenant du 15/10/2025) : ce test
             // n'excluait que le contrat occasionnel. Un passage 52 → 46 y répondait donc « oui, c'est
             // un 46 → 46 » et prenait la branche qui CUMULE les deux moitiés du mois sur le mois
@@ -3047,15 +3062,11 @@ function calcRegulOnglet(c, opts){
             // 276,70 € et 609,96 € de dû au lieu de 369,98 €, la moitié en 52 fixe étant ajoutée à
             // la moitié en 46 var. Un 52 AVEC la clause de régularisation reste, lui, dans le même
             // cycle : ses deux moitiés se cumulent bien, d'où l'exception sur cycle.clause52.
-            const estPassage46vers46Reg=estPassageVers46Reg&&(()=>{
-              const srcAv=getVersionActive(c,new Date(debutMoisComplet));
-              if(srcAv.tc==='occ') return false;
-              if(srcAv.tc==='52') return !!cycle.clause52;
-              return true;
-            })();
+            const estPassage46vers46Reg=partieAvantRegul&&partieApresRegul; // les deux parties : une seule ligne, cumulée
             // Calcul recap selon le type de passage
             let montantMensu=0, txNetMois=0, finMoisRegul=finMois, debutMoisRegul=debutMois;
             let montantPrevuOverride=null; // 17/08/2026 (Sophie) : salaire dû calculé en 2 portions (voir branche 46-46 ci-dessous)
+            let mensuMoitiesReg=null; // 14/09/2026 : mensualisé de chaque partie d'avenant, quand les deux comptent
             // 17/08/2026 (Sophie) : anniversaire ET avenant le même mois — validé avec Sophie sur
             // plusieurs cas chiffrés. zoneDeb/zoneFin = bornes de la partie du mois qui reste
             // régularisable une fois l'avenant pris en compte (calcul avenant ci-dessous INCHANGÉ,
@@ -3073,6 +3084,7 @@ function calcRegulOnglet(c, opts){
               const mensuAvant=recapAvant?parseFloat(((recapAvant.hMensu||0)*(recapAvant.txNetExact||0)+majMensuRecapReg(recapAvant)-(recapAvant.montantAbsences||0)).toFixed(2)):0;
               const mensuApres=recapApres?parseFloat(((recapApres.hMensu||0)*(recapApres.txNetExact||0)+majMensuRecapReg(recapApres)-(recapApres.montantAbsences||0)).toFixed(2)):0;
               montantMensu=parseFloat((mensuAvant+mensuApres).toFixed(2));
+              mensuMoitiesReg={avant:mensuAvant, apres:mensuApres};
               txNetMois=parseFloat(recapApres?.txNetExact||0);
               debutMoisRegul=debutMoisComplet; finMoisRegul=finMoisComplet;
               zoneDeb=debutMoisComplet; zoneFin=finMoisComplet;
@@ -3096,19 +3108,23 @@ function calcRegulOnglet(c, opts){
               montantMensu=parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)+majMensuRecapReg(recapMois)-(recapMois?.montantAbsences||0)).toFixed(2));
               debutMoisRegul=avenantDuMoisReg.dateAvenant; finMoisRegul=finMoisComplet;
               zoneDeb=avenantDuMoisReg.dateAvenant; zoneFin=finMoisComplet;
-            } else if(avenantDuMoisReg){
-              // 46→52 : partie avant avenant reste régularisable, après avenant définitivement perdu
+            } else if(avenantDuMoisReg&&partieAvantRegul){
+              // Partie d'avant seulement (46 → 52 sans clause, 52 avec clause → 52 sans clause) : l'après est perdu
               const recapMois=ficheMois?calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant'):null;
               txNetMois=parseFloat(recapMois?.txNetExact||0);
               montantMensu=parseFloat(((recapMois?.hMensu||0)*(recapMois?.txNetExact||0)+majMensuRecapReg(recapMois)-(recapMois?.montantAbsences||0)).toFixed(2));
               debutMoisRegul=debutMoisComplet; finMoisRegul=veilleAvenantReg||finMoisComplet;
               zoneDeb=debutMoisComplet; zoneFin=veilleAvenantReg||finMoisComplet;
+            } else if(avenantDuMoisReg){
+              // 14/09/2026 : aucune des deux parties n'est régularisable — rien à compter ce mois-ci.
+              montantMensu=0; debutMoisRegul='9999-12-31'; finMoisRegul='0000-01-01'; zoneDeb='9999-12-31'; zoneFin='0000-01-01';
             } else if(portionAnniv==='avant'||portionAnniv==='apres'){
               // 17/08/2026 (Sophie) : anniversaire SANS avenant réel — ne réutilise pas le mécanisme
               // avenant (inadapté ici, même version des deux côtés). Calcul dédié : le montant mensuel
               // du mois ENTIER (calcul normal) réparti entre avant/après au prorata des heures
-              // THÉORIQUES de chaque portion (jamais le prévu — une semaine off ou un congé doit garder
-              // sa valeur pleine dans ce partage, contrairement au cas avec avenant ci-dessous).
+              // THÉORIQUES de chaque portion (jamais le prévu — un congé garde sa valeur pleine dans ce
+              // partage, contrairement au cas avec avenant ci-dessous ; une semaine non travaillée compte 0,
+              // décision Sophie du 14/09/2026).
               const hTheoComplet=calcHTheoReg(debutMoisComplet,finMoisComplet);
               const hPrevuComplet=calcHPrevuReg(c, cycle.clause52, debutMoisComplet,finMoisComplet);
               const hMensuRegComplet=calcHMensuReg(debutMoisComplet,finMoisComplet,hPrevuComplet,false);
@@ -3118,7 +3134,10 @@ function calcRegulOnglet(c, opts){
               // montantAbsences entier retiré, sa part de majoration comprise.
               const montantMensuComplet=Math.max(0,hMensuRegComplet*txNetMoisComplet+majMensuRecapReg(recapMoisComplet)-(recapMoisComplet?.montantAbsences||0));
               const hTheoPortion=calcHTheoReg(debutMois,finMois);
-              const ratioPortion=hTheoComplet>0?(hTheoPortion/hTheoComplet):0;
+              // 14/09/2026 : mois sans aucune heure (tout en semaines non travaillées) — partage au nombre de
+              // jours, sinon les deux parties valaient 0 et le mensualisé du mois disparaissait.
+              const nbJoursPortionReg=(a,b)=>Math.round((parseDateLoc(b)-parseDateLoc(a))/86400000)+1;
+              const ratioPortion=hTheoComplet>0?(hTheoPortion/hTheoComplet):(nbJoursPortionReg(debutMois,finMois)/nbJoursPortionReg(debutMoisComplet,finMoisComplet));
               montantMensu=parseFloat((montantMensuComplet*ratioPortion).toFixed(2));
               txNetMois=txNetMoisComplet;
               if(portionAnniv==='avant'){ debutMoisRegul=debutMois; finMoisRegul=veilleAnniv||finMois; }
@@ -3143,10 +3162,25 @@ function calcRegulOnglet(c, opts){
               const portionFinA=portionAnniv==='avant'?veilleAnniv:finMoisComplet;
               const interDebA=maxD(portionDebA,zoneDeb), interFinA=minD(portionFinA,zoneFin);
               if(interDebA<=interFinA){
-                const hPrevuZoneA=calcHPrevuReg(c, cycle.clause52, zoneDeb,zoneFin);
-                const hPrevuInterA=calcHPrevuReg(c, cycle.clause52, interDebA,interFinA);
-                const ratioAnnivA=hPrevuZoneA>0?(hPrevuInterA/hPrevuZoneA):0;
-                montantMensu=parseFloat((montantMensu*ratioAnnivA).toFixed(2));
+                if(mensuMoitiesReg){
+                  // 14/09/2026 : les deux parties de l'avenant comptent — chacune se répartit sur SA zone (avant /
+                  // après l'avenant) au prorata de ses heures prévues, au nombre de jours si elle n'en a aucune.
+                  // Réparties ensemble sur le mois, la partie d'avant nourrissait l'année d'après (46var-52sem,
+                  // avenant le jour anniversaire : 223,99 € attendus sur la partie (1), 202,08 € obtenus).
+                  const nbJA=(a,b)=>Math.round((parseDateLoc(b)-parseDateLoc(a))/86400000)+1;
+                  const partMoitieA=(debZ,finZ,montant)=>{
+                    const dI=maxD(portionDebA,debZ), fI=minD(portionFinA,finZ);
+                    if(!montant||dI>fI) return 0;
+                    const hZ=calcHPrevuReg(c, cycle.clause52, debZ,finZ);
+                    return montant*(hZ>0?calcHPrevuReg(c, cycle.clause52, dI,fI)/hZ:nbJA(dI,fI)/nbJA(debZ,finZ));
+                  };
+                  montantMensu=parseFloat((partMoitieA(debutMoisComplet,veilleAvenantReg,mensuMoitiesReg.avant)+partMoitieA(avenantDuMoisReg.dateAvenant,finMoisComplet,mensuMoitiesReg.apres)).toFixed(2));
+                } else {
+                  const hPrevuZoneA=calcHPrevuReg(c, cycle.clause52, zoneDeb,zoneFin);
+                  const hPrevuInterA=calcHPrevuReg(c, cycle.clause52, interDebA,interFinA);
+                  const ratioAnnivA=hPrevuZoneA>0?(hPrevuInterA/hPrevuZoneA):0;
+                  montantMensu=parseFloat((montantMensu*ratioAnnivA).toFixed(2));
+                }
                 debutMoisRegul=interDebA; finMoisRegul=interFinA;
               } else {
                 // Cette portion anniversaire est entièrement hors de la zone régularisable — rien à
@@ -3184,7 +3218,8 @@ function calcRegulOnglet(c, opts){
             totMensu+=montantMensu; totPrevu+=montantPrevu;
             cycleTotMensu+=montantMensu; cycleTotPrevu+=montantPrevu;
             if(ficheMois&&ficheMois.valide){ cycleTotMensuValide+=montantMensu; cycleTotPrevuValide+=montantPrevu; }
-            lignesDataReg.push({mois:moisLabel,mensu:montantMensu,prevu:montantPrevu,valide:!!(ficheMois&&ficheMois.valide)}); // 14/09/2026 (point 24)
+            // 14/09/2026 (point 24) ; key, enCours (période non soldée) et cycleFin : lus par la rupture et le paiement au passage
+            lignesDataReg.push({mois:moisLabel,mensu:montantMensu,prevu:montantPrevu,valide:!!(ficheMois&&ficheMois.valide),key,enCours:!cycle.solde,cycleFin:cycle.moisMax});
             const diff=montantPrevu-montantMensu;
             const dc=diff>0?'var(--vt)':diff<0?'var(--al)':'var(--tx2)';
             return `<tr style="border-bottom:1px solid var(--mb)">
@@ -3240,15 +3275,11 @@ function calcRegulOnglet(c, opts){
         // 25/08/2026 (Sophie) : diff affiché en haut, limité aux mois validés uniquement — distinct de
         // diffGen (qui reste la base de c._regulDiffEuros ci-dessous, usage différent, ailleurs).
         const diffGenValide=totGlobalPrevuValide-totGlobalMensuValide;
-        // Stocker le diff en euros pour buildRecapHtml (cycle le plus récent non soldé)
         const dernierCycleEnCours=cycles.find(cy=>!cy.solde);
-        const diffDernierCycle=dernierCycleEnCours?(()=>{
-          const moisCycle=Object.keys(c.fiches||{}).filter(k=>k<=moisMax&&k>=dernierCycleEnCours.moisMin&&k<=dernierCycleEnCours.moisMax).sort();
-          // On utilise le totGlobal car c'est le seul cycle en cours
-          return diffGen;
-        })():0;
-        // Jamais écrasé par une projection : cette valeur sert au récapitulatif réel, pas au simulateur.
-        if(!borneReg) c._regulDiffEuros=parseFloat(diffDernierCycle.toFixed(2));
+        // 14/09/2026 (Sophie) : l'onglet n'écrit plus c._regulDiffEuros (il y mettait l'écart de TOUTES les
+        // périodes) — ce montant est le paiement au passage, calculé par calcRegulDiffEurosAuto sur la seule
+        // période soldée. Écart de la seule période en cours : c'est lui que régularisent la rupture et le simulateur.
+        const diffEnCoursReg=parseFloat(anneesRegDetail.flatMap(a=>a.lignes).filter(l=>l.enCours).reduce((s,l)=>s+l.prevu-l.mensu,0).toFixed(2));
         const dcGen=diffGenValide>0?'var(--vt)':diffGenValide<0?'var(--al)':'var(--tx2)';
         const htmlRegulFinal=`
           <div class="card" style="background:var(--mp);margin-bottom:12px;border-bottom:none">
@@ -3274,7 +3305,7 @@ function calcRegulOnglet(c, opts){
           ?[...new Set([...Object.keys(c.fiches||{}),...clesProjeteesReg])].filter(k=>k<=moisMax&&k>=dernierCycleEnCours.moisMin&&k<=dernierCycleEnCours.moisMax).sort()
           :[];
         return {html:htmlRegulFinal, cache:!borneReg, mensuValide:totGlobalMensuValide, prevuValide:totGlobalPrevuValide, annees:anneesRegDetail,
-                mensuTotal:totGlobalMensu, prevuTotal:totGlobalPrevu, diffTotal:diffGen,
+                mensuTotal:totGlobalMensu, prevuTotal:totGlobalPrevu, diffTotal:diffGen, diffEnCours:diffEnCoursReg,
                 borne:!!borneReg, jusquA:borneReg, moisProjetes:clesProjeteesReg, moisCycleCourant:moisCycleCourantReg,
                 horsPlafond:!!(optsReg.jusquA&&optsReg.jusquA>plafondProjReg)};
 
@@ -4068,138 +4099,22 @@ function ouvrirFicheAvecRestauration(contratId,key){
   });
 }
 
-function calcRegulDiffEurosAuto(c, moisMaxForce){
-  // Calcule c._regulDiffEuros sans affichage HTML
-  const avenantVers52=(c.avenants||[]).find(av=>av.signe&&av.tc==='52'&&av.dateAvenant);
-  const avenantVers46=(c.avenants||[]).find(av=>av.signe&&av.tc!=='52'&&av.tc!=='occ'&&av.dateAvenant);
-  const estContratRegul=c.tc!=='52'&&c.tc!=='occ';
-  if(!estContratRegul&&!avenantVers52&&!avenantVers46){c._regulDiffEuros=0;return;}
-  const now=new Date();
-  const moisMax=moisMaxForce||(now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0'));
-  const moisMaxRegul=avenantVers52?avenantVers52.dateAvenant.slice(0,7):moisMax;
-  const moisMinRegul=avenantVers46&&!estContratRegul?avenantVers46.dateAvenant.slice(0,7):null;
-  const moisTries=Object.keys(c.fiches||{}).filter(k=>k<=moisMax&&k<=moisMaxRegul&&(!moisMinRegul||k>=moisMinRegul)).sort();
-  let totGenMensu=0,totGenPrevu=0;
-  moisTries.forEach(key=>{
-    const ficheMois=c.fiches?.[key];
-    if(!ficheMois) return;
-    const [ay2,am2]=key.split('-').map(Number);
-    const debutMois=ay2+'-'+String(am2).padStart(2,'0')+'-01';
-    const finMoisDate=new Date(ay2,am2,0);
-    const finMois=ay2+'-'+String(am2).padStart(2,'0')+'-'+String(finMoisDate.getDate()).padStart(2,'0');
-    const tousAvenantsSignes=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant);
-    const avenantDuMoisReg=tousAvenantsSignes.find(av=>av.dateAvenant.slice(0,7)===key)||null;
-    const veilleAvenantReg=avenantDuMoisReg?(()=>{
-      const [avy,avm,avd]=avenantDuMoisReg.dateAvenant.split('-').map(Number);
-      const dV=new Date(avy,avm-1,avd-1);
-      return dV.getFullYear()+'-'+String(dV.getMonth()+1).padStart(2,'0')+'-'+String(dV.getDate()).padStart(2,'0');
-    })():null;
-    const estPassageVers46Reg=avenantDuMoisReg&&avenantDuMoisReg.tc!=='52'&&avenantDuMoisReg.tc!=='occ';
-    // 14/09/2026 (Sophie) : même règle que l'onglet Régularisation (corrigée le 07/09) — un passage 52 → 46 n'est
-    // pas un 46 → 46 : la partie d'avant, en 52, n'appartient pas au cycle (sauf clause de régularisation 52).
-    // Cette fonction la cumulait encore avec la partie 46 (52var-46sem-52fixe, mars 2024).
-    const estPassage46vers46Reg=estPassageVers46Reg&&(()=>{
-      const srcAv=getVersionActive(c,new Date(debutMois));
-      if(srcAv.tc==='occ') return false;
-      if(srcAv.tc==='52') return !!((c.tc==='52'&&c.clauseRegul52)||(c.avenants||[]).some(av=>av.signe&&av.clauseRegul52&&av.dateAvenant));
-      return true;
-    })();
-    // 25/08/2026 (Sophie) : résolution agendaMois, même schéma que le reste de l'app (parseDateLoc,
-    // comparaison sur le mois entier — pas juste une date précise, sinon mauvais agenda trouvé quand
-    // plusieurs se chevauchent). Utile pour détecter une semaine "off" (isAbsenceEmployeur) sur ce
-    // mois — nécessaire pour un jour "travaillé" qui tombe dans une semaine "off" : ce jour ne doit
-    // jamais compter, même s'il porte des heures prévues structurelles (bug confirmé Sophie 25/08 :
-    // 14 et 16 janvier 2025, jours "travaillé" dans une semaine "off", comptés à tort avec leurs
-    // heures prévues — 9h chacun, 18h en trop sur ce mois).
-    const srcAgReg=getVersionActive(c,new Date(debutMois));
-    const agendasAgReg=srcAgReg.agendas||c.agendas||[];
-    const agendaMoisReg=agendasAgReg.find(ag=>{
-      const pm=new Date(ay2,am2-1,1);
-      const dm=new Date(ay2,am2,0);
-      return parseDateLoc(ag.dateDebut)<=dm&&parseDateLoc(ag.dateFin)>=pm;
-    });
-    let montantMensu=0, txNetMois=0, finMoisRegul=finMois, debutMoisRegul=debutMois;
-    if(avenantDuMoisReg&&estPassage46vers46Reg){
-      const rA=calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant');
-      const rP=calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres');
-      montantMensu=parseFloat((((rA.hMensu||0)*(rA.txNetExact||0)+majMensuRecapReg(rA)-(rA.montantAbsences||0))+((rP.hMensu||0)*(rP.txNetExact||0)+majMensuRecapReg(rP)-(rP.montantAbsences||0))).toFixed(2));
-      txNetMois=parseFloat(rP?.txNetExact||0);
-    } else if(avenantDuMoisReg&&estPassageVers46Reg){
-      const r=calcRecapFiche(c,ficheMois,avenantDuMoisReg.dateAvenant,null,avenantDuMoisReg.dateAvenant,avenantDuMoisReg.dateAvenant,'apres');
-      txNetMois=parseFloat(r?.txNetExact||0);
-      montantMensu=parseFloat(((r?.hMensu||0)*(r?.txNetExact||0)+majMensuRecapReg(r)-(r?.montantAbsences||0)).toFixed(2));
-      debutMoisRegul=avenantDuMoisReg.dateAvenant;
-    } else if(avenantDuMoisReg){
-      const r=calcRecapFiche(c,ficheMois,null,veilleAvenantReg,veilleAvenantReg,avenantDuMoisReg.dateAvenant,'avant');
-      txNetMois=parseFloat(r?.txNetExact||0);
-      montantMensu=parseFloat(((r?.hMensu||0)*(r?.txNetExact||0)+majMensuRecapReg(r)-(r?.montantAbsences||0)).toFixed(2));
-      finMoisRegul=veilleAvenantReg||finMois;
-    } else {
-      const r=calcRecapFiche(c,ficheMois);
-      txNetMois=parseFloat(r?.txNetExact||0);
-      montantMensu=parseFloat(Math.max(0,(r?.hMensu||0)*txNetMois+majMensuRecapReg(r)-(r?.montantAbsences||0)).toFixed(2));
-    }
-    // 01/09/2026 (Sophie) : troisième implémentation séparée du même calcul ("Situation au [date]",
-    // via c._regulDiffEuros) — divergeait de calcHPrevuReg (référence confirmée juste par Sophie sur
-    // l'onglet Régularisation) pour min/var : recalculait heure par heure depuis les statuts de la
-    // fiche plutôt que via l'agenda + volume garanti. Aligné sur le même calcul partagé que
-    // calcRegularisationDefinitive, pour ne plus jamais diverger. Fixe/sem : logique jour par jour
-    // inchangée (déjà correcte, déjà alignée depuis la correction "plan sem" antérieure).
-    const estPlanMinVarRegAuto=srcAgReg.th==='plan'&&(srcAgReg.planType==='min'||srcAgReg.planType==='var');
-    let hReel=0;
-    if(estPlanMinVarRegAuto){
-      hReel=calcHPrevuReg(c,false,debutMoisRegul,finMoisRegul);
-    } else {
-    // 13/09/2026 (Sophie) : fractionnement retiré — compte pour ses heures prévues (voir hDuJourRegFS)
-    const statutsExclus=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-conges','abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat'];
-    (ficheMois.jours||[]).forEach(j=>{
-      if(window.DEBUG_REGUL_COMPARE&&['2023-09','2023-12','2024-01','2024-03','2025-09','2026-05'].includes(key)){
-        console.log('[TEMP-fnA-jour]',j.date,'| statut:',j.statut,'| heureDebPrev:',j.heureDebPrev,'| heureFinPrev:',j.heureFinPrev,'| isFerie:',isFerie(j.date,c),'| isAbsEmpl:',isAbsenceEmployeur(agendaMoisReg,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))),'| horsPlage:',(j.date<debutMoisRegul||j.date>finMoisRegul));
-      }
-      if(j.date<debutMoisRegul||j.date>finMoisRegul) return;
-      // 04/09/2026 (Sophie, test sur un contrat réel) : même correctif que hReelPortion/calcHPrevuReg — jamais de
-      // vérification de la date de fin de contrat ici avant aujourd'hui.
-      const dateFinCFnA=getDateFinContrat(c);
-      if(dateFinCFnA&&j.date>dateToStr(dateFinCFnA)) return;
-      let statut=j.statut||getStatutPrevu(c,j);
-      // 04/09/2026 (Sophie) : même principe que hReelPortion — fractionnement et abs-non cross-contrat
-      // recalculés localement ici, jamais visibles sans cette injection.
-      if((!j.statut||j.statut==='non-prevu'||j.statut==='prevu')&&estJourFractionnementChoisi(c,j.date)) statut='fractionnement';
-      else if(estJourAbsNonFractionnement(c,j)) statut='abs-non';
-      // 25/08/2026 (Sophie) : un jour "travaillé" qui tombe dans une semaine "off" ne doit jamais
-      // compter, même s'il porte des heures prévues structurelles (bug confirmé Sophie 25/08 : 14 et
-      // 16 janvier 2025, jours "travaillé" dans une semaine "off", comptés à tort avec leurs heures
-      // prévues — 9h chacun, 18h en trop sur ce mois).
-      if(statut==='travaille'&&isAbsenceEmployeur(agendaMoisReg,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))) return;
-      if(statut==='travaille'&&isFerie(j.date,c)&&!(j.heureDebPrev&&j.heureFinPrev)){
-        const prevusFerieHR=getHeuresPrevues(c,new Date(j.date));
-        if(prevusFerieHR&&prevusFerieHR.debut&&prevusFerieHR.fin){
-          hReel+=Math.max(0,(toMins(prevusFerieHR.fin)-toMins(prevusFerieHR.debut))/60);
-        }
-        return;
-      }
-      // Un férié tombant DANS une pose de congés (statut "ferie", pas "travaille") reçoit le même
-      // traitement qu'un jour de congés ordinaire — moyenne hebdo / jours union, s'il tombe sur un
-      // jour union (getHJourCongesNonDeduit, déjà utilisée ailleurs pour ce même calcul) — 25/08/2026
-      // (Sophie), exemple chiffré : 25 décembre 2025, un jeudi, jour union, tombé à zéro depuis le
-      // passage en plan sem (heureDebPrev/heureFinPrev restent null pour un jour férié en plan sem,
-      // contrairement au plan fixe, où ils restaient renseignés).
-      if(statut==='ferie'&&!(j.heureDebPrev&&j.heureFinPrev)){
-        const hJourFerieCg=getHJourCongesNonDeduit(c,j.date,j.jourSemaine);
-        if(hJourFerieCg>0) hReel+=hJourFerieCg;
-        return;
-      }
-      if(statutsExclus.includes(statut)) return;
-      if(statut==='abs-partielle'){if(j.heureDebReel&&j.heureFinReel)hReel+=Math.max(0,(toMins(j.heureFinReel)-toMins(j.heureDebReel))/60);}
-      else if(j.heureDebPrev&&j.heureFinPrev)hReel+=Math.max(0,(toMins(j.heureFinPrev)-toMins(j.heureDebPrev))/60);
-    });
-    }
-    // 13/09/2026 (Sophie) : majoration des heures au-delà de 45 h, des deux côtés (voir hSupDuReg)
-    const montantPrevu=parseFloat(((hReel+hSupDuReg(c,false,debutMoisRegul,finMoisRegul)*((srcAgReg.majSup||0)/100))*txNetMois).toFixed(2));
-    if(window.DEBUG_REGUL_COMPARE)console.log('[TEMP-fnA]',key,'| montantMensu:',montantMensu,'| montantPrevu:',montantPrevu,'| txNetMois:',txNetMois,'| hReel:',hReel);
-    totGenMensu+=montantMensu;totGenPrevu+=montantPrevu;
-  });
-  c._regulDiffEuros=parseFloat((totGenPrevu-totGenMensu).toFixed(2));
+function calcRegulDiffEurosAuto(c, moisMaxForce, cleFiche){
+  // Montant de la régularisation payée AU PASSAGE vers un 52 sans clause (52 fixe compris) : l'écart de la
+  // période soldée par ce passage, tel que le calcule l'onglet Régularisation (ses lignes, mois validés ou non).
+  // 14/09/2026 (Sophie) : « on ne paye pas la régularisation avant la fin du contrat, à moins d'un passage en 52
+  // fixe ou sans clause ». Cette fonction avait son propre calcul (qui divergeait de l'onglet) et payait aussi un
+  // passage 46 → 52 AVEC clause, où la régularisation continue jusqu'à la fin du contrat. cleFiche : la feuille
+  // ouverte — on retient la période soldée à ce mois-là, sinon la première. moisMaxForce : sans effet.
+  c._regulDiffEuros=0;
+  const passageSolde=(c.avenants||[]).some(av=>av.signe&&av.tc==='52'&&av.dateAvenant&&!versionRegularisable(getVersionActive(c,parseDateLoc(av.dateAvenant))));
+  if(!passageSolde) return;
+  const lignesSoldees=((calcRegulOnglet(c)||{}).annees||[]).flatMap(a=>a.lignes||[]).filter(l=>!l.enCours);
+  const fins=[...new Set(lignesSoldees.map(l=>l.cycleFin))].sort();
+  const fin=(cleFiche&&fins.includes(cleFiche))?cleFiche:fins[0];
+  if(!fin) return;
+  const diff=lignesSoldees.filter(l=>l.cycleFin===fin).reduce((s,l)=>s+l.prevu-l.mensu,0);
+  c._regulDiffEuros=parseFloat(diff.toFixed(2));
 }
 
 // 29/07/2026 (correctif Sophie) : "quitter sans enregistrer malgré l'avertissement" doit annuler
@@ -4226,7 +4141,7 @@ function ouvrirFiche(contratId,key){
   // Repéré via un profil de performance (un contrat réel : aucun avenant en 52, plusieurs secondes à chaque
   // ouverture de feuille pour un calcul dont le résultat n'était lu nulle part).
   if((c.avenants||[]).some(av=>av.signe&&av.tc==='52')){
-    calcRegulDiffEurosAuto(c);
+    calcRegulDiffEurosAuto(c,undefined,key);
   } else {
     c._regulDiffEuros=0;
   }
@@ -17358,150 +17273,25 @@ function calcSoldeConges46(c, dateRupture){
 function aCycleRegulRupture(c){
   if(!c) return false;
   const srcRup=getVersionActive(c,getDateFinContrat(c)||new Date());
-  if(srcRup.tc==='occ') return false;
-  if(srcRup.tc!=='52') return true;
-  return !!((c.tc==='52'&&c.clauseRegul52)||(c.avenants||[]).some(av=>av.signe&&av.clauseRegul52&&av.dateAvenant));
+  // 14/09/2026 (Sophie) : régularisation due à la rupture si la version en vigueur à la fin est régularisable
+  // (46, ou 52 avec SA clause) — un passage à un 52 sans clause a déjà soldé et payé la période.
+  return versionRegularisable(srcRup);
 }
 function calcRegularisationDefinitive(c, dateDebutLimite, dateFinLimite){
-  const moisTries=Object.keys(c.fiches||{}).filter(k=>{
-    if(!c.fiches[k].valide) return false;
-    if(dateDebutLimite||dateFinLimite){
-      const [ay,am]=k.split('-').map(Number);
-      const dateF=new Date(ay,am-1,1);
-      if(dateDebutLimite&&dateF<dateDebutLimite) return false;
-      if(dateFinLimite&&dateF>dateFinLimite) return false;
-    }
-    return true;
-  }).sort();
+  // 14/09/2026 (Sophie) : « la rupture doit reprendre l'onglet regul ». Plus de calcul propre : il comptait les mois
+  // en 52 sans clause, prenait tout le mois d'un passage 52 → 46 et oubliait les congés dus sous la clause en
+  // fixe/sem (52fixe-46fixe −335,24 € au lieu de −26,64 € ; regul52 −271,91 € au lieu de +7,66 €). Somme des lignes
+  // VALIDÉES de la période en cours (non soldée) de l'onglet ; bornes facultatives (Date, mois compris) conservées.
+  const r=calcRegulOnglet(c)||{};
+  const cleDe=d=>d?d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'):null;
+  const kDeb=cleDe(dateDebutLimite), kFin=cleDe(dateFinLimite);
   let totalMensuNet=0, totalPrevuNet=0;
-  moisTries.forEach(key=>{
-    const fiche=c.fiches[key];
-    const [ay2,am2]=key.split('-').map(Number);
-    const source=getVersionActive(c,new Date(ay2,am2-1,1));
-    // Détecter si ce mois est à cheval sur un avenant 46→52
-    // 14/09/2026 (Sophie) : un VRAI passage 46 → 52 (la veille, le contrat n'était pas en 52) — un avenant 52 → 52
-    // (changement de taux, d'horaires) était pris pour un passage 46 → 52 : mois coupé à tort à la veille.
-    const avenantMois=(c.avenants||[]).find(av=>av.signe&&av.tc==='52'&&av.dateAvenant&&av.dateAvenant.slice(0,7)===key&&(()=>{const vAvM=parseDateLoc(av.dateAvenant); vAvM.setDate(vAvM.getDate()-1); return ((getVersionActive(c,vAvM)||{}).tc||c.tc)!=='52';})());
-    const veilleAvenantStr=avenantMois?(()=>{
-      const [avy,avm,avd]=avenantMois.dateAvenant.split('-').map(Number);
-      const dV=new Date(avy,avm-1,avd-1);
-      return dV.getFullYear()+'-'+String(dV.getMonth()+1).padStart(2,'0')+'-'+String(dV.getDate()).padStart(2,'0');
-    })():null;
-    // Heures payées = hMensu - hAbsDeduit (en heures équivalentes)
-    // 14/09/2026 (Sophie, point 21) : date de référence = veille de l'avenant, comme calcRegulDiffEurosAuto et
-    // l'onglet Régularisation. Sans elle, la partie d'AVANT l'avenant était calculée avec le contrat d'APRÈS
-    // (46fixe-52sem, mars 2024 : 99,67 h mensualisées au lieu de 68,33 h, 166,10 € au lieu de 34,16 €).
-    const recapMois=avenantMois?calcRecapFiche(c,fiche,null,veilleAvenantStr,veilleAvenantStr,avenantMois.dateAvenant,'avant'):calcRecapFiche(c,fiche);
-    // Déduction sur la seule mensu de base (jamais la majoration structurelle HS, exclue de la
-    // régularisation des deux côtés pour rester cohérent — voir discussion du jour) : montantAbsences
-    // moins montantAbsMaj, converti en heures au taux normal
-    const _txNetRegulMois=parseFloat(recapMois.txNetExact||recapMois.txNet||0);
-    const _montantAbsNormMois=Math.max(0,parseFloat(recapMois.montantAbsences||0)-parseFloat(recapMois.montantAbsMaj||0));
-    const hAbsDedMois=_txNetRegulMois>0?parseFloat((_montantAbsNormMois/_txNetRegulMois).toFixed(2)):0;
-    const hMensuMois=parseFloat(recapMois.hMensu||source.hMensu||0);
-    const hMensuNetMoisH=Math.max(0,hMensuMois-hAbsDedMois);
-    // Heures prévues (sans off ni congés)
-    const agendas=source.agendas||c.agendas||[];
-    const ag=agendas.find(a=>{
-      const pm=new Date(ay2,am2-1,1);const dm=new Date(ay2,am2,0);
-      return parseDateLoc(a.dateDebut)<=dm&&parseDateLoc(a.dateFin)>=pm;
-    });
-    let hPrevu=0;
-    const estPlanMinVarRegul=source.th==='plan'&&(source.planType==='min'||source.planType==='var');
-    if(estPlanMinVarRegul){
-      // 01/09/2026 (Sophie) : remplace hThéoriques (volume garanti brut — juste pour le concept
-      // "théoriques", mais faux ici : hThéoriques ne retire jamais les semaines de congés/off,
-      // alors que les congés sont payés à part, pas via cette déduction) par calcHPrevuReg —
-      // extraite de renderDetTab pour être partagée, même calcul que celui déjà confirmé juste par
-      // Sophie sur l'onglet Régularisation (écart chiffré confirmé : 681,05€ contre 7,31€, dû à
-      // cette divergence). clause52=false : les 3 appelants de calcRegularisationDefinitive
-      // excluent déjà tc==='52' avant d'appeler cette fonction.
-      const debutMoisRegC=ay2+'-'+String(am2).padStart(2,'0')+'-01';
-      const finMoisDateRegC=new Date(ay2,am2,0);
-      const finMoisRegC=finMoisDateRegC.getFullYear()+'-'+String(finMoisDateRegC.getMonth()+1).padStart(2,'0')+'-'+String(finMoisDateRegC.getDate()).padStart(2,'0');
-      // 07/09/2026 (Sophie) : la clause était forcée à « non », au motif que les trois appelants
-      // écartaient déjà tc==='52'. Ce raisonnement oubliait la clause : un 52 qui la porte est bien
-      // dans un cycle, et ses congés, couverts par la mensualisation, doivent compter dans le dû.
-      const clause52RegC=!!((c.tc==='52'&&c.clauseRegul52)||(c.avenants||[]).some(av=>av.signe&&av.clauseRegul52&&av.dateAvenant));
-      // 14/09/2026 (Sophie, point 21) : mois d'un avenant 46 → 52, le dû s'arrête à la veille comme le mensualisé
-      hPrevu=calcHPrevuReg(c,clause52RegC,debutMoisRegC,veilleAvenantStr||finMoisRegC);
-    } else {
-      (fiche.jours||[]).forEach(j=>{
-        // 14/09/2026 (Sophie, point 21) : mois d'un avenant 46 → 52, le dû s'arrête à la veille comme le mensualisé
-        if(veilleAvenantStr&&j.date>veilleAvenantStr) return;
-        const semKey=getSemISO(j.date);
-        const agKey=getKeyAgenda(semKey,getSemAnnee(j.date));
-        const typeSem=ag&&ag.semaines&&ag.semaines[agKey];
-        if(window.DEBUG_REGUL_COMPARE&&['2023-09','2023-12','2024-01','2024-03','2025-09','2026-05'].includes(key)){
-          console.log('[TEMP-fnC-jour]',j.date,'| statut:',j.statut,'| heureDebPrev:',j.heureDebPrev,'| heureFinPrev:',j.heureFinPrev,'| isFerie:',isFerie(j.date,c),'| typeSem:',typeSem);
-        }
-        if(typeSem==='off') return;
-        // 04/09/2026 (Sophie, test sur un contrat réel) : même correctif que les 2 autres fonctions de régularisation
-        // — jamais de vérification de la date de fin de contrat ici avant aujourd'hui.
-        const dateFinCFnC=getDateFinContrat(c);
-        if(dateFinCFnC&&j.date>dateToStr(dateFinCFnC)) return;
-        // 13/09/2026 (Sophie) : un jour de fractionnement n'est plus écarté — il compte pour ses heures prévues
-        // (voir hDuJourRegFS) ; sur un jour non prévu, il n'en a pas.
-        if(estJourAbsNonFractionnement(c,j)) return;
-        // 27/08/2026 (Sophie) : liste complétée avec les 8 statuts qu'elle n'avait jamais eus
-        // (alignée sur statutsExclus de calcRegulDiffEurosAuto) — abs-non notamment ("Absence non
-        // rémunérée", "le jour sera déduit du salaire" dans son propre libellé) tombait avant dans la
-        // branche générique et comptait à tort ses heures prévues complètes. Confirmé par Sophie sur
-        // 3 exemples chiffrés : janvier 2024 (405,15 et non 429,96), septembre 2025 (0 et non 52,23).
-        if(['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges','abs-non','abs-am','ferie-non','abs-enfant','arret','non-prevu','repos','hors-contrat'].includes(j.statut)) return;
-        if(j.statut==='abs-partielle'){
-          // 27/08/2026 (Sophie) : même traitement que calcRegulDiffEurosAuto — heures réellement
-          // travaillées ce jour-là (jamais les heures prévues complètes), la déduction proportionnelle
-          // hAbsReelles ci-dessous est retirée en même temps que cet ajout (sinon double déduction).
-          if(j.heureDebReel&&j.heureFinReel) hPrevu+=Math.max(0,(toMins(j.heureFinReel)-toMins(j.heureDebReel))/60);
-        } else if(j.heureDebPrev&&j.heureFinPrev){
-          hPrevu+=(toMins(j.heureFinPrev)-toMins(j.heureDebPrev))/60;
-        } else if(j.statut==='travaille'&&isFerie(j.date,c)){
-          // Jour férié normalement prévu, passé en "travaillé" (statut nécessaire pour que la
-          // majoration férié s'applique) : ce statut n'entretient jamais d'heures prévues, donc on
-          // retrouve ici les heures qui auraient été dues si le jour n'avait pas été modifié, en
-          // les recalculant depuis le motif structurel du contrat pour cette date.
-          const prevusFerieReg=getHeuresPrevues(c,new Date(j.date));
-          if(prevusFerieReg&&prevusFerieReg.debut&&prevusFerieReg.fin){
-            hPrevu+=(toMins(prevusFerieReg.fin)-toMins(prevusFerieReg.debut))/60;
-          }
-        } else if(j.statut==='ferie'){
-          // 25/08/2026 (Sophie) : un férié resté au statut "ferie" (pas "travaillé") dans une pose de
-          // congés acquis doit compter, sur un jour prévu ou jour union — même traitement qu'un jour
-          // de congés ordinaire (moyenne hebdo / jours union, getHJourCongesNonDeduit) — même
-          // correctif que celui posé dans calcRegulDiffEurosAuto et hReelPortion plus tôt aujourd'hui,
-          // bug identique dans cette troisième fonction séparée (exemple chiffré Sophie : 25 décembre
-          // 2025, jeudi, jour union, tombait à zéro en plan sem).
-          const hJourFerieReg2=getHJourCongesNonDeduit(c,j.date,j.jourSemaine);
-          if(hJourFerieReg2>0) hPrevu+=hJourFerieReg2;
-        }
-      });
-    }
-    // 27/08/2026 (Sophie) : déduction proportionnelle retirée côté "dû" — devenue redondante et
-    // à risque de double déduction maintenant que la boucle ci-dessus gère précisément abs-partielle
-    // (heures réelles) et exclut les statuts d'absence (abs-non, abs-am, abs-enfant, arret) comme
-    // calcRegulDiffEurosAuto. Le côté "mensu" (ci-dessus, hMensuNetMoisH) reste inchangé — confirmé
-    // correct par Sophie, la proportionnalité y reste nécessaire.
-    const hPrevuNetMoisH=Math.max(0,hPrevu);
-    // 27/08/2026 (Sophie) : conversion en euros ICI, mois par mois, avec le taux net DE CE MOIS
-    // (_txNetRegulMois, déjà calculé plus haut pour la déduction d'absence) — plus une seule
-    // conversion globale à la fin avec le taux actuel. Le taux d'un contrat réel a changé en septembre
-    // 2025 ; l'ancienne version (accumulation d'heures sur tout l'historique, conversion unique à la
-    // fin) revalorisait les mois antérieurs au taux d'aujourd'hui, gonflant l'écart d'environ
-    // 110-130€ par rapport à "Situation au"/"onglet Régularisation", qui calculaient déjà euro par
-    // euro, mois par mois, au bon taux à chaque fois — cette fonction était la seule des trois à ne
-    // pas le faire.
-    // 13/09/2026 (Sophie) : majoration des heures sup comptée des deux côtés (voir hSupDuReg) — côté mensualisé,
-    // celle des heures sup mensualisées, sa part retenue lors des absences déduite ; côté dû, celle des heures
-    // au-delà de 45 h par semaine.
-    const clause52Def=!!((c.tc==='52'&&c.clauseRegul52)||(c.avenants||[]).some(av=>av.signe&&av.clauseRegul52&&av.dateAvenant));
-    const finMoisDef=veilleAvenantStr||(key+'-'+String(new Date(ay2,am2,0).getDate()).padStart(2,'0'));
-    const montantMensuMoisC=parseFloat((hMensuNetMoisH*_txNetRegulMois+majMensuRecapReg(recapMois)-parseFloat(recapMois.montantAbsMaj||0)).toFixed(2));
-    const montantPrevuMoisC=parseFloat(((hPrevuNetMoisH+hSupDuReg(c,clause52Def,key+'-01',finMoisDef)*((recapMois.majSup||0)/100))*_txNetRegulMois).toFixed(2));
-    if(window.DEBUG_REGUL_COMPARE)console.log('[TEMP-fnC]',key,'| montantMensu:',montantMensuMoisC,'| montantPrevu:',montantPrevuMoisC,'| txNetMois:',_txNetRegulMois,'| hMensuNetMoisH:',hMensuNetMoisH,'| hPrevuNetMoisH:',hPrevuNetMoisH);
-    totalMensuNet+=montantMensuMoisC;
-    totalPrevuNet+=montantPrevuMoisC;
-  });
+  (r.annees||[]).forEach(a=>(a.lignes||[]).forEach(l=>{
+    if(!l.valide||!l.enCours) return;
+    if(kDeb&&l.key<kDeb) return;
+    if(kFin&&l.key>kFin) return;
+    totalMensuNet+=l.mensu; totalPrevuNet+=l.prevu;
+  }));
   return {totalMensuNet:parseFloat(totalMensuNet.toFixed(2)),totalPrevuNet:parseFloat(totalPrevuNet.toFixed(2)),diffNet:parseFloat((totalPrevuNet-totalMensuNet).toFixed(2))};
 }
 
@@ -18588,14 +18378,9 @@ function renderRupture(c, cont){
       return new Date(ay,am-1,1);
     })():null;
     // Calculer la régularisation localement pour éviter les conflits avec l'onglet régul
-    const _regulRupture=(()=>{
-      const saved=c._regulDiffEuros;
-      const dernierMoisValideR=getDernieresFicheValidee(c);
-      calcRegulDiffEurosAuto(c,dernierMoisValideR||undefined);
-      const val=c._regulDiffEuros||0;
-      c._regulDiffEuros=saved; // remettre la valeur précédente
-      return val;
-    })();
+    // 14/09/2026 (Sophie) : la rupture reprend l'onglet Régularisation (période en cours, feuilles validées) —
+    // ce calcul passait par le montant du passage en 52, qui visait une période déjà soldée et payée.
+    const _regulRupture=calcRegularisationDefinitive(c).diffNet||0;
     const regulEuros=_regulRupture;
     if(regulEuros>0){
       regHtml=`<div class="card" style="margin-bottom:10px">
@@ -18811,7 +18596,8 @@ function renderRupture(c, cont){
         const moisFinSim=dateFinContrat?dateToStr(dateFinContrat).slice(0,7):null;
         const regProj=moisFinSim?calcRegulOnglet(c,{jusquA:moisFinSim}):null;
         const reg=calcRegularisationDefinitive(c);
-        const regNetBrut=regProj&&regProj.borne?regProj.diffTotal:reg.diffNet;
+        // 14/09/2026 (Sophie) : période en cours seulement — diffTotal additionnait aussi les périodes soldées, déjà payées.
+        const regNetBrut=regProj&&regProj.borne?regProj.diffEnCours:reg.diffNet;
         if(regNetBrut>0){
         // 29/07/2026 (correctif Sophie) : coefNet n'existe pas dans cette portée — coefficient en
         // vigueur à la rupture (dateSit), même référence que le reste de l'onglet.
