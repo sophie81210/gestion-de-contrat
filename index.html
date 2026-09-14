@@ -9378,8 +9378,11 @@ function _validerFicheSuite(contratId,key,c){
   const [kvy,kvm]=key.split('-').map(Number);
   if(kvm===1){
     const msgs=[];
-    // Contrats 52 sem : vérifier si tous les congés acquis seront pris avant le 30 avril
-    if(c.tc==='52'&&c.conges){
+    // Vérifier si tous les congés acquis seront pris avant le 30 avril
+    // 14/09/2026 (Sophie, point 15) : tous les contrats (46 comme 52, pas l'occasionnel), d'après le type EN
+    // VIGUEUR en janvier — réservé aux 52, et lu sur le type de départ, l'avertissement n'apparaissait jamais
+    // pour un 46 (Enaël). Légalement tous les jours doivent être pris : il invite à en poser d'autres.
+    if(((getVersionActive(c,new Date(kvy,0,15))||{}).tc||c.tc)!=='occ'&&c.conges){
       calcCongesContrat(c);
       // 03/09/2026 (Sophie) : ne vérifier QUE l'année dont l'échéance (30 avril) tombe cette même
       // année civile que le janvier en cours de validation (anneeRef+2===kvy) — pas toutes les
@@ -21629,8 +21632,22 @@ function calcSeuilAcquis(c, anneeDebut, premierJourPose){
 // que la première vient d'écrire et converge. Centralisé ici pour que tous les appelants
 // n'aient plus qu'à appeler une seule fois.
 function majFichesCgAm(anneeDebut, sauvegarder=true){
+  // 14/09/2026 (Sophie, point 18) : seuls les contrats réellement modifiés par le recalcul sont marqués à
+  // enregistrer, et l'enregistrement passe par la sauvegarde groupée habituelle. Avant, chaque passe avec
+  // sauvegarde envoyait chaque contrat un par un, puis saveCongesAM les marquait TOUS pour un second envoi :
+  // quinze contrats réécrits deux fois pour une seule action, jusqu'à saturer la file d'écritures de la base
+  // (« Write stream exhausted »), avec des validations qui semblaient passées sans l'être.
+  const signatureCgAm=c=>{
+    let s=JSON.stringify(c.planning||{})+JSON.stringify(c.agendas||[])+JSON.stringify(c.congesFiges||{});
+    Object.keys(c.fiches||{}).forEach(k=>{ const f=c.fiches[k]; s+=k+(f.valide?'v':'')+(f.anticipeActif?'a':'');
+      (f.jours||[]).forEach(j=>{ s+='|'+(j.statut||'')+(j.heureDebPrev||'')+(j.heureFinPrev||'')+(j.heureDebReel||'')+(j.heureFinReel||''); }); });
+    return s;
+  };
+  const avantCgAm=new Map((S.contrats||[]).map(c=>[c.id,signatureCgAm(c)]));
   majFichesCgAmPasse(anneeDebut,false);
-  majFichesCgAmPasse(anneeDebut,sauvegarder);
+  majFichesCgAmPasse(anneeDebut,false);
+  (S.contrats||[]).forEach(c=>{ if(avantCgAm.get(c.id)!==signatureCgAm(c)) _contratsModifies.add(c.id); });
+  if(sauvegarder){ saveCongesAM(); saveToFirestore(); }
 }
 function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
   if(window.DEBUG_CGAM)console.log('[CGAM] === appel majFichesCgAm année',anneeDebut,'===');
@@ -23482,8 +23499,8 @@ async function enregistrerCgAm(){
 function saveCongesAM(){
   // Ne pas sauvegarder si congesAM est vide (évite d'écraser les données)
   if(!S.congesAM||!Object.keys(S.congesAM).length) return;
-  // Marquer tous les contrats comme modifiés car majFichesCgAm les a tous mis à jour
-  S.contrats.forEach(c=>_contratsModifies.add(c.id));
+  // 14/09/2026 (Sophie, point 18) : ne marque plus TOUS les contrats à enregistrer — majFichesCgAm marque
+  // lui-même ceux qu'il a réellement modifiés. Ici, seul le calendrier des congés est enregistré.
   localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM));
   if(window.FB_USER&&window._fbModules){
     const {doc,setDoc}=window._fbModules;
