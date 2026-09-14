@@ -4941,14 +4941,14 @@ function ouvrirFiche(contratId,key){
   // (pose continue d'un mois sur l'autre) a réellement posé des jours en anticipé et que la case de
   // CE mois n'est pas cochée, prévenir l'utilisatrice à l'ouverture plutôt que la laisser découvrir
   // le décalage seulement au survol de la case (ce qui s'est produit avant ce correctif).
-  const [keyAnneeAntW,keyMoisAntW]=key.split('-').map(Number);
-  const moisPrecAntDateW=new Date(keyAnneeAntW,keyMoisAntW-2,1);
-  const moisPrecAntKeyW=moisPrecAntDateW.getFullYear()+'-'+String(moisPrecAntDateW.getMonth()+1).padStart(2,'0');
-  const fichePrecAntW=c.fiches?.[moisPrecAntKeyW];
-  const premierJourMoisEstCongeW=fiche.jours[0]&&['conges-acq','conges-non','conges-anticipe'].includes(fiche.jours[0].statut);
-  const dernierJourPrecEstCongeW=!!(fichePrecAntW&&fichePrecAntW.jours&&fichePrecAntW.jours.length&&['conges-acq','conges-non','conges-anticipe'].includes(fichePrecAntW.jours[fichePrecAntW.jours.length-1].statut));
-  const posePrecedenteADejaAnticipeW=!!(fichePrecAntW&&fichePrecAntW.jours&&fichePrecAntW.jours.some(j=>j.statut==='conges-anticipe'||j.statut==='decompte-anticipe'));
-  const avertirAnticipeManquant=premierJourMoisEstCongeW&&dernierJourPrecEstCongeW&&posePrecedenteADejaAnticipeW&&!anticipeActif;
+  // 14/09/2026 (Sophie) : même détection de la pose continue que la validation (poseContinueDepuisMoisPrecedent) —
+  // cet avertissement regardait encore le seul statut du 1er du mois et du dernier jour du mois précédent, souvent un
+  // dimanche, un férié ou un jour de décompte : il ne partait pas toujours. Et le sens inverse manquait : une pose
+  // commencée SANS anticipation alors qu'elle était nécessaire, case cochée le mois suivant (52minfract-52min,
+  // janvier 2022 : décembre validé non coché, le 3 et le 4 janvier passaient en anticipé).
+  const choixPrecW=poseContinueDepuisMoisPrecedent(c,key)?choixAnticipeMoisPrecedent(c,key):null;
+  const avertirAnticipeManquant=choixPrecW==='anticipe'&&!anticipeActif;
+  const avertirAnticipeEnTrop=choixPrecW==='refuse'&&anticipeActif;
   // 06/08/2026 (Sophie) : case affichée sur TOUS les mois ayant des congés, plus seulement le
   // premier mois de la pose — le calcul (majFichesCgAmPasse) ne consulte de toute façon plus que
   // la case du mois où l'anticipé devient réellement nécessaire pour une pose donnée (décidée une
@@ -4969,6 +4969,7 @@ function ouvrirFiche(contratId,key){
     </div>
     ${planningNonEnregistrePourMois(c,key)?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">⚠ Le planning de ce mois a des modifications non enregistrées — retournez sur l'onglet Planning et cliquez sur 💾 Enregistrer avant de continuer, sinon cette feuille ne reflète pas vos derniers changements.</div>`:''}
     ${avertirAnticipeManquant?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">⚠ Cette pose de congés a commencé par de l'anticipé le mois précédent — pensez à cocher « Prise de congés par anticipation » plus bas si elle doit continuer sur ce mois-ci.</div>`:''}
+    ${avertirAnticipeEnTrop?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">⚠ Cette pose de congés a commencé sans anticipation le mois précédent — décochez « Prise de congés par anticipation » plus bas : le choix vaut pour toute la prise.</div>`:''}
     <div style="width:100%;overflow:hidden">
       <table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed">
         <colgroup>
@@ -8985,6 +8986,42 @@ function lancerControleFige(){
   },20);
 }
 
+// 09/09/2026 (Sophie), partagé le 14/09/2026 : une pose de congés se poursuit-elle depuis le mois précédent ? Le 1er du
+// mois est posé (calendrier Ass'Mat, ou statut de pose sur la feuille), et en remontant jour par jour jusqu'à sept jours
+// avant, on rencontre un jour POSÉ avant toute journée prévue ou travaillée — la règle du décompte, qui se poursuit
+// jusqu'à la première journée prévue (cas réel : pose du 26 au 30 décembre 2023, le 31 est un dimanche non posé).
+function poseContinueDepuisMoisPrecedent(c,key){
+  const f=c.fiches&&c.fiches[key]; if(!f) return false;
+  const [a,m]=key.split('-').map(Number);
+  const statutsPose=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges','conges-6j','conges-6j-fin'];
+  const jour1=(f.jours||[]).find(j=>j.date===key+'-01');
+  if(!(isJourCongeAM(key+'-01')||(jour1&&statutsPose.includes(jour1.statut)))) return false;
+  const statutJour=ds=>{ const fJ=c.fiches&&c.fiches[ds.slice(0,7)]; const jJ=fJ&&(fJ.jours||[]).find(x=>x.date===ds); return jJ?(jJ.statut||''):''; };
+  for(let recul=1;recul<=7;recul++){
+    const ds=dateToStr(new Date(a,m-1,1-recul));
+    if(isJourCongeAM(ds)) return true;
+    if(['prevu','travaille','reprise'].includes(statutJour(ds))) return false;
+  }
+  return false;
+}
+// 14/09/2026 (Sophie) : choix d'anticipation de la pose au mois précédent — 'anticipe' : des jours y ont été pris par
+// anticipation ; 'refuse' : l'anticipation y était nécessaire (jours « congés non acquis » dans la pose de fin de mois)
+// mais la case n'était pas cochée ; null : les jours acquis suffisaient, le choix reste libre le mois suivant.
+function choixAnticipeMoisPrecedent(c,key){
+  const [a,m]=key.split('-').map(Number);
+  const dP=new Date(a,m-2,1); const kP=dP.getFullYear()+'-'+String(dP.getMonth()+1).padStart(2,'0');
+  const fP=c.fiches&&c.fiches[kP]; if(!fP||!fP.jours) return null;
+  if(fP.jours.some(j=>j.statut==='conges-anticipe'||j.statut==='decompte-anticipe')) return 'anticipe';
+  if(c.cgAnticipe!=='oui'||fP.anticipeActif) return null;
+  // Jours de la pose en fin de mois précédent : on remonte depuis le dernier jour jusqu'à une journée prévue ou travaillée.
+  const joursP=fP.jours.filter(j=>j.date&&j.date.startsWith(kP)).sort((x,y)=>x.date.localeCompare(y.date));
+  for(let i=joursP.length-1;i>=0;i--){
+    const st=joursP[i].statut||getStatutPrevu(c,joursP[i])||'';
+    if(['prevu','travaille','reprise'].includes(st)) break;
+    if(st==='conges-non'||st==='decompte-conges') return 'refuse';
+  }
+  return null;
+}
 function validerFiche(contratId,key){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c||!c.fiches||!c.fiches[key])return;
@@ -9029,50 +9066,18 @@ function validerFiche(contratId,key){
     alerte(`⚠ <strong>Agenda incomplet</strong><br><br>L’agenda n’est pas complet — toutes les semaines doivent être pointées avant de valider.`);
     return;
   }
-  // 17/08/2026 (Sophie) : même principe que le contrôle planning ci-dessus — bloquer la validation si
-  // cette pose de congés a commencé par de l'anticipé le mois précédent et que la case de CE mois
-  // n'est pas cochée, plutôt qu'une simple bannière qu'on peut valider sans l'avoir traitée.
+  // 17/08/2026 (Sophie) : bloquer la validation si cette pose de congés a commencé par de l'anticipé le mois
+  // précédent et que la case de CE mois n'est pas cochée. 09/09/2026 : pose continue lue dans le calendrier (voir
+  // poseContinueDepuisMoisPrecedent). 14/09/2026 (Sophie) : et l'inverse — pose commencée SANS anticipation alors qu'elle
+  // était nécessaire, case cochée ce mois-ci. Si les jours acquis suffisaient le mois précédent, le choix reste libre.
   {
-    const ficheCourAntV=c.fiches[key];
-    const [keyAnneeAntV,keyMoisAntV]=key.split('-').map(Number);
-    const moisPrecAntDateV=new Date(keyAnneeAntV,keyMoisAntV-2,1);
-    const moisPrecAntKeyV=moisPrecAntDateV.getFullYear()+'-'+String(moisPrecAntDateV.getMonth()+1).padStart(2,'0');
-    const fichePrecAntV=c.fiches?.[moisPrecAntKeyV];
-    // 09/09/2026 (Sophie : « l'avertissement n'apparaît pas, ou du moins pas toujours ») : la continuité
-    // de la pose était jugée sur le STATUT du 1er du mois et du dernier jour du mois précédent, parmi
-    // trois valeurs seulement — congés acquis, non acquis, anticipés. Or au milieu d'une pose, ces deux
-    // journées-là sont très souvent un dimanche, un férié, un congé Ass'Mat ou un jour de décompte :
-    // aucun de ces cas n'était reconnu, et l'avertissement ne partait donc presque jamais.
-    // On regarde désormais la POSE elle-même, dans le calendrier Ass'Mat : si le dernier jour du mois
-    // précédent et le 1er de ce mois sont tous deux posés, la pose est continue, quels que soient les
-    // statuts que les feuilles leur donnent.
-    const dsPremierAntV=key+'-01';
-    // 09/09/2026, second essai (Sophie : « j'ai pu valider janvier sans cocher la case ») : exiger que le
-    // dernier jour du mois précédent soit posé ne marche pas non plus — ce jour-là est souvent un dimanche,
-    // donc hors pose. Cas réel : pose du 26 au 30 décembre 2023, le 31 est un dimanche non posé, et janvier
-    // reprend posé dès le 1er. On remonte donc jour par jour depuis le 1er du mois, jusqu'à sept jours en
-    // arrière : si on rencontre un jour POSÉ avant de rencontrer une journée prévue ou travaillée, la pose
-    // est continue. C'est exactement la règle du décompte, qui se poursuit jusqu'à la première journée prévue.
-    const statutsPoseAntV=['conges-acq','conges-anticipe','conges-non','conges-am','decompte-acq','decompte-anticipe','decompte-conges','conges-6j','conges-6j-fin'];
-    const premierJourEstPoseAntV=isJourCongeAM(dsPremierAntV)||(ficheCourAntV.jours[0]&&statutsPoseAntV.includes(ficheCourAntV.jours[0].statut));
-    let poseContinueAntV=false;
-    if(premierJourEstPoseAntV){
-      const statutJourPrecAntV=ds=>{
-        const fJ=c.fiches&&c.fiches[ds.slice(0,7)];
-        const jJ=fJ&&(fJ.jours||[]).find(x=>x.date===ds);
-        return jJ?(jJ.statut||''):'';
-      };
-      for(let recul=1;recul<=7;recul++){
-        const dRecul=new Date(keyAnneeAntV,keyMoisAntV-1,1-recul);
-        const dsRecul=dateToStr(dRecul);
-        if(isJourCongeAM(dsRecul)){ poseContinueAntV=true; break; }
-        const stR=statutJourPrecAntV(dsRecul);
-        if(['prevu','travaille','reprise'].includes(stR)) break;
-      }
+    const choixPrecAntV=poseContinueDepuisMoisPrecedent(c,key)?choixAnticipeMoisPrecedent(c,key):null;
+    if(choixPrecAntV==='anticipe'&&!c.fiches[key].anticipeActif){
+      alerte('Cette pose de congés a commencé par de l’anticipé le mois précédent — cochez « Prise de congés par anticipation » sur cette feuille avant de valider.');
+      return;
     }
-    const posePrecedenteADejaAnticipeV=!!(fichePrecAntV&&fichePrecAntV.jours&&fichePrecAntV.jours.some(j=>j.statut==='conges-anticipe'||j.statut==='decompte-anticipe'));
-    if(poseContinueAntV&&posePrecedenteADejaAnticipeV&&!ficheCourAntV.anticipeActif){
-      alerte('Cette pose de congés a commencé par de l\u2019anticipé le mois précédent — cochez « Prise de congés par anticipation » sur cette feuille avant de valider.');
+    if(choixPrecAntV==='refuse'&&c.fiches[key].anticipeActif){
+      alerte('Cette pose de congés a commencé sans anticipation le mois précédent — décochez « Prise de congés par anticipation » sur cette feuille avant de valider : le choix vaut pour toute la prise.');
       return;
     }
   }
@@ -9187,7 +9192,9 @@ function validerFiche(contratId,key){
     }
   }
   // Détecter si c'est la dernière feuille (rupture confirmée + mois de fin)
-  let msgConfirm='Avez-vous enregistré les dernières modifications ? Confirmer la validation ?';
+  // 14/09/2026 (Sophie) : la question « Avez-vous enregistré les dernières modifications ? » ne servait à rien — la
+  // validation prend de toute façon la feuille telle qu'elle est à l'écran et l'enregistre.
+  let msgConfirm='Confirmer la validation ?';
   if(c.rupture&&c.rupture.confirmee&&!c.archive){
     const dateFinContrat=getDateFinContrat(c);
     if(dateFinContrat){
