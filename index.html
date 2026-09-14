@@ -22121,6 +22121,14 @@ if(tousNonPrevus){
     if(!c.signe||!c.fiches||estContratCloture(c))return;
     const periodes=getPeriodes(joursPoses,c);
     if(window.DEBUG_CGAM)console.log('[CGAM] contrat',c.nom||c.prenom||c.id,'—',periodes.length,'période(s) de pose trouvée(s) pour',anneeDebut);
+    // 14/09/2026 (Sophie, 52minfract-52min, juin 2026 : congés posés jeudi 11 et samedi 13, vendredi non
+    // prévu et non coché) : un jour NON coché au calendrier à l'intérieur d'une période de pose (forcément
+    // non prévu, sinon getPeriodes aurait coupé la période) est un jour de DÉCOMPTE — « Non prévu » avec
+    // reprise possible — comme ceux qui suivent la fin de pose, et non un jour posé. Il suit la marche
+    // habituelle (même quota, même compteur, mêmes samedis) sous son statut congés, pour que les fériés
+    // voisins soient jugés exactement comme avant ; il ne reçoit son statut de décompte qu'à la toute fin
+    // du traitement du contrat (voir plus bas, avant l'enregistrement dans S.contrats).
+    const joursEcartPoseDecompte=[];
 
     // Calculer le quota acquis jusqu'à fin du mois précédant chaque pose
     // (basé sur calcCongesContrat)
@@ -22910,6 +22918,8 @@ if(tousNonPrevus){
                   const estSemOffCN=agOffCN&&agOffCN.semaines&&agOffCN.semaines[agKeyOffCN]==='off';
                   if(estSemOffCN){if(!fiche.valide)jour.statut=null;}else jour.statut='conges-non';
                 }
+                // Jour non coché au milieu de la période (14/09/2026, voir joursEcartPoseDecompte).
+                if(!estPose&&!estJourPrevu&&!estHorsPeriode&&jour.statut) joursEcartPoseDecompte.push(jour);
                 if(estSamedi) nbSamedisDecomptes++;
                 if(window.DEBUG_CGAM)console.log('[CGAM]',dateStr,'| pose → statut',jour.statut);
               } else {
@@ -23098,6 +23108,11 @@ if(tousNonPrevus){
         }
       });
     });
+    // 14/09/2026 : jours non cochés au milieu d'une période de pose → statut de décompte équivalent
+    // (reprise possible), une fois tous les fériés jugés. Un jour passé entre-temps en reprise ou
+    // autre n'est pas touché.
+    const DECOMPTE_ECART={'conges-acq':'decompte-acq','conges-anticipe':'decompte-anticipe','conges-non':'decompte-conges'};
+    joursEcartPoseDecompte.forEach(j=>{ if(DECOMPTE_ECART[j.statut]) j.statut=DECOMPTE_ECART[j.statut]; });
     const cidx=S.contrats.findIndex(x=>x.id==c.id);
     if(cidx!==-1)S.contrats[cidx]=c;
   });
