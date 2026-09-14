@@ -8447,10 +8447,10 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
     // la mensualisation, majoration seule
     if(parseFloat(recap.hSupDeplace||0)>0) html+=ligneG('Majoration heures sup (planning modifié)', parseFloat(recap.hSupDeplace).toFixed(2)+' h — +'+parseFloat(recap.montantMajSupDeplace||0).toFixed(2)+' €');
     const totalMajFerie=(parseFloat(recap.montantMajFeriePrevu2||0)+parseFloat(recap.montantMajFerieNP||0));
-    const totalHMajFerie=(parseFloat(recap.hMajFerie||0)+parseFloat(recap.hMajFeriePrevu||0));
+    const totalHMajFerie=(parseFloat(recap.hMajFerie||0)+parseFloat(recap.hMajFeriePrevu||0)+parseFloat(recap.hFerieMajSeule||0));
     if(totalMajFerie>0) html+=ligneG('Majoration férié', totalHMajFerie.toFixed(2)+' h — +'+totalMajFerie.toFixed(2)+' €');
     if(parseFloat(recap.montantMajRepos||0)>0) html+=ligneG('Majoration repos travaillé', (parseFloat(recap.hMajRepos||0)+parseFloat(recap.hReposMajSeule||0)).toFixed(2)+' h — +'+parseFloat(recap.montantMajRepos).toFixed(2)+' €');
-    if(parseFloat(recap.montantMaj1erMai||0)>0) html+=ligneG('Majoration 1er mai', parseFloat(recap.hMaj1erMai||0).toFixed(2)+' h — +'+parseFloat(recap.montantMaj1erMai).toFixed(2)+' €');
+    if(parseFloat(recap.montantMaj1erMai||0)>0) html+=ligneG('Majoration 1er mai', (parseFloat(recap.hMaj1erMai||0)+parseFloat(recap.h1erMaiMajSeule||0)).toFixed(2)+' h — +'+parseFloat(recap.montantMaj1erMai).toFixed(2)+' €');
   }
 
   if(parseFloat(recap.indemCongeMois||0)>0){
@@ -11865,6 +11865,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   let hComp=0, hSup=0, hAbs=0;
   let hMajFerie=0, hMajFeriePrevu=0, hMajRepos=0, hMaj1erMai=0; // heures jours spéciaux travaillés
   let hReposMajSeule=0; // 14/09/2026 : heures du jour de repos payées en comp / sup, majoration repos seule ici
+  let hFerieMajSeule=0, h1erMaiMajSeule=0; // 14/09/2026 : idem pour un férié / 1er mai sur jour non prévu
   // Taux de majoration (déclarés tôt pour usage dans la boucle)
   const majFeriePct=(sourceActif.majFerie||0)/100;
   const majReposPct=(sourceActif.majRepos||0)/100;
@@ -13486,35 +13487,23 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           const skFP=getSemISO(j.date); hCompParSemaine[skFP]=(hCompParSemaine[skFP]||0)+(hReelJourSpec-hPrevJour);
         }
       } else if(estFerieNonPrevu||estReposJ){
-        // Heures réelles entières majorées (avec exo)
+        // 14/09/2026 (Sophie, notice « majorations ») : jour NON PRÉVU travaillé — férié, 1er mai ou jour de repos. Ses
+        // heures sont des heures complémentaires (supplémentaires au-delà de 45 h dans la semaine) avec leur majoration
+        // (hComp, réparti ensuite par semaine), plus la majoration du jour seule — férié, 1er mai ou repos, la plus
+        // favorable en cas de cumul. Elles étaient payées heure + majoration du jour, jamais comptées ni déclarées en
+        // complémentaires, et la base des heures au-delà de 45 h était payée deux fois.
         const hReelJourSpec=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
         if(hReelJourSpec>0){
           if(mmddJ==='05-01'&&sourceActif.maj1erMai!=null){
-            if(estJourReposHebdoBrut&&majReposPct>maj1erMaiPct){
-              hMajRepos+=hReelJourSpec;
-            } else {
-              hMaj1erMai+=hReelJourSpec;
-            }
+            if(estJourReposHebdoBrut&&majReposPct>maj1erMaiPct) hReposMajSeule+=hReelJourSpec;
+            else h1erMaiMajSeule+=hReelJourSpec;
           } else if(estFerieNonPrevu){
-            // Si le jour est aussi un jour de repos, prendre le taux le plus favorable
-            const pctFerie=majFeriePct;
-            const pctRepos=estJourReposHebdoBrut?majReposPct:0;
-            if(pctRepos>pctFerie){
-              hMajRepos+=hReelJourSpec; // repos plus favorable
-            } else {
-              hMajFerie+=hReelJourSpec;
-            }
+            if(estJourReposHebdoBrut&&majReposPct>majFeriePct) hReposMajSeule+=hReelJourSpec; // repos plus favorable
+            else hFerieMajSeule+=hReelJourSpec;
           } else if(estReposJ&&sourceActif.majRepos!=null){
-            // 14/09/2026 (Sophie, notice « majorations ») : les heures du jour de repos sont des heures complémentaires
-            // (supplémentaires au-delà de 45 h dans la semaine) AVEC leur majoration, plus la majoration repos. Elles
-            // étaient payées heure + majoration repos seulement, jamais comptées ni déclarées en complémentaires.
-            // Base et majoration comp / sup passent par hComp (réparti ensuite par semaine) ; ici la majoration repos seule.
             hReposMajSeule+=hReelJourSpec;
-            if(compJour>0){ hComp+=compJour/60; const skR=getSemISO(j.date); hCompParSemaine[skR]=(hCompParSemaine[skR]||0)+compJour/60; }
-          } else if(compJour>0){
-            hComp+=compJour/60;
-            const skC=getSemISO(j.date);if(!hCompParSemaine[skC])hCompParSemaine[skC]=0;hCompParSemaine[skC]+=compJour/60;
           }
+          if(compJour>0){ hComp+=compJour/60; const skR=getSemISO(j.date); hCompParSemaine[skR]=(hCompParSemaine[skR]||0)+compJour/60; }
         }
       } else if(compJour>0){
         hComp+=compJour/60;
@@ -14101,16 +14090,16 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const montantMajCompDejaPayee=parseFloat((hCompVersHSTotal*majCompPct*txNetPrecis).toFixed(2));
   const montantMajSup=parseFloat((estEnvMensuelleV?(hSup*majSup*txNetPrecis):Math.max(0,montantMajSupBrut-montantMajCompDejaPayee)).toFixed(2));
   const montantMajSupDeplace=parseFloat((hSupDeplace*majSup*txNetPrecis).toFixed(2)); // 13/09/2026 : majoration seule (voir hSupDeplace)
-  const montantMajFerieNP=parseFloat((hMajFerie*majFeriePct*txNetPrecis).toFixed(2));
+  const montantMajFerieNP=parseFloat(((hMajFerie+hFerieMajSeule)*majFeriePct*txNetPrecis).toFixed(2));
   const montantMajFeriePrevu2=parseFloat((hMajFeriePrevu*majFeriePct*txNetPrecis).toFixed(2));
   const montantMajRepos=parseFloat(((hMajRepos+hReposMajSeule)*majReposPct*txNetPrecis).toFixed(2));
-  const montantMaj1erMai=parseFloat((hMaj1erMai*maj1erMaiPct*txNetPrecis).toFixed(2));
+  const montantMaj1erMai=parseFloat(((hMaj1erMai+h1erMaiMajSeule)*maj1erMaiPct*txNetPrecis).toFixed(2));
 
   // ── Exonération de charges (11,31% sur brut des heures hors férié prévu, y compris HS mensualisées) ──
   // hMensuMaj réduit de l'absence éventuellement déduite sur la part HS (hAbsDeduitHS), pour que
   // l'exonération reflète les heures sup réellement payées ce mois, pas le volume contractuel brut
   const hMensuMajExo=Math.max(0,hMensuMaj-(typeof hAbsDeduitHS!=='undefined'?hAbsDeduitHS:0));
-  const hExoBrut=(hComp*(1+majCompPct)+hSup*(1+majSup)+hSupDeplace*(1+majSup)+hMensuMajExo*(1+majSup)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hReposMajSeule*majReposPct+hMaj1erMai*(1+maj1erMaiPct))*txBrut;
+  const hExoBrut=(hComp*(1+majCompPct)+hSup*(1+majSup)+hSupDeplace*(1+majSup)+hMensuMajExo*(1+majSup)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hReposMajSeule*majReposPct+hFerieMajSeule*majFeriePct+h1erMaiMajSeule*maj1erMaiPct+hMaj1erMai*(1+maj1erMaiPct))*txBrut;
   const montantExo=parseFloat((hExoBrut*0.1131).toFixed(2));
 
   // ── Totaux comp/sup ──
@@ -14120,13 +14109,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const montantTotalSup=parseFloat((montantMajSup+montantMajSupDeplace).toFixed(2)); // sup = majoration uniquement
 
   // ── Rétrocompat retour (pour calcBrutTotal et régularisation) ──
-  const montantCompBrutMaj=(hComp*(1+majCompPct)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hReposMajSeule*majReposPct+hMaj1erMai*(1+maj1erMaiPct))*txBrut;
+  const montantCompBrutMaj=(hComp*(1+majCompPct)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hReposMajSeule*majReposPct+hFerieMajSeule*majFeriePct+h1erMaiMajSeule*maj1erMaiPct+hMaj1erMai*(1+maj1erMaiPct))*txBrut;
   const montantSupBrutMaj=hSup*(1+majSup)*txBrut;
   // 24/08/2026 (Sophie) : dénominateur corrigé pour inclure hMensuMajExo (heures sup mensualisées),
   // comme hExoBrut ci-dessus — il en manquait avant, ce qui faisait retomber toute la part
   // d'exonération des heures sup mensualisées dans exoCompPart (mélangée à tort avec les heures
   // complémentaires, jamais isolée). exoMensuSupPart l'isole maintenant correctement à part.
-  const denomExoNet=(hComp*(1+majCompPct)+hSup*(1+majSup)+hSupDeplace*(1+majSup)+hMensuMajExo*(1+majSup)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hReposMajSeule*majReposPct+hMaj1erMai*(1+maj1erMaiPct))||1;
+  const denomExoNet=(hComp*(1+majCompPct)+hSup*(1+majSup)+hSupDeplace*(1+majSup)+hMensuMajExo*(1+majSup)+hMajFerie*(1+majFeriePct)+hMajRepos*(1+majReposPct)+hReposMajSeule*majReposPct+hFerieMajSeule*majFeriePct+h1erMaiMajSeule*maj1erMaiPct+hMaj1erMai*(1+maj1erMaiPct))||1;
   const exoSupPart=parseFloat((montantExo*((hSup+hSupDeplace)*(1+majSup)/denomExoNet)).toFixed(2));
   const exoMensuSupPart=parseFloat((montantExo*(hMensuMajExo*(1+majSup)/denomExoNet)).toFixed(2));
   // 24/08/2026 (Sophie) : brut des heures sup mensualisées (absence déduite), exposé séparément pour
@@ -14143,11 +14132,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const montantMajFeriePrevuNet=montantMajFeriePrevu2;
   const montantMajFeriePrevuBrut=parseFloat((hMajFeriePrevu*majFeriePct*txBrut).toFixed(2));
   // Rétrocompat anciens noms
-  const montantMajFerieBrut=parseFloat((hMajFerie*(1+majFeriePct)*txBrut).toFixed(2));
+  const montantMajFerieBrut=parseFloat(((hMajFerie*(1+majFeriePct)+hFerieMajSeule*majFeriePct)*txBrut).toFixed(2));
   const montantMajFerieNet=parseFloat((montantBaseFerieNP+montantMajFerieNP).toFixed(2));
   const montantMajReposBrut=parseFloat(((hMajRepos*(1+majReposPct)+hReposMajSeule*majReposPct)*txBrut).toFixed(2));
   const montantMajReposNet=parseFloat((montantBaseRepos+montantMajRepos).toFixed(2));
-  const montantMaj1erMaiBrut=parseFloat((hMaj1erMai*(1+maj1erMaiPct)*txBrut).toFixed(2));
+  const montantMaj1erMaiBrut=parseFloat(((hMaj1erMai*(1+maj1erMaiPct)+h1erMaiMajSeule*maj1erMaiPct)*txBrut).toFixed(2));
   const montantMaj1erMaiNet=parseFloat((montantBase1erMai+montantMaj1erMai).toFixed(2));
   const tcActifSalaire=sourceActif.tc||c.tc;
   let hBase=tcActifSalaire==='occ'?0:hMensu;
@@ -14168,7 +14157,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // hComp = base jours ouvrables (hors HS), hSup = base + majoration (payées entièrement ici)
     salaireNetBrut=hMensuNorm*txNetPrecis+hMensuMaj*txNetMajR
       +hComp*(1+majComp)*txNetPrecis+hSup*(1+majSup)*txNetPrecis+hSupDeplace*majSup*txNetPrecis - montantAbsences
-      +hMajFerie*(1+majFeriePct)*txNetPrecis+hMajFeriePrevu*majFeriePct*txNetPrecis+hMajRepos*(1+majReposPct)*txNetPrecis+hReposMajSeule*majReposPct*txNetPrecis+hMaj1erMai*(1+maj1erMaiPct)*txNetPrecis;
+      +hMajFerie*(1+majFeriePct)*txNetPrecis+hMajFeriePrevu*majFeriePct*txNetPrecis+hMajRepos*(1+majReposPct)*txNetPrecis+hReposMajSeule*majReposPct*txNetPrecis+hFerieMajSeule*majFeriePct*txNetPrecis+h1erMaiMajSeule*maj1erMaiPct*txNetPrecis+hMaj1erMai*(1+maj1erMaiPct)*txNetPrecis;
   }
   const salaireNet=parseFloat(Math.max(0,salaireNetBrut).toFixed(2));
   const nbAbsEnfantMois=fiche.jours.filter(j=>{
@@ -14606,10 +14595,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     hBase:parseFloat(hBase.toFixed(2)),
     nbJoursTravReels:fiche.jours.filter(j=>j.heureDebReel&&j.heureFinReel).length,
     montantCompBrut, montantCompNet, montantSupBrut, montantSupNet,
-    hMajFerie:hMajFerie.toFixed(2), montantMajFerieBrut, montantMajFerieNet,
+    hMajFerie:hMajFerie.toFixed(2), hFerieMajSeule:hFerieMajSeule.toFixed(2), montantMajFerieBrut, montantMajFerieNet,
     hMajFeriePrevu:hMajFeriePrevu.toFixed(2), montantMajFeriePrevuBrut, montantMajFeriePrevuNet,
     hMajRepos:hMajRepos.toFixed(2), hReposMajSeule:hReposMajSeule.toFixed(2), montantMajReposBrut, montantMajReposNet,
-    hMaj1erMai:hMaj1erMai.toFixed(2), montantMaj1erMaiBrut, montantMaj1erMaiNet,
+    hMaj1erMai:hMaj1erMai.toFixed(2), h1erMaiMajSeule:h1erMaiMajSeule.toFixed(2), montantMaj1erMaiBrut, montantMaj1erMaiNet,
     montantBaseComp, montantBaseSup, montantBaseFerieNP, montantBaseRepos, montantBase1erMai,
     hCompMaj:hCompMaj.toFixed(2),
     montantMajComp, montantMajSup, montantMajFerieNP, montantMajFeriePrevu2, montantMajRepos, montantMaj1erMai,
