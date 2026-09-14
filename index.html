@@ -2728,6 +2728,13 @@ function versionRegularisable(v){
   const tc=(v&&v.tc)||'';
   return (tc!=='52'&&tc!=='occ')||(tc==='52'&&!!v.clauseRegul52);
 }
+// 14/09/2026 (Sophie) : mois où la régularisation est payée au passage — avenant qui fait passer d'une période
+// régularisable vers un 52 sans clause (depuis un 46, ou depuis un 52 avec clause). Une copie figée d'avant cette date
+// ne connaît que estPassage46vers52 : elle garde son repère d'origine, pour qu'aucune feuille validée ne perde sa ligne.
+function estPassageRegulSoldeRecap(r){
+  if(!r) return false;
+  return r.estPassageRegulSolde!==undefined?!!r.estPassageRegulSolde:!!r.estPassage46vers52;
+}
 function calcRegulOnglet(c, opts){
   // 07/09/2026 (Sophie) : opts.jusquA (mois AAAA-MM) prolonge le calcul au-delà du mois en cours,
   // pour le simulateur de rupture qui doit projeter jusqu'à une date de fin future. Sans lui, tout se
@@ -8290,7 +8297,7 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
   const ligneG=(label,val,gras,color,noBorder)=>'<tr style="'+(noBorder?'':'border-bottom:1px solid var(--mb)')+'"><td style="padding:7px 4px;color:var(--tx2);'+(gras?'font-weight:700':'')+'">'+(label||'')+'</td><td style="padding:7px 4px;font-weight:'+(gras?'700':'600')+';text-align:right;'+(color?'color:'+color:'')+'">'+(val||'')+'</td></tr>';
   let html='';
   // Calcul régularisation si applicable (utilisé dans plusieurs sections)
-  const _hasRegul=recap.estPassage46vers52&&recap.periodeAv!=='apres'&&c&&c._regulDiffEuros>0;
+  const _hasRegul=estPassageRegulSoldeRecap(recap)&&recap.periodeAv!=='apres'&&c&&c._regulDiffEuros>0;
   const _diffEuros=_hasRegul?c._regulDiffEuros:0;
   const _txNetRegul46=_hasRegul?(()=>{const [ay46,am46,ad46]=recap.dateAvenantPassage.split('-').map(Number);const vR=new Date(ay46,am46-1,ad46-1);return parseFloat(((getVersionActive(c,vR).txBrut||0)*(getParamAt('coefficients',dateToStr(vR)).valeur||0.7811975)).toFixed(4));})():0;
   const _hRegul46=(_hasRegul&&_txNetRegul46>0)?parseFloat((_diffEuros/_txNetRegul46).toFixed(2)):0;
@@ -8449,7 +8456,7 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
 function buildRecapPajemploi(recap,c,regulExterne){
   const ligneG=(label,val,gras,color,noBorder)=>'<tr style="'+(noBorder?'':'border-bottom:1px solid var(--mb)')+'"><td style="padding:7px 4px;color:var(--tx2);'+(gras?'font-weight:700':'')+'">'+(label||'')+'</td><td style="padding:7px 4px;font-weight:'+(gras?'700':'600')+';text-align:right;'+(color?'color:'+color:'')+'">'+(val||'')+'</td></tr>';
   let html='';
-  const _hasRegul52=recap.estPassage46vers52&&recap.periodeAv!=='apres'&&c&&c._regulDiffEuros>0;
+  const _hasRegul52=estPassageRegulSoldeRecap(recap)&&recap.periodeAv!=='apres'&&c&&c._regulDiffEuros>0;
   // 27/08/2026 (Sophie) : régularisation pour un contrat qui RESTE en 46 (pas de passage vers 52) —
   // reçue en paramètre (solde.regul de calcSoldeToutCompte), déjà calculée avec la logique corrigée
   // aujourd'hui, et jamais mise en cache contrairement à `recap` — donc toujours à jour, y compris
@@ -8514,7 +8521,7 @@ function buildRecapPajemploi(recap,c,regulExterne){
 function buildRecapCumul(r1,r2,solde,c){
   const ligneG=(label,val,gras,color)=>'<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2);'+(gras?'font-weight:700':'')+'">'+(label||'')+'</td><td style="padding:7px 4px;font-weight:'+(gras?'700':'600')+';text-align:right;'+(color?'color:'+color:'')+'">'+(val||'')+'</td></tr>';
   // Régularisation (depuis r1 = partie avant avenant)
-  const _cumulHasRegul=r1.estPassage46vers52&&r1.periodeAv!=='apres'&&c&&c._regulDiffEuros>0;
+  const _cumulHasRegul=estPassageRegulSoldeRecap(r1)&&r1.periodeAv!=='apres'&&c&&c._regulDiffEuros>0;
   const _cumulDiffEuros=_cumulHasRegul?c._regulDiffEuros:0;
   const _cumulTxNet=_cumulHasRegul?(()=>{const [ay,am,ad]=r1.dateAvenantPassage.split('-').map(Number);const vR=new Date(ay,am-1,ad-1);return parseFloat(((getVersionActive(c,vR).txBrut||0)*(getParamAt('coefficients',dateToStr(vR)).valeur||0.7811975)).toFixed(4));})():0;
   const _cumulHRegul=(_cumulHasRegul&&_cumulTxNet>0)?parseFloat((_cumulDiffEuros/_cumulTxNet).toFixed(2)):0;
@@ -11761,6 +11768,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const srcAvant=getVersionActive(c,veille);
       return srcAvant.tc!=='52';
     })();
+  // 14/09/2026 (Sophie) : passage qui SOLDE la régularisation (la seule qui se paie avant la fin du contrat) — vers un
+  // 52 sans clause, depuis une période régularisable. estPassage46vers52 reste le repère des congés du 46 payés au passage.
+  const estPassageRegulSolde=!!(avenantDuMois&&avenantDuMois.tc==='52'&&
+    !versionRegularisable(getVersionActive(c,parseDateLoc(avenantDuMois.dateAvenant)))&&
+    (()=>{ const [ay,am,ad]=avenantDuMois.dateAvenant.split('-').map(Number); return versionRegularisable(getVersionActive(c,new Date(ay,am-1,ad-1))); })());
   // 20/08/2026 (Sophie) : symétrique, pour le cas 2 (congés) — avenant de ce mois qui fait passer VERS
   // 46/occ depuis un régime qui était 52 la veille.
   const estPassage52vers46=avenantDuMois&&avenantDuMois.tc!=='52'&&
@@ -14535,7 +14547,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     indemNegoJoursBascule, // 27/07/2026 : nombre de jours du mois où le négocié est passé sous le
     // légal ce jour-là — sert à déclencher l'alerte de revalorisation
     estPassage46vers52:estPassage46vers52||false,
-    dateAvenantPassage:estPassage46vers52?avenantDuMois.dateAvenant:null,
+    estPassageRegulSolde,
+    dateAvenantPassage:(estPassage46vers52||estPassageRegulSolde)?avenantDuMois.dateAvenant:null,
     periodeAv:periodeAv||null,
     isOcc:sourceActif.tc==='occ',
     tc:sourceActif.tc,
@@ -16889,7 +16902,7 @@ function calcBrutTotal(c, dateDebut, dateFin){
     // 27/07/2026 (correctif Sophie) : coefficient du mois concerné (keyBT), pas celui d'aujourd'hui
     const coefNetBT=getParamAt('coefficients',(keyBT||dateToStr(new Date()))+'-01').valeur||0.7811975;
     // Tout ce qui a été payé en brut sur le mois (ou la sous-période), hors frais (entretien/repas/km) et hors exonération de charges
-    const regulPassage52=(r.estPassage46vers52&&r.periodeAv!=='apres'&&c._regulDiffEuros>0)?parseFloat(c._regulDiffEuros||0):0;
+    const regulPassage52=(estPassageRegulSoldeRecap(r)&&r.periodeAv!=='apres'&&c._regulDiffEuros>0)?parseFloat(c._regulDiffEuros||0):0;
     const netMois=parseFloat(r.salaireNet||0)+parseFloat(r.indemCongeMois||0)+(r.regul52Fiche?parseFloat(r.regul52Fiche.diff||0):0)+parseFloat(r.indemCgOcc||0)+regulPassage52;
     return parseFloat((netMois/coefNetBT).toFixed(2));
   };
@@ -18375,33 +18388,19 @@ function renderRupture(c, cont){
     }
   }
 
-  // ─── Régularisation définitive (46 sem uniquement) ───
+  // ─── Régularisation de salaire (période régularisable en cours) ───
+  // 14/09/2026 (Sophie) : une rubrique de la carte « Situation au », présentée comme ses voisines (plus de carte à part
+  // ni de montant vert et gras) ; affichée pour toute version régularisable (46, ou 52 avec sa clause), comme la
+  // régularisation de rupture qu'elle reprend (calcRegularisationDefinitive : lignes validées de l'onglet Régularisation).
   let regHtml='';
-  const avenantVers52=(c.avenants||[]).find(av=>av.signe&&av.tc==='52'&&av.dateAvenant);
-  const srcActifRegulHaut=getVersionActive(c,new Date());
-  if(srcActifRegulHaut.tc!=='52'){
-    const dateFinRegul=avenantVers52?(()=>{
-      const [ay,am]=avenantVers52.dateAvenant.split('-').map(Number);
-      // Inclure le mois de l'avenant (traité en partie dans calcRegularisationDefinitive)
-      return new Date(ay,am-1,1);
-    })():null;
-    // Calculer la régularisation localement pour éviter les conflits avec l'onglet régul
-    // 14/09/2026 (Sophie) : la rupture reprend l'onglet Régularisation (période en cours, feuilles validées) —
-    // ce calcul passait par le montant du passage en 52, qui visait une période déjà soldée et payée.
-    const _regulRupture=calcRegularisationDefinitive(c).diffNet||0;
-    const regulEuros=_regulRupture;
-    if(regulEuros>0){
-      regHtml=`<div class="card" style="margin-bottom:10px">
-        <div class="ctitle">Régularisation définitive</div>
-        <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;color:var(--vt);margin-top:6px">
-          <span>Solde à verser</span><span>+${regulEuros.toFixed(2)} € net</span>
-        </div></div>`;
-    } else {
-      regHtml=`<div class="card" style="margin-bottom:10px">
-        <div class="ctitle">Régularisation définitive</div>
-        <div style="font-size:13px;color:var(--tx2)">Aucun solde à verser</div>
-      </div>`;
-    }
+  if(aCycleRegulRupture(c)){
+    const regulEuros=calcRegularisationDefinitive(c).diffNet||0;
+    regHtml=`<div style="margin-bottom:14px">
+      <div style="font-size:13px;font-weight:600;color:var(--tx2);margin-bottom:4px;">Régularisation de salaire</div>
+      ${regulEuros>0
+        ?`<div style="display:flex;justify-content:space-between;font-size:13px"><span>Solde à verser</span><span>${regulEuros.toFixed(2)} € net</span></div>`
+        :`<div style="font-size:13px;color:var(--tx2)">Aucun solde à verser</div>`}
+    </div>`;
   }
 
   // ─── Simulation de rupture ───
@@ -18709,9 +18708,8 @@ function renderRupture(c, cont){
     ${confirmeeHtml}
     ${derniereFicheValideeSitR2?'':`<div class="card" style="margin-bottom:10px">
       <div class="ctitle" style="display:flex;align-items:center">Situation au <strong style="margin-left:4px">${dateSitStr}</strong>${pastilleAide('rupture')}</div>
-      ${soldeCongesHtml}${indemRuptureEncartHtml}
+      ${soldeCongesHtml}${indemRuptureEncartHtml}${regHtml}
     </div>`}
-    ${regHtml}
     <div class="card" style="margin-bottom:10px">
       <div class="ctitle">Simulation de rupture</div>
       <div>
