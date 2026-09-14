@@ -5578,6 +5578,37 @@ function jourComptePlanning(c, dateStr, infos){
   return infos.volIdx>=0&&!infos.aucunType;
 }
 
+// 14/09/2026 (Sophie) : semaine ENTIÈREMENT en congés de l'Ass'Mat pour un plan var/min — tous les jours
+// possibles du motif (hors repos hebdomadaire) sont posés en congés ou fériés. null hors var/min (fixe/sem
+// n'ont pas cette notion). Critère unique de l'affichage du planning (« Congés de l'Ass'Mat » au lieu de la
+// case « Congé (sur jour prévu) » d'une semaine partielle) et de l'effacement des cases restées cochées
+// dessous (effacerCochesSemainesCongesAM).
+function semaineCongesAMComplete(c, dateStr){
+  const dt=parseDateLoc(dateStr);
+  const src=getVersionActive(c,dt);
+  let possibles=null;
+  if(src.th==='plan'&&src.planType==='var'&&src.planVar){
+    possibles=[0,1,2,3,4,5,6].filter(i=>{
+      if(i===(src.reposHebdo||c.reposHebdo||0)) return false;
+      const idxLun=i===0?6:i-1;
+      return src.planVar.some(v=>v.jours&&v.jours[idxLun]);
+    });
+  } else if(src.th==='plan'&&src.planType==='min'&&src.joursMin){
+    possibles=[0,1,2,3,4,5,6].filter(i=>{
+      if(i===(src.reposHebdo||c.reposHebdo||0)) return false;
+      return !!src.joursMin[i===0?6:i-1];
+    });
+  }
+  if(!possibles) return null;
+  // Vraie date de chaque jour de la semaine, même hors du mois affiché (semaine à cheval sur deux mois).
+  const lundi=new Date(dt); lundi.setDate(dt.getDate()-(dt.getDay()||7)+1);
+  return possibles.every(jourSem=>{
+    const x=new Date(lundi); x.setDate(lundi.getDate()+(jourSem===0?6:jourSem-1));
+    const s=x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0');
+    return isJourCongeAM(s)||isFerie(s,c);
+  });
+}
+
 function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
   const moisKeyTile=annee+'-'+String(moisIdx+1).padStart(2,'0');
   const ficheTile=c.fiches&&c.fiches[moisKeyTile];
@@ -5779,34 +5810,9 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       // case à cocher (comme un férié), plutôt que d'être verrouillé comme une vraie semaine de congés
       let estSemCongesPartiellePln=false;
       if(estCongeAM){
-        const srcPln=getVersionActive(c,j.dt);
-        let joursPossiblesIdxPln=null;
-        if(srcPln.th==='plan'&&srcPln.planType==='var'&&srcPln.planVar){
-          joursPossiblesIdxPln=Array.from({length:7},(_,i)=>i).filter(i=>{
-            if(i===(srcPln.reposHebdo||c.reposHebdo||0)) return false;
-            const idxLun=i===0?6:i-1;
-            return srcPln.planVar.some(v=>v.jours&&v.jours[idxLun]);
-          });
-        } else if(srcPln.th==='plan'&&srcPln.planType==='min'&&srcPln.joursMin){
-          joursPossiblesIdxPln=Array.from({length:7},(_,i)=>i).filter(i=>{
-            if(i===(srcPln.reposHebdo||c.reposHebdo||0)) return false;
-            const idxLun=i===0?6:i-1;
-            return !!srcPln.joursMin[idxLun];
-          });
-        }
-        if(joursPossiblesIdxPln){
-          // 06/08/2026 (Sophie) : même correctif que ferieDansConges juste en dessous — calculer la
-          // vraie date de chaque jour de la semaine plutôt que de présumer congé un jour invisible
-          // depuis le mois affiché (semaine à cheval sur deux mois).
-          const lundiSemPln=new Date(j.dt); lundiSemPln.setDate(j.dt.getDate()-(j.dt.getDay()||7)+1);
-          const estComplete=joursPossiblesIdxPln.every(jourSem=>{
-            const offsetPln=jourSem===0?6:jourSem-1;
-            const dateCandPln=new Date(lundiSemPln); dateCandPln.setDate(lundiSemPln.getDate()+offsetPln);
-            const dateCandStrPln=dateCandPln.getFullYear()+'-'+String(dateCandPln.getMonth()+1).padStart(2,'0')+'-'+String(dateCandPln.getDate()).padStart(2,'0');
-            return isJourCongeAM(dateCandStrPln)||isFerie(dateCandStrPln,c);
-          });
-          estSemCongesPartiellePln=!estComplete;
-        }
+        // 14/09/2026 : critère désormais partagé avec l'effacement des cases restées cochées sous une
+        // semaine entière de congés (semaineCongesAMComplete, même calcul qu'ici auparavant).
+        estSemCongesPartiellePln=semaineCongesAMComplete(c,j.date)===false;
       }
       // Férié dans une vraie période de congés : verrouillé seulement si tous les AUTRES jours possibles
       // de la semaine (hors le férié lui-même) sont posés en congés — un jour de congé isolé adjacent
@@ -21634,6 +21640,32 @@ function calcSeuilAcquis(c, anneeDebut, premierJourPose){
 // calcule le quota depuis des statuts d'avant ce calcul ; la deuxième relit les statuts frais
 // que la première vient d'écrire et converge. Centralisé ici pour que tous les appelants
 // n'aient plus qu'à appeler une seule fois.
+// 14/09/2026 (Sophie, 52minfract-52min, 21/12/2022) : un jour coché dans le planning d'une semaine qui passe
+// ENSUITE entièrement en congés de l'Ass'Mat restait coché, caché sous « Congés de l'Ass'Mat » (plus aucune
+// case pour le décocher) mais toujours compté partout — total de la semaine, plafonds, volume de la portion
+// d'avenant (10 h fantômes refusant l'enregistrement du planning), feuille de présence. La case est effacée,
+// ainsi que les heures prévues et réelles du jour sur la feuille (statut de congé conservé). Plan var/min
+// uniquement, 46 comme 52 : fixe/sem affichent normalement leurs heures prévues pendant les congés. Mois
+// validés jamais touchés. Un congé retiré ensuite fait revenir le jour vide, à recocher (décision Sophie).
+function effacerCochesSemainesCongesAM(){
+  (S.contrats||[]).forEach(c=>{
+    if(!c.planning||estContratCloture(c)) return;
+    Object.keys(c.planning).forEach(ds=>{
+      const pd=c.planning[ds];
+      if(!pd||!pd.coche||!isJourCongeAM(ds)) return;
+      const fiche=c.fiches&&c.fiches[ds.slice(0,7)];
+      if(fiche&&fiche.valide) return;
+      if(semaineCongesAMComplete(c,ds)!==true) return;
+      delete c.planning[ds];
+      // La feuille lit la dernière version ENREGISTRÉE du planning : l'effacer là aussi.
+      if(c._planningSauvegarde) delete c._planningSauvegarde[ds];
+      const j=fiche&&(fiche.jours||[]).find(x=>x.date===ds);
+      if(j&&j.statut!=='travaille'&&j.statut!=='reprise'){
+        j.heureDebPrev=null; j.heureFinPrev=null; j.heureDebReel=null; j.heureFinReel=null;
+      }
+    });
+  });
+}
 function majFichesCgAm(anneeDebut, sauvegarder=true){
   // 14/09/2026 (Sophie, point 18) : seuls les contrats réellement modifiés par le recalcul sont marqués à
   // enregistrer, et l'enregistrement passe par la sauvegarde groupée habituelle. Avant, chaque passe avec
@@ -21647,6 +21679,7 @@ function majFichesCgAm(anneeDebut, sauvegarder=true){
     return s;
   };
   const avantCgAm=new Map((S.contrats||[]).map(c=>[c.id,signatureCgAm(c)]));
+  effacerCochesSemainesCongesAM();
   majFichesCgAmPasse(anneeDebut,false);
   majFichesCgAmPasse(anneeDebut,false);
   (S.contrats||[]).forEach(c=>{ if(avantCgAm.get(c.id)!==signatureCgAm(c)) _contratsModifies.add(c.id); });
