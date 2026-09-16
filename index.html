@@ -574,9 +574,9 @@ input[type=time].fi{width:auto;min-width:92px}
       <div class="fg" id="section-date-cg" style="display:none;margin-bottom:0">
         <label class="fl">Date de paiement des cong&eacute;s</label>
         <div class="rg">
-          <div class="ro" onclick="selR(this,'date-cg','juin')"><input type="radio" name="date-cg" value="juin"><label>En une fois au mois de juin</label></div>
-          <div class="ro" onclick="selR(this,'date-cg','principale')"><input type="radio" name="date-cg" value="principale"><label>Lors de la prise principale des cong&eacute;s</label></div>
-          <div class="ro" onclick="selR(this,'date-cg','chaque')"><input type="radio" name="date-cg" value="chaque"><label>&Agrave; chaque prise</label></div>
+          <div class="ro" onclick="choisirDateCg(this,'juin')"><input type="radio" name="date-cg" value="juin"><label>En une fois au mois de juin</label></div>
+          <div class="ro" onclick="choisirDateCg(this,'principale')"><input type="radio" name="date-cg" value="principale"><label>Lors de la prise principale des cong&eacute;s</label></div>
+          <div class="ro" onclick="choisirDateCg(this,'chaque')"><input type="radio" name="date-cg" value="chaque"><label>&Agrave; chaque prise</label></div>
         </div>
       </div>
     </div>
@@ -2239,7 +2239,7 @@ function modifierKmDirect(contratId, val, cibleId){
         function calcHPrevuReg(c, clause52In, dateDebStr, dateFinStr){
           // 14/09/2026 (Sophie, point 25) : une période qui contient un avenant se calcule en deux morceaux, un de
           // chaque côté — la semaine de l'avenant est ainsi valorisée par chaque côté pour ses propres jours.
-          const avDansPeriode=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant&&av.dateAvenant>dateDebStr&&av.dateAvenant<=dateFinStr).map(av=>av.dateAvenant).sort()[0];
+          const avDansPeriode=(c.avenants||[]).filter(av=>avenantCoupant(av)&&av.dateAvenant>dateDebStr&&av.dateAvenant<=dateFinStr).map(av=>av.dateAvenant).sort()[0];
           if(avDansPeriode){
             const vAvP=parseDateLoc(avDansPeriode); vAvP.setDate(vAvP.getDate()-1);
             return calcHPrevuReg(c,clause52In,dateDebStr,dateToStr(vAvP))+calcHPrevuReg(c,clause52In,avDansPeriode,dateFinStr);
@@ -2300,7 +2300,7 @@ function modifierKmDirect(contratId, val, cibleId){
                   const dateDebC=c.dateDeb;
                   // 14/09/2026 (Sophie, point 25) : l'avenant qui tombe DANS cette semaine, quel qu'il soit — seul le
                   // premier avenant du contrat était repéré, les suivants jamais.
-                  const dateAvenantC=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant).map(av=>av.dateAvenant).find(dAvC=>lundiSemStr<=dAvC&&dimSemStr>=dAvC);
+                  const dateAvenantC=(c.avenants||[]).filter(av=>avenantCoupant(av)).map(av=>av.dateAvenant).find(dAvC=>lundiSemStr<=dAvC&&dimSemStr>=dAvC);
                   let limiteDebut=null, limiteEstAvenant=false;
                   if(dateDebC&&lundiSemStr<dateDebC&&dimSemStr>=dateDebC) limiteDebut=dateDebC;
                   else if(dateAvenantC&&lundiSemStr<=dateAvenantC&&dimSemStr>=dateAvenantC){ limiteDebut=dateAvenantC; limiteEstAvenant=true; }
@@ -2707,7 +2707,7 @@ function hDuMorceauReg(c, clause52, a, b, semaineAvenant, fichesExtra){
 // (majMensuRecapReg). Au bout de 12 mois conformes au contrat, les deux se compensent.
 function hSupDuReg(c, clause52, debStr, finStr, fichesExtra){
   if(!debStr||!finStr||debStr>finStr) return 0;
-  const avDatesS=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant).map(av=>av.dateAvenant);
+  const avDatesS=(c.avenants||[]).filter(av=>avenantCoupant(av)).map(av=>av.dateAvenant);
   const dfcS=getDateFinContrat(c), ruptS=dfcS?dateToStr(dfcS):null;
   const veilleS=x=>{ const v=parseDateLoc(x); v.setDate(v.getDate()-1); return dateToStr(v); };
   let total=0;
@@ -2843,7 +2843,7 @@ function calcRegulOnglet(c, opts){
         const dateDebContrat=new Date(ddy,ddm-1,ddd);
 
         // Collecter toutes les dates d'avenant signés
-        const datesAvenants=(c.avenants||[]).filter(a=>a.signe&&a.dateAvenant).map(a=>a.dateAvenant).sort();
+        const datesAvenants=(c.avenants||[]).filter(a=>avenantCoupant(a)).map(a=>a.dateAvenant).sort();
 
         // Fonction : calcul heures prévues régularisation pour une période (dateDebStr→dateFinStr inclus)
         // Exclut semaines 'off' et jours de congés
@@ -3015,7 +3015,7 @@ function calcRegulOnglet(c, opts){
             let hPrevu=0, hMensuReg=0;
 
             // Détecter tout avenant dans ce mois (46→52, occ→46, etc.)
-            const tousAvenantsSignes=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant);
+            const tousAvenantsSignes=(c.avenants||[]).filter(av=>avenantCoupant(av));
             // 17/08/2026 (Sophie) : cherche sur le mois ENTIER (pas debutMois/finMois, qui peuvent être
             // rétrécis par une portion anniversaire) — sinon la moitié du mois qui ne contient pas
             // physiquement l'avenant ne le détecte jamais, alors que les deux portions ont besoin de le
@@ -3517,6 +3517,7 @@ function voirAvenant(cid,avid){
       <button class="btn bs bsm" onclick="renderDetTab(${cid},'contrat')">← Retour</button>
       <span style="font-weight:700;font-size:15px;color:#C97B5C">Avenant n°${av.num}</span>
       <span style="font-size:12px;color:#C97B5C;font-weight:600">✓ Signé — effectif le ${new Date(av.dateAvenant).toLocaleDateString('fr-FR')}</span>
+      ${av.sansCoupure?`<span style="font-size:12px;color:var(--tx2)">Sans coupure : ni la mensualisation ni l'organisation du travail ne changent, le mois n'est pas coupé et l'agenda en cours continue</span>`:''}
       ${aDejaServi?'':`<button class="btn bd bsm" style="margin-left:auto" onclick="annulerAvenant(${cid},${avid})">Annuler cet avenant</button>`}
     </div>
     ${buildFicheContenu(av,c)}
@@ -3562,6 +3563,13 @@ function voirAvenant(cid,avid){
     // (créé avant le correctif à la sauvegarde) — un avenant fixe/sem ne doit JAMAIS transmettre de
     // planType, quelle que soit la donnée réellement stockée dessus.
     _vaResult={...c,...dernierAv,planType:dernierAv.th==='plan'?dernierAv.planType:null,id:c.id,nom:c.nom,dateDeb:c.dateDeb,fiches:c.fiches,avenants:c.avenants};
+    // 16/09/2026 (Sophie) : un avenant sans coupure garde les agendas de la version qu'il prolonge (dernier avenant
+    // qui a coupé, ou contrat initial) — l'agenda en cours continue.
+    if(dernierAv.sansCoupure){
+      const avCoupeVA=[...avsEffectifs].reverse().find(a=>!a.sansCoupure)||null;
+      _vaResult.agendas=avCoupeVA?avCoupeVA.agendas:c.agendas;
+      _vaResult._dateCoupure=avCoupeVA?avCoupeVA.dateAvenant:null;
+    }
   }
   if(!_vaParContrat){ _vaParContrat=new Map(); _versionActiveCache.set(c,_vaParContrat); }
   _vaParContrat.set(dateStr,_vaResult);
@@ -4185,7 +4193,7 @@ function ouvrirFiche(contratId,key){
   // anticipé) restait figé sur son dernier calcul tant que rien d'autre (comme décocher/recocher
   // "prise en anticipé") ne le redéclenchait explicitement. Limité aux contrats concernés par
   // l'anticipé pour éviter le coût du recalcul sur tous les contrats à chaque ouverture de fiche.
-  if(S.congesAM&&c.cgAnticipe==='oui'){
+  if(S.congesAM&&anticipeAutoriseMois(c,key)){
     const anneeAmOf2=getAnneeAmPourDate(key);
     if(S.congesAM[anneeAmOf2]) majFichesCgAm(anneeAmOf2,false);
   }
@@ -4202,7 +4210,7 @@ function ouvrirFiche(contratId,key){
     const debutMoisV=new Date(ky,km-1,1);
     const finMoisV=new Date(ky,km,0);
     // Vérifier les agendas des deux versions si avenant dans ce mois
-    const avenantDuMoisV2=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&av.dateAvenant.slice(0,7)===key);
+    const avenantDuMoisV2=(c.avenants||[]).find(av=>avenantCoupant(av)&&av.dateAvenant.slice(0,7)===key);
     const versionsV=avenantDuMoisV2?
       [getVersionActive(c,debutMoisV), getVersionActive(c,new Date(avenantDuMoisV2.dateAvenant))]:
       [getVersionActive(c,debutMoisV)];
@@ -4582,7 +4590,7 @@ function ouvrirFiche(contratId,key){
 
   // avenantDuMois nécessaire dans la boucle de rendu
   const avenantDuMois=c.avenants&&c.avenants.find(av=>{
-    if(!av.signe||!av.dateAvenant) return false;
+    if(!avenantCoupant(av)) return false;
     const [ay,am,ad]=av.dateAvenant.split('-').map(Number);
     const dateAv=new Date(ay,am-1,ad);
     const debutMois=new Date(parseInt(annee),mois,1);
@@ -4962,7 +4970,7 @@ function ouvrirFiche(contratId,key){
   // repli). Sinon la case peut sembler cochée à l'écran sans qu'aucun anticipé ne soit réellement pris
   // en compte, sans aucun signe visible en dehors du texte au survol.
   const anticipeActif=!!fiche.anticipeActif;
-  const anticipeAutorise=c.cgAnticipe==='oui';
+  const anticipeAutorise=anticipeAutoriseMois(c,key);
   // 17/08/2026 (Sophie) : avertissement (pas un verrou, essayé puis annulé) — si le mois précédent
   // (pose continue d'un mois sur l'autre) a réellement posé des jours en anticipé et que la case de
   // CE mois n'est pas cochée, prévenir l'utilisatrice à l'ouverture plutôt que la laisser découvrir
@@ -5131,7 +5139,7 @@ function ouvrirFiche(contratId,key){
          function toggleAnticipe(contratId,key,val){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c||!c.fiches||!c.fiches[key]) return;
-  if(val&&c.cgAnticipe!=='oui'){
+  if(val&&!anticipeAutoriseMois(c,key)){
     alerte('La prise par anticipation n\'est pas autorisée au contrat.\n\nPour autoriser cette prise, signez un avenant.');
     ouvrirFiche(contratId,key);
     return;
@@ -5585,7 +5593,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
     semCourante.jours.push(j);
   });
   const avenantDuMoisP=c.avenants&&c.avenants.find(av=>{
-    if(!av.signe||!av.dateAvenant) return false;
+    if(!avenantCoupant(av)) return false;
     const [ay,am,ad]=av.dateAvenant.split('-').map(Number);
     return ay===annee&&(am-1)===moisIdx;
   });
@@ -6197,7 +6205,7 @@ function majPlanningJour(contratId, dateStr, champ, val, semKeyDom){
     // après) — la mise à jour en direct doit alimenter le bon. La partie avant est souvent affichée
     // en texte (jours du motif sem, sans champs d'heures) : dans ce cas on n'y touche pas, taper dans
     // un champ de la partie après ne peut de toute façon pas la changer.
-    const avSemLive=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&av.dateAvenant.slice(0,7)===moisKeyJ);
+    const avSemLive=(c.avenants||[]).find(av=>avenantCoupant(av)&&av.dateAvenant.slice(0,7)===moisKeyJ);
     const dateAvLive=avSemLive?avSemLive.dateAvenant:null;
     let minAvantLive=0, minApresLive=0, aInputAvantLive=false;
     semDiv.querySelectorAll('.pln-deb').forEach(debEl=>{
@@ -6403,7 +6411,7 @@ function enregistrerPlanningMois(contratId, moisKey){
     const fmtSem=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
     const lundiSemStr=fmtSem(lundiSem), dimSemStr=fmtSem(dimSem);
     const dateDebC=c.dateDeb;
-    const dateAvenantC=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&av.dateAvenant>lundiSemStr&&av.dateAvenant<=dimSemStr)?.dateAvenant;
+    const dateAvenantC=(c.avenants||[]).find(av=>avenantCoupant(av)&&av.dateAvenant>lundiSemStr&&av.dateAvenant<=dimSemStr)?.dateAvenant;
     const dateRuptureC=(()=>{const _dfcR=getDateFinContrat(c);return _dfcR?dateToStr(_dfcR):null;})();
     if(dateAvenantC){
       // 25/08/2026 (Sophie) : même principe que calcEnveloppeMoisVar (avenant en cours de semaine,
@@ -6703,7 +6711,7 @@ function enregistrerPlanningMois(contratId, moisKey){
   // (planning modifié) vs total BASELINE (motif du contrat seul, sans aucune modification —
   // `getInfosJourPlanning` ignore toujours `c.planning`, donc calcule ce baseline naturellement).
   const srcMoisFS=getVersionActive(c,new Date(ay,am-1,1));
-  const dateAvenantRefMoisFS=srcMoisFS.dateAvenant||null;
+  const dateAvenantRefMoisFS=dateCoupureVersion(srcMoisFS);
   let joursBaseline=0, minBaseline=0, joursReel=0, minReel=0;
   let joursBaseV=0, minBaseV=0, joursReelV=0, minReelV=0;
   if(srcMoisFS.th==='fixe'||srcMoisFS.th==='sem'){
@@ -6714,7 +6722,7 @@ function enregistrerPlanningMois(contratId, moisKey){
       // 04/09/2026 (Sophie) : un jour d'une autre période contractuelle (avenant en cours de mois) ne
       // doit pas compter dans le total réel de CETTE période — même correctif que le contrôle
       // hebdomadaire déjà confirmé, appliqué ici au contrôle mensuel fixe/sem.
-      if((getVersionActive(c,parseDateLoc(dateStr2)).dateAvenant||null)!==dateAvenantRefMoisFS) continue;
+      if(dateCoupureVersion(getVersionActive(c,parseDateLoc(dateStr2)))!==dateAvenantRefMoisFS) continue;
       const infos2=getInfosJourPlanning(c,dateStr2);
       if(infos2.aucunType) continue; // congé/off : jamais compté (un férié, lui, compte — payé normalement même chômé)
       const pd2=c.planning&&c.planning[dateStr2];
@@ -6954,7 +6962,7 @@ function toggleJourFixeSem(contratId, dateStr, checked, semKeyDom){
 function joursMoisPourEchange(c, dateOrigine){
   const [oy,om]=dateOrigine.split('-').map(Number);
   const finMoisE=new Date(oy,om,0).getDate();
-  const dateAvenantRefE=getVersionActive(c,parseDateLoc(dateOrigine)).dateAvenant||null;
+  const dateAvenantRefE=dateCoupureVersion(getVersionActive(c,parseDateLoc(dateOrigine)));
   const jours=[];
   for(let d=1; d<=finMoisE; d++){
     const dateStr=oy+'-'+String(om).padStart(2,'0')+'-'+String(d).padStart(2,'0');
@@ -6967,7 +6975,7 @@ function joursMoisPourEchange(c, dateOrigine){
     // doit jamais être une cible d'échange — même principe déjà confirmé sur les 2 contrôles de
     // quota planning. Bug confirmé Sophie : un jour plan sem pouvait être déplacé sur un jour plan
     // var après l'avenant, et inversement.
-    if((getVersionActive(c,parseDateLoc(dateStr)).dateAvenant||null)!==dateAvenantRefE){ dispo=false; motif='autre contrat (avenant)'; }
+    if(dateCoupureVersion(getVersionActive(c,parseDateLoc(dateStr)))!==dateAvenantRefE){ dispo=false; motif='autre contrat (avenant)'; }
     else if(estOccupe){ dispo=false; motif='déjà pris'; }
     else if(infos.estReposHebdo){ dispo=false; motif='repos hebdomadaire'; }
     else if(infos.ferieChome){ dispo=false; motif='férié'; }
@@ -7090,13 +7098,13 @@ function toggleJourPlanning(contratId, dateStr, checked, semKeyDom, estFerie){
     if(infos.jMax>0&&!modifActiveJ){
       const semKeyISO=getSemISO(dateStr)+'-'+getSemAnnee(dateStr);
       const versionActiveJ=getVersionActive(c,parseDateLoc(dateStr));
-      const dateAvenantRefJ=versionActiveJ.dateAvenant||null;
+      const dateAvenantRefJ=dateCoupureVersion(versionActiveJ);
       let totalCoche=0;
       const detailDiagJ=[];
       Object.keys(c.planning).forEach(dt=>{
         if(dt===dateStr) return;
         if((getSemISO(dt)+'-'+getSemAnnee(dt))!==semKeyISO) return;
-        const dateAvenantRefDt=getVersionActive(c,parseDateLoc(dt)).dateAvenant||null;
+        const dateAvenantRefDt=dateCoupureVersion(getVersionActive(c,parseDateLoc(dt)));
         if(dateAvenantRefDt!==dateAvenantRefJ){
           detailDiagJ.push(dt+' exclu (dateAvenantRef:'+dateAvenantRefDt+' vs '+dateAvenantRefJ+')');
           return;
@@ -7115,7 +7123,7 @@ function toggleJourPlanning(contratId, dateStr, checked, semKeyDom, estFerie){
         const lundiSemJ=parseDateLoc(dateStr); lundiSemJ.setDate(lundiSemJ.getDate()-jourIdxSemJ);
         const dimSemJ=new Date(lundiSemJ); dimSemJ.setDate(lundiSemJ.getDate()+6);
         const avSemJ=(c.avenants||[]).find(av=>{
-          if(!av.signe||!av.dateAvenant) return false;
+          if(!avenantCoupant(av)) return false;
           const dAvTestJ=parseDateLoc(av.dateAvenant);
           return dAvTestJ>lundiSemJ&&dAvTestJ<=dimSemJ;
         });
@@ -7372,7 +7380,7 @@ function enregistrerFiche(contratId,key){
   const fiche=c.fiches[key];
   const [ay,am]=key.split('-').map(Number);
   const avenantDuMois=c.avenants&&c.avenants.find(av=>{
-    if(!av.signe||!av.dateAvenant) return false;
+    if(!avenantCoupant(av)) return false;
     const [avy,avm,avd]=av.dateAvenant.split('-').map(Number);
     const dateAv=new Date(avy,avm-1,avd);
     const debutMois=new Date(ay,am-1,1);
@@ -7459,7 +7467,7 @@ function calcEnveloppeMoisVar(c,ay,am,limDebV,limFinV){
           // laquelle il appartient, pour le mois auquel il appartient — pas de plafond partagé à
           // négocier avec l'autre mois, contrairement au cas "jours max" ci-dessous.
           const avenantSemaine3=(c.avenants||[]).find(av=>{
-            if(!av.signe||!av.dateAvenant) return false;
+            if(!avenantCoupant(av)) return false;
             const dAv3=parseDateLoc(av.dateAvenant);
             return dAv3>lundiSem3&&dAv3<=dimancheSem3;
           });
@@ -7671,7 +7679,7 @@ function getPortionsEnveloppeMois(c,ay,am,minParDate){
   const finMoisPE=new Date(ay,am,0);
   const fmtPE=(y,m,j)=>y+'-'+String(m).padStart(2,'0')+'-'+String(j).padStart(2,'0');
   const debutMoisPE=fmtPE(ay,am,1), finMoisPE2=fmtPE(ay,am,finMoisPE.getDate());
-  const coupuresPE=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant&&av.dateAvenant>debutMoisPE&&av.dateAvenant<=finMoisPE2)
+  const coupuresPE=(c.avenants||[]).filter(av=>avenantCoupant(av)&&av.dateAvenant>debutMoisPE&&av.dateAvenant<=finMoisPE2)
     .map(av=>av.dateAvenant).sort();
   const bornesPE=[];
   let debPE=debutMoisPE;
@@ -8924,7 +8932,7 @@ function figerFiche(c, key){
   let ajout=false;
   try{
     if(!f._recapCache){ calcRecapFiche(c,f); ajout=true; }
-    const av=(c.avenants||[]).find(a=>a.signe&&a.dateAvenant&&a.dateAvenant>=key+'-01'&&a.dateAvenant<=key+'-31');
+    const av=(c.avenants||[]).find(a=>avenantCoupant(a)&&a.dateAvenant>=key+'-01'&&a.dateAvenant<=key+'-31');
     if(av){
       const vAv=parseDateLoc(av.dateAvenant); vAv.setDate(vAv.getDate()-1);
       const finMoisAv=dateToStr(new Date(+key.slice(0,4),+key.slice(5,7),0));
@@ -8944,7 +8952,7 @@ function figerFichesValidees(){
     const cles=Object.keys(c.fiches||{}).filter(k=>{
       const f=c.fiches[k]; if(!f.valide) return false;
       if(!f._recapCache) return true;
-      return (c.avenants||[]).some(a=>a.signe&&a.dateAvenant&&a.dateAvenant>=k+'-01'&&a.dateAvenant<=k+'-31')&&!(f._recapCacheAvant&&f._recapCacheApres);
+      return (c.avenants||[]).some(a=>avenantCoupant(a)&&a.dateAvenant>=k+'-01'&&a.dateAvenant<=k+'-31')&&!(f._recapCacheAvant&&f._recapCacheApres);
     }).sort();
     if(!cles.length) return;
     try{ calcCongesContrat(c); }catch(e){}
@@ -8983,7 +8991,7 @@ function controlerDonneesFigees(){
       };
       try{
         comparer(f._recapCache,calcRecapFiche(c,copie),'');
-        const av=(c.avenants||[]).find(a=>a.signe&&a.dateAvenant&&a.dateAvenant>=key+'-01'&&a.dateAvenant<=key+'-31');
+        const av=(c.avenants||[]).find(a=>avenantCoupant(a)&&a.dateAvenant>=key+'-01'&&a.dateAvenant<=key+'-31');
         if(av){
           const vAv=parseDateLoc(av.dateAvenant); vAv.setDate(vAv.getDate()-1);
           const finMoisAv=dateToStr(new Date(+key.slice(0,4),+key.slice(5,7),0));
@@ -9052,7 +9060,7 @@ function choixAnticipeMoisPrecedent(c,key){
   const dP=new Date(a,m-2,1); const kP=dP.getFullYear()+'-'+String(dP.getMonth()+1).padStart(2,'0');
   const fP=c.fiches&&c.fiches[kP]; if(!fP||!fP.jours) return null;
   if(fP.jours.some(j=>j.statut==='conges-anticipe'||j.statut==='decompte-anticipe')) return 'anticipe';
-  if(c.cgAnticipe!=='oui'||fP.anticipeActif) return null;
+  if(!anticipeAutoriseMois(c,kP)||fP.anticipeActif) return null;
   // Jours de la pose en fin de mois précédent : on remonte depuis le dernier jour jusqu'à une journée prévue ou travaillée.
   const joursP=fP.jours.filter(j=>j.date&&j.date.startsWith(kP)).sort((x,y)=>x.date.localeCompare(y.date));
   for(let i=joursP.length-1;i>=0;i--){
@@ -9149,7 +9157,7 @@ function validerFiche(contratId,key){
       const debutMoisV=new Date(ky,km-1,1);
       const finMoisV=new Date(ky,km,0);
       // Vérifier les agendas des deux versions si avenant dans ce mois
-      const avenantDuMoisV=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&av.dateAvenant.slice(0,7)===key);
+      const avenantDuMoisV=(c.avenants||[]).find(av=>avenantCoupant(av)&&av.dateAvenant.slice(0,7)===key);
       const versionsAVerifier=avenantDuMoisV?
         [getVersionActive(c,debutMoisV), getVersionActive(c,new Date(avenantDuMoisV.dateAvenant))]:
         [getVersionActive(c,debutMoisV)];
@@ -10257,7 +10265,7 @@ function calcCongesContrat(c, dateRefOverride){
           const morceauxSem=[];
           joursTriesSem.forEach(j=>{
             const vJ=getVersionActive(c,parseDateLoc(j.date));
-            const cleV=(vJ&&vJ.dateAvenant)||'initial';
+            const cleV=dateCoupureVersion(vJ)||'initial';
             const der=morceauxSem[morceauxSem.length-1];
             if(der&&der.cle===cleV) der.jours.push(j); else morceauxSem.push({v:vJ,cle:cleV,jours:[j]});
           });
@@ -10884,9 +10892,9 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
         const dimSem=new Date(lundiSem);dimSem.setDate(lundiSem.getDate()+6);
         const lundiStr=lundiSem.getFullYear()+'-'+String(lundiSem.getMonth()+1).padStart(2,'0')+'-'+String(lundiSem.getDate()).padStart(2,'0');
         const dimStr=dimSem.getFullYear()+'-'+String(dimSem.getMonth()+1).padStart(2,'0')+'-'+String(dimSem.getDate()).padStart(2,'0');
-        const estCheval=lundiStr<debutMoisStr||dimStr>finMoisStr||(c.dateDeb&&lundiStr<c.dateDeb&&dimStr>=c.dateDeb)||((c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&lundiStr<=av.dateAvenant&&dimStr>=av.dateAvenant));
+        const estCheval=lundiStr<debutMoisStr||dimStr>finMoisStr||(c.dateDeb&&lundiStr<c.dateDeb&&dimStr>=c.dateDeb)||((c.avenants||[]).find(av=>avenantCoupant(av)&&lundiStr<=av.dateAvenant&&dimStr>=av.dateAvenant));
         if(estCheval){
-          const avenantDeCetteSemCh=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant&&lundiStr<=av.dateAvenant&&dimStr>=av.dateAvenant);
+          const avenantDeCetteSemCh=(c.avenants||[]).find(av=>avenantCoupant(av)&&lundiStr<=av.dateAvenant&&dimStr>=av.dateAvenant);
           const statsCongésChevalDetect=['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe','conges-am'];
           const contientJourCongesCh=avenantDeCetteSemCh&&joursDesSem.some(jj=>{
             const st=jj.statut||getStatutPrevu(sourceActif||c,jj);
@@ -11135,7 +11143,7 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
       const finMoisDate=new Date(fiche.annee,fiche.mois+1,0);
       const finMoisStr=finMoisDate.getFullYear()+'-'+String(finMoisDate.getMonth()+1).padStart(2,'0')+'-'+String(finMoisDate.getDate()).padStart(2,'0');
       const dateDebContrat=c.dateDeb||'';
-      const dateAvenant=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant)?.dateAvenant||'';
+      const dateAvenant=(c.avenants||[]).find(av=>avenantCoupant(av))?.dateAvenant||'';
       // Semaine à cheval si elle déborde hors du mois OU sur le début/fin de contrat/avenant
       const lundiSem=new Date(dateEx);
       while(lundiSem.getDay()!==1) lundiSem.setDate(lundiSem.getDate()-1);
@@ -11802,7 +11810,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const debutMois=new Date(fiche.annee,fiche.mois,1);
   const finMois=new Date(fiche.annee,fiche.mois+1,0);
   const avenantDuMois=c.avenants&&c.avenants.find(av=>{
-    if(!av.signe||!av.dateAvenant) return false;
+    if(!avenantCoupant(av)) return false;
     const [ay,am,ad]=av.dateAvenant.split('-').map(Number);
     const dateAv=new Date(ay,am-1,ad);
     return dateAv>=debutMois&&dateAv<=finMois;
@@ -11835,8 +11843,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const coeff=getParamAt('coefficients',dateStr);
   const txNet=parseFloat((txBrut*(coeff.valeur||0.7811975)).toFixed(4));
   const txNetPrecis=txBrut*(coeff.valeur||0.7811975); // sans arrondi intermédiaire, pour le calcul du salaire mensuel de base
-  const majComp=(sourceActif.majComp||0)/100;
-  const majSup=(sourceActif.majSup||0)/100;
+  let majComp=(sourceActif.majComp||0)/100;
+  let majSup=(sourceActif.majSup||0)/100;
   const hMensu=sourceActif.hMensu||0;
   const hMensuMaj=parseFloat(sourceActif.hMensuMaj||0);
   const hMensuNorm=hMensuMaj>0?parseFloat(sourceActif.hMensuNorm||hMensu-hMensuMaj):hMensu;
@@ -11874,9 +11882,18 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   let hReposMajSeule=0; // 14/09/2026 : heures du jour de repos payées en comp / sup, majoration repos seule ici
   let hFerieMajSeule=0, h1erMaiMajSeule=0; // 14/09/2026 : idem pour un férié / 1er mai sur jour non prévu
   // Taux de majoration (déclarés tôt pour usage dans la boucle)
-  const majFeriePct=(sourceActif.majFerie||0)/100;
-  const majReposPct=(sourceActif.majRepos||0)/100;
-  const maj1erMaiPct=(sourceActif.maj1erMai||0)/100;
+  let majFeriePct=(sourceActif.majFerie||0)/100;
+  let majReposPct=(sourceActif.majRepos||0)/100;
+  let maj1erMaiPct=(sourceActif.maj1erMai||0)/100;
+  // 16/09/2026 (Sophie) : avenant sans coupure dans le mois (ou au début du mois suivant, pour la dernière semaine) —
+  // la majoration d'un férié, d'un repos ou du 1er mai est celle de la version du jour ; celle des heures
+  // complémentaires et supplémentaires, celle de la version en vigueur à la fin de la semaine. Les taux du mois
+  // deviennent la moyenne pondérée par les heures, ce qui donne exactement la somme des majorations dues.
+  // Aucun avenant de ce genre : taux de la version du mois, comme avant.
+  const avSansCoupureMois=(c.avenants||[]).some(a=>a.signe&&a.sansCoupure&&a.dateAvenant&&a.dateAvenant>dateStr&&a.dateAvenant<=dateToStr(new Date(fiche.annee,fiche.mois+1,6)));
+  const versionMajJour=ds=>avSansCoupureMois?(getVersionActive(c,parseDateLoc(ds))||sourceActif):sourceActif;
+  const pondMaj={ferie:[0,0],repos:[0,0],mai:[0,0]};
+  const ajoutPondMaj=(cle,h,pct)=>{ pondMaj[cle][0]+=h*pct; pondMaj[cle][1]+=h; };
   // 05/08/2026 : 2 tentatives de correctif sur cette ligne (priorité au vrai compte du mois, puis
   // ciblée au seul mois de début/fin de contrat) ont toutes les deux cassé plan fixe 52, qui
   // fonctionnait correctement avant qu'on y touche — sans même résoudre le "40h19"/"49h87" sur fixe
@@ -12072,7 +12089,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const fmtV2=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
         const lundiVStr2=fmtV2(lundiV2), dimVStr2=fmtV2(dimV2);
         const dateDebC2=c.dateDeb;
-        const dateAvenant2=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant)?.dateAvenant;
+        const dateAvenant2=(c.avenants||[]).find(av=>avenantCoupant(av))?.dateAvenant;
         let limiteCheval2=null;
         if(dateDebC2&&lundiVStr2<dateDebC2&&dimVStr2>=dateDebC2) limiteCheval2=dateDebC2;
         else if(dateAvenant2&&lundiVStr2<=dateAvenant2&&dimVStr2>=dateAvenant2) limiteCheval2=dateAvenant2;
@@ -12104,7 +12121,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const fmtVM=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
       const lundiVMStr=fmtVM(lundiVM), dimVMStr=fmtVM(dimVM);
       const dateDebM=c.dateDeb;
-      const dateAvenantM=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant)?.dateAvenant;
+      const dateAvenantM=(c.avenants||[]).find(av=>avenantCoupant(av))?.dateAvenant;
       let limiteChevalM=null;
       if(dateDebM&&lundiVMStr<dateDebM&&dimVMStr>=dateDebM) limiteChevalM=dateDebM;
       else if(dateAvenantM&&lundiVMStr<=dateAvenantM&&dimVMStr>=dateAvenantM) limiteChevalM=dateAvenantM;
@@ -12526,7 +12543,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const fmtSemTh=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
         const lundiSemStrTh=fmtSemTh(lundiSemTh), dimSemStrTh=fmtSemTh(dimSemTh);
         const dateDebCTh=c.dateDeb;
-        const dateAvenantCTh=(c.avenants||[]).find(av=>av.signe&&av.dateAvenant)?.dateAvenant;
+        const dateAvenantCTh=(c.avenants||[]).find(av=>avenantCoupant(av))?.dateAvenant;
         const dateRuptureCTh=(()=>{const _dfcR=getDateFinContrat(c);return _dfcR?dateToStr(_dfcR):null;})();
         let limiteDebutTh=null, limiteFinTh=null;
         if(dateDebCTh&&lundiSemStrTh<dateDebCTh&&dimSemStrTh>=dateDebCTh) limiteDebutTh=dateDebCTh;
@@ -13467,21 +13484,22 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         const hReelJourSpec=(j.heureFinReel&&j.heureDebReel)?(toM(j.heureFinReel)-toM(j.heureDebReel))/60:0;
         const hPrevJour=(j.heureFinPrev&&j.heureDebPrev)?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:0;
         if(hReelJourSpec>0){
-          if(mmddJ==='05-01'&&sourceActif.maj1erMai!=null){
+          const vMajFP=versionMajJour(j.date), pFerFP=(vMajFP.majFerie||0)/100, pRepFP=(vMajFP.majRepos||0)/100, pMaiFP=(vMajFP.maj1erMai||0)/100;
+          if(mmddJ==='05-01'&&vMajFP.maj1erMai!=null){
             // 1er mai : majoration la plus favorable entre maj1erMai et majRepos si jour de repos —
             // comparaison désormais réellement appliquée (pas seulement calculée).
-            if(estJourReposHebdoBrut&&majReposPct>maj1erMaiPct){
-              hMajRepos+=hReelJourSpec;
+            if(estJourReposHebdoBrut&&pRepFP>pMaiFP){
+              hMajRepos+=hReelJourSpec; ajoutPondMaj('repos',hReelJourSpec,pRepFP);
             } else {
-              hMaj1erMai+=hReelJourSpec;
+              hMaj1erMai+=hReelJourSpec; ajoutPondMaj('mai',hReelJourSpec,pMaiFP);
             }
-          } else if(sourceActif.majFerie!=null){
+          } else if(vMajFP.majFerie!=null){
             // Majoration la plus favorable entre majFerie et majRepos si cumul — comparaison
             // désormais réellement appliquée (pas seulement calculée).
-            if(estJourReposHebdoBrut&&majReposPct>majFeriePct){
-              hMajRepos+=hReelJourSpec;
+            if(estJourReposHebdoBrut&&pRepFP>pFerFP){
+              hMajRepos+=hReelJourSpec; ajoutPondMaj('repos',hReelJourSpec,pRepFP);
             } else {
-              hMajFeriePrevu+=hReelJourSpec;
+              hMajFeriePrevu+=hReelJourSpec; ajoutPondMaj('ferie',hReelJourSpec,pFerFP);
             }
           }
         }
@@ -13501,14 +13519,15 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         // complémentaires, et la base des heures au-delà de 45 h était payée deux fois.
         const hReelJourSpec=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
         if(hReelJourSpec>0){
-          if(mmddJ==='05-01'&&sourceActif.maj1erMai!=null){
-            if(estJourReposHebdoBrut&&majReposPct>maj1erMaiPct) hReposMajSeule+=hReelJourSpec;
-            else h1erMaiMajSeule+=hReelJourSpec;
+          const vMajNP=versionMajJour(j.date), pFerNP=(vMajNP.majFerie||0)/100, pRepNP=(vMajNP.majRepos||0)/100, pMaiNP=(vMajNP.maj1erMai||0)/100;
+          if(mmddJ==='05-01'&&vMajNP.maj1erMai!=null){
+            if(estJourReposHebdoBrut&&pRepNP>pMaiNP){ hReposMajSeule+=hReelJourSpec; ajoutPondMaj('repos',hReelJourSpec,pRepNP); }
+            else { h1erMaiMajSeule+=hReelJourSpec; ajoutPondMaj('mai',hReelJourSpec,pMaiNP); }
           } else if(estFerieNonPrevu){
-            if(estJourReposHebdoBrut&&majReposPct>majFeriePct) hReposMajSeule+=hReelJourSpec; // repos plus favorable
-            else hFerieMajSeule+=hReelJourSpec;
-          } else if(estReposJ&&sourceActif.majRepos!=null){
-            hReposMajSeule+=hReelJourSpec;
+            if(estJourReposHebdoBrut&&pRepNP>pFerNP){ hReposMajSeule+=hReelJourSpec; ajoutPondMaj('repos',hReelJourSpec,pRepNP); } // repos plus favorable
+            else { hFerieMajSeule+=hReelJourSpec; ajoutPondMaj('ferie',hReelJourSpec,pFerNP); }
+          } else if(estReposJ&&vMajNP.majRepos!=null){
+            hReposMajSeule+=hReelJourSpec; ajoutPondMaj('repos',hReelJourSpec,pRepNP);
           }
           if(compJour>0){ hComp+=compJour/60; const skR=getSemISO(j.date); hCompParSemaine[skR]=(hCompParSemaine[skR]||0)+compJour/60; }
         }
@@ -14082,6 +14101,22 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   }
   const hBaseComp=hComp+hSup; // heures en plus ("sur jours ouvrables")
   // Montants base (heures × txNet, sans majoration)
+  if(avSansCoupureMois){
+    if(pondMaj.ferie[1]>0) majFeriePct=pondMaj.ferie[0]/pondMaj.ferie[1];
+    if(pondMaj.repos[1]>0) majReposPct=pondMaj.repos[0]/pondMaj.repos[1];
+    if(pondMaj.mai[1]>0) maj1erMaiPct=pondMaj.mai[0]/pondMaj.mai[1];
+    const finSemMaj={};
+    fiche.jours.forEach(jS=>{ const dS=parseDateLoc(jS.date); const dimS=new Date(dS.getFullYear(),dS.getMonth(),dS.getDate()+(7-dS.getDay())%7); finSemMaj[getSemISO(jS.date)]=dateToStr(dimS); });
+    let wSupM=0,hSupM=0,wCompM=0,hCompM=0;
+    Object.keys(finSemMaj).forEach(kS=>{
+      const vFinS=versionMajJour(finSemMaj[kS]);
+      const hSupS=hSupParSemaine[kS]||0, hCompS=Math.max(0,(hCompParSemaine[kS]||0)-hSupS);
+      if(hSupS>0){ wSupM+=hSupS*(vFinS.majSup||0)/100; hSupM+=hSupS; }
+      if(hCompS>0){ wCompM+=hCompS*(vFinS.majComp||0)/100; hCompM+=hCompS; }
+    });
+    if(hSupM>0) majSup=wSupM/hSupM;
+    if(hCompM>0) majComp=wCompM/hCompM;
+  }
   const montantBaseComp=parseFloat((hComp*txNetPrecis+hSup*(1+majSup)*txNetPrecis).toFixed(2)); // base sur jours ouvrables
   const montantBaseSup=0; // déjà inclus dans montantBaseComp
   const montantBaseFerieNP=parseFloat((hMajFerie*txNetPrecis).toFixed(2));
@@ -15105,7 +15140,17 @@ function selTH(el,v){
 function toggleClauseRegul52(el,ev){
   const cb=el.querySelector('input');
   if(!ev||ev.target!==cb){cb.checked=!cb.checked;}
+  if(!cb.checked&&S.enAvenant){
+    const cCl=S.contrats.find(x=>x.id==S.enAvenant.cid);
+    if(cCl&&clauseRegul52Verrouillee(cCl,document.getElementById('f-dateavenant')?.value||null)){
+      cb.checked=true; el.classList.add('on');
+      ouvrirAideModal('regularisation.html','Régularisation');
+      return;
+    }
+  }
   el.classList.toggle('on',cb.checked);
+  // 16/09/2026 (Sophie) : contrat initial — la page d'aide s'ouvre quand on coche la clause, comme « Sur planning ».
+  if(cb.checked&&!S.enAvenant) ouvrirAideModal('regularisation.html','Régularisation');
 }
 function majVisibiliteClauseRegul52(){
   // 11/08/2026 (Sophie) : la clause de régularisation n'a de sens que pour var-52/sem-52 —
@@ -15126,6 +15171,19 @@ function selPlanType(el,v){
   document.getElementById('cond-plan-var').classList.toggle('on',v==='var');
   majVisibiliteClauseRegul52();
   calc();
+}
+// 16/09/2026 (Sophie) : dans un avenant, changer le mode de paiement des congés prend effet au 1er du mois de la date
+// d'effet (le mois n'est pas coupé pour ça) — prévenu au moment du choix.
+function choisirDateCg(el,val){
+  selR(el,'date-cg',val);
+  if(!S.enAvenant) return;
+  const cDC=S.contrats.find(x=>x.id==S.enAvenant.cid); if(!cDC) return;
+  const dateDC=document.getElementById('f-dateavenant')?.value||null;
+  if(dateDC&&parseDateLoc(dateDC).getDate()===1) return;
+  let versionDC=cDC;
+  if(dateDC){ const v=parseDateLoc(dateDC); v.setDate(v.getDate()-1); versionDC=getVersionActive(cDC,v)||cDC; }
+  else { const avs=(cDC.avenants||[]).filter(a=>a.signe&&a.dateAvenant).sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant)); if(avs.length) versionDC={...cDC,...avs[avs.length-1]}; }
+  if((versionDC.dateCg||null)!==val) alerte('La prise d’effet se fera à compter du 1er du mois.');
 }
 function selR(el,name,val){
   document.querySelectorAll('[name="'+name+'"]').forEach(r=>r.parentElement.classList.remove('on'));
@@ -15430,7 +15488,7 @@ function creerAgenda(cid){
   // Déterminer la source active (avenant effectif ou contrat)
   const now=new Date();
   const aujourdStr=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
-  const avsEffectifs=c.avenants?c.avenants.filter(a=>a.signe&&a.dateAvenant<=aujourdStr)
+  const avsEffectifs=c.avenants?c.avenants.filter(a=>a.signe&&a.dateAvenant<=aujourdStr&&!a.sansCoupure)
     .sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant)):[];
   const source=avsEffectifs.length?avsEffectifs[avsEffectifs.length-1]:c;
   if(!source.agendas)source.agendas=[];
@@ -15689,7 +15747,7 @@ function renderAgendas(c){
     const _tousAvTmp=[...(_contratPpal?.avenants||[])].sort((a,b)=>a.dateAvenant>b.dateAvenant?1:-1);
     const _propTmp=_contratPpal?.agendas?.some(a=>a.id===ag.id)?_contratPpal:_tousAvTmp.find(av=>av.agendas?.some(a=>a.id===ag.id));
     const _avUltTmp=_propTmp?_tousAvTmp.find(av=>{
-      if(!av.signe||!av.dateAvenant||av===_propTmp) return false;
+      if(!avenantCoupant(av)||av===_propTmp) return false;
       const dp=_propTmp===_contratPpal?(_contratPpal.dateDeb||''):(_propTmp.dateAvenant||'');
       if(av.dateAvenant<=dp) return false;
       return av.dateAvenant>=ag.dateDebut&&av.dateAvenant<=ag.dateFin;
@@ -15719,7 +15777,7 @@ function renderAgendas(c){
       if(proprietaire){
         // Chercher un avenant ultérieur signé dont la date tombe dans cet agenda
         const avenantUlterieur=tousAvenants.find(av=>{
-          if(!av.signe||!av.dateAvenant) return false;
+          if(!avenantCoupant(av)) return false;
           if(av===proprietaire) return false;
           // L'avenant doit être postérieur au propriétaire
           const dateProprietaire=proprietaire===contratPrincipal?contratPrincipal.dateDeb:(proprietaire.dateAvenant||'');
@@ -16890,6 +16948,7 @@ function validerAvenant(){
   av.indemType=document.querySelector('[name="ind-type"]:checked')?.value||null;
   av.indemMontant=parseFloat(document.getElementById('f-ind-mont')?.value)||null;
   av.clauseRegul52=document.getElementById('f-clause-regul52')?.checked||false;
+  if(!av.clauseRegul52&&clauseRegul52EligibleVersion({tc:S.tc,th:S.th,planType:S.th==='plan'?S.planType:null})&&clauseRegul52Verrouillee(c,dateAvenant||null)) av.clauseRegul52=true;
   av.indemPer=document.querySelector('[name="ind-per"]:checked')?.value||null;
   av.repas=[0,1,2,3,4].map(i=>parseFloat(document.getElementById('f-repas-'+i)?.value)||null);
   av.km=parseFloat(document.getElementById('f-km')?.value)||null;
@@ -16963,7 +17022,7 @@ function calcBrutTotal(c, dateDebut, dateFin){
     if(dateFin&&debutMois>dateFin) return;
     // Détecter un avenant qui démarre strictement dans ce mois (split avant/après nécessaire)
     const avenantDuMoisBT=(c.avenants||[]).find(a=>{
-      if(!a.signe||!a.dateAvenant) return false;
+      if(!avenantCoupant(a)) return false;
       return a.dateAvenant>key+'-01'&&a.dateAvenant<=key+'-31';
     });
     if(avenantDuMoisBT){
@@ -17002,7 +17061,7 @@ function calcHeuresSupMensuBrutTotal(c, dateDebut, dateFin){
     if(dateDebut&&finMois<dateDebut) return;
     if(dateFin&&debutMois>dateFin) return;
     const avenantDuMoisHS=(c.avenants||[]).find(a=>{
-      if(!a.signe||!a.dateAvenant) return false;
+      if(!avenantCoupant(a)) return false;
       return a.dateAvenant>key+'-01'&&a.dateAvenant<=key+'-31';
     });
     if(avenantDuMoisHS){
@@ -17912,7 +17971,7 @@ function confirmerRupture(cid){
     const dateFinAvR=calcDateFinContratBrute(c);
     if(dateFinAvR&&!isNaN(dateFinAvR.getTime())){
       const moisFinAvR=dateFinAvR.getFullYear()+'-'+String(dateFinAvR.getMonth()+1).padStart(2,'0');
-      const avMemeMoisR=(c.avenants||[]).find(a=>a.signe&&a.dateAvenant&&a.dateAvenant.slice(0,7)===moisFinAvR);
+      const avMemeMoisR=(c.avenants||[]).find(a=>avenantCoupant(a)&&a.dateAvenant.slice(0,7)===moisFinAvR);
       if(avMemeMoisR){
         alerte('Le contrat s’achèverait en '+moisFinAvR+', mois où prend effet l’avenant signé le '+dateISOversTexte(avMemeMoisR.dateAvenant)+'.<br><br>Un même mois ne peut pas être coupé à la fois par un avenant et par une fin de contrat. Annulez cet avenant, ou choisissez une date de rupture sur un autre mois.');
         return;
@@ -18955,7 +19014,7 @@ function montantVerse46Annee(c, anneeRef, opts){
   Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
     if(!fiche.valide&&!o.memeNonValidees) return;
     if(o.jusqua&&key>o.jusqua) return;
-    const av=(c.avenants||[]).find(a=>a.signe&&a.dateAvenant&&a.dateAvenant>key+'-01'&&a.dateAvenant<=key+'-31');
+    const av=(c.avenants||[]).find(a=>avenantCoupant(a)&&a.dateAvenant>key+'-01'&&a.dateAvenant<=key+'-31');
     if(av){
       const vA=parseDateLoc(av.dateAvenant); vA.setDate(vA.getDate()-1);
       const finM=new Date(+key.slice(0,4),+key.slice(5,7),0);
@@ -20505,7 +20564,7 @@ function ouvrirPassageCDI(cid){
     if(av.dateCg){const el=document.querySelector('[name="date-cg"][value="'+av.dateCg+'"]')?.parentElement;if(el)selR(el,'date-cg',av.dateCg);}
     if(av.indemType){const el=document.getElementById('ro-ind-'+(av.indemType==='legal'?'legal':'nego'));if(el)selInd(el,av.indemType);}
     if(av.indemMontant)sv('f-ind-mont',av.indemMontant);
-    if(av.clauseRegul52){const cb=document.getElementById('f-clause-regul52');if(cb){cb.checked=true;cb.closest('.ro')?.classList.add('on');}}
+    if(av.clauseRegul52||clauseRegul52Verrouillee(c,av.dateAvenant||null)){const cb=document.getElementById('f-clause-regul52');if(cb){cb.checked=true;cb.closest('.ro')?.classList.add('on');}}
     if(typeof majVisibiliteClauseRegul52==='function') majVisibiliteClauseRegul52();
     if(av.repas)av.repas.forEach((v,i)=>{if(v)sv('f-repas-'+i,v);});
     if(av.km)sv('f-km',av.km);
@@ -20614,6 +20673,64 @@ function avenantSansPartieAvant(c, dateAvStr){
   const reposAvt=((getVersionActive(c,veilleAv)||c).reposHebdo)||0;
   for(let jr=1;jr<dAv.getDate();jr++){ if(new Date(dAv.getFullYear(),dAv.getMonth(),jr).getDay()!==reposAvt) return false; }
   return true;
+}
+
+// 16/09/2026 (Sophie) : avenant « sans coupure ». Un avenant qui ne change ni la mensualisation ni l'organisation du
+// travail (seulement des éléments annexes : majorations, indemnités, repas, km, congés, clause de régularisation, fin
+// de CDD) ne coupe plus le mois en deux : un seul encart sur la feuille, un seul volume au planning, et l'agenda en
+// cours continue (pas de nouvel agenda). Décidé une fois pour toutes à la signature (av.sansCoupure) : les avenants
+// signés avant cette règle gardent leur coupure. Un taux horaire différent reste une coupure (la mensualisation change).
+function avenantChangeStructure(avant, av){
+  if(!avant||!av) return true;
+  if((avant.tc||'')==='occ'||(av.tc||'')==='occ') return true;
+  const canon=x=>{
+    if(x===undefined||x===null||x==='') return null;
+    if(Array.isArray(x)) return x.map(canon);
+    if(typeof x==='object'){ const o={}; Object.keys(x).sort().forEach(k=>{ const v=canon(x[k]); if(v!==null&&v!==false) o[k]=v; }); return Object.keys(o).length?o:null; }
+    if(typeof x==='string'&&x.trim()!==''&&!isNaN(Number(x))) return Number(x);
+    return x;
+  };
+  const pareil=(a,b)=>JSON.stringify(canon(a))===JSON.stringify(canon(b));
+  const num=x=>Math.round((parseFloat(x)||0)*100)/100;
+  if((avant.tc||'')!==(av.tc||'')||(avant.th||'')!==(av.th||'')) return true;
+  if((parseInt(avant.reposHebdo)||0)!==(parseInt(av.reposHebdo)||0)) return true;
+  if(['txBrut','hMensu','hMensuMaj'].some(k=>num(avant[k])!==num(av[k]))) return true;
+  if(av.tc!=='52'&&num(avant.nbSem)!==num(av.nbSem)) return true;
+  // heures sup mensualisées : leur majoration fait partie du salaire mensualisé
+  if(num(av.hMensuMaj)>0&&num(avant.majSup)!==num(av.majSup)) return true;
+  if(av.th==='fixe') return !pareil(avant.joursFixe,av.joursFixe);
+  if(av.th==='sem'){
+    const sem=l=>(l||[]).map(t=>({nb:num(t&&t.nb),jours:t&&t.jours}));
+    return !pareil(sem(avant.semTypes),sem(av.semTypes));
+  }
+  if(av.th==='plan'){
+    if((avant.planType||'')!==(av.planType||'')) return true;
+    if(av.planType==='var'){
+      const vol=l=>(l||[]).map(v=>({h:num(v&&v.h),s:num(v&&v.s),j:num(v&&v.j),jours:v&&v.jours}));
+      return !pareil(vol(avant.planVar),vol(av.planVar));
+    }
+    if(av.planType==='min') return num(avant.hMin)!==num(av.hMin)||num(avant.jMaxMin)!==num(av.jMaxMin)||!pareil(avant.joursMin,av.joursMin);
+  }
+  return false;
+}
+// 16/09/2026 (Sophie) : clause de régularisation 52 choisie = pas de retour en arrière tant que le contrat reste en
+// 52 semaines (sem ou var), pour qu'un avenant ne puisse pas la retirer quand le calcul arrange. Un passage en 46, en
+// 52 fixe ou en 52 min reste possible. Version de référence : la veille de la date d'effet, ou à défaut la dernière signée.
+function clauseRegul52Verrouillee(c, dateAvStr){
+  let avt=c;
+  if(dateAvStr){ const v=parseDateLoc(dateAvStr); v.setDate(v.getDate()-1); avt=getVersionActive(c,v)||c; }
+  else { const avs=(c.avenants||[]).filter(a=>a.signe&&a.dateAvenant).sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant)); if(avs.length) avt={...c,...avs[avs.length-1]}; }
+  return (avt.tc||c.tc)==='52'&&!!avt.clauseRegul52;
+}
+function clauseRegul52EligibleVersion(v){ return !!v&&v.tc==='52'&&(v.th==='sem'||(v.th==='plan'&&v.planType==='var')); }
+// Avenant signé qui coupe le mois (tous ceux d'avant le 16/09/2026, et ceux qui changent la structure).
+function avenantCoupant(av){ return !!(av&&av.signe&&av.dateAvenant&&!av.sansCoupure); }
+// Date du dernier avenant qui a coupé, pour une version renvoyée par getVersionActive (null = contrat initial).
+function dateCoupureVersion(v){ if(!v) return null; return v._dateCoupure!==undefined?v._dateCoupure:(v.dateAvenant||null); }
+// Prise par anticipation permise pendant au moins une partie du mois (avenant en cours de mois compris).
+function anticipeAutoriseMois(c, key){
+  const [a,m]=key.split('-').map(Number);
+  return [new Date(a,m-1,1),new Date(a,m,0)].some(d=>((getVersionActive(c,d)||c).cgAnticipe)==='oui');
 }
 
 function signerAvenant(){
@@ -20761,18 +20878,32 @@ function signerAvenant(){
     return;
   }
          
+  // 16/09/2026 (Sophie) : avenant sans coupure — comparé à la version en vigueur la veille de la date d'effet.
+  const veilleSC=parseDateLoc(av.dateAvenant); veilleSC.setDate(veilleSC.getDate()-1);
+  const versionVeilleSC=getVersionActive(c,veilleSC)||c;
+  if(clauseRegul52EligibleVersion(av)&&!av.clauseRegul52&&clauseRegul52Verrouillee(c,av.dateAvenant)){
+    alerte('La clause de régularisation a été choisie sur ce contrat de 52 semaines : un avenant qui reste en 52 semaines ne peut plus la retirer.<br><br>Cochez la clause dans l’avenant et enregistrez-le avant de signer.');
+    return;
+  }
+  const sansCoupureSC=!avenantChangeStructure(versionVeilleSC,av);
+  let infoCoupureSC='';
+  if(sansCoupureSC) infoCoupureSC='\n\nCet avenant ne modifie ni la mensualisation ni l\'organisation du travail : le mois de la date d\'effet ne sera pas coupé en deux et l\'agenda en cours continue.';
+  else if(parseDateLoc(av.dateAvenant).getDate()!==1&&!avenantChangeStructure(versionVeilleSC,{...av,txBrut:versionVeilleSC.txBrut}))
+    infoCoupureSC='\n\nSeul le taux horaire change : le mois de la date d\'effet sera coupé en deux. Une date d\'effet au 1er du mois l\'éviterait.';
   // Confirmer
-  if(!confirm('L\'avenant n°'+av.num+' sera verrouillé après signature et ne pourra plus être modifié. Confirmer ?')) return;
+  if(!confirm('L\'avenant n°'+av.num+' sera verrouillé après signature et ne pourra plus être modifié.'+infoCoupureSC+'\n\nConfirmer ?')) return;
 
   // Signer
   av.signe=true;
+  if(sansCoupureSC) av.sansCoupure=true; else delete av.sansCoupure;
   av.dateSigne=new Date().toISOString().slice(0,10);
   c._regulDirty=true;
   // 11/08/2026 (Sophie) : les modifications de planning jour par jour (échanges, jours modifiés)
   // enregistrées AVANT cet avenant appartiennent à l'ancien type de contrat — les garder au-delà de
   // la date de l'avenant fait ressurgir d'anciens horaires qui n'ont plus de sens (ex. un contrat
   // passé en "1 jour/semaine" qui affiche encore les jours modifiés de l'ancien planning complet).
-  ['planning','_planningSauvegarde'].forEach(champPlanningAv=>{
+  // 16/09/2026 : un avenant sans coupure ne change pas l'organisation — les modifications de planning restent.
+  if(!av.sansCoupure) ['planning','_planningSauvegarde'].forEach(champPlanningAv=>{
     if(c[champPlanningAv]){
       Object.keys(c[champPlanningAv]).forEach(dateKeyAv=>{
         if(dateKeyAv>=av.dateAvenant) delete c[champPlanningAv][dateKeyAv];
@@ -20787,14 +20918,14 @@ function signerAvenant(){
   // Supprimer agendas obsolètes : ceux qui débutent strictement après le mois de l'avenant
   const debutMoisAvent=av.dateAvenant.slice(0,7)+'-01';
   if(!c.agendas) c.agendas=[];
-  if(av.dateAvenant){
+  if(av.dateAvenant&&!av.sansCoupure){
     c.agendas=c.agendas.filter(ag=>{
       const debAg=ag.dateDebut||ag.dateDeb||'';
       return debAg<=debutMoisAvent;
     });
   }
   // Faire de même pour les agendas des avenants précédents signés
-  c.avenants.forEach(avPrec=>{
+  if(!av.sansCoupure) c.avenants.forEach(avPrec=>{
     if(avPrec.id===avid||!avPrec.signe||!avPrec.agendas) return;
     avPrec.agendas=avPrec.agendas.filter(ag=>{
       const debAg=ag.dateDebut||ag.dateDeb||'';
@@ -20811,7 +20942,7 @@ function signerAvenant(){
   // (plusieurs calculs cherchent un agenda par simple chevauchement de mois, puis lisent la clé de la
   // semaine). La semaine qui contient l'avenant lui-même reste partagée entre les deux agendas, comme
   // deux agendas consécutifs le font déjà partout ailleurs.
-  {
+  if(!av.sansCoupure){
     const pAv=av.dateAvenant.split('-').map(Number);
     const dVeilleAv=new Date(pAv[0],pAv[1]-1,pAv[2]-1);
     const veilleAvStr=dVeilleAv.getFullYear()+'-'+String(dVeilleAv.getMonth()+1).padStart(2,'0')+'-'+String(dVeilleAv.getDate()).padStart(2,'0');
@@ -20837,7 +20968,7 @@ function signerAvenant(){
   }
 
   // Créer l'agenda si nécessaire
-  if(contratNeedAgenda(av)&&(!av.agendas||!av.agendas.length)){
+  if(!av.sansCoupure&&contratNeedAgenda(av)&&(!av.agendas||!av.agendas.length)){
     const avParts=av.dateAvenant.split('-').map(Number);
     const dRef=new Date(avParts[0],avParts[1]-1,avParts[2]);
     // Fin = exactement la veille de l'anniversaire (12 mois pleins depuis la date de début exacte),
@@ -20862,7 +20993,7 @@ function signerAvenant(){
   // dernier agenda existant et aujourd'hui, avec plus aucun moyen de le créer ensuite (repéré par
   // Sophie : contrat var 46, avenant 52 sem signé avant la création de l'agenda suivant). Même
   // logique que `creerAgenda`, en boucle jusqu'à couvrir aujourd'hui, jamais au-delà de l'avenant.
-  if(contratNeedAgenda(c)){
+  if(!av.sansCoupure&&contratNeedAgenda(c)){
     let gardeAgC=0;
     while(gardeAgC<12){
       gardeAgC++;
@@ -20913,7 +21044,7 @@ function signerAvenant(){
   S.enCours=cid;
   S.detTab='contrat';
   setTimeout(()=>{
-    if(contratNeedAgenda(av)){
+    if(!av.sansCoupure&&contratNeedAgenda(av)){
       const agExiste=av.agendas&&av.agendas.some(ag=>ag.semaines&&Object.keys(ag.semaines).length>0);
       if(!agExiste){
         if(confirm('Avenant n°'+av.num+' signé ✓\n\nCet avenant nécessite un agenda. Souhaitez-vous le remplir maintenant ?')){
@@ -21453,7 +21584,7 @@ function calcSeuilAcquis(c, anneeDebut, premierJourPose){
   const cgTermine = c.conges && (c.conges[anneeRefTerminee] || c.conges[anneeDebut]);
   let seuil = cgTermine ? Math.ceil(cgTermine.acquis || 0) : 0;
   // Ajouter congés anticipés : acquis jusqu'à fin du mois précédant le 1er jour posé
-  if(c.cgAnticipe === 'oui' && premierJourPose){
+  if(premierJourPose && ((getVersionActive(c,parseDateLoc(premierJourPose))||c).cgAnticipe)==='oui'){
     const p = premierJourPose.split('-').map(Number);
     // Fin du mois précédant = dernier jour du mois M-1
     const finMoisPrec = new Date(p[0], p[1]-1, 0); // jour 0 du mois courant = dernier du précédent
@@ -22041,6 +22172,9 @@ if(tousNonPrevus){
       // artificielle de getPeriodes sur les jours de repos) → la décision "anticipé" se redemande.
       if(finPosePrecedenteCgAm&&!memePoseCgAm(c,finPosePrecedenteCgAm,debut)) anticipeDecidePose=null;
       finPosePrecedenteCgAm=fin;
+      // 16/09/2026 (Sophie) : prise par anticipation permise ou non selon la version du contrat au début de la pose
+      // (un avenant qui la change s'applique à la pose suivante) — c'était toujours le contrat initial.
+      const cgAnticipePose=((getVersionActive(c,parseDateLoc(debut))||c).cgAnticipe);
       const premierTrav=premierJourTravaille(c,debut,fin);
       if(window.DEBUG_CGAM)console.log('[CGAM-premierTrav]','période:',debut,'à',fin,'| premierTrav trouvé:',premierTrav);
       const finDate=new Date(fin);
@@ -22050,7 +22184,7 @@ if(tousNonPrevus){
       const limitePTStr=limitePTDate.getFullYear()+'-'+String(limitePTDate.getMonth()+1).padStart(2,'0')+'-'+String(limitePTDate.getDate()).padStart(2,'0');
       // Pour premierTravReprise : chercher à partir du début de l'avenant suivant si applicable
       const avenantApresFinStr=(c.avenants||[])
-        .filter(av=>av.signe&&av.dateAvenant>fin)
+        .filter(av=>avenantCoupant(av)&&av.dateAvenant>fin)
         .sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant))[0]?.dateAvenant;
       const debutRechercheReprise=avenantApresFinStr&&avenantApresFinStr>apresFinStr?avenantApresFinStr:apresFinStr;
       const premierTravReprise=premierJourTravaille(c,debutRechercheReprise,limitePTStr,true);
@@ -22060,7 +22194,7 @@ if(tousNonPrevus){
       // de décompte ne démarre sous le nouveau contrat (52var-46sem-52fixe : avenant du 26/08/2025 tombé
       // sur le décompte de la pose d'août, le 26 était décompté sous le 52).
       {
-        const avDansDecompte=(c.avenants||[]).filter(av=>av.signe&&av.dateAvenant&&av.dateAvenant>fin&&av.dateAvenant<=dernierDecompte).map(av=>av.dateAvenant).sort()[0];
+        const avDansDecompte=(c.avenants||[]).filter(av=>avenantCoupant(av)&&av.dateAvenant>fin&&av.dateAvenant<=dernierDecompte).map(av=>av.dateAvenant).sort()[0];
         if(avDansDecompte){
           const vDecompte=parseDateLoc(avDansDecompte); vDecompte.setDate(vDecompte.getDate()-1);
           const vDecompteStr=dateToStr(vDecompte);
@@ -22149,7 +22283,7 @@ if(tousNonPrevus){
           const dansAcquisition=debutDate>=debutRef&&debutDate<=finRef;
           const dansPose=debutDate>=debutPose&&debutDate<=finPose;
           if((dansAcquisition||dansPose)&&!cg.estTerminee){
-            if(c.cgAnticipe==='oui'&&!(dansAcquisition&&debutDate>=debutPose)){
+            if(cgAnticipePose==='oui'&&!(dansAcquisition&&debutDate>=debutPose)){
               quotaAnticipe+=cg.acquis||0;
               // Utiliser acqBrut car compteurTotal voit les jours déjà pris dans la boucle
               quotaAnticipeBrut=cg.acqBrut!==undefined?cg.acqBrut:(cg.acquis||0);
@@ -22468,7 +22602,7 @@ if(tousNonPrevus){
               // pose (anticipeDecidePose, remis à null à chaque nouvelle pose — voir memePoseCgAm).
               if(anticipeDecidePose===null){
                 const ficheDecisionPP=c.fiches?.[dateStr.slice(0,7)];
-                anticipeDecidePose=c.cgAnticipe==='oui'&&!!(ficheDecisionPP&&ficheDecisionPP.anticipeActif);
+                anticipeDecidePose=cgAnticipePose==='oui'&&!!(ficheDecisionPP&&ficheDecisionPP.anticipeActif);
               }
               if(anticipeDecidePose&&compteurTotal+1<=quotaAnticipeTotal){
                 compteurTotal++;
@@ -22637,7 +22771,7 @@ if(tousNonPrevus){
             // jusqu'à la fin de la pose (anticipeDecidePose, voir plus haut).
             if(anticipeDecidePose===null){
               const ficheDecisionFerLend=c.fiches?.[dateStr.slice(0,7)];
-              anticipeDecidePose=c.cgAnticipe==='oui'&&!!(ficheDecisionFerLend&&ficheDecisionFerLend.anticipeActif);
+              anticipeDecidePose=cgAnticipePose==='oui'&&!!(ficheDecisionFerLend&&ficheDecisionFerLend.anticipeActif);
             }
             const anticipeOkFerLend=anticipeDecidePose;
             const lendAcquis=lendConges&&((estEnPeriodePoseFerLend&&compteurTotal+1<=quotaAcquis)||(anticipeOkFerLend&&compteurTotal+1<=quotaAnticipeTotal));
@@ -22713,7 +22847,7 @@ if(tousNonPrevus){
                 // suffit pas), au moment précis où c'est le cas, jamais avant.
                 if(!(estEnPeriodePoseHP&&compteurTotal+1<=quotaAcquis)&&anticipeDecidePose===null){
                   const ficheDecisionHP=c.fiches?.[dateStr.slice(0,7)];
-                  anticipeDecidePose=c.cgAnticipe==='oui'&&!!(ficheDecisionHP&&ficheDecisionHP.anticipeActif);
+                  anticipeDecidePose=cgAnticipePose==='oui'&&!!(ficheDecisionHP&&ficheDecisionHP.anticipeActif);
                 }
                 const anticipeOkHP=anticipeDecidePose;
                 if(window.DEBUG_CGAM)console.log('[CGAM]',dateStr,'| post-pose non prévu | compteur',compteurTotal,'/ quota',quotaAcquis,'/ anticipé total',quotaAnticipeTotal,'| enPériodePose',estEnPeriodePoseHP,'| anticipéOk',anticipeOkHP);
@@ -22739,7 +22873,7 @@ if(tousNonPrevus){
                 // suffit pas), au moment précis où c'est le cas, jamais avant.
                 if(!(estEnPeriodePose2&&compteurTotal+1<=quotaAcquis)&&anticipeDecidePose===null){
                   const ficheDecision2=c.fiches?.[dateStr.slice(0,7)];
-                  anticipeDecidePose=c.cgAnticipe==='oui'&&!!(ficheDecision2&&ficheDecision2.anticipeActif);
+                  anticipeDecidePose=cgAnticipePose==='oui'&&!!(ficheDecision2&&ficheDecision2.anticipeActif);
                 }
                 const anticipeOk=anticipeDecidePose;
                 if(window.DEBUG_CGAM)console.log('[CGAM]',dateStr,'| pose | compteur',compteurTotal,'/ quota',quotaAcquis,'/ anticipé total',quotaAnticipeTotal,'| enPériodePose',estEnPeriodePose2,'| anticipéOk',anticipeOk);
