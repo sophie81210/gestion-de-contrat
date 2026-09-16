@@ -574,9 +574,9 @@ input[type=time].fi{width:auto;min-width:92px}
       <div class="fg" id="section-date-cg" style="display:none;margin-bottom:0">
         <label class="fl">Date de paiement des cong&eacute;s</label>
         <div class="rg">
-          <div class="ro" onclick="choisirDateCg(this,'juin')"><input type="radio" name="date-cg" value="juin"><label>En une fois au mois de juin</label></div>
-          <div class="ro" onclick="choisirDateCg(this,'principale')"><input type="radio" name="date-cg" value="principale"><label>Lors de la prise principale des cong&eacute;s</label></div>
-          <div class="ro" onclick="choisirDateCg(this,'chaque')"><input type="radio" name="date-cg" value="chaque"><label>&Agrave; chaque prise</label></div>
+          <div class="ro" onclick="selR(this,'date-cg','juin')"><input type="radio" name="date-cg" value="juin"><label>En une fois au mois de juin</label></div>
+          <div class="ro" onclick="selR(this,'date-cg','principale')"><input type="radio" name="date-cg" value="principale"><label>Lors de la prise principale des cong&eacute;s</label></div>
+          <div class="ro" onclick="selR(this,'date-cg','chaque')"><input type="radio" name="date-cg" value="chaque"><label>&Agrave; chaque prise</label></div>
         </div>
       </div>
     </div>
@@ -15140,10 +15140,11 @@ function selTH(el,v){
 function toggleClauseRegul52(el,ev){
   const cb=el.querySelector('input');
   if(!ev||ev.target!==cb){cb.checked=!cb.checked;}
-  if(!cb.checked&&S.enAvenant){
+  if(S.enAvenant){
     const cCl=S.contrats.find(x=>x.id==S.enAvenant.cid);
-    if(cCl&&clauseRegul52Verrouillee(cCl,document.getElementById('f-dateavenant')?.value||null)){
-      cb.checked=true; el.classList.add('on');
+    const figeeCl=cCl?clauseRegul52Figee(cCl,document.getElementById('f-dateavenant')?.value||null):null;
+    if(figeeCl!==null&&cb.checked!==figeeCl){
+      cb.checked=figeeCl; el.classList.toggle('on',figeeCl);
       ouvrirAideModal('regularisation.html','Régularisation');
       return;
     }
@@ -15171,19 +15172,6 @@ function selPlanType(el,v){
   document.getElementById('cond-plan-var').classList.toggle('on',v==='var');
   majVisibiliteClauseRegul52();
   calc();
-}
-// 16/09/2026 (Sophie) : dans un avenant, changer le mode de paiement des congés prend effet au 1er du mois de la date
-// d'effet (le mois n'est pas coupé pour ça) — prévenu au moment du choix.
-function choisirDateCg(el,val){
-  selR(el,'date-cg',val);
-  if(!S.enAvenant) return;
-  const cDC=S.contrats.find(x=>x.id==S.enAvenant.cid); if(!cDC) return;
-  const dateDC=document.getElementById('f-dateavenant')?.value||null;
-  if(dateDC&&parseDateLoc(dateDC).getDate()===1) return;
-  let versionDC=cDC;
-  if(dateDC){ const v=parseDateLoc(dateDC); v.setDate(v.getDate()-1); versionDC=getVersionActive(cDC,v)||cDC; }
-  else { const avs=(cDC.avenants||[]).filter(a=>a.signe&&a.dateAvenant).sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant)); if(avs.length) versionDC={...cDC,...avs[avs.length-1]}; }
-  if((versionDC.dateCg||null)!==val) alerte('La prise d’effet se fera à compter du 1er du mois.');
 }
 function selR(el,name,val){
   document.querySelectorAll('[name="'+name+'"]').forEach(r=>r.parentElement.classList.remove('on'));
@@ -16948,7 +16936,7 @@ function validerAvenant(){
   av.indemType=document.querySelector('[name="ind-type"]:checked')?.value||null;
   av.indemMontant=parseFloat(document.getElementById('f-ind-mont')?.value)||null;
   av.clauseRegul52=document.getElementById('f-clause-regul52')?.checked||false;
-  if(!av.clauseRegul52&&clauseRegul52EligibleVersion({tc:S.tc,th:S.th,planType:S.th==='plan'?S.planType:null})&&clauseRegul52Verrouillee(c,dateAvenant||null)) av.clauseRegul52=true;
+  if(clauseRegul52EligibleVersion({tc:S.tc,th:S.th,planType:S.th==='plan'?S.planType:null})){ const figeeS=clauseRegul52Figee(c,dateAvenant||null); if(figeeS!==null) av.clauseRegul52=figeeS; }
   av.indemPer=document.querySelector('[name="ind-per"]:checked')?.value||null;
   av.repas=[0,1,2,3,4].map(i=>parseFloat(document.getElementById('f-repas-'+i)?.value)||null);
   av.km=parseFloat(document.getElementById('f-km')?.value)||null;
@@ -20564,7 +20552,7 @@ function ouvrirPassageCDI(cid){
     if(av.dateCg){const el=document.querySelector('[name="date-cg"][value="'+av.dateCg+'"]')?.parentElement;if(el)selR(el,'date-cg',av.dateCg);}
     if(av.indemType){const el=document.getElementById('ro-ind-'+(av.indemType==='legal'?'legal':'nego'));if(el)selInd(el,av.indemType);}
     if(av.indemMontant)sv('f-ind-mont',av.indemMontant);
-    if(av.clauseRegul52||clauseRegul52Verrouillee(c,av.dateAvenant||null)){const cb=document.getElementById('f-clause-regul52');if(cb){cb.checked=true;cb.closest('.ro')?.classList.add('on');}}
+    {const figeeF=clauseRegul52Figee(c,av.dateAvenant||null); const cocheF=figeeF!==null?figeeF:!!av.clauseRegul52; const cb=document.getElementById('f-clause-regul52');if(cb){cb.checked=cocheF;cb.closest('.ro')?.classList.toggle('on',cocheF);}}
     if(typeof majVisibiliteClauseRegul52==='function') majVisibiliteClauseRegul52();
     if(av.repas)av.repas.forEach((v,i)=>{if(v)sv('f-repas-'+i,v);});
     if(av.km)sv('f-km',av.km);
@@ -20713,16 +20701,18 @@ function avenantChangeStructure(avant, av){
   }
   return false;
 }
-// 16/09/2026 (Sophie) : clause de régularisation 52 choisie = pas de retour en arrière tant que le contrat reste en
-// 52 semaines (sem ou var), pour qu'un avenant ne puisse pas la retirer quand le calcul arrange. Un passage en 46, en
-// 52 fixe ou en 52 min reste possible. Version de référence : la veille de la date d'effet, ou à défaut la dernière signée.
-function clauseRegul52Verrouillee(c, dateAvStr){
+// 16/09/2026 (Sophie) : clause de régularisation 52 figée — si la version précédente était déjà un 52 sem ou var, un
+// avenant qui reste en 52 sem ou var garde le choix fait (avec ou sans clause) : ni retrait ni ajout quand le calcul
+// arrange. Un passage en 46, 52 fixe ou 52 min reste possible, et l'arrivée en 52 sem/var depuis un autre type laisse le
+// choix libre. Renvoie la valeur imposée (true/false), ou null si le choix est libre. Version de référence : la veille de
+// la date d'effet, ou à défaut la dernière version signée.
+function clauseRegul52EligibleVersion(v){ return !!v&&v.tc==='52'&&(v.th==='sem'||(v.th==='plan'&&v.planType==='var')); }
+function clauseRegul52Figee(c, dateAvStr){
   let avt=c;
   if(dateAvStr){ const v=parseDateLoc(dateAvStr); v.setDate(v.getDate()-1); avt=getVersionActive(c,v)||c; }
   else { const avs=(c.avenants||[]).filter(a=>a.signe&&a.dateAvenant).sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant)); if(avs.length) avt={...c,...avs[avs.length-1]}; }
-  return (avt.tc||c.tc)==='52'&&!!avt.clauseRegul52;
+  return clauseRegul52EligibleVersion(avt)?!!avt.clauseRegul52:null;
 }
-function clauseRegul52EligibleVersion(v){ return !!v&&v.tc==='52'&&(v.th==='sem'||(v.th==='plan'&&v.planType==='var')); }
 // Avenant signé qui coupe le mois (tous ceux d'avant le 16/09/2026, et ceux qui changent la structure).
 function avenantCoupant(av){ return !!(av&&av.signe&&av.dateAvenant&&!av.sansCoupure); }
 // Date du dernier avenant qui a coupé, pour une version renvoyée par getVersionActive (null = contrat initial).
@@ -20881,17 +20871,26 @@ function signerAvenant(){
   // 16/09/2026 (Sophie) : avenant sans coupure — comparé à la version en vigueur la veille de la date d'effet.
   const veilleSC=parseDateLoc(av.dateAvenant); veilleSC.setDate(veilleSC.getDate()-1);
   const versionVeilleSC=getVersionActive(c,veilleSC)||c;
-  if(clauseRegul52EligibleVersion(av)&&!av.clauseRegul52&&clauseRegul52Verrouillee(c,av.dateAvenant)){
-    alerte('La clause de régularisation a été choisie sur ce contrat de 52 semaines : un avenant qui reste en 52 semaines ne peut plus la retirer.<br><br>Cochez la clause dans l’avenant et enregistrez-le avant de signer.');
-    return;
+  {
+    const figeeSig=clauseRegul52EligibleVersion(av)?clauseRegul52Figee(c,av.dateAvenant):null;
+    if(figeeSig!==null&&!!av.clauseRegul52!==figeeSig){
+      alerte(figeeSig
+        ?'La clause de régularisation a été choisie sur ce contrat de 52 semaines : un avenant qui reste en 52 semaines ne peut plus la retirer.<br><br>Cochez la clause dans l’avenant et enregistrez-le avant de signer.'
+        :'Ce contrat de 52 semaines a été signé sans clause de régularisation : un avenant qui reste en 52 semaines ne peut pas l’ajouter.<br><br>Décochez la clause dans l’avenant et enregistrez-le avant de signer.');
+      return;
+    }
   }
   const sansCoupureSC=!avenantChangeStructure(versionVeilleSC,av);
   let infoCoupureSC='';
   if(sansCoupureSC) infoCoupureSC='\n\nCet avenant ne modifie ni la mensualisation ni l\'organisation du travail : le mois de la date d\'effet ne sera pas coupé en deux et l\'agenda en cours continue.';
   else if(parseDateLoc(av.dateAvenant).getDate()!==1&&!avenantChangeStructure(versionVeilleSC,{...av,txBrut:versionVeilleSC.txBrut}))
     infoCoupureSC='\n\nSeul le taux horaire change : le mois de la date d\'effet sera coupé en deux. Une date d\'effet au 1er du mois l\'éviterait.';
+  // 16/09/2026 (Sophie) : mode de paiement des congés changé par un avenant sans coupure en cours de mois — le mois
+  // n'étant pas coupé, le nouveau mode s'applique dès le 1er. (Avec coupure, il s'applique à la date d'effet.)
+  const cgDes1erSC=sansCoupureSC&&parseDateLoc(av.dateAvenant).getDate()!==1&&(av.dateCg||null)!==(versionVeilleSC.dateCg||null);
+  if(cgDes1erSC) infoCoupureSC+='\n\n⚠ Le mode de paiement des congés change : la prise d\'effet se fera à compter du 1er du mois.';
   // Confirmer
-  if(!confirm('L\'avenant n°'+av.num+' sera verrouillé après signature et ne pourra plus être modifié.'+infoCoupureSC+'\n\nConfirmer ?')) return;
+  if(!confirm('L\'avenant n°'+av.num+' sera verrouillé après signature et ne pourra plus être modifié.'+infoCoupureSC+'\n\n'+(cgDes1erSC?'Confirmer quand même ?':'Confirmer ?'))) return;
 
   // Signer
   av.signe=true;
