@@ -15925,6 +15925,10 @@ function ouvrirModifAgenda(cid,agid){
   // Pas d'avertissement à l'ouverture de la modification
 
   S.agendaEnModif=agid; // Marquer l'agenda en cours de modification (masque les warnings)
+  // 17/09/2026 (Sophie) : semaines telles qu'à l'ouverture de la modification, pour ne réinitialiser à la validation
+  // que les semaines réellement changées.
+  if(!S.agendaSemainesAvantModif) S.agendaSemainesAvantModif={};
+  S.agendaSemainesAvantModif[agid]=JSON.parse(JSON.stringify(ag.semaines||{}));
   // Cacher le calendrier lecture seule
   const calDiv=document.getElementById('cal-'+agid);
   if(calDiv)calDiv.style.display='none';
@@ -16417,13 +16421,31 @@ function validerModifAgenda(cid,agid){
   // Réinitialiser les fiches non validées couvertes par l'agenda modifié
   const agDebutStr=ag.dateDebut.slice(0,7);
   const agFinStr=ag.dateFin.slice(0,7);
+  // 17/09/2026 (Sophie) : seules les semaines dont le type a réellement changé sont remises à jour, et seulement leur
+  // partie « prévue » (heures prévues, statut prévu / non prévu / repos / férié / hors contrat). Les pointages, absences,
+  // arrêts, jours travaillés et congés saisis restent. Avant, toutes les feuilles non validées de la période étaient
+  // recréées à neuf, même sans aucun changement : pointages et absences perdus.
+  const avantModif=S.agendaSemainesAvantModif&&S.agendaSemainesAvantModif[agid];
+  if(S.agendaSemainesAvantModif) delete S.agendaSemainesAvantModif[agid];
+  const semainesChangees=avantModif
+    ? new Set([...Object.keys(avantModif),...Object.keys(ag.semaines||{})].filter(k=>(avantModif[k]||null)!==((ag.semaines||{})[k]||null)))
+    : null;
+  const statutsDerives=[null,undefined,'','prevu','non-prevu','repos','ferie','a-selectionner','hors-contrat'];
   Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
     if(fiche.valide) return;
     if(key<agDebutStr||key>agFinStr) return;
-    // Réinitialiser la fiche
     const annee=parseInt(key.split('-')[0]);
     const mois=parseInt(key.split('-')[1])-1;
-    c.fiches[key]=creerFiche(c,annee,mois);
+    if(!semainesChangees){ c.fiches[key]=creerFiche(c,annee,mois); return; }
+    const joursTouches=(fiche.jours||[]).filter(j=>j.date&&semainesChangees.has(getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))));
+    if(!joursTouches.length) return;
+    const neuve=creerFiche(c,annee,mois);
+    joursTouches.forEach(j=>{
+      const n=neuve.jours.find(x=>x.date===j.date); if(!n) return;
+      j.heureDebPrev=n.heureDebPrev; j.heureFinPrev=n.heureFinPrev; j.planVarPrevu=n.planVarPrevu; j._jourPossible=n._jourPossible;
+      if(statutsDerives.includes(j.statut)) j.statut=n.statut;
+    });
+    delete fiche._recapCache; delete fiche._recapCacheAvant; delete fiche._recapCacheApres;
   });
   // Recalculer les statuts congés car l'agenda a changé
   if(S.congesAM){
@@ -16439,6 +16461,7 @@ function validerModifAgenda(cid,agid){
 
 function fermerModifAgenda(cid,agid){
   if(S.agendaEnModif===agid) delete S.agendaEnModif;
+  if(S.agendaSemainesAvantModif) delete S.agendaSemainesAvantModif[agid];
   const zone=document.getElementById('modif-zone-'+agid);
   if(zone){zone.style.display='none';zone.innerHTML='';}
   const calDiv=document.getElementById('cal-'+agid);
