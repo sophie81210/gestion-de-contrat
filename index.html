@@ -3575,8 +3575,11 @@ function voirAvenant(cid,avid){
     // qui a coupé, ou contrat initial) — l'agenda en cours continue.
     if(dernierAv.sansCoupure){
       const avCoupeVA=[...avsEffectifs].reverse().find(a=>!a.sansCoupure)||null;
-      _vaResult.agendas=avCoupeVA?avCoupeVA.agendas:c.agendas;
       _vaResult._dateCoupure=avCoupeVA?avCoupeVA.dateAvenant:null;
+    }
+    if(avenantGardeAgenda(dernierAv)){
+      const avAgendaVA=[...avsEffectifs].reverse().find(a=>!avenantGardeAgenda(a))||null;
+      _vaResult.agendas=avAgendaVA?avAgendaVA.agendas:c.agendas;
     }
   }
   if(!_vaParContrat){ _vaParContrat=new Map(); _versionActiveCache.set(c,_vaParContrat); }
@@ -15485,7 +15488,7 @@ function creerAgenda(cid){
   // Déterminer la source active (avenant effectif ou contrat)
   const now=new Date();
   const aujourdStr=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
-  const avsEffectifs=c.avenants?c.avenants.filter(a=>a.signe&&a.dateAvenant<=aujourdStr&&!a.sansCoupure)
+  const avsEffectifs=c.avenants?c.avenants.filter(a=>a.signe&&a.dateAvenant<=aujourdStr&&!avenantGardeAgenda(a))
     .sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant)):[];
   const source=avsEffectifs.length?avsEffectifs[avsEffectifs.length-1]:c;
   if(!source.agendas)source.agendas=[];
@@ -15744,7 +15747,7 @@ function renderAgendas(c){
     const _tousAvTmp=[...(_contratPpal?.avenants||[])].sort((a,b)=>a.dateAvenant>b.dateAvenant?1:-1);
     const _propTmp=_contratPpal?.agendas?.some(a=>a.id===ag.id)?_contratPpal:_tousAvTmp.find(av=>av.agendas?.some(a=>a.id===ag.id));
     const _avUltTmp=_propTmp?_tousAvTmp.find(av=>{
-      if(!avenantCoupant(av)||av===_propTmp) return false;
+      if(!avenantCoupant(av)||avenantGardeAgenda(av)||av===_propTmp) return false;
       const dp=_propTmp===_contratPpal?(_contratPpal.dateDeb||''):(_propTmp.dateAvenant||'');
       if(av.dateAvenant<=dp) return false;
       return av.dateAvenant>=ag.dateDebut&&av.dateAvenant<=ag.dateFin;
@@ -15774,7 +15777,7 @@ function renderAgendas(c){
       if(proprietaire){
         // Chercher un avenant ultérieur signé dont la date tombe dans cet agenda
         const avenantUlterieur=tousAvenants.find(av=>{
-          if(!avenantCoupant(av)) return false;
+          if(!avenantCoupant(av)||avenantGardeAgenda(av)) return false;
           if(av===proprietaire) return false;
           // L'avenant doit être postérieur au propriétaire
           const dateProprietaire=proprietaire===contratPrincipal?contratPrincipal.dateDeb:(proprietaire.dateAvenant||'');
@@ -20712,7 +20715,7 @@ function avenantSansPartieAvant(c, dateAvStr){
 // de CDD) ne coupe plus le mois en deux : un seul encart sur la feuille, un seul volume au planning, et l'agenda en
 // cours continue (pas de nouvel agenda). Décidé une fois pour toutes à la signature (av.sansCoupure) : les avenants
 // signés avant cette règle gardent leur coupure. Un taux horaire différent reste une coupure (la mensualisation change).
-function avenantChangeStructure(avant, av){
+function avenantChangeStructure(avant, av, organisationSeule){
   if(!avant||!av) return true;
   if((avant.tc||'')==='occ'||(av.tc||'')==='occ') return true;
   const canon=x=>{
@@ -20726,10 +20729,10 @@ function avenantChangeStructure(avant, av){
   const num=x=>Math.round((parseFloat(x)||0)*100)/100;
   if((avant.tc||'')!==(av.tc||'')||(avant.th||'')!==(av.th||'')) return true;
   if((parseInt(avant.reposHebdo)||0)!==(parseInt(av.reposHebdo)||0)) return true;
-  if(['txBrut','hMensu','hMensuMaj'].some(k=>num(avant[k])!==num(av[k]))) return true;
+  if(!organisationSeule&&['txBrut','hMensu','hMensuMaj'].some(k=>num(avant[k])!==num(av[k]))) return true;
   if(av.tc!=='52'&&num(avant.nbSem)!==num(av.nbSem)) return true;
   // heures sup mensualisées : leur majoration fait partie du salaire mensualisé
-  if(num(av.hMensuMaj)>0&&num(avant.majSup)!==num(av.majSup)) return true;
+  if(!organisationSeule&&num(av.hMensuMaj)>0&&num(avant.majSup)!==num(av.majSup)) return true;
   if(av.th==='fixe') return !pareil(avant.joursFixe,av.joursFixe);
   if(av.th==='sem'){
     const sem=l=>(l||[]).map(t=>({nb:num(t&&t.nb),jours:t&&t.jours}));
@@ -20776,6 +20779,9 @@ function clauseRegul52Figee(c, dateAvStr){
   else { const avs=(c.avenants||[]).filter(a=>a.signe&&a.dateAvenant).sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant)); if(avs.length) avt={...c,...avs[avs.length-1]}; }
   return clauseRegul52EligibleVersion(avt)?!!avt.clauseRegul52:null;
 }
+// 17/09/2026 (Sophie) : l'agenda ne dépend que de l'organisation du travail. Un avenant qui coupe le mois sans la changer
+// (taux horaire, heures mensualisées) garde l'agenda en cours (av.agendaConserve, décidé à la signature).
+function avenantGardeAgenda(av){ return !!(av&&(av.sansCoupure||av.agendaConserve)); }
 // Avenant signé qui coupe le mois (tous ceux d'avant le 16/09/2026, et ceux qui changent la structure).
 function avenantCoupant(av){ return !!(av&&av.signe&&av.dateAvenant&&!av.sansCoupure); }
 // Date du dernier avenant qui a coupé, pour une version renvoyée par getVersionActive (null = contrat initial).
@@ -20959,6 +20965,7 @@ function signerAvenant(){
   // Signer
   av.signe=true;
   if(sansCoupureSC) av.sansCoupure=true; else delete av.sansCoupure;
+  if(!sansCoupureSC&&!avenantChangeStructure(versionVeilleSC,av,true)) av.agendaConserve=true; else delete av.agendaConserve;
   av.dateSigne=new Date().toISOString().slice(0,10);
   c._regulDirty=true;
   // 11/08/2026 (Sophie) : les modifications de planning jour par jour (échanges, jours modifiés)
@@ -20966,7 +20973,7 @@ function signerAvenant(){
   // la date de l'avenant fait ressurgir d'anciens horaires qui n'ont plus de sens (ex. un contrat
   // passé en "1 jour/semaine" qui affiche encore les jours modifiés de l'ancien planning complet).
   // 16/09/2026 : un avenant sans coupure ne change pas l'organisation — les modifications de planning restent.
-  if(!av.sansCoupure) ['planning','_planningSauvegarde'].forEach(champPlanningAv=>{
+  if(!avenantGardeAgenda(av)) ['planning','_planningSauvegarde'].forEach(champPlanningAv=>{
     if(c[champPlanningAv]){
       Object.keys(c[champPlanningAv]).forEach(dateKeyAv=>{
         if(dateKeyAv>=av.dateAvenant) delete c[champPlanningAv][dateKeyAv];
@@ -20981,14 +20988,14 @@ function signerAvenant(){
   // Supprimer agendas obsolètes : ceux qui débutent strictement après le mois de l'avenant
   const debutMoisAvent=av.dateAvenant.slice(0,7)+'-01';
   if(!c.agendas) c.agendas=[];
-  if(av.dateAvenant&&!av.sansCoupure){
+  if(av.dateAvenant&&!avenantGardeAgenda(av)){
     c.agendas=c.agendas.filter(ag=>{
       const debAg=ag.dateDebut||ag.dateDeb||'';
       return debAg<=debutMoisAvent;
     });
   }
   // Faire de même pour les agendas des avenants précédents signés
-  if(!av.sansCoupure) c.avenants.forEach(avPrec=>{
+  if(!avenantGardeAgenda(av)) c.avenants.forEach(avPrec=>{
     if(avPrec.id===avid||!avPrec.signe||!avPrec.agendas) return;
     avPrec.agendas=avPrec.agendas.filter(ag=>{
       const debAg=ag.dateDebut||ag.dateDeb||'';
@@ -21005,7 +21012,7 @@ function signerAvenant(){
   // (plusieurs calculs cherchent un agenda par simple chevauchement de mois, puis lisent la clé de la
   // semaine). La semaine qui contient l'avenant lui-même reste partagée entre les deux agendas, comme
   // deux agendas consécutifs le font déjà partout ailleurs.
-  if(!av.sansCoupure){
+  if(!avenantGardeAgenda(av)){
     const pAv=av.dateAvenant.split('-').map(Number);
     const dVeilleAv=new Date(pAv[0],pAv[1]-1,pAv[2]-1);
     const veilleAvStr=dVeilleAv.getFullYear()+'-'+String(dVeilleAv.getMonth()+1).padStart(2,'0')+'-'+String(dVeilleAv.getDate()).padStart(2,'0');
@@ -21031,7 +21038,7 @@ function signerAvenant(){
   }
 
   // Créer l'agenda si nécessaire
-  if(!av.sansCoupure&&contratNeedAgenda(av)&&(!av.agendas||!av.agendas.length)){
+  if(!avenantGardeAgenda(av)&&contratNeedAgenda(av)&&(!av.agendas||!av.agendas.length)){
     const avParts=av.dateAvenant.split('-').map(Number);
     const dRef=new Date(avParts[0],avParts[1]-1,avParts[2]);
     // Fin = exactement la veille de l'anniversaire (12 mois pleins depuis la date de début exacte),
@@ -21056,7 +21063,7 @@ function signerAvenant(){
   // dernier agenda existant et aujourd'hui, avec plus aucun moyen de le créer ensuite (repéré par
   // Sophie : contrat var 46, avenant 52 sem signé avant la création de l'agenda suivant). Même
   // logique que `creerAgenda`, en boucle jusqu'à couvrir aujourd'hui, jamais au-delà de l'avenant.
-  if(!av.sansCoupure&&contratNeedAgenda(c)){
+  if(!avenantGardeAgenda(av)&&contratNeedAgenda(c)){
     let gardeAgC=0;
     while(gardeAgC<12){
       gardeAgC++;
@@ -21102,7 +21109,7 @@ function signerAvenant(){
   S.enCours=cid;
   S.detTab='contrat';
   setTimeout(()=>{
-    if(!av.sansCoupure&&contratNeedAgenda(av)){
+    if(!avenantGardeAgenda(av)&&contratNeedAgenda(av)){
       const agExiste=av.agendas&&av.agendas.some(ag=>ag.semaines&&Object.keys(ag.semaines).length>0);
       if(!agExiste){
         if(confirm('Avenant n°'+av.num+' signé ✓\n\nCet avenant nécessite un agenda. Souhaitez-vous le remplir maintenant ?')){
