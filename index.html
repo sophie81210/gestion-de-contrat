@@ -568,7 +568,7 @@ input[type=time].fi{width:auto;min-width:92px}
         <label class="fl">Cong&eacute;s pay&eacute;s en anticip&eacute;</label>
         <div class="rg row" style="gap:7px">
           <div class="ro" id="ro-cg-oui" onclick="selR(this,'cg-anticipe','oui')" style="flex:1"><input type="radio" name="cg-anticipe" value="oui"><label>Oui</label></div>
-          <div class="ro" id="ro-cg-non" onclick="selR(this,'cg-anticipe','non')" style="flex:1"><input type="radio" name="cg-anticipe" value="non"><label>Non</label></div>
+          <div class="ro" id="ro-cg-non" onclick="choisirCgAnticipe(this,'non')" style="flex:1"><input type="radio" name="cg-anticipe" value="non"><label>Non</label></div>
         </div>
       </div>
       <div class="fg" id="section-date-cg" style="display:none;margin-bottom:0">
@@ -633,11 +633,7 @@ input[type=time].fi{width:auto;min-width:92px}
           c.avenants=c.avenants.filter(a=>a.id!=avid);
           const cidx=S.contrats.findIndex(x=>x.id==cid);
           if(cidx!==-1)S.contrats[cidx]=c;
-          localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
-          if(window.FB_USER&&window.fbSaveData){
-            window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
-              .catch(e=>console.error('Save supprAvenant:',e));
-          }
+          enregistrerContrats([c.id],true);
         }
       }
       S.enAvenant=null;
@@ -1175,8 +1171,9 @@ async function resetMotDePasse(){
 async function deconn(){
   showLoader('Déconnexion...');
   if(window.FB_USER&&window.fbSaveData){
-    await window.fbSaveData(window.FB_USER.uid,{contrats:S.contrats,params:S.params||{},congesAM:S.congesAM||{}})
-      .catch(e=>console.error('Save deconn:',e));
+    // 17/09/2026 : seulement ce qui attend d'être enregistré, nettoyé comme partout (plus l'envoi brut de tous les contrats)
+    if(_saveTimer){ clearTimeout(_saveTimer); _saveTimer=null; }
+    if(_contratsModifies.size>0) await _flushSaveFirestore();
   }
   if(window.fbLogout) await window.fbLogout();
   hideLoader();
@@ -1239,25 +1236,41 @@ const _contratsModifies=new Set(); // IDs des contrats modifiés depuis la derni
 async function _flushSaveFirestore(){
   if(!window.FB_USER||!window.fbSaveData) return;
   _saveEnCours=true;
+  let idsEnvoyesSave=[];
   try{
     const contratsCompresses=getContratsCompresses();
     // Ne sauvegarder que les contrats modifiés (ou tous si aucun tracké)
     const contratsClean=_contratsModifies.size>0
       ? contratsCompresses.filter(c=>_contratsModifies.has(c.id))
       : contratsCompresses;
+    idsEnvoyesSave=contratsClean.map(c=>c.id);
     _contratsModifies.clear();
     const dataClean=JSON.parse(JSON.stringify({
       contrats:contratsClean, // seulement les modifiés
       params:S.params||{},
       congesAM:S.congesAM||{}
     }));
-    await window.fbSaveData(window.FB_USER.uid, dataClean);
+    // 17/09/2026 (Sophie) : fbSaveData ne lève pas d'erreur, il renvoie {ok:false} — un échec (document trop gros,
+    // réseau) passait inaperçu. Les contrats non écrits sont remis en file pour la prochaine sauvegarde.
+    const resSave=await window.fbSaveData(window.FB_USER.uid, dataClean);
+    if(!resSave||!resSave.ok) throw new Error((resSave&&resSave.err)||'écriture refusée');
   }catch(e){
     console.error('Save Firebase:',e);
+    idsEnvoyesSave.forEach(id=>_contratsModifies.add(id));
     toast('\u26A0 Sauvegarde Firebase \u00E9chou\u00E9e \u2014 v\u00E9rifiez votre connexion');
   }finally{
     _saveEnCours=false;
   }
+}
+// 17/09/2026 (Sophie) : enregistrement d'un contrat par le circuit normal (contrat nettoyé des données de travail avant
+// l'envoi). Plusieurs endroits envoyaient l'objet contrat brut, avec par exemple la page de l'onglet Régularisation :
+// au-delà de la taille maximale d'un document, l'écriture échouait sans rien dire (brouillon d'avenant perdu à
+// l'actualisation). immediat : envoi sans attendre les 2 s (création, avenant, signature).
+function enregistrerContrats(ids, immediat){
+  (ids||[]).forEach(id=>{ if(id!=null) _contratsModifies.add(id); });
+  if(!window.FB_USER||!window.fbSaveData){ localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses())); return; }
+  saveToFirestore();
+  if(immediat){ if(_saveTimer){clearTimeout(_saveTimer);_saveTimer=null;} _flushSaveFirestore(); }
 }
 async function saveToFirestore(){
   if(!window.FB_USER||!window.fbSaveData) return;
@@ -1551,11 +1564,7 @@ function pointer(id,type){
   // Sauvegarder
   const cidx=S.contrats.findIndex(x=>x.id==id);
   if(cidx!==-1) S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
-  if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
-      .catch(e=>console.error('Save pointer:',e));
-  }
+  enregistrerContrats([c.id]);
 
   // Si jour non prévu ou repos et qu'on pointe → passer à "travaillé"
   // Bug confirmé Sophie (test du 14/07/2026, jour férié) : cette 2e condition vérifiait
@@ -1577,11 +1586,7 @@ function pointer(id,type){
     if(!S.contrats[cidx2].fiches) S.contrats[cidx2].fiches={};
     S.contrats[cidx2].fiches[key]=fiche;
   }
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
-  if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[S.contrats.find(x=>x.id==id)],params:{},congesAM:S.congesAM||{}})
-      .catch(e=>console.error('Save pointer2:',e));
-  }
+  enregistrerContrats([id]);
 
   // Rafraîchir la page aujourd'hui
   renderAuj();
@@ -16455,11 +16460,7 @@ function supprimerAgenda(cid,agid){
   source.agendas=source.agendas.filter(a=>a.id!=agid);
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
-  if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
-      .catch(e=>console.error('Save supprimerAgenda:',e));
-  }
+  enregistrerContrats([c.id],true);
   const agWrap2=document.getElementById('agenda-wrap-'+cid);
   if(agWrap2) agWrap2.innerHTML=renderAgendas({...source,id:c.id});
 }
@@ -16825,12 +16826,7 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
     if(!data.joursFixe&&ancien.joursFixe) data.joursFixe=ancien.joursFixe;
     if(idx!==-1)S.contrats[idx]={...ancien,...data};
     S.dernierContratId=idCible;S.enEd=null;toast('Contrat '+nom+' modifié !');
-    localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
-    const cModif=S.contrats.find(x=>x.id==idCible);
-    if(window.FB_USER&&window.fbSaveData&&cModif){
-      window.fbSaveData(window.FB_USER.uid,{contrats:[cModif],params:{},congesAM:S.congesAM||{}})
-        .catch(e=>console.error('Save valider modif:',e));
-    }
+    enregistrerContrats([idCible],true);
     const bs=document.getElementById('btn-signe');
 if(bs){bs.style.display='inline-flex';bs.style.cssText='display:inline-flex;background:#3a6b4a;color:#e8f5ee;border:none;padding:9px 20px;border-radius:24px;font-size:14px;font-weight:600;cursor:pointer;font-family:Calibri,sans-serif;align-items:center;gap:6px';}
            
@@ -16858,12 +16854,7 @@ S.contrats.push({
 });
 S.dernierContratId=newId;
 toast('Contrat '+nom+' enregistré !');
- localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
-  const cNew=S.contrats.find(x=>x.id==newId);
-  if(window.FB_USER&&window.fbSaveData&&cNew){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[cNew],params:{},congesAM:S.congesAM||{}})
-      .catch(e=>console.error('Save valider new:',e));
-  }
+  enregistrerContrats([newId],true);
   const bs=document.getElementById('btn-signe');
   if(bs){bs.style.display='inline-flex';bs.style.cssText='display:inline-flex;background:#6B8060;color:#fff;border:none;padding:9px 20px;border-radius:24px;font-size:14px;font-weight:600;cursor:pointer;font-family:Calibri,sans-serif;align-items:center;gap:6px';}
 }
@@ -16932,6 +16923,7 @@ function validerAvenant(){
   av.majComp=parseFloat(document.getElementById('f-maj-comp')?.value)||0;
   av.majSup=parseFloat(document.getElementById('f-maj-sup')?.value)||0;
   av.cgAnticipe=document.querySelector('[name="cg-anticipe"]:checked')?.value||null;
+  if(cgAnticipeFige(c,dateAvenant||null)) av.cgAnticipe='oui';
   av.dateCg=document.querySelector('[name="date-cg"]:checked')?.value||null;
   av.indemType=document.querySelector('[name="ind-type"]:checked')?.value||null;
   av.indemMontant=parseFloat(document.getElementById('f-ind-mont')?.value)||null;
@@ -16958,11 +16950,7 @@ function validerAvenant(){
 
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
-  if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
-      .catch(e=>console.error('Save validerAvenant:',e));
-  }
+  enregistrerContrats([c.id],true);
   toast('Avenant n°'+av.num+' enregistré ✓');
   // Rester sur le formulaire, mettre à jour S.enAvenant avec les données fraîches
   // Rafraîchir le bouton signer
@@ -20356,11 +20344,7 @@ function creerAvenant(id){
   c.avenants.push(newAv);
   const cidx=S.contrats.findIndex(x=>x.id==id);
   if(cidx!==-1)S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
-  if(window.FB_USER&&window.fbSaveData){
-    window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
-      .catch(e=>console.error('Save creerAvenant:',e));
-  }
+  enregistrerContrats([c.id],true);
   ouvrirFormulaireAvenant(id,newAv.id);
 }
 
@@ -20548,7 +20532,7 @@ function ouvrirPassageCDI(cid){
         sv('fixe-d-'+i,h.d);sv('fixe-f-'+i,h.f);calcJ('fixe',i);
       });
     }
-    if(av.cgAnticipe){const el=document.getElementById('ro-cg-'+av.cgAnticipe);if(el)selR(el,'cg-anticipe',av.cgAnticipe);}
+    {const cgAvF=cgAnticipeFige(c,av.dateAvenant||null)?'oui':av.cgAnticipe; if(cgAvF){const el=document.getElementById('ro-cg-'+cgAvF);if(el)selR(el,'cg-anticipe',cgAvF);}}
     if(av.dateCg){const el=document.querySelector('[name="date-cg"][value="'+av.dateCg+'"]')?.parentElement;if(el)selR(el,'date-cg',av.dateCg);}
     if(av.indemType){const el=document.getElementById('ro-ind-'+(av.indemType==='legal'?'legal':'nego'));if(el)selInd(el,av.indemType);}
     if(av.indemMontant)sv('f-ind-mont',av.indemMontant);
@@ -20706,6 +20690,25 @@ function avenantChangeStructure(avant, av){
 // arrange. Un passage en 46, 52 fixe ou 52 min reste possible, et l'arrivée en 52 sem/var depuis un autre type laisse le
 // choix libre. Renvoie la valeur imposée (true/false), ou null si le choix est libre. Version de référence : la veille de
 // la date d'effet, ou à défaut la dernière version signée.
+// 17/09/2026 (Sophie) : prise par anticipation acceptée au contrat ou par un avenant = pas de retour en arrière.
+// Version de référence : la veille de la date d'effet, ou à défaut la dernière version signée.
+function cgAnticipeFige(c, dateAvStr){
+  let avt=c;
+  if(dateAvStr){ const v=parseDateLoc(dateAvStr); v.setDate(v.getDate()-1); avt=getVersionActive(c,v)||c; }
+  else { const avs=(c.avenants||[]).filter(a=>a.signe&&a.dateAvenant).sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant)); if(avs.length) avt={...c,...avs[avs.length-1]}; }
+  return avt.cgAnticipe==='oui';
+}
+function choisirCgAnticipe(el,val){
+  if(val==='non'&&S.enAvenant){
+    const cCA=S.contrats.find(x=>x.id==S.enAvenant.cid);
+    if(cCA&&cgAnticipeFige(cCA,document.getElementById('f-dateavenant')?.value||null)){
+      const elOui=document.getElementById('ro-cg-oui'); if(elOui) selR(elOui,'cg-anticipe','oui');
+      alerte('La prise par anticipation a été acceptée : un avenant ne peut plus la retirer.');
+      return;
+    }
+  }
+  selR(el,'cg-anticipe',val);
+}
 function clauseRegul52EligibleVersion(v){ return !!v&&v.tc==='52'&&(v.th==='sem'||(v.th==='plan'&&v.planType==='var')); }
 function clauseRegul52Figee(c, dateAvStr){
   let avt=c;
@@ -20796,6 +20799,10 @@ function signerAvenant(){
   if(av.tc!=='occ'&&!av.th) manquantsAv.push("type d'horaires");
   if(!av.txBrut) manquantsAv.push("taux horaire brut");
   if(!av.cgAnticipe) av.cgAnticipe='non';
+  if(av.cgAnticipe!=='oui'&&av.dateAvenant&&cgAnticipeFige(c,av.dateAvenant)){
+    alerte('La prise par anticipation a été acceptée : un avenant ne peut plus la retirer.<br><br>Choisissez « Oui » dans l’avenant et enregistrez-le avant de signer.');
+    return;
+  }
   if(!av.indemType) manquantsAv.push("indemnité d'entretien");
   if(av.majComp===0&&av.majSup===0) manquantsAv.push("majorations heures comp./sup. (mettre 0 si aucune)");
   if(av.majRepos===null||av.majRepos===undefined) manquantsAv.push("majoration jour de repos");
@@ -21031,12 +21038,7 @@ function signerAvenant(){
 
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1)S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
-  if(window.FB_USER&&window.fbSaveData){
-    const cClean=JSON.parse(JSON.stringify(c));
-    window.fbSaveData(window.FB_USER.uid,{contrats:[cClean],params:{},congesAM:S.congesAM||{}})
-      .catch(e=>console.error('Save avenant:',e));
-  }
+  enregistrerContrats([c.id],true);
   toast('⏳ Signature en cours...');
   S.enAvenant=null;
   S.enCours=cid;
@@ -21696,10 +21698,7 @@ function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
     S.contrats.forEach((c,i)=>{if(c.fiches)S.contrats[i]=c;});
     localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
     if(sauvegarder&&window.FB_USER&&window.fbSaveData){
-      S.contrats.filter(c=>c.fiches&&c.signe&&!estContratCloture(c)).forEach(c=>{
-        window.fbSaveData(window.FB_USER.uid,{contrats:[c],params:{},congesAM:S.congesAM||{}})
-          .catch(e=>console.error('Save majFichesCgAm:',e));
-      });
+      enregistrerContrats(S.contrats.filter(c=>c.fiches&&c.signe&&!estContratCloture(c)).map(c=>c.id));
     }
     return;
   }
@@ -23101,11 +23100,7 @@ if(tousNonPrevus){
 
   // Sauvegarder chaque contrat modifié individuellement
  if(sauvegarder&&window.FB_USER&&window.fbSaveData){
-    S.contrats.filter(c=>c.fiches&&c.signe&&!estContratCloture(c)).forEach(c=>{
-      window.fbSaveData(window.FB_USER.uid,{
-        contrats:[c],params:{},congesAM:S.congesAM||{}
-      }).catch(e=>console.error('Save contrat:',e));
-    });
+    enregistrerContrats(S.contrats.filter(c=>c.fiches&&c.signe&&!estContratCloture(c)).map(c=>c.id));
   }
   if(sauvegarder) saveCongesAM();
 }
