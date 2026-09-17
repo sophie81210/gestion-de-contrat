@@ -1342,17 +1342,29 @@ else S.params=JSON.parse(localStorage.getItem('cam_params')||'null')||JSON.parse
       initToutesLesFiches();
       renderAuj();
       // Recalculer les statuts congés en arrière-plan après affichage
-      if(S.congesAM){
-        setTimeout(()=>{
-          Object.keys(S.congesAM).forEach(am=>{
-            majFichesCgAm(parseInt(am),false);
-          });
-        },200);
-      }
+      if(S.congesAM) recalculerCongesAuDemarrage();
     }
   }catch(e){console.error('Load:',e);S._paramsChargementTermine=true;}
 }
 
+// 17/09/2026 (Sophie : l'onglet Contrats mettait 15 s à s'ouvrir après le démarrage). Le recalcul des congés de toutes les
+// années s'enchaînait d'un bloc, et chaque clic attendait la fin. Désormais : seules les années ayant au moins une
+// feuille non validée sur leur période (mai N à juillet N+1, décomptes compris) sont recalculées — une feuille validée
+// n'est jamais modifiée par ce recalcul —, et une pause entre deux années laisse l'app répondre aux clics.
+function anneeCgAmARecalculer(am){
+  const deb=am+'-05', fin=(am+1)+'-07';
+  return (S.contrats||[]).some(c=>c.signe&&!estContratCloture(c)&&Object.entries(c.fiches||{}).some(([k,f])=>!f.valide&&k>=deb&&k<=fin));
+}
+function recalculerCongesAuDemarrage(){
+  const annees=Object.keys(S.congesAM||{}).map(Number).filter(am=>!isNaN(am)).sort((a,b)=>a-b).filter(anneeCgAmARecalculer);
+  let iAm=0;
+  const suivante=()=>{
+    if(iAm>=annees.length) return;
+    try{ majFichesCgAm(annees[iAm++],false); }catch(e){ console.error('Recalcul congés au démarrage :',e); }
+    setTimeout(suivante,0);
+  };
+  setTimeout(suivante,200);
+}
 function migrerFiches(){
   // Corriger les dates mal stockées (bug timezone toISOString)
   S.contrats.forEach(c=>{
