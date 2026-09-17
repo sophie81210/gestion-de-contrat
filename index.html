@@ -20336,6 +20336,19 @@ function annulerAvenant(cid, avid){
     });
     fAnn.complete=false;
   });
+  // 17/09/2026 (Sophie) : rendre aux agendas ce que la signature leur avait retiré — date de fin, semaines pointées
+  // effacées, agendas supprimés. Les semaines pointées depuis ne sont jamais écrasées. Avenants signés avant cette
+  // règle : pas de copie, rien à rendre.
+  (av._agendasAvantSignature||[]).forEach(({proprietaire,ag:agAvant})=>{
+    const cible=proprietaire==='contrat'?c:(c.avenants||[]).find(a=>a.id===proprietaire);
+    if(!cible) return;
+    if(!cible.agendas) cible.agendas=[];
+    const actuel=cible.agendas.find(a=>a.id===agAvant.id);
+    if(!actuel){ cible.agendas.push(agAvant); cible.agendas.sort((x,y)=>(x.dateDebut||'').localeCompare(y.dateDebut||'')); return; }
+    if(agAvant.dateFin&&(!actuel.dateFin||actuel.dateFin<agAvant.dateFin)){ actuel.dateFin=agAvant.dateFin; actuel._semFin=agAvant._semFin; }
+    actuel.semaines=actuel.semaines||{};
+    Object.entries(agAvant.semaines||{}).forEach(([k,v])=>{ if(actuel.semaines[k]===undefined) actuel.semaines[k]=v; });
+  });
   c.avenants=c.avenants.filter(a=>a.id!==avid);
   c._regulDirty=true;
   _contratsModifies.add(c.id);
@@ -20985,6 +20998,14 @@ function signerAvenant(){
   // Passage CDD → CDI : ce champ ne vit que sur le contrat (pas par avenant), donc le reporter ici
   if(av.typeDuree==='cdi') c.typeDuree='cdi';
 
+  // 17/09/2026 (Sophie) : copie des agendas tels qu'avant la signature, pour que l'annulation de l'avenant puisse
+  // rendre ce que la signature leur retire (date de fin ramenée à la veille, semaines effacées, agendas supprimés).
+  if(!avenantGardeAgenda(av)){
+    av._agendasAvantSignature=[
+      ...(c.agendas||[]).map(ag=>({proprietaire:'contrat',ag:JSON.parse(JSON.stringify(ag))})),
+      ...c.avenants.filter(a=>a.id!==avid&&a.signe).flatMap(a=>(a.agendas||[]).map(ag=>({proprietaire:a.id,ag:JSON.parse(JSON.stringify(ag))})))
+    ];
+  }
   // Supprimer agendas obsolètes : ceux qui débutent strictement après le mois de l'avenant
   const debutMoisAvent=av.dateAvenant.slice(0,7)+'-01';
   if(!c.agendas) c.agendas=[];
