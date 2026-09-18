@@ -20725,6 +20725,14 @@ function reporterVersionDansAvenant(){
 // congés — posé au calendrier de l'assistante maternelle, ou marqué congés / décompte sur la fiche — la
 // date coupe une pose. Renvoie alors le premier et le dernier jour de congés de la pose, et la première
 // date d'effet possible après elle, pour que le message donne les vraies bornes.
+// 18/09/2026 (Sophie) : vrai si ce contrat a besoin d'un agenda et qu'aucun ne couvre cette date — l'app ne connaît
+// alors aucune semaine travaillée, et marque tous les jours « congés Ass'Mat ».
+function agendaManquantADate(c,dateStr){
+  const src=getVersionActive(c,parseDateLoc(dateStr))||c;
+  if(!contratNeedAgenda(src)) return false;
+  const ags=src.agendas||c.agendas||[];
+  return !ags.some(ag=>ag&&ag.dateDebut<=dateStr&&(ag.dateFin||'')>=dateStr);
+}
 function avenantCoupeUnePoseCg(c,dateEffetStr){
   const posesAmAv={};
   Object.values(S.congesAM||{}).forEach(am=>Object.entries(am.jours||{}).forEach(([ds,st])=>{ if(st==='pose') posesAmAv[ds]=true; }));
@@ -20736,6 +20744,8 @@ function avenantCoupeUnePoseCg(c,dateEffetStr){
   const estCongesAv=ds=>{
     if(posesAmAv[ds]) return true;
     const st=statutEffectifAv(ds);
+    // Un « congés Ass'Mat » posé faute d'agenda n'est pas une vraie pose (voir agendaManquantADate).
+    if(st==='conges-am'&&agendaManquantADate(c,ds)) return false;
     return !!st&&(/^conges|^decompte/.test(st)||st==='fractionnement');
   };
   const estNeutreAv=ds=>{
@@ -20746,16 +20756,20 @@ function avenantCoupeUnePoseCg(c,dateEffetStr){
     return d.getDay()===(srcAv.reposHebdo??c.reposHebdo??0)||isFerie(ds,c);
   };
   const decaleAv=(ds,nb)=>{ const d=parseDateLoc(ds); d.setDate(d.getDate()+nb); return dateToStr(d); };
+  // 18/09/2026 (Sophie) : un trou de jours neutres ne peut pas dépasser 4 jours consécutifs (week-end prolongé,
+  // férié). Sans cette limite, un contrat dont l'agenda n'est pas encore pointé n'a aucun jour prévu : tous ses
+  // jours étaient neutres, et l'app reliait deux poses distantes de plusieurs mois (« pose du 19/06 au 17/12 »).
+  const MAX_TROU_AV=4;
   let avant=null, ds=decaleAv(dateEffetStr,-1);
-  for(let i=0;i<21;i++,ds=decaleAv(ds,-1)){ if(estCongesAv(ds)){ avant=ds; break; } if(!estNeutreAv(ds)) break; }
+  for(let i=0;i<=MAX_TROU_AV;i++,ds=decaleAv(ds,-1)){ if(estCongesAv(ds)){ avant=ds; break; } if(!estNeutreAv(ds)) break; }
   if(!avant) return null;
   let apres=null; ds=dateEffetStr;
-  for(let i=0;i<21;i++,ds=decaleAv(ds,1)){ if(estCongesAv(ds)){ apres=ds; break; } if(!estNeutreAv(ds)) break; }
+  for(let i=0;i<=MAX_TROU_AV;i++,ds=decaleAv(ds,1)){ if(estCongesAv(ds)){ apres=ds; break; } if(!estNeutreAv(ds)) break; }
   if(!apres) return null;
-  let debut=avant; ds=decaleAv(avant,-1);
-  for(let i=0;i<90;i++,ds=decaleAv(ds,-1)){ if(estCongesAv(ds)) debut=ds; else if(!estNeutreAv(ds)) break; }
-  let fin=apres; ds=decaleAv(apres,1);
-  for(let i=0;i<90;i++,ds=decaleAv(ds,1)){ if(estCongesAv(ds)) fin=ds; else if(!estNeutreAv(ds)) break; }
+  let debut=avant, trou=0; ds=decaleAv(avant,-1);
+  for(let i=0;i<90;i++,ds=decaleAv(ds,-1)){ if(estCongesAv(ds)){ debut=ds; trou=0; } else if(estNeutreAv(ds)&&++trou<=MAX_TROU_AV){ continue; } else break; }
+  let fin=apres; trou=0; ds=decaleAv(apres,1);
+  for(let i=0;i<90;i++,ds=decaleAv(ds,1)){ if(estCongesAv(ds)){ fin=ds; trou=0; } else if(estNeutreAv(ds)&&++trou<=MAX_TROU_AV){ continue; } else break; }
   return {debut,fin,premiereDatePossible:decaleAv(fin,1)};
 }
 
@@ -20907,6 +20921,14 @@ function signerAvenant(){
   if(parseDateLoc(av.dateAvenant).getDay()===(av.reposHebdo??c.reposHebdo??0)){
     const lendemainAv=parseDateLoc(av.dateAvenant); lendemainAv.setDate(lendemainAv.getDate()+1);
     alerte('La date d’effet du '+dateISOversTexte(av.dateAvenant)+' tombe sur le jour de repos hebdomadaire.<br><br>Choisissez le premier jour d’accueil, par exemple le '+dateISOversTexte(dateToStr(lendemainAv))+'.');
+    return;
+  }
+  // 18/09/2026 (Sophie) : sans agenda couvrant la date d'effet, l'app ne connaît aucune semaine travaillée —
+  // tous les jours passent en « congés Ass'Mat » et les calculs du mois seraient faux.
+  if(agendaManquantADate(c,av.dateAvenant)){
+    const agsManq=[...((getVersionActive(c,parseDateLoc(av.dateAvenant))||c).agendas||c.agendas||[])].sort((a,b)=>(a.dateFin||'').localeCompare(b.dateFin||''));
+    const finDernier=agsManq.length?agsManq[agsManq.length-1].dateFin:null;
+    alerte('L’agenda du contrat n’est pas rempli'+(finDernier?' au-delà du '+dateISOversTexte(finDernier):'')+'.<br><br>Sans lui, l’app ne connaît aucune semaine travaillée à la date d’effet : créez et pointez l’agenda avant de signer cet avenant.');
     return;
   }
   // 11/09/2026 (Sophie) : même principe étendu à toute la période de congés (voir avenantCoupeUnePoseCg).
