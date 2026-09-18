@@ -3709,6 +3709,17 @@ function getHeuresPrevues(c, date, sourceForce, ignorerPlanning){
   const semKey = getKeyAgenda(semISO, semAnnee);
   const typeSem = getTypeSem(agenda, semKey);
 
+  // ── Accueil occasionnel (18/09/2026, Sophie) ──
+  // Aucun horaire contractuel : le prévu d'un jour est exactement ce qui a été coché sur le planning
+  // remis à l'employeur. Seul le planning ENREGISTRÉ fait foi, jamais un brouillon en cours de saisie.
+  if((source.tc||c.tc)==='occ'){
+    if(ignorerPlanning) return {debut:null, fin:null};
+    const planOcc=(c._planningSauvegarde!==undefined?c._planningSauvegarde:c.planning)||{};
+    const pdOcc=planOcc[dateStr];
+    if(pdOcc&&pdOcc.coche&&pdOcc.d&&pdOcc.f) return {debut:pdOcc.d, fin:pdOcc.f};
+    return {debut:null, fin:null};
+  }
+
   // ── Semaines types ──
   if(source.th === 'sem' && source.semTypes){
     // Planning modifié (fixe/sem généralisé, 18/07/2026) : une modification enregistrée dans
@@ -3845,6 +3856,8 @@ function getStatutOptions(statutPrevu, isPlanMinVar, c, sourceActive){
     'reprise':['decompte-conges'],
     'fractionnement':['fractionnement'],
   };
+  // 18/09/2026 (Sophie) : accueil occasionnel — la notion d'absence pour maladie de l'enfant n'existe pas.
+  if((((sourceActive||{}).tc)||tc)==='occ') opts['prevu']=opts['prevu'].filter(o=>o!=='abs-enfant');
   const labels={
     'prevu':'Prévu','abs-rem':'Absence rémunérée','abs-enfant':'Abs. maladie enfant',
     'abs-non':'Absence non rémunérée','abs-am':'Absence AM','ferie-non':'Férié non acquis',
@@ -4068,6 +4081,17 @@ function getStatutPrevu(c,j){
       const agGSP=agendasGSP.find(a=>new Date(a.dateDebut)<=new Date(j.date)&&new Date(a.dateFin)>=new Date(j.date));
       if(agGSP&&agGSP.semaines&&agGSP.semaines[agKeyGSP]==='off') return 'non-prevu';
     }
+  }
+  // 18/09/2026 (Sophie) : accueil occasionnel — le planning enregistré décide seul de ce qui est
+  // prévu, sans dépendre des heures recopiées sur la feuille. Un férié coché est un jour réellement
+  // travaillé (rien n'est payé sans travail) : il est « prévu » comme les autres, la feuille le garde
+  // simplement en jaune et ses heures reçoivent la majoration férié. Non coché, un férié reste
+  // « férié » (règle générale ci-dessous) et tout autre jour est « non prévu ».
+  const srcOccSP=getVersionActive(c,new Date(j.date));
+  if((srcOccSP.tc||c.tc)==='occ'){
+    const pdOccSP=((c._planningSauvegarde!==undefined?c._planningSauvegarde:c.planning)||{})[j.date];
+    if(pdOccSP&&pdOccSP.coche&&pdOccSP.d&&pdOccSP.f) return 'prevu';
+    if(!isFerie(j.date,c)) return 'non-prevu';
   }
   if(isFerie(j.date,c)){
     const parts=j.date.split('-');
@@ -4701,7 +4725,10 @@ function ouvrirFiche(contratId,key){
     // 14/09/2026 (Sophie) : de même le jour de repos hebdomadaire garde son beige, et il reste beige s'il est
     // aussi férié (travaillé ou non) — le repos est prioritaire sur le férié.
     const estReposHebdoBg=j.jourSemaine===((getVersionActive(c,parseDateLoc(j.date))||{}).reposHebdo??c.reposHebdo??0);
-    const bg=getStatutBg(estReposHebdoBg&&(statutActuel==='travaille'||statutActuel==='ferie')?'repos':(statutActuel==='travaille'&&isFerie(j.date,c)?'ferie':statutActuel));
+    // 18/09/2026 (Sophie) : accueil occasionnel — un férié coché au planning reste « Prévu » dans le
+    // menu, mais garde le jaune du férié pour être repéré d'un coup d'œil.
+    const estFeriePrevuOccAff=statutActuel==='prevu'&&isFerie(j.date,c)&&(((getVersionActive(c,parseDateLoc(j.date))||{}).tc||c.tc)==='occ');
+    const bg=getStatutBg(estReposHebdoBg&&(statutActuel==='travaille'||statutActuel==='ferie')?'repos':((statutActuel==='travaille'&&isFerie(j.date,c))||estFeriePrevuOccAff?'ferie':statutActuel));
     const border=statutActuel!==statutPrevu?'border-left:3px solid var(--m)':'';
     const manquant=statutPrevu==='prevu'&&!j.heureDebReel&&!j.heureFinReel&&statutActuel==='prevu';
     const inputBorder='';
@@ -5416,7 +5443,15 @@ function getInfosJourPlanning(c, dateStr){
   const estFixePlanning=src.th==='fixe';
   const estFixe52Planning=estFixePlanning&&(src.tc||c.tc)==='52';
   const estMin52Planning=src.planType==='min'&&(src.tc||c.tc)==='52';
-  const contournerAgenda=estFixe52Planning||estMin52Planning;
+  // 18/09/2026 (Sophie) : accueil occasionnel — la CCN impose la remise d'un planning, mais ce
+  // contrat n'a ni agenda, ni motif de semaine, ni mensualisation. Tous les jours y sont donc
+  // librement saisissables (aucun plancher, aucun plafond de jours ni d'heures), sauf le jour de
+  // repos hebdomadaire. Un férié n'y est jamais « chômé » (rien n'est payé sans travail) : coché,
+  // il vaut jour réellement travaillé et reçoit la majoration férié — il se coche donc comme un
+  // jour ordinaire, avec ses heures.
+  const estOccPlanning=(src.tc||c.tc)==='occ';
+  const reposHebdoIJP=src.reposHebdo||c.reposHebdo||0;
+  const contournerAgenda=estFixe52Planning||estMin52Planning||estOccPlanning;
   // Le contournement de l'agenda (fixe, min 52) ne dispense JAMAIS de la vraie limite de date de
   // début/fin du contrat — ce sont deux notions différentes (bug confirmé Sophie 23/07/2026 : le
   // planning fixe 52 partait du 1er du mois au lieu de la date de début réelle du contrat, un
@@ -5450,7 +5485,10 @@ function getInfosJourPlanning(c, dateStr){
   const semaineOff=!contournerAgenda&&typeSem==='off';
   let jourPossible=false, jMax=0, volIdx=-1, volH=0, planVarSrc=[];
   let semaineCongesAM=false; // type assigné mais ne correspond à aucun volume du contrat = semaine violette
-  if(estFixePlanning){
+  if(estOccPlanning){
+    jourPossible=d.getDay()!==reposHebdoIJP;
+    jMax=0; volIdx=-1; volH=0; // aucun plafond de jours, aucun volume d'heures
+  } else if(estFixePlanning){
     const jf=src.joursFixe&&src.joursFixe[jourIdx];
     jourPossible=!!(jf&&jf.d);
     jMax=(src.joursFixe||[]).filter(j=>j&&j.d).length||1;
@@ -5486,7 +5524,9 @@ function getInfosJourPlanning(c, dateStr){
   // Repos hebdomadaire : jour jamais possible dans aucun des volumes/config du contrat (structurel), à distinguer d'un jour
   // simplement non prévu dans le type de semaine assigné cette semaine-là
   let jamaisPossible=true;
-  if(estFixePlanning){
+  if(estOccPlanning){
+    jamaisPossible=d.getDay()===reposHebdoIJP;
+  } else if(estFixePlanning){
     jamaisPossible=!(src.joursFixe&&src.joursFixe[jourIdx]&&src.joursFixe[jourIdx].d);
   } else if(src.th==='sem'){
     jamaisPossible=!(src.semTypes||[]).some(st=>st.jours&&st.jours[jourIdx]&&st.jours[jourIdx].d);
@@ -5500,7 +5540,7 @@ function getInfosJourPlanning(c, dateStr){
   const estFerie=isFerie(dateStr, c);
   const mmddF=dateStr.slice(5);
   const feriesTravSrc=src.feriesTravailles||c.feriesTravailles||[];
-  const ferieChome=estFerie&&!feriesTravSrc.includes(mmddF);
+  const ferieChome=estFerie&&!feriesTravSrc.includes(mmddF)&&!estOccPlanning;
   // Heures prévues (fixe/sem) pour préremplir les champs — undefined si min/var (pas de notion
   // d'heures "au jour" fixe, ou jour non prévu)
   let jPrevueDeb, jPrevueFin;
@@ -8409,6 +8449,14 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
     html+=ligneG('Taux horaire net', recap.txNet+' €', true);
     html+=ligneG('Jours travaillés', recap.nbJoursTravReels+' j');
     html+=ligneG('Heures normales', recap.hBase.toFixed(2)+' h', true);
+    // 18/09/2026 (Sophie) : depuis que l'occasionnel a un planning, les heures qui le dépassent sont des
+    // heures complémentaires, et celles au-delà de 45 h dans la semaine des heures supplémentaires. Elles
+    // sont sorties des heures normales (voir le calcul du salaire) : sans ces deux lignes, le total du
+    // mois ne se retrouvait plus. Leurs majorations restent dans l'encart « Majorations ».
+    const _hCompOcc=parseFloat(recap.hComp||0), _hSupOcc=parseFloat(recap.hSup||0);
+    const _txOccR=parseFloat(recap.txNetExact||recap.txNet||0);
+    if(_hCompOcc>0) html+=ligneG('Heures complémentaires', _hCompOcc.toFixed(2)+' h — '+(_hCompOcc*_txOccR).toFixed(2)+' €', true);
+    if(_hSupOcc>0) html+=ligneG('Heures supplémentaires', _hSupOcc.toFixed(2)+' h — '+(_hSupOcc*_txOccR).toFixed(2)+' €', true);
   } else {
     // Partie haute : mensu + absences + taux
     if(!masquerBase){
@@ -8462,11 +8510,14 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
   }
   // ── Section heures complémentaires et majorées ──
-  const hasHComp=parseFloat(recap.hBaseComp||0)>0||parseFloat(recap.hMajFerie||0)>0||parseFloat(recap.hMajRepos||0)>0||parseFloat(recap.hMaj1erMai||0)>0;
+  // 18/09/2026 (Sophie) : jamais pour l'accueil occasionnel — cet encart détaille la BASE des heures en
+  // plus de la mensualisation, or l'occasionnel n'en a aucune : ses heures de repos travaillé, de férié
+  // ou de 1er mai sont déjà dans « Heures normales », elles seraient comptées deux fois à l'écran.
+  const hasHComp=!recap.isOcc&&(parseFloat(recap.hBaseComp||0)>0||parseFloat(recap.hMajFerie||0)>0||parseFloat(recap.hMajRepos||0)>0||parseFloat(recap.hMaj1erMai||0)>0);
   const hasMaj=parseFloat(recap.hComp||0)>0||parseFloat(recap.hSup||0)>0||parseFloat(recap.hSupDeplace||0)>0||parseFloat(recap.montantMajComp||0)>0||parseFloat(recap.montantMajSup||0)>0||parseFloat(recap.montantMajFerieNP||0)>0||parseFloat(recap.montantMajFeriePrevu2||0)>0||parseFloat(recap.montantMajRepos||0)>0||parseFloat(recap.montantMaj1erMai||0)>0;
   if(hasHComp||hasMaj){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:1px solid var(--mb)"></td></tr>';
-    html+='<tr><td colspan="2" style="padding:4px 4px 2px;font-weight:700;color:var(--m);font-size:12px">Heures complémentaires et majorées</td></tr>';
+    if(hasHComp) html+='<tr><td colspan="2" style="padding:4px 4px 2px;font-weight:700;color:var(--m);font-size:12px">Heures complémentaires et majorées</td></tr>';
     // 14/09/2026 (Sophie) : les heures d'un férié, d'un jour de repos ou d'un 1er mai non prévus sont payées en heures
     // complémentaires / sup (comptées dans hBaseComp, montantBaseComp) mais gardent leur propre ligne, pour les
     // repérer ; « Sur jours ouvrables » ne garde que les heures en plus des jours ordinaires. Affichage seul : les
@@ -8478,11 +8529,11 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
     // Base seule : montantBaseComp contient aussi la majoration des heures sup, déjà affichée sur sa propre ligne
     // « Majoration heures supplémentaires » (elle apparaissait deux fois).
     const _mOuvrSp=parseFloat((_hOuvrSp*_txBaseSp).toFixed(2));
-    if(_hOuvrSp>0.005) html+=ligneG('Sur jours ouvrables', _hOuvrSp.toFixed(2)+' h — '+_mOuvrSp.toFixed(2)+' €');
+    if(hasHComp&&_hOuvrSp>0.005) html+=ligneG('Sur jours ouvrables', _hOuvrSp.toFixed(2)+' h — '+_mOuvrSp.toFixed(2)+' €');
     const _hFerAff=parseFloat(recap.hMajFerie||0)+_hFerSp, _hRepAff=parseFloat(recap.hMajRepos||0)+_hRepSp, _h1MAff=parseFloat(recap.hMaj1erMai||0)+_h1MSp;
-    if(_hFerAff>0) html+=ligneG('Férié sur jour non prévu', _hFerAff.toFixed(2)+' h — '+(parseFloat(recap.montantBaseFerieNP||0)+_mFerSp).toFixed(2)+' €');
-    if(_hRepAff>0) html+=ligneG('Repos travaillé', _hRepAff.toFixed(2)+' h — '+(parseFloat(recap.montantBaseRepos||0)+_mRepSp).toFixed(2)+' €');
-    if(_h1MAff>0) html+=ligneG('1er mai travaillé', _h1MAff.toFixed(2)+' h — '+(parseFloat(recap.montantBase1erMai||0)+_m1MSp).toFixed(2)+' €');
+    if(hasHComp&&_hFerAff>0) html+=ligneG('Férié sur jour non prévu', _hFerAff.toFixed(2)+' h — '+(parseFloat(recap.montantBaseFerieNP||0)+_mFerSp).toFixed(2)+' €');
+    if(hasHComp&&_hRepAff>0) html+=ligneG('Repos travaillé', _hRepAff.toFixed(2)+' h — '+(parseFloat(recap.montantBaseRepos||0)+_mRepSp).toFixed(2)+' €');
+    if(hasHComp&&_h1MAff>0) html+=ligneG('1er mai travaillé', _h1MAff.toFixed(2)+' h — '+(parseFloat(recap.montantBase1erMai||0)+_m1MSp).toFixed(2)+' €');
   }
   if(hasMaj){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:1px solid var(--mb)"></td></tr>';
@@ -8583,7 +8634,11 @@ function buildRecapPajemploi(recap,c,regulExterne){
   const _joursCgPajemploi=(recap.indemCongeNbJours||0)+(recap.indemFractionnementNbJours||0);
   if(_joursCgPajemploi>0) html+=ligneG('Jours de congés payés', _joursCgPajemploi+' j', true);
   // Jours d'activité
-  html+=ligneG('Jours d\'activité', (recap.nbJoursTrav+_joursRegul).toFixed(1)+' j', true, '', _hasRegul&&_joursRegul>0);
+  // 18/09/2026 (Sophie) : accueil occasionnel — aucune mensualisation, donc aucun « jour moyen » à
+  // corriger : les jours d'activité déclarés sont exactement les jours réellement accueillis dans le
+  // mois. Un jour prévu au planning mais non travaillé (absence) n'est pas compté.
+  const _joursActDecl=recap.isOcc?parseFloat(recap.nbJoursTravReels||0):parseFloat(recap.nbJoursTrav||0);
+  html+=ligneG('Jours d\'activité', (_joursActDecl+_joursRegul).toFixed(1)+' j', true, '', _hasRegul&&_joursRegul>0);
   if(_hasRegul&&_joursRegul>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--tx2)">dont '+_joursRegul.toFixed(1)+' j régularisés</td></tr>';
   const _hMajE2=parseFloat(recap.hMensuMaj||0);
   const _txNetE2=parseFloat(recap.txNet||0);
@@ -13471,8 +13526,17 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       let compJour=0;
       const thActif=sourceActif.th||c.th; // utiliser sourceActif pour les avenants
       const tcActif=sourceActif.tc||c.tc;
+      // 18/09/2026 (Sophie) : l'accueil occasionnel mettait TOUTE comparaison prévu/réel à zéro —
+      // aucune heure complémentaire n'existait, tout était payé en heures de base. Depuis qu'il a un
+      // planning, les heures qui DÉPASSENT un jour prévu sont des heures complémentaires, comme pour
+      // les autres contrats. Un jour entier absent du planning, lui, reste en heures normales : faute
+      // de mensualisation, il n'est « en plus » de rien (et tout basculer en complémentaires laisserait
+      // la déclaration Pajemploi à 0 h normale, alors que ce sont les seules heures du mois).
       if(tcActif==='occ'){
-        compJour=0;
+        if(debPrev!==null&&finPrev!==null){
+          if(debReel<debPrev) compJour+=debPrev-debReel;
+          if(finReel>finPrev) compJour+=finReel-finPrev;
+        }
       } else if(thActif==='plan'&&(sourceActif.planType==='var'||sourceActif.planType==='min')){
         const semKeyJ=getSemISO(j.date);
         const hVolContrat=hPrevuParSemaine[semKeyJ]||0;
@@ -13512,7 +13576,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       } else if(debPrev!==null&&finPrev!==null&&!isAbsenceEmployeur(agendaMois,getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date)))){
         if(debReel<debPrev) compJour+=debPrev-debReel;
         if(finReel>finPrev) compJour+=finReel-finPrev;
-      } else if(tcActif!=='occ'){
+      } else {
         compJour+=finReel-debReel;
       }
       // Jours spéciaux travaillés : férié non prévu au contrat, repos, 1er mai
@@ -13520,7 +13584,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const mmddJ=j.date.slice(5);
       const feriesTravJ=sourceActif.feriesTravailles||[];
       const jourSemJ=new Date(j.date).getDay(); // 0=dim,1=lun...6=sam
-      const estFerieContrat=isFerie(j.date,c)&&statut==='travaille';
+      // 18/09/2026 (Sophie) : accueil occasionnel — un férié coché au planning porte le statut « prévu »
+      // (jamais « travaillé ») mais c'est bien un jour travaillé : même traitement que le férié sur jour
+      // prévu des autres contrats.
+      const estOccFerieR=(sourceActif.tc||c.tc)==='occ';
+      const estFerieContrat=isFerie(j.date,c)&&(statut==='travaille'||(estOccFerieR&&estStatutPrevu(statut)));
       const estPlanMinVarFerie=sourceActif.th==='plan'&&(sourceActif.planType==='min'||sourceActif.planType==='var');
       const estFeriePrevu=estFerieContrat&&(estPlanMinVarFerie
         ?!!(c.planning&&c.planning[j.date]&&c.planning[j.date].coche)
@@ -13565,7 +13633,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         // 13/09/2026 (Sophie, point 23, 46sem6jours 24/05/2021 : 11 h réelles pour 10 h prévues) : ajoutées
         // aussi au total de la semaine — hComp est recalculé plus bas à partir de hCompParSemaine seul,
         // l'heure en plus disparaissait.
-        if(hReelJourSpec>hPrevJour){
+        // 18/09/2026 (Sophie) : en accueil occasionnel, un jour férié reçoit la majoration férié et
+        // rien d'autre — jamais en plus celle des heures complémentaires.
+        if(hReelJourSpec>hPrevJour&&!estOccFerieR){
           hComp+=hReelJourSpec-hPrevJour;
           const skFP=getSemISO(j.date); hCompParSemaine[skFP]=(hCompParSemaine[skFP]||0)+(hReelJourSpec-hPrevJour);
         }
@@ -14242,17 +14312,29 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   let hBase=tcActifSalaire==='occ'?0:hMensu;
   if(tcActifSalaire==='occ'){
     const hReelTotal=Object.values(hParSemaine).reduce((t,h)=>t+h,0);
-    hBase=Math.max(0,hReelTotal-parseFloat(hSup));
+    // 18/09/2026 (Sophie) : les heures complémentaires sont retirées de la base, elles sont payées
+    // avec leur majoration juste en dessous — sans ça, depuis qu'elles existent pour l'occasionnel,
+    // leur base serait payée deux fois.
+    hBase=Math.max(0,hReelTotal-parseFloat(hSup)-hComp);
   }
   // Salaire = heures normales mensualisées + heures majorées mensualisées (taux différent)
   const txNetMajR=txBrut*(1+majSup52)*coefNetR;
   let salaireNetBrut;
   if(tcActifSalaire==='occ'){
-    // Occasionnel : salaire sur heures réelles (hBase = hReel - hSup)
-    const hBaseNormOcc=Math.min(hBase,45); // part normale ≤45h
-    const hBaseMajOcc=Math.max(0,hBase-45); // part majorée >45h
-    salaireNetBrut=hBaseNormOcc*txNet+hBaseMajOcc*txNetMajR
-      +hComp*(1+majComp)*txNetPrecis+hSup*(1+majSup)*txNetPrecis;
+    // Occasionnel : salaire sur heures réelles (hBase = hReel - hSup - hComp)
+    // 18/09/2026 (Sophie) : le seuil des heures majorées est HEBDOMADAIRE (45 h dans la semaine) et il
+    // est déjà appliqué par hSup, calculé semaine par semaine comme pour tous les contrats. Le
+    // découpage à 45 h qui se trouvait ici le refaisait sur le TOTAL DU MOIS : un occasionnel à 60 h
+    // dans le mois, sans jamais dépasser 45 h dans une semaine, voyait 15 h payées au taux majoré des
+    // heures supplémentaires. La base se paie donc entièrement au taux normal.
+    // 18/09/2026 (Sophie) : aucune majoration n'était payée en accueil occasionnel — ni férié, ni jour
+    // de repos hebdomadaire, ni 1er mai. Seule leur PART DE MAJORATION est ajoutée ici : la base de ces
+    // heures est déjà comptée dans hBase (ou dans hComp pour un jour non prévu au planning).
+    salaireNetBrut=hBase*txNet
+      +hComp*(1+majComp)*txNetPrecis+hSup*(1+majSup)*txNetPrecis
+      +(hMajFerie+hMajFeriePrevu+hFerieMajSeule)*majFeriePct*txNetPrecis
+      +(hMajRepos+hReposMajSeule)*majReposPct*txNetPrecis
+      +(hMaj1erMai+h1erMaiMajSeule)*maj1erMaiPct*txNetPrecis;
   } else {
     // hComp = base jours ouvrables (hors HS), hSup = base + majoration (payées entièrement ici)
     salaireNetBrut=hMensuNorm*txNetPrecis+hMensuMaj*txNetMajR
