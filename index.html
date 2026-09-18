@@ -3589,8 +3589,10 @@ function voirAvenant(cid,avid){
     _vaResult={...c,...dernierAv,planType:dernierAv.th==='plan'?dernierAv.planType:null,id:c.id,nom:c.nom,dateDeb:c.dateDeb,fiches:c.fiches,avenants:c.avenants};
     // 16/09/2026 (Sophie) : un avenant sans coupure garde les agendas de la version qu'il prolonge (dernier avenant
     // qui a coupé, ou contrat initial) — l'agenda en cours continue.
-    if(dernierAv.sansCoupure){
-      const avCoupeVA=[...avsEffectifs].reverse().find(a=>!a.sansCoupure)||null;
+    {
+      // _dateCoupure : dernier avenant qui change l'organisation du travail (les quotas et échanges du planning s'y
+      // réfèrent) — jamais un avenant sans coupure ni un avenant qui garde l'agenda.
+      const avCoupeVA=[...avsEffectifs].reverse().find(a=>!avenantGardeAgenda(a))||null;
       _vaResult._dateCoupure=avCoupeVA?avCoupeVA.dateAvenant:null;
     }
     if(avenantGardeAgenda(dernierAv)){
@@ -5627,7 +5629,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
     semCourante.jours.push(j);
   });
   const avenantDuMoisP=c.avenants&&c.avenants.find(av=>{
-    if(!avenantCoupant(av)) return false;
+    if(!avenantCoupePlanning(av)) return false;
     const [ay,am,ad]=av.dateAvenant.split('-').map(Number);
     return ay===annee&&(am-1)===moisIdx;
   });
@@ -6239,7 +6241,7 @@ function majPlanningJour(contratId, dateStr, champ, val, semKeyDom){
     // après) — la mise à jour en direct doit alimenter le bon. La partie avant est souvent affichée
     // en texte (jours du motif sem, sans champs d'heures) : dans ce cas on n'y touche pas, taper dans
     // un champ de la partie après ne peut de toute façon pas la changer.
-    const avSemLive=(c.avenants||[]).find(av=>avenantCoupant(av)&&av.dateAvenant.slice(0,7)===moisKeyJ);
+    const avSemLive=(c.avenants||[]).find(av=>avenantCoupePlanning(av)&&av.dateAvenant.slice(0,7)===moisKeyJ);
     const dateAvLive=avSemLive?avSemLive.dateAvenant:null;
     let minAvantLive=0, minApresLive=0, aInputAvantLive=false;
     semDiv.querySelectorAll('.pln-deb').forEach(debEl=>{
@@ -6445,7 +6447,7 @@ function enregistrerPlanningMois(contratId, moisKey){
     const fmtSem=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
     const lundiSemStr=fmtSem(lundiSem), dimSemStr=fmtSem(dimSem);
     const dateDebC=c.dateDeb;
-    const dateAvenantC=(c.avenants||[]).find(av=>avenantCoupant(av)&&av.dateAvenant>lundiSemStr&&av.dateAvenant<=dimSemStr)?.dateAvenant;
+    const dateAvenantC=(c.avenants||[]).find(av=>avenantCoupePlanning(av)&&av.dateAvenant>lundiSemStr&&av.dateAvenant<=dimSemStr)?.dateAvenant;
     const dateRuptureC=(()=>{const _dfcR=getDateFinContrat(c);return _dfcR?dateToStr(_dfcR):null;})();
     if(dateAvenantC){
       // 25/08/2026 (Sophie) : même principe que calcEnveloppeMoisVar (avenant en cours de semaine,
@@ -7157,7 +7159,7 @@ function toggleJourPlanning(contratId, dateStr, checked, semKeyDom, estFerie){
         const lundiSemJ=parseDateLoc(dateStr); lundiSemJ.setDate(lundiSemJ.getDate()-jourIdxSemJ);
         const dimSemJ=new Date(lundiSemJ); dimSemJ.setDate(lundiSemJ.getDate()+6);
         const avSemJ=(c.avenants||[]).find(av=>{
-          if(!avenantCoupant(av)) return false;
+          if(!avenantCoupePlanning(av)) return false;
           const dAvTestJ=parseDateLoc(av.dateAvenant);
           return dAvTestJ>lundiSemJ&&dAvTestJ<=dimSemJ;
         });
@@ -7517,7 +7519,7 @@ function calcEnveloppeMoisVar(c,ay,am,limDebV,limFinV){
           // laquelle il appartient, pour le mois auquel il appartient — pas de plafond partagé à
           // négocier avec l'autre mois, contrairement au cas "jours max" ci-dessous.
           const avenantSemaine3=(c.avenants||[]).find(av=>{
-            if(!avenantCoupant(av)) return false;
+            if(!avenantCoupePlanning(av)) return false;
             const dAv3=parseDateLoc(av.dateAvenant);
             return dAv3>lundiSem3&&dAv3<=dimancheSem3;
           });
@@ -7729,7 +7731,7 @@ function getPortionsEnveloppeMois(c,ay,am,minParDate){
   const finMoisPE=new Date(ay,am,0);
   const fmtPE=(y,m,j)=>y+'-'+String(m).padStart(2,'0')+'-'+String(j).padStart(2,'0');
   const debutMoisPE=fmtPE(ay,am,1), finMoisPE2=fmtPE(ay,am,finMoisPE.getDate());
-  const coupuresPE=(c.avenants||[]).filter(av=>avenantCoupant(av)&&av.dateAvenant>debutMoisPE&&av.dateAvenant<=finMoisPE2)
+  const coupuresPE=(c.avenants||[]).filter(av=>avenantCoupePlanning(av)&&av.dateAvenant>debutMoisPE&&av.dateAvenant<=finMoisPE2)
     .map(av=>av.dateAvenant).sort();
   const bornesPE=[];
   let debPE=debutMoisPE;
@@ -20883,6 +20885,9 @@ function avenantSansChangement(avant, av){
 }
 // Avenant signé qui coupe le mois (tous ceux d'avant le 16/09/2026, et ceux qui changent la structure).
 function avenantCoupant(av){ return !!(av&&av.signe&&av.dateAvenant&&!av.sansCoupure); }
+// 18/09/2026 (Sophie) : le planning ne dépend que de l'organisation du travail — un avenant qui ne change que le taux
+// ou la mensualisation coupe la feuille, mais laisse le planning et ses volumes d'un seul tenant, comme l'agenda.
+function avenantCoupePlanning(av){ return !!(av&&av.signe&&av.dateAvenant&&!avenantGardeAgenda(av)); }
 // Date du dernier avenant qui a coupé, pour une version renvoyée par getVersionActive (null = contrat initial).
 function dateCoupureVersion(v){ if(!v) return null; return v._dateCoupure!==undefined?v._dateCoupure:(v.dateAvenant||null); }
 // Prise par anticipation permise pendant au moins une partie du mois (avenant en cours de mois compris).
