@@ -20865,6 +20865,21 @@ function clauseRegul52Figee(c, dateAvStr){
 // 17/09/2026 (Sophie) : l'agenda ne dépend que de l'organisation du travail. Un avenant qui coupe le mois sans la changer
 // (taux horaire, heures mensualisées) garde l'agenda en cours (av.agendaConserve, décidé à la signature).
 function avenantGardeAgenda(av){ return !!(av&&(av.sansCoupure||av.agendaConserve)); }
+// 18/09/2026 (Sophie) : un avenant qui ne change strictement rien n'a pas lieu d'être — refusé à la signature.
+function avenantSansChangement(avant, av){
+  if(!avant||!av) return false;
+  const canonC=x=>{
+    if(x===undefined||x===null||x==='') return null;
+    if(Array.isArray(x)) return x.map(canonC);
+    if(typeof x==='object'){ const o={}; Object.keys(x).sort().forEach(k=>{ const v=canonC(x[k]); if(v!==null&&v!==false) o[k]=v; }); return Object.keys(o).length?o:null; }
+    if(typeof x==='string'&&x.trim()!==''&&!isNaN(Number(x))) return Number(x);
+    return x;
+  };
+  const champsAv=['tc','th','planType','nbSem','hMin','jMaxMin','joursMin','joursFixe','semTypes','planVar','reposHebdo',
+    'txBrut','hMensu','hMensuMaj','hMensuNorm','majComp','majSup','majRepos','majFerie','maj1erMai','feriesTravailles',
+    'cgAnticipe','dateCg','clauseRegul52','indemType','indemMontant','indemPer','repas','km','cddDateFin'];
+  return champsAv.every(k=>JSON.stringify(canonC(avant[k]))===JSON.stringify(canonC(av[k])));
+}
 // Avenant signé qui coupe le mois (tous ceux d'avant le 16/09/2026, et ceux qui changent la structure).
 function avenantCoupant(av){ return !!(av&&av.signe&&av.dateAvenant&&!av.sansCoupure); }
 // Date du dernier avenant qui a coupé, pour une version renvoyée par getVersionActive (null = contrat initial).
@@ -21041,6 +21056,10 @@ function signerAvenant(){
         :'Ce contrat de 52 semaines a été signé sans clause de régularisation : un avenant qui reste en 52 semaines ne peut pas l’ajouter.<br><br>Décochez la clause dans l’avenant et enregistrez-le avant de signer.');
       return;
     }
+  }
+  if(avenantSansChangement(versionVeilleSC,av)){
+    alerte('Cet avenant ne modifie rien par rapport au contrat en vigueur.');
+    return;
   }
   const sansCoupureSC=!avenantChangeStructure(versionVeilleSC,av);
   let infoCoupureSC='';
