@@ -6530,7 +6530,7 @@ function enregistrerPlanningMois(contratId, moisKey){
         const estMinPlanP=srcP.planType==='min';
         let volP;
         if(estMinPlanP){
-          volP={h:srcP.hMin||0,jours:srcP.joursMin||[]};
+          volP={h:srcP.hMin||0,j:srcP.jMaxMin||1,jours:srcP.joursMin||[]};
         } else {
           const agendasP=srcP.agendas||c.agendas||[];
           const agP=agendasP.find(a=>parseDateLoc(a.dateDebut)<=portion.depuis&&parseDateLoc(a.dateFin)>=portion.depuis);
@@ -6539,19 +6539,25 @@ function enregistrerPlanningMois(contratId, moisKey){
           volP=(srcP.planVar||[]).find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemP);
         }
         if(!volP||!volP.jours) return;
-        const nbJoursPossiblesP=volP.jours.filter(Boolean).length||1;
-        let volHPortionP=0, actuelPortionP=0;
+        // 18/09/2026 (Sophie) : jours GARANTIS de part et d'autre de l'avenant, plafonnés aux jours du
+        // motif présents dans la partie — même mécanisme qu'une semaine à cheval sur deux mois, et
+        // même valeur du jour (volume ÷ jours max) que le total affiché sur la tuile, le volume
+        // disponible et le plafond mensuel. Voir la note jumelle dans calcEnveloppeMoisVar.
+        const jMaxP=volP.j||1;
+        const partJourP=volP.h/jMaxP;
+        let joursPresentsP=0, actuelPortionP=0;
         for(let cur=new Date(portion.depuis);cur<=portion.jusqua;cur.setDate(cur.getDate()+1)){
           const idxP=cur.getDay()===0?6:cur.getDay()-1;
           if(!volP.jours[idxP]) continue;
           const curStrP=fmtSem(cur);
-          volHPortionP+=volP.h/nbJoursPossiblesP;
-          volHTotalSemaine+=volP.h/nbJoursPossiblesP;
+          joursPresentsP++;
           const pdP=c.planning&&c.planning[curStrP];
           if(pdP&&pdP.coche&&jourComptePlanning(c,curStrP,getInfosJourPlanning(c,curStrP))){
-            actuelPortionP+=(pdP.d&&pdP.f)?(toM(pdP.f)-toM(pdP.d))/60:volP.h/nbJoursPossiblesP;
+            actuelPortionP+=(pdP.d&&pdP.f)?(toM(pdP.f)-toM(pdP.d))/60:partJourP;
           }
         }
+        const volHPortionP=Math.min(jMaxP,joursPresentsP)*partJourP;
+        volHTotalSemaine+=volHPortionP;
         portionsDetailEnr.push({debut:fmtSem(portion.depuis),fin:fmtSem(portion.jusqua),plan:estMinPlanP?'min':'var',cote:portion.cote,cap:volHPortionP,actuel:actuelPortionP});
       });
       if(window.DEBUG_CGAM)console.log('[CGAM-enrPlanning-portionsAvenant]',getSemISO(dateStr),portionsDetailEnr);
@@ -6753,7 +6759,11 @@ function enregistrerPlanningMois(contratId, moisKey){
         const pd2=c.planning[dt];
         if(!pd2||!pd2.coche||!jourComptePlanning(c,dt,getInfosJourPlanning(c,dt))) return;
         if(pd2.d&&pd2.f) totalSemaineCeMois+=(toM(pd2.f)-toM(pd2.d))/60;
-        else totalSemaineCeMois+=volH/jMaxVol;
+        // 18/09/2026 (Sophie) : part du jour prise sur SA propre version (volume ÷ jours max), jamais
+        // sur volH/jMaxVol — sur une semaine coupée par un avenant, ce diviseur est ramené à 1 (le
+        // prorata ayant déjà été fait jour par jour) et un férié coché, qui n'a pas d'heures à lire,
+        // se voyait alors attribuer le volume de la semaine entière : refus d'enregistrement certain.
+        else { const infoJP=getInfosJourPlanning(c,dt); totalSemaineCeMois+=(infoJP.volH||0)/(infoJP.jMax||1); }
       });
     }
     let totalSemaine=0;
@@ -6765,7 +6775,9 @@ function enregistrerPlanningMois(contratId, moisKey){
       if(window.DEBUG_CGAM)console.log('[CGAM-totalSemaine-detail]',dt,'| coché:',!!(pd2&&pd2.coche),'| jourPossible:',infosDbgV.jourPossible,'| jourComptePlanning:',compteDbgV,'| statut fiche:',(()=>{const mkD=dt.slice(0,7);const jD=c.fiches&&c.fiches[mkD]&&c.fiches[mkD].jours&&c.fiches[mkD].jours.find(j=>j.date===dt);return jD?jD.statut:'(fiche/jour introuvable)';})());
       if(!pd2||!pd2.coche||!jourComptePlanning(c,dt,infosDbgV)) return;
       if(pd2.d&&pd2.f) totalSemaine+=(toM(pd2.f)-toM(pd2.d))/60;
-      else totalSemaine+=volH/jMaxVol; // férié coché (pas de champs d'heures) : compte pour volume/jMax
+      // férié coché (pas de champs d'heures) : compte pour volume ÷ jours max de SA version — voir la
+      // note jumelle au-dessus sur le diviseur ramené à 1 des semaines coupées par un avenant.
+      else totalSemaine+=(infosDbgV.volH||0)/(infosDbgV.jMax||1);
     });
     if(window.DEBUG_CGAM)console.log('[CGAM-totalSemaine]',semKeyISO,'| totalSemaine:',totalSemaine,'| volH:',volH,'| jMaxVol:',jMaxVol);
     // 06/08/2026 (Sophie) : oubliait "min" — le blocage "volume de la semaine dépassé" n'était donc
@@ -7587,8 +7599,19 @@ function calcEnveloppeMoisVar(c,ay,am,limDebV,limFinV){
               const typeSemP=agP&&agP.semaines&&agP.semaines[agKeyP];
               const volP=estMinPlanP?{h:srcP.hMin||0,j:srcP.jMaxMin||1,jours:srcP.joursMin||[]}:(srcP.planVar||[]).find((v,i)=>(v.nom||'Volume '+(i+1))===typeSemP);
               if(!volP||!volP.jours) return;
-              const nbJoursPossiblesP=volP.jours.filter(Boolean).length||1;
-              let joursPortionV=0, hPortionV=0;
+              // 18/09/2026 (Sophie) : chaque partie d'une semaine coupée par un avenant se comporte
+              // exactement comme une portion de semaine à cheval sur deux mois — jours GARANTIS
+              // (volume ÷ jours max), plafonnés au nombre de jours du motif réellement présents dans
+              // la partie ; ce qui ne rentre pas est perdu, jamais reporté sur l'autre partie.
+              // Remplace le prorata par « jours possibles » (06/08/2026), qui donnait au même jour
+              // deux valeurs différentes selon l'endroit du code : le total affiché sur la tuile, le
+              // volume disponible et le plafond mensuel comptaient volume ÷ jours max, ce contrôle-ci
+              // volume ÷ jours possibles. Un jour coché SANS champ d'heures (férié chômé, congés
+              // posés) tombait pile dans cet écart et pouvait, à lui seul, faire refuser
+              // l'enregistrement. Au passage, un jour retiré du motif (congés posés) ne rabote plus la
+              // capacité tant qu'il reste au moins autant de jours possibles que de jours garantis.
+              const jMaxP=volP.j||1;
+              let joursPortionV=0;
               for(let cur=new Date(portion.depuis); cur<=portion.jusqua; cur.setDate(cur.getDate()+1)){
                 const curStr=fmtSem3(cur);
                 const idxP=cur.getDay()===0?6:cur.getDay()-1;
@@ -7598,11 +7621,13 @@ function calcEnveloppeMoisVar(c,ay,am,limDebV,limFinV){
                 if(cur.getMonth()!==am-1||cur.getFullYear()!==ay) continue;
                 if(!dansBornesV(curStr)) continue; // portion demandée (avenant en cours de mois)
                 if(isJourCongeAM(curStr)) continue; // congés posés : rien à planifier ce jour-là
-                joursBaseV++;
-                minBaseV+=(volP.h/nbJoursPossiblesP)*60;
-                joursPortionV++; hPortionV+=volP.h/nbJoursPossiblesP;
+                joursPortionV++;
               }
-              if(window.DEBUG_CGAM)console.log('[CGAM-envMoisVar-portionAvenant]',semKeyISO3,'| portion',portion.depuis.toISOString().slice(0,10),'->',portion.jusqua.toISOString().slice(0,10),'| plan:',estMinPlanP?'min':'var','| volH:',volP.h,'| nbJoursPossibles:',nbJoursPossiblesP,'| joursComptés:',joursPortionV,'| heures:',hPortionV);
+              const joursRetenusP=Math.min(jMaxP,joursPortionV);
+              const hPortionV=joursRetenusP*(volP.h/jMaxP);
+              joursBaseV+=joursRetenusP;
+              minBaseV+=hPortionV*60;
+              if(window.DEBUG_CGAM)console.log('[CGAM-envMoisVar-portionAvenant]',semKeyISO3,'| portion',portion.depuis.toISOString().slice(0,10),'->',portion.jusqua.toISOString().slice(0,10),'| plan:',estMinPlanP?'min':'var','| volH:',volP.h,'| jMax:',jMaxP,'| joursPrésents:',joursPortionV,'| joursRetenus:',joursRetenusP,'| heures:',hPortionV);
             });
           } else {
           // Conscience de dateDeb/dateFin (correctif 21/07/2026) : jMax réduit sur le motif PROPRE à cette
