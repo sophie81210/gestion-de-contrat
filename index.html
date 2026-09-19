@@ -1218,6 +1218,14 @@ function getContratsCompresses(){
 
 async function saveToFirestoreSync(){
   if(!window.FB_USER||!window.fbSaveData) return;
+  // 19/09/2026 (Sophie) : une session employeur ne doit RIEN écrire. Elle lit le contrat directement
+  // chez l'assistante maternelle (fbLoadContratEmployeur) et ne s'en sert que pour l'affichage ; mais
+  // les écritures automatiques (figement des feuilles validées au chargement, recalculs qui marquent
+  // le contrat modifié) partaient sous l'identifiant de l'employeur, créant dans SON espace une copie
+  // complète du contrat de l'assistante maternelle — copie que rien ne relit jamais, qui survivait à
+  // la suppression du contrat comme à celle de son compte (constaté par Sophie sur la base : des
+  // documents orphelins contenant un seul contrat). Les trois fonctions d'envoi sont fermées ici.
+  if(estLectureSeuleEmployeur()) return;
   if(_contratsModifies.size===0) return {ok:true}; // rien à sauvegarder
   const contratsCompresses=getContratsCompresses();
   const contratsClean=contratsCompresses.filter(c=>_contratsModifies.has(c.id));
@@ -1235,6 +1243,7 @@ let _saveEnCours=false; // écriture Firestore en cours (fetch envoyée, répons
 const _contratsModifies=new Set(); // IDs des contrats modifiés depuis la dernière sauvegarde
 async function _flushSaveFirestore(){
   if(!window.FB_USER||!window.fbSaveData) return;
+  if(estLectureSeuleEmployeur()) return; // voir la note de saveToFirestoreSync
   _saveEnCours=true;
   let idsEnvoyesSave=[];
   try{
@@ -1274,6 +1283,7 @@ function enregistrerContrats(ids, immediat){
 }
 async function saveToFirestore(){
   if(!window.FB_USER||!window.fbSaveData) return;
+  if(estLectureSeuleEmployeur()) return; // voir la note de saveToFirestoreSync
   // Sauvegarder immédiatement dans localStorage
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
   // Debounce : attendre 2s d'inactivité avant d'écrire sur Firestore
@@ -1336,7 +1346,9 @@ else S.params=JSON.parse(localStorage.getItem('cam_params')||'null')||JSON.parse
      migrerFiches();
      // 13/09/2026 (Sophie) : figer une fois pour toutes les feuilles validées qui n'ont pas encore leurs
      // copies, avec les chiffres qu'elles affichent aujourd'hui (voir figerFichesValidees).
-     try{ if(figerFichesValidees()>0) setTimeout(()=>{ try{ saveToFirestore(); }catch(e){} },0); }catch(e){ console.error('Figer les feuilles validées :',e); }
+     try{ if(!estLectureSeuleEmployeur()&&figerFichesValidees()>0) setTimeout(()=>{ try{ saveToFirestore(); }catch(e){} },0); }catch(e){ console.error('Figer les feuilles validées :',e); }
+     // 19/09/2026 (Sophie) : retrait des accès employeurs arrivés à échéance (voir dateFinAccesEmployeur).
+     try{ purgerAccesEmployeursPerimes(); }catch(e){ console.error('Purge des accès employeurs :',e); }
       localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
       localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM||{}));
       initToutesLesFiches();
@@ -1769,17 +1781,55 @@ function nettoyerFichesPostCloture(c){
   }
 }
 
+// 19/09/2026 (Sophie) : date à laquelle l'accès employeur doit disparaître — sept mois après la
+// clôture du contrat, en partant du plus TARDIF entre la fin du contrat (rupture confirmée ou terme
+// du CDD) et la fin du dernier mois validé : le solde de tout compte n'est connu qu'une fois la
+// dernière feuille validée, et le délai de contestation de six mois court à partir de là. null tant
+// que le contrat n'a pas de fin : un contrat en cours garde son accès sans limite.
+function dateFinAccesEmployeur(c){
+  const dFinAcc=getDateFinContrat(c);
+  if(!dFinAcc) return null;
+  let borneAcc=dFinAcc;
+  const clesValideesAcc=Object.keys(c.fiches||{}).filter(k=>c.fiches[k]&&c.fiches[k].valide).sort();
+  if(clesValideesAcc.length){
+    const [ayAcc,amAcc]=clesValideesAcc[clesValideesAcc.length-1].split('-').map(Number);
+    const finDerniereValideeAcc=new Date(ayAcc,amAcc,0); // dernier jour du mois validé
+    if(finDerniereValideeAcc>borneAcc) borneAcc=finDerniereValideeAcc;
+  }
+  const echeanceAcc=new Date(borneAcc);
+  echeanceAcc.setMonth(echeanceAcc.getMonth()+7);
+  return echeanceAcc;
+}
+// Retire les accès arrivés à échéance : l'autorisation est supprimée de la base (l'email redevient
+// libre pour un autre contrat) et l'employeur qui reviendrait tombe sur l'écran « Accès non
+// disponible », d'où il peut supprimer son compte lui-même.
+function purgerAccesEmployeursPerimes(){
+  if(estLectureSeuleEmployeur()) return 0;
+  const idsPurgesAcc=[];
+  (S.contrats||[]).forEach(c=>{
+    if(!c.emailEmployeurAutorise) return;
+    const echAcc=dateFinAccesEmployeur(c);
+    if(!echAcc||new Date()<echAcc) return;
+    if(window.fbDeleteAccesEmployeur){
+      window.fbDeleteAccesEmployeur(c.emailEmployeurAutorise).catch(e=>console.error('Purge acces employeur:',e));
+    }
+    c.emailEmployeurAutorise=null;
+    idsPurgesAcc.push(c.id);
+  });
+  if(idsPurgesAcc.length&&typeof enregistrerContrats==='function') enregistrerContrats(idsPurgesAcc);
+  return idsPurgesAcc.length;
+}
+
 function archiverContrat(c){
   // Le nettoyage des fiches/agendas a déjà eu lieu dès la clôture (validation de la dernière fiche)
   nettoyerFichesPostCloture(c);
-  // 28/07/2026 (correctif Sophie, précision explicite : à l'archivage, jamais à la rupture — le
-  // contrat rompu reste actif un temps, l'employeur peut encore avoir besoin d'y accéder) : nettoyer
-  // l'accès employeur associé, pour la même raison qu'à la suppression — sinon l'email reste
-  // bloqué indéfiniment sur un contrat désormais archivé.
-  if(c.emailEmployeurAutorise&&window.fbDeleteAccesEmployeur){
-    window.fbDeleteAccesEmployeur(c.emailEmployeurAutorise).catch(e=>console.error('Delete acces employeur (archivage):',e));
-    c.emailEmployeurAutorise=null;
-  }
+  // 19/09/2026 (Sophie) : l'accès employeur n'est PLUS retiré ici. Il survit à l'archivage et tombe
+  // sept mois après la clôture du contrat, quoi qu'il arrive — l'employeur dispose de six mois pour
+  // contester le solde de tout compte, ranger le contrat dans les archives ne doit pas le priver de
+  // cette possibilité. Retrait automatique par purgerAccesEmployeursPerimes, à chaque ouverture de
+  // l'app. (Remplace la règle du 28/07/2026, qui coupait l'accès dès l'archivage ; son motif —
+  // ne pas laisser un email bloqué indéfiniment sur un contrat archivé — reste couvert, puisque
+  // l'échéance des sept mois libère l'email de toute façon.)
   // Marquer archivé
   c.archive=true;
   // Retirer de la pointeuse
