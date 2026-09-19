@@ -2494,8 +2494,46 @@ function modifierKmDirect(contratId, val, cibleId){
                       // travaillé. Ainsi valorisées, les deux portions se partagent exactement le
                       // volume de la semaine. Début de contrat et rupture gardent, eux, "au plus
                       // favorable" : une seule portion existe, aucun double emploi possible.
-                      const diviseurSemHP=limiteEstAvenant?nbJoursPossiblesVol:jMaxSemHP;
-                      const joursRetenusHP=limiteEstAvenant?joursSousContratHP:Math.min(jMaxSemHP,joursSousContratHP);
+                      // 19/09/2026 (Sophie) : une seule regle pour tous les calculs, avenant compris —
+                      // jours GARANTIS, plafonnes aux jours de la portion. L'exception du 07/09 (semaine
+                      // d'avenant valorisee en jours possibles) faisait diverger le salaire du de ce que le
+                      // planning autorise a saisir : Enael octobre 2021, 149h27 saisissables pour 147h41
+                      // dues. Chaque portion a son propre volume hebdomadaire, celui de SA version du
+                      // contrat ; ce que l'une prend ne retire rien a l'autre (meme principe que la
+                      // coordination entre mois, sautee elle aussi sur une semaine d'avenant).
+                      const diviseurSemHP=jMaxSemHP;
+                      // 19/09/2026 (Sophie) : partie AVANT l'avenant — elle n'a droit qu'aux jours
+                      // qu'elle a réellement cochés, ce qu'elle laisse pouvant être placé après ; plancher
+                      // égal à ce que la partie d'après ne peut pas absorber. Même règle que l'enveloppe du
+                      // planning et que le contrôle à l'enregistrement (note détaillée dans
+                      // calcEnveloppeMoisVar). La partie d'après, elle, garde sa part structurelle.
+                      const estPortionAvantHP=limiteEstAvenant&&dateFinStr<limiteDebut;
+                      let joursRetenusHP=Math.min(jMaxSemHP,joursSousContratHP);
+                      if(estPortionAvantHP){
+                        const dimSemHP=new Date(lundiSem); dimSemHP.setDate(lundiSem.getDate()+6);
+                        const dAvHP=parseDateLoc(limiteDebut);
+                        const srcApHP=getVersionActive(c,dAvHP);
+                        const agApHP=(srcApHP.agendas||c.agendas||[]).find(a=>parseDateLoc(a.dateDebut)<=dAvHP&&parseDateLoc(a.dateFin)>=dAvHP);
+                        const typeApHP=agApHP&&agApHP.semaines&&agApHP.semaines[getKeyAgenda(getSemISO(limiteDebut),getSemAnnee(limiteDebut))];
+                        const volApHP=srcApHP.planType==='min'?{jours:srcApHP.joursMin||[]}:(srcApHP.planVar||[]).find((v,i)=>(v.nom||'Volume '+(i+1))===typeApHP);
+                        let joursPossiblesApresHP=0;
+                        if(volApHP&&volApHP.jours){
+                          for(let curApHP=new Date(dAvHP); curApHP<=dimSemHP; curApHP.setDate(curApHP.getDate()+1)){
+                            const idxApHP=curApHP.getDay()===0?6:curApHP.getDay()-1;
+                            if(volApHP.jours[idxApHP]) joursPossiblesApresHP++;
+                          }
+                        }
+                        let joursCochesAvHP=0;
+                        for(let dAvJ=0;dAvJ<7;dAvJ++){
+                          const jdAvHP=new Date(lundiSem); jdAvHP.setDate(lundiSem.getDate()+dAvJ);
+                          const jdAvStrHP=fmtSem(jdAvHP);
+                          if(!joursPattern[dAvJ]||jdAvStrHP>=limiteDebut) continue;
+                          const pdAvHP=c.planning&&c.planning[jdAvStrHP];
+                          if(pdAvHP&&pdAvHP.coche) joursCochesAvHP++;
+                        }
+                        const plancherAvHP=Math.max(0,jMaxSemHP-joursPossiblesApresHP);
+                        joursRetenusHP=Math.min(joursRetenusHP,Math.max(plancherAvHP,joursCochesAvHP));
+                      }
                       const volDispoSemHP=joursRetenusHP*(volH/(diviseurSemHP||1));
                       hPrevu+=Math.max(0,volDispoSemHP-hCongesVol-hAbsVol);
                     } else {
@@ -6572,6 +6610,21 @@ function enregistrerPlanningMois(contratId, moisKey){
       // part). Toujours vérifié, même "modifications autorisées" coché : ce n'est pas une
       // redistribution normale entre semaines du mois, mais un dépassement d'une frontière
       // contractuelle (avant/après avenant).
+      // Ce que la partie d'APRÈS peut absorber : ses propres jours possibles. Sert de plancher à la
+      // partie d'avant (voir la note dans calcEnveloppeMoisVar).
+      const joursPossiblesApresEnr=(()=>{
+        const srcApE=getVersionActive(c,dAvenantObj);
+        const agApE=(srcApE.agendas||c.agendas||[]).find(a=>parseDateLoc(a.dateDebut)<=dAvenantObj&&parseDateLoc(a.dateFin)>=dAvenantObj);
+        const typeApE=agApE&&agApE.semaines&&agApE.semaines[getKeyAgenda(getSemISO(fmtSem(dAvenantObj)),getSemAnnee(fmtSem(dAvenantObj)))];
+        const volApE=srcApE.planType==='min'?{jours:srcApE.joursMin||[]}:(srcApE.planVar||[]).find((v,i)=>(v.nom||'Volume '+(i+1))===typeApE);
+        if(!volApE||!volApE.jours) return 0;
+        let nApE=0;
+        for(let curApE=new Date(dAvenantObj); curApE<=dimSem; curApE.setDate(curApE.getDate()+1)){
+          const idxApE=curApE.getDay()===0?6:curApE.getDay()-1;
+          if(volApE.jours[idxApE]) nApE++;
+        }
+        return nApE;
+      })();
       const portionsDetailEnr=[];
       portionsEnr.forEach(portion=>{
         if(portion.depuis>portion.jusqua) return;
@@ -6593,20 +6646,29 @@ function enregistrerPlanningMois(contratId, moisKey){
         // motif présents dans la partie — même mécanisme qu'une semaine à cheval sur deux mois, et
         // même valeur du jour (volume ÷ jours max) que le total affiché sur la tuile, le volume
         // disponible et le plafond mensuel. Voir la note jumelle dans calcEnveloppeMoisVar.
+        // 19/09/2026 (Sophie) : même règle asymétrique que l'enveloppe — la partie d'AVANT l'avenant
+        // n'a droit qu'à ce qu'elle a réellement coché (ce qu'elle laisse pouvait être placé après),
+        // avec pour plancher ce que la partie d'après ne peut pas absorber. Voir la note détaillée
+        // dans calcEnveloppeMoisVar.
         const jMaxP=volP.j||1;
         const partJourP=volP.h/jMaxP;
-        let joursPresentsP=0, actuelPortionP=0;
+        let joursPresentsP=0, joursCochesPortP=0, actuelPortionP=0;
         for(let cur=new Date(portion.depuis);cur<=portion.jusqua;cur.setDate(cur.getDate()+1)){
           const idxP=cur.getDay()===0?6:cur.getDay()-1;
           if(!volP.jours[idxP]) continue;
           const curStrP=fmtSem(cur);
           joursPresentsP++;
           const pdP=c.planning&&c.planning[curStrP];
+          if(pdP&&pdP.coche) joursCochesPortP++;
           if(pdP&&pdP.coche&&jourComptePlanning(c,curStrP,getInfosJourPlanning(c,curStrP))){
             actuelPortionP+=(pdP.d&&pdP.f)?(toM(pdP.f)-toM(pdP.d))/60:partJourP;
           }
         }
-        const volHPortionP=Math.min(jMaxP,joursPresentsP)*partJourP;
+        const structPortP=Math.min(jMaxP,joursPresentsP);
+        const joursDonnesPortP=portion.cote==='avant'
+          ?Math.min(structPortP,Math.max(Math.max(0,jMaxP-joursPossiblesApresEnr),joursCochesPortP))
+          :structPortP;
+        const volHPortionP=joursDonnesPortP*partJourP;
         volHTotalSemaine+=volHPortionP;
         portionsDetailEnr.push({debut:fmtSem(portion.depuis),fin:fmtSem(portion.jusqua),plan:estMinPlanP?'min':'var',cote:portion.cote,cap:volHPortionP,actuel:actuelPortionP});
       });
@@ -7638,8 +7700,23 @@ function calcEnveloppeMoisVar(c,ay,am,limDebV,limFinV){
             const dAvenant3=parseDateLoc(avenantSemaine3.dateAvenant);
             const veilleAvenant3=new Date(dAvenant3); veilleAvenant3.setDate(dAvenant3.getDate()-1);
             if(window.DEBUG_CGAM)console.log('[CGAM-envMoisVar-semaineAvenant]',semKeyISO3,'| lundi->dimanche:',fmtSem3(lundiSem3),'->',fmtSem3(dimancheSem3),'| dateAvenant:',avenantSemaine3.dateAvenant);
-            [{depuis:lundiSem3, jusqua:veilleAvenant3, version:getVersionActive(c,lundiSem3)},
-             {depuis:dAvenant3, jusqua:dimancheSem3, version:getVersionActive(c,dAvenant3)}]
+            // Jours du motif de la partie d'APRÈS réellement présents dans sa portion : c'est tout ce
+            // qu'elle peut absorber, donc le plancher de la partie d'avant (voir la note plus bas).
+            const joursPossiblesApresAv=(()=>{
+              const srcAp=getVersionActive(c,dAvenant3);
+              const agAp=(srcAp.agendas||c.agendas||[]).find(a=>parseDateLoc(a.dateDebut)<=dAvenant3&&parseDateLoc(a.dateFin)>=dAvenant3);
+              const typeAp=agAp&&agAp.semaines&&agAp.semaines[getKeyAgenda(getSemISO(fmtSem3(dAvenant3)),getSemAnnee(fmtSem3(dAvenant3)))];
+              const volAp=srcAp.planType==='min'?{jours:srcAp.joursMin||[]}:(srcAp.planVar||[]).find((v,i)=>(v.nom||'Volume '+(i+1))===typeAp);
+              if(!volAp||!volAp.jours) return 0;
+              let nAp=0;
+              for(let curAp=new Date(dAvenant3); curAp<=dimancheSem3; curAp.setDate(curAp.getDate()+1)){
+                const idxAp=curAp.getDay()===0?6:curAp.getDay()-1;
+                if(volAp.jours[idxAp]) nAp++;
+              }
+              return nAp;
+            })();
+            [{depuis:lundiSem3, jusqua:veilleAvenant3, version:getVersionActive(c,lundiSem3), avant:true},
+             {depuis:dAvenant3, jusqua:dimancheSem3, version:getVersionActive(c,dAvenant3), avant:false}]
             .forEach(portion=>{
               const srcP=portion.version;
               const estMinPlanP=srcP.planType==='min';
@@ -7660,8 +7737,21 @@ function calcEnveloppeMoisVar(c,ay,am,limDebV,limFinV){
               // posés) tombait pile dans cet écart et pouvait, à lui seul, faire refuser
               // l'enregistrement. Au passage, un jour retiré du motif (congés posés) ne rabote plus la
               // capacité tant qu'il reste au moins autant de jours possibles que de jours garantis.
+              // 19/09/2026 (Sophie) : règle asymétrique des deux parties d'une semaine coupée par un
+              // avenant, la même partout (enveloppe, contrôle d'enregistrement, salaire dû).
+              //  • partie APRÈS (fin de semaine) : sa part structurelle, autant de jours garantis qu'il
+              //    en tient dans la portion.
+              //  • partie AVANT (début de semaine) : seulement ce qu'elle a réellement coché, car ce
+              //    qu'elle n'a pas pris pouvait être placé après l'avenant — avec un plancher, puisque la
+              //    partie d'après ne peut absorber que ses propres jours possibles.
+              // jours donnés (avant) = min(part structurelle, max(plancher, jours cochés)),
+              // plancher = jours garantis − jours possibles de la partie d'après.
+              // Exemple Sophie : 3 jours garantis, avenant le mercredi, lundi et mardi non cochés —
+              // plancher 3−3 = 0, rien de dû à la partie avant. Enaël octobre 2021 : 4 jours garantis,
+              // avenant le vendredi, plancher 4−1 = 3 — avec ses 4 jours cochés elle garde ses 22 h,
+              // avec 3 cochés elle tombe à 3 jours, jamais en dessous de 3.
               const jMaxP=volP.j||1;
-              let joursPortionV=0;
+              let joursPortionV=0, joursCochesP=0;
               for(let cur=new Date(portion.depuis); cur<=portion.jusqua; cur.setDate(cur.getDate()+1)){
                 const curStr=fmtSem3(cur);
                 const idxP=cur.getDay()===0?6:cur.getDay()-1;
@@ -7672,8 +7762,14 @@ function calcEnveloppeMoisVar(c,ay,am,limDebV,limFinV){
                 if(!dansBornesV(curStr)) continue; // portion demandée (avenant en cours de mois)
                 if(isJourCongeAM(curStr)) continue; // congés posés : rien à planifier ce jour-là
                 joursPortionV++;
+                const pdCoP=c.planning&&c.planning[curStr];
+                if(pdCoP&&pdCoP.coche) joursCochesP++;
               }
-              const joursRetenusP=Math.min(jMaxP,joursPortionV);
+              const structPortionP=Math.min(jMaxP,joursPortionV);
+              const plancherPortionP=Math.max(0,jMaxP-joursPossiblesApresAv);
+              const joursRetenusP=portion.avant
+                ?Math.min(structPortionP,Math.max(plancherPortionP,joursCochesP))
+                :structPortionP;
               const hPortionV=joursRetenusP*(volP.h/jMaxP);
               joursBaseV+=joursRetenusP;
               minBaseV+=hPortionV*60;
