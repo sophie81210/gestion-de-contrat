@@ -3893,6 +3893,24 @@ function infoArretSemaineMinVar(c,dateStr){
   }
   return {coche:cocheA,arrets:arretsA,jMax:jMaxA,volH:volHA};
 }
+// 21/09/2026 (Sophie) : le jour est-il un jour possible du contrat (un de ses motifs), quel que soit l'agenda ?
+function jourPossibleContratCg(c,dateStr){
+  const [yP,mP,dP]=dateStr.split('-').map(Number);
+  const dtP=new Date(yP,mP-1,dP);
+  const vP=getVersionActive(c,dtP)||c;
+  const iP=(dtP.getDay()+6)%7;
+  if(vP.th==='fixe'&&vP.joursFixe) return !!(vP.joursFixe[iP]&&vP.joursFixe[iP].d);
+  if(vP.th==='sem'&&vP.semTypes) return vP.semTypes.some(st=>st.jours&&st.jours[iP]&&st.jours[iP].d);
+  if(vP.planType==='min') return !!((vP.joursMin||c.joursMin||[])[iP]);
+  if(vP.planType==='var') return (vP.planVar||c.planVar||[]).some(v=>v.jours&&v.jours[iP]);
+  return false;
+}
+// 21/09/2026 (Sophie) : semaine d'absence de l'employeur en arrêt — elle compte dans l'acquisition (l'utilisateur
+// déplace la semaine d'absence) : 0,8 par jour d'arrêt sur un jour possible, au plus 0,8 semaine.
+function contribArretSemaineOffCg(c,joursSub,jMax){
+  const nA=(joursSub||[]).filter(j=>j.statut==='arret'&&jourPossibleContratCg(c,j.date)).length;
+  return jMax>0?Math.min(nA,jMax)*0.8/jMax:0;
+}
 // Nombre de jours d'arrêt d'un morceau de semaine qui comptent pour l'acquisition (avant plafond aux jours garantis).
 function arretsComptesSemaineCg(c,joursSub,pattern){
   const arretsC=(joursSub||[]).filter(j=>j.statut==='arret');
@@ -10314,7 +10332,14 @@ function calcCongesContrat(c, dateRefOverride){
             // 27/08/2026 (Sophie) : le test "off" seul est retiré — joursActifs (ci-dessus) reflète déjà
             // correctement une semaine off (vide si aucun jour travaillé, réduit à ces jours sinon), donc
             // le test générique "aucun jour actif et aucun volume" suffit désormais à couvrir les deux cas.
-            if(joursActifs.length===0&&!volAgendaPV) return {contrib:0,contribArret:0};
+            if(joursActifs.length===0&&!volAgendaPV){
+              // 21/09/2026 (Sophie) : semaine d'absence de l'employeur en arrêt — comptée (au plus 0,8 semaine).
+              if(typeSemPV==='off'){
+                const jMaxOffPV=Math.max(0,...(sourcePV.planVar||c.planVar||[]).map(v=>v.j||0))||joursMax;
+                return {contrib:0,contribArret:contribArretSemaineOffCg(c,joursSub,jMaxOffPV)};
+              }
+              return {contrib:0,contribArret:0};
+            }
             let jMaxSem=joursMax;
             let joursPatternPV=null;
             if(volAgendaPV){
@@ -10441,7 +10466,9 @@ function calcCongesContrat(c, dateRefOverride){
             // semaine-là, au lieu du seul jour travaillé (via joursTravaillePV, compté séparément).
             // 21/09/2026 (Sophie, ligne 55) : un arrêt ne supprime plus le plancher. Les jours d'arrêt qui comptent
             // (voir infoArretSemaineMinVar) prennent la place de jours garantis, jamais au-delà.
-            const arretCptPV=typeSemPV==='off'?0:Math.min(arretsComptesSemaineCg(c,joursSub,joursPatternPV),Math.max(0,jMaxSemAjustePV-joursNormauxPV-joursConges16PV));
+            const arretCptPV=typeSemPV==='off'
+              ?Math.min(joursSub.filter(jj=>jj.statut==='arret'&&jourPossibleContratCg(c,jj.date)).length,Math.max(0,jMaxSem-joursNormauxPV-joursConges16PV))
+              :Math.min(arretsComptesSemaineCg(c,joursSub,joursPatternPV),Math.max(0,jMaxSemAjustePV-joursNormauxPV-joursConges16PV));
             let compteEffectifPV=(joursConges16PV===0&&jMaxSemAjustePV>0&&typeSemPV!=='off')?Math.max(jMaxSemAjustePV-arretCptPV,joursNormauxPV):joursNormauxPV;
             // 12/09/2026 (Sophie) : plan var — « la semaine vaut 1 − absence » (règle Sophie). Le plancher
             // ci-dessus retirait bien les jours d'absence non payée des jours POSSIBLES, mais tant qu'il en
@@ -10526,7 +10553,7 @@ function calcCongesContrat(c, dateRefOverride){
                 return ['travaille','reprise'].includes(stJJ)||jj.heureDebReel;
               });
               if(window.DEBUG_CGAM)console.log('[CGAM-offMin]',c.nom||c.prenom||c.id,'|',joursSub[0]?.date,'-',joursSub[joursSub.length-1]?.date,'| agMinOff trouvé:',!!agMinOff,'| agKeyMinOff:',agKeyMinOff,'| typeSemMinOff:',typeSemMinOff,'| estSemaineOffMin:',estSemaineOffMin,'| aJourTravailleMinOff:',aJourTravailleMinOff,'| statuts:',joursSub.map(jj=>jj.date+':'+(jj.statut||getStatutPrevu(c,jj))).join(', '));
-              if(estSemaineOffMin&&!aJourTravailleMinOff) return {contrib:0,contribArret:0};
+              if(estSemaineOffMin&&!aJourTravailleMinOff) return {contrib:0,contribArret:contribArretSemaineOffCg(c,joursSub,sourceSem.jMaxMin||joursMax)};
             }
             let joursMaxSem=joursMax;
             let typeSemActif46=null;
@@ -10841,15 +10868,11 @@ function calcCongesContrat(c, dateRefOverride){
             // 21/09/2026 (Sophie) : fixe et semaines types — une semaine en arrêt ne compte jamais plus de 0,8 semaine.
             // Seuls les jours d'arrêt tombant sur un jour du contrat comptent (un arrêt saisi du lundi au dimanche
             // comptait 7 × 0,8), dans la limite des jours de la semaine restés sans présence ni congé.
-            const arretsContratFSM=joursSub.filter(jj=>{
-              if(jj.statut!=='arret') return false;
-              const [ya,ma,da]=jj.date.split('-').map(Number);
-              const hCa=getHeuresPrevues(c,new Date(ya,ma-1,da),null,true);
-              return !!(hCa&&hCa.debut&&hCa.fin);
-            }).length;
+            const arretsContratFSM=joursSub.filter(jj=>jj.statut==='arret'&&jourPossibleContratCg(c,jj.date)).length;
             const arretCptFSM=!estMinArretFSM?Math.min(arretsContratFSM,Math.max(0,joursMaxSem-joursNormaux-joursConges16))
               :(arretCptMinG!==null?arretCptMinG
-                :(estSemaineOffMin?0:Math.min(arretsComptesSemaineCg(c,joursSub,sourceSem.joursMin||c.joursMin),Math.max(0,joursMaxSem-joursNormaux-joursConges16))));
+                :(estSemaineOffMin?Math.min(joursSub.filter(jj=>jj.statut==='arret'&&jourPossibleContratCg(c,jj.date)).length,Math.max(0,joursMaxSem-joursNormaux-joursConges16))
+                  :Math.min(arretsComptesSemaineCg(c,joursSub,sourceSem.joursMin||c.joursMin),Math.max(0,joursMaxSem-joursNormaux-joursConges16))));
             const contributionArret=arretCptFSM*(0.8)/joursMaxSem;
             const prorata=penaliteModifFSM>0
               ?Math.max(0,Math.min(1,contributionNormale+contributionConges)-penaliteModifFSM/joursMaxSem)
