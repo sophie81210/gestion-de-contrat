@@ -5802,7 +5802,9 @@ function getInfosJourPlanning(c, dateStr){
   } else if(src.th==='sem'&&volIdx>=0&&src.semTypes&&src.semTypes[volIdx]&&src.semTypes[volIdx].jours&&src.semTypes[volIdx].jours[jourIdx]){
     jPrevueDeb=src.semTypes[volIdx].jours[jourIdx].d; jPrevueFin=src.semTypes[volIdx].jours[jourIdx].f;
   }
-  return {jourPossible, jMax, volIdx, volH, typeSem, aucunType, horsContrat, agendaManquant, semaineOff, semaineCongesAM, jamaisPossible, couleur, estFerie, ferieChome, jPrevueDeb, jPrevueFin, estReposHebdo:d.getDay()===(src.reposHebdo||c.reposHebdo||0)};
+  // 21/09/2026 (Sophie) : agenda existant mais semaine non pointée (agendaManquant ne couvre que l'absence d'agenda).
+  const agendaNonPointe=!contournerAgenda&&!horsContrat&&!!agenda&&!typeSem&&!!c.dateDeb&&dateStr>=c.dateDeb;
+  return {jourPossible, jMax, volIdx, volH, typeSem, aucunType, horsContrat, agendaManquant, agendaNonPointe, semaineOff, semaineCongesAM, jamaisPossible, couleur, estFerie, ferieChome, jPrevueDeb, jPrevueFin, estReposHebdo:d.getDay()===(src.reposHebdo||c.reposHebdo||0)};
 }
 
 // 03/08/2026 (option 1 retenue par Sophie) : une semaine à cheval sur deux mois calendaires, ou sur
@@ -6699,7 +6701,19 @@ function semainesSansAgendaMois(c, moisKey){
   for(let dS=1; dS<=nbJ; dS++){
     const dsS=yS+'-'+String(mS).padStart(2,'0')+'-'+String(dS).padStart(2,'0');
     let infS=null; try{ infS=getInfosJourPlanning(c,dsS); }catch(e){ infS=null; }
-    if(!infS||!infS.agendaManquant) continue;
+    if(!infS||!(infS.agendaManquant||infS.agendaNonPointe)) continue;
+    if(isJourCongeAM(dsS)) continue; // semaine de congés de l'Ass'Mat : rien à pointer
+    // seuls les jours où l'accueil est possible au contrat comptent (un week-end hors du rythme ne demande rien)
+    {
+      const srcS=getVersionActive(c,new Date(yS,mS-1,dS));
+      const iS=(new Date(yS,mS-1,dS).getDay()+6)%7;
+      let possS=true;
+      if(srcS.th==='fixe'&&srcS.joursFixe) possS=!!(srcS.joursFixe[iS]&&srcS.joursFixe[iS].d);
+      else if(srcS.th==='sem'&&srcS.semTypes) possS=srcS.semTypes.some(st=>st.jours&&st.jours[iS]&&st.jours[iS].d);
+      else if(srcS.planType==='min') possS=!!((srcS.joursMin||c.joursMin||[])[iS]);
+      else if(srcS.planType==='var') possS=(srcS.planVar||c.planVar||[]).some(v=>v.jours&&v.jours[iS]);
+      if(!possS) continue;
+    }
     const dtS=new Date(yS,mS-1,dS); dtS.setDate(dtS.getDate()-(dtS.getDay()||7)+1);
     const lunS=dtS.toLocaleDateString('fr-FR');
     if(!lundis.includes(lunS)) lundis.push(lunS);
