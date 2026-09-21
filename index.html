@@ -2539,7 +2539,41 @@ function modifierKmDirect(contratId, val, cibleId){
                     } else {
                       // Semaine à cheval sur deux mois calendaires (sans lien avec le contrat) ?
                       const moisLundiSem=lundiSem.getMonth(), moisDimSem=dimSem.getMonth();
-                      if(moisLundiSem!==moisDimSem||lundiSem.getFullYear()!==dimSem.getFullYear()){
+                      const semChevalMoisHP=moisLundiSem!==moisDimSem||lundiSem.getFullYear()!==dimSem.getFullYear();
+                      // 21/09/2026 (Sophie, plan de tests ligne 67, Enaël janvier 2022 et 2023) : semaine coupée en
+                      // son milieu par la PLAGE demandée elle-même — la semaine de l'anniversaire du contrat, calculée
+                      // une fois pour la fin de l'année écoulée et une fois pour le début de la suivante. Elle était
+                      // comptée entière des deux côtés. Règle de la semaine à cheval (décision Sophie) : le début de
+                      // semaine reçoit ce qu'il a réellement prévu, plafonné à sa part et jamais sous le plancher
+                      // (ce que la fin de semaine ne peut pas absorber) ; la fin de semaine reçoit le reste. Une
+                      // coupure au 1er du mois ou au dernier jour relève, elle, de la semaine à cheval sur deux mois
+                      // juste en dessous, inchangée.
+                      const dernierJourMoisHP=ds=>{const [yD,mD]=ds.split('-').map(Number);return ds===yD+'-'+String(mD).padStart(2,'0')+'-'+String(new Date(yD,mD,0).getDate()).padStart(2,'0');};
+                      let coupurePlageHP=null;
+                      if(dateDebStr>lundiSemStr&&dateDebStr<=dimSemStr&&dateDebStr.slice(8)!=='01') coupurePlageHP=dateDebStr;
+                      else if(dateFinStr>=lundiSemStr&&dateFinStr<dimSemStr&&!dernierJourMoisHP(dateFinStr)){ const lendHP=parseDateLoc(dateFinStr); lendHP.setDate(lendHP.getDate()+1); coupurePlageHP=fmtSem(lendHP); }
+                      if(coupurePlageHP&&!semChevalMoisHP){
+                        const jMaxCpHP=source.planType==='min'?(source.jMaxMin||nbJoursPossiblesVol):(()=>{const vLCp=source.planVar&&source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);return (vLCp&&vLCp.j)||nbJoursPossiblesVol;})();
+                        let jPossAvCp=0, jPossApCp=0, litteralAvCp=0;
+                        for(let d=0;d<7;d++){
+                          const jd=new Date(lundiSem); jd.setDate(lundiSem.getDate()+d);
+                          const jdStr=fmtSem(jd);
+                          if(jdStr>=coupurePlageHP){ if(joursPattern[d]) jPossApCp++; continue; }
+                          if(joursPattern[d]) jPossAvCp++;
+                          if(!clause52&&isJourCongeAM(jdStr)) continue;
+                          if(joursPattern[d]&&estJourAbsenceVol(jdStr)) continue;
+                          const fJdCp=c.fiches&&c.fiches[jdStr.slice(0,7)];
+                          const jJdCp=fJdCp&&fJdCp.jours.find(jj=>jj.date===jdStr);
+                          if(jJdCp&&jJdCp.heureDebPrev&&jJdCp.heureFinPrev) litteralAvCp+=Math.max(0,(toMins(jJdCp.heureFinPrev)-toMins(jJdCp.heureDebPrev))/60);
+                        }
+                        const dispoSemCp=Math.max(0,volH-hCongesVol-hAbsVol);
+                        const structAvCp=Math.min(jPossAvCp,jMaxCpHP)*(volH/jMaxCpHP);
+                        const plancherAvCp=Math.max(0,jMaxCpHP-Math.min(jPossApCp,jMaxCpHP))*(volH/jMaxCpHP);
+                        const partAvCp=Math.min(structAvCp,Math.max(plancherAvCp,Math.min(litteralAvCp,dispoSemCp)));
+                        if(dateFinStr<coupurePlageHP) hPrevu+=Math.min(partAvCp,dispoSemCp);
+                        else hPrevu+=Math.max(0,dispoSemCp-partAvCp);
+                      } else if(semChevalMoisHP){
+                        const hAvantChevalHP=hPrevu;
                         // Prévu plafonné au volume, jour par jour, dans la portion de la semaine qui
                         // tombe dans CE mois — avec report entre les deux mois pour ne jamais dupliquer
                         // ni perdre de quota (une semaine à cheval sur une fin de mois ne doit jamais
@@ -2634,6 +2668,23 @@ function modifierKmDirect(contratId, val, cibleId){
                           const dejaAlloue=partMoisPrecedentReg();
                           if(window.DEBUG_CGAM)console.log('[CGAM-hPrevuReg-cheval]',c.nom||c.prenom||c.id,'| mois calculé (mois suivant):',cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0'),'| dejaAlloue:',dejaAlloue,'| volH:',volH,'| contribution:',Math.max(0,volH-hCongesVol-hAbsVol-dejaAlloue));
                           hPrevu+=Math.max(0,volH-hCongesVol-hAbsVol-dejaAlloue);
+                        }
+                        // 21/09/2026 (Sophie, ligne 67) : la même semaine est AUSSI coupée par l'anniversaire, dans la partie
+                        // qui revient à ce mois (52minfract-52min, septembre 2026 : anniversaire le dimanche 6, semaine du
+                        // lundi 31 août). La part du mois calculée ci-dessus se partage entre les deux années au prorata
+                        // des jours garantis de chaque côté de l'anniversaire, dans ce mois — jamais comptée deux fois.
+                        if(coupurePlageHP){
+                          const deltaChevalHP=hPrevu-hAvantChevalHP;
+                          const jMaxDcHP=source.planType==='min'?(source.jMaxMin||nbJoursPossiblesVol):(()=>{const vLDc=source.planVar&&source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);return (vLDc&&vLDc.j)||nbJoursPossiblesVol;})();
+                          let jAvDc=0, jApDc=0;
+                          for(let d=0;d<7;d++){
+                            const jd=new Date(lundiSem); jd.setDate(lundiSem.getDate()+d);
+                            if(!joursPattern[d]||jd.getMonth()!==cur.getMonth()||jd.getFullYear()!==cur.getFullYear()) continue;
+                            if(fmtSem(jd)<coupurePlageHP) jAvDc++; else jApDc++;
+                          }
+                          const sAvDc=Math.min(jAvDc,jMaxDcHP), sApDc=Math.min(jApDc,jMaxDcHP);
+                          const partDcHP=(sAvDc+sApDc)>0?((dateFinStr<coupurePlageHP?sAvDc:sApDc)/(sAvDc+sApDc)):0;
+                          hPrevu=hAvantChevalHP+deltaChevalHP*partDcHP;
                         }
                       } else {
                         // Semaine complète, aucun cheval : volume plein moins les jours de congés et d'absence
@@ -2970,6 +3021,29 @@ function calcRegulOnglet(c, opts){
         // Fonction : calcul hThéoriques mensuel pour une période (pour prorata mensualisation)
         function calcHTheoReg(dateDebStr, dateFinStr){
           let hTheo=0;
+          // 21/09/2026 (Sophie, ligne 67) : part d'une semaine de plan min ou var qui revient à la plage demandée
+          // quand celle-ci la coupe en son milieu (semaine de l'anniversaire) — au prorata des jours garantis de
+          // chaque côté (jours possibles de la partie, plafonnés au maximum de la semaine). 1 si la semaine n'est
+          // pas coupée, ou si elle l'est par un changement de mois (traitement inchangé).
+          const fmtTh=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
+          const partSemainePlageTh=(jourCur,pat,jMax)=>{
+            if(!pat) return 1;
+            const lunTh=new Date(jourCur); lunTh.setDate(jourCur.getDate()-(jourCur.getDay()||7)+1);
+            const dimTh=new Date(lunTh); dimTh.setDate(lunTh.getDate()+6);
+            if(lunTh.getMonth()!==dimTh.getMonth()||lunTh.getFullYear()!==dimTh.getFullYear()) return 1;
+            const lunS=fmtTh(lunTh), dimS=fmtTh(dimTh);
+            const dernierTh=ds=>{const [yT,mT]=ds.split('-').map(Number);return ds===yT+'-'+String(mT).padStart(2,'0')+'-'+String(new Date(yT,mT,0).getDate()).padStart(2,'0');};
+            let coupTh=null;
+            if(dateDebStr>lunS&&dateDebStr<=dimS&&dateDebStr.slice(8)!=='01') coupTh=dateDebStr;
+            else if(dateFinStr>=lunS&&dateFinStr<dimS&&!dernierTh(dateFinStr)){ const lTh=parseDateLoc(dateFinStr); lTh.setDate(lTh.getDate()+1); coupTh=fmtTh(lTh); }
+            if(!coupTh) return 1;
+            let jAvTh=0, jApTh=0;
+            for(let dTh=0;dTh<7;dTh++){ if(!pat[dTh]) continue; const xTh=new Date(lunTh); xTh.setDate(lunTh.getDate()+dTh); if(fmtTh(xTh)<coupTh) jAvTh++; else jApTh++; }
+            const jmTh=jMax||(jAvTh+jApTh)||1;
+            const sAvTh=Math.min(jAvTh,jmTh), sApTh=Math.min(jApTh,jmTh);
+            if(sAvTh+sApTh===0) return 0;
+            return (dateFinStr<coupTh?sAvTh:sApTh)/(sAvTh+sApTh);
+          };
           const semJoursCpt={};
           const semainesCompteesVMTh=new Set();
           const [dy,dm,dd]=dateDebStr.split('-').map(Number);
@@ -3010,9 +3084,9 @@ function calcRegulOnglet(c, opts){
                   if(typeSem){
                     if(source.planType==='var'&&source.planVar){
                       const vol=source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);
-                      if(vol) hTheo+=vol.h;
+                      if(vol) hTheo+=vol.h*partSemainePlageTh(cur,vol.jours,vol.j);
                     } else if(source.planType==='min'){
-                      hTheo+=source.hMin||0;
+                      hTheo+=(source.hMin||0)*partSemainePlageTh(cur,source.joursMin,source.jMaxMin);
                     }
                   }
                 }
@@ -3280,10 +3354,15 @@ function calcRegulOnglet(c, opts){
               // montantAbsences entier retiré, sa part de majoration comprise.
               const montantMensuComplet=Math.max(0,hMensuRegComplet*txNetMoisComplet+majMensuRecapReg(recapMoisComplet)-(recapMoisComplet?.montantAbsences||0));
               const hTheoPortion=calcHTheoReg(debutMois,finMois);
+              // 21/09/2026 (Sophie, ligne 67) : dénominateur = somme des deux moitiés, pas le mois entier. Le mois entier
+              // compte ses semaines à cheval sur les mois voisins, les deux moitiés aussi : rapporter une moitié au mois
+              // entier ne garantissait pas que les deux parts fassent 100 % (Enaël janvier 2022 : 60 % + 60 %).
+              const hTheoAutrePortion=portionAnniv==='avant'?calcHTheoReg(dateAnniv,finMoisComplet):calcHTheoReg(debutMoisComplet,veilleAnniv);
+              const hTheoDeuxPortions=hTheoPortion+hTheoAutrePortion;
               // 14/09/2026 : mois sans aucune heure (tout en semaines non travaillées) — partage au nombre de
               // jours, sinon les deux parties valaient 0 et le mensualisé du mois disparaissait.
               const nbJoursPortionReg=(a,b)=>Math.round((parseDateLoc(b)-parseDateLoc(a))/86400000)+1;
-              const ratioPortion=hTheoComplet>0?(hTheoPortion/hTheoComplet):(nbJoursPortionReg(debutMois,finMois)/nbJoursPortionReg(debutMoisComplet,finMoisComplet));
+              const ratioPortion=hTheoDeuxPortions>0?(hTheoPortion/hTheoDeuxPortions):(nbJoursPortionReg(debutMois,finMois)/nbJoursPortionReg(debutMoisComplet,finMoisComplet));
               montantMensu=parseFloat((montantMensuComplet*ratioPortion).toFixed(2));
               txNetMois=txNetMoisComplet;
               if(portionAnniv==='avant'){ debutMoisRegul=debutMois; finMoisRegul=veilleAnniv||finMois; }
