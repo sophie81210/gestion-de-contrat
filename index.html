@@ -5258,7 +5258,7 @@ function ouvrirFiche(contratId,key){
     <div class="card" style="margin-top:10px">
       <div class="ctitle">Déclaration Pajemploi — ${label}${pastilleAide('declaration-pajemploi')}</div>
       <table id="recap-${contratId}-${key}" style="width:100%;border-collapse:collapse;font-size:13px">
-        ${buildRecapCumul(recap,recap2,calcSoldeToutCompte(c, key),c)}
+        ${buildRecapCumul((avSansAvant&&!fiche.valide)?neutraliserBaseRecapSansPartieAvant(recap):recap,recap2,calcSoldeToutCompte(c, key),c)}
       </table>
     </div>`:`
     <div class="card" style="margin-top:10px">
@@ -7643,7 +7643,7 @@ function enregistrerFiche(contratId,key){
     // garde son solde ; le rafraîchissement les perdait jusqu'au rechargement de la page.
     if(el1) el1.innerHTML=buildRecapHtml(recap, null, null, c);
     if(el2) el2.innerHTML=(avenantSansPartieAvant(c,dateDebAv)?buildRecapHtml(recap, null, null, c, true):'')+buildRecapHtml(recap2, null, null, c);
-    if(elC) elC.innerHTML=buildRecapCumul(recap,recap2,calcSoldeToutCompte(c, key),c);
+    if(elC) elC.innerHTML=buildRecapCumul((avenantSansPartieAvant(c,dateDebAv)&&!fiche.valide)?neutraliserBaseRecapSansPartieAvant(recap):recap,recap2,calcSoldeToutCompte(c, key),c);
   } else {
     const recap=calcRecapFiche(c,fiche);
     const el=document.getElementById('recap-'+contratId+'-'+key);
@@ -8873,6 +8873,27 @@ function buildRecapPajemploi(recap,c,regulExterne){
   html+=ligneG('Total payé avec indemnités', total.toFixed(2)+' €', true, 'var(--m)');
   if(exo>0) html+='<tr><td colspan="2" style="padding:2px 4px 6px;font-size:12px;font-weight:700;color:var(--tx2)">dont '+exo.toFixed(2)+' € d\'exonération de charges</td></tr>';
   return html;
+}
+// 21/09/2026 (Sophie, Enaël février 2023, plan de tests ligne 66) : avenant au 1er du mois (ou précédé seulement de jours
+// de repos) — la partie « avant avenant » n'a aucun jour de travail. Elle reste affichée pour ce qu'elle peut porter de
+// propre à l'ancien contrat (indemnité de congés, régularisation au passage), mais sa BASE est nulle : pas de salaire
+// mensualisé, pas d'heures, pas de jours. Le calcul d'une période vide la valorisait pourtant avec la mensualisation du
+// NOUVEAU contrat, moins des jours fabriqués « hors contrat » : 32,78 h, 4,7 jours et 111,38 € s'ajoutaient à la carte
+// Pajemploi (130,71 h déclarées au lieu de 97,93 h, et le salaire à déclarer en conséquence).
+// Jamais appliqué à une feuille validée : ce qu'elle affichait à la validation a pu être déclaré et payé, il ne change
+// plus (Constance septembre 2025 : 170,61 € affichés, dont 49,74 € venus de cette partie vide).
+function neutraliserBaseRecapSansPartieAvant(r){
+  if(!r) return r;
+  const n={...r};
+  ['salaireNet','hMensu','hMensuNorm','hMensuMaj','hBase','hAbs','hAbsDeduit','hAbsDeduitHS','hAbsHS','hAbsNorm',
+   'montantAbsences','montantAbsMaj','nbJoursTrav','nbJoursTravReels','joursEnPlus','joursEnMoins',
+   'hComp','hCompMaj','hSup','hSupDeplace','hBaseComp','hTotalComp','montantBaseComp','montantMajComp','montantMajSup',
+   'montantMajSupDeplace','montantTotalComp','montantTotalSup','montantCompNet','montantSupNet','montantExo',
+   'hMajFerie','hMajFeriePrevu','hMajRepos','hMaj1erMai','hFerieMajSeule','hReposMajSeule','h1erMaiMajSeule',
+   'montantBaseFerieNP','montantBaseRepos','montantBase1erMai','montantMajFerieNP','montantMajFeriePrevu2',
+   'montantMajRepos','montantMaj1erMai','indemEntretienTotal','indemRepasTotal','indemKmTotal']
+   .forEach(k=>{ if(k in n) n[k]=(typeof n[k]==='string')?'0.00':0; });
+  return n;
 }
 function buildRecapCumul(r1,r2,solde,c){
   const ligneG=(label,val,gras,color)=>'<tr style="border-bottom:1px solid var(--mb)"><td style="padding:7px 4px;color:var(--tx2);'+(gras?'font-weight:700':'')+'">'+(label||'')+'</td><td style="padding:7px 4px;font-weight:'+(gras?'700':'600')+';text-align:right;'+(color?'color:'+color:'')+'">'+(val||'')+'</td></tr>';
@@ -17009,7 +17030,11 @@ function calcSal(){
   // 27/07/2026 (correctif Sophie) : coefficient à la date de début du contrat en cours de saisie
   // (utile pour éditer un ancien contrat), pas celui d'aujourd'hui — repli sur aujourd'hui si le
   // champ date de début est encore vide (nouveau contrat pas encore daté)
-  const dateDebSal=document.getElementById('f-datedeb')?.value||dateToStr(new Date());
+  // 21/09/2026 (Sophie, Enaël février 2023, plan de tests ligne 64) : dans un avenant, le taux net affiché se calcule
+  // au coefficient de la DATE DE L'AVENANT — c'est celui que la signature enregistre. Le formulaire prenait la date de
+  // début du contrat (verrouillée dans un avenant) : après le bouton « Report », il montrait le net de l'époque du
+  // contrat initial, alors que la feuille et le récapitulatif utilisaient déjà le bon.
+  const dateDebSal=(S.enAvenant&&document.getElementById('f-dateavenant')?.value)||document.getElementById('f-datedeb')?.value||dateToStr(new Date());
   const coefSal=getParamAt('coefficients',dateDebSal).valeur||0.7811975;
   // 27/07/2026 (correctif Sophie, suite) : les petits indices "× 0,7811975" à côté de ces champs
   // étaient un texte figé dans le HTML, jamais mis à jour — ils affichaient toujours l'ancien
@@ -20896,7 +20921,7 @@ function remplirFormulaireAvenant(c,av,d){
       fg.className='fg';
       fg.id='fg-dateavenant';
       fg.innerHTML=`<label class="fl">Date d'effet de l'avenant</label>
-        <input class="fi" type="date" id="f-dateavenant" value="${d.dateAvenant||''}">`;
+        <input class="fi" type="date" id="f-dateavenant" value="${d.dateAvenant||''}" onchange="if(typeof calcSal==='function')calcSal()">`;
       inputDatedeb.parentElement.parentElement.insertBefore(fg,inputDatedeb.parentElement.nextSibling);
     } else {
       document.getElementById('f-dateavenant').value=d.dateAvenant||'';
