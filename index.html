@@ -2458,7 +2458,13 @@ function modifierKmDirect(contratId, val, cibleId){
                       return somme;
                     };
                     const hCongesVol=clause52?0:sommeHeuresJoursVol(jdStr=>isJourCongeAM(jdStr));
-                    const hAbsVol=sommeHeuresJoursVol(jdStr=>estJourAbsenceVol(jdStr));
+                    let hAbsVol=sommeHeuresJoursVol(jdStr=>estJourAbsenceVol(jdStr));
+                    // 21/09/2026 (Sophie, ligne 55) : semaine sans aucun jour coché — les jours d'arrêt sont déduits au
+                    // prix d'un jour garanti, comme sur la feuille du mois.
+                    {
+                      const infoArretReg=infoArretSemaineMinVar(c,lundiSemStr>=(c.dateDeb||'')?lundiSemStr:dateStr);
+                      if(infoArretReg&&!infoArretReg.coche&&infoArretReg.arrets.length) hAbsVol+=Math.min(infoArretReg.arrets.length,infoArretReg.jMax)*volH/infoArretReg.jMax;
+                    }
                     if(limiteDebut||limiteFin){
                       // 07/09/2026 (règle rappelée par Sophie) : semaine de début de contrat, de
                       // début d'avenant ou de rupture — en plan min et var on applique « au plus
@@ -3832,6 +3838,72 @@ function creerFiche(c,annee,mois){
   return{annee,mois,jours,complete:false,valide:false};
 }
 
+
+// 21/09/2026 (Sophie, plan de tests ligne 55, Enaël janvier 2022) : arrêt de travail en plan minimum ou variable.
+//  - Au moins un jour coché au planning dans la semaine : seul un arrêt posé sur un jour coché compte (déduit du
+//    salaire, 0,8 jour pour les congés) ; un arrêt sur un jour non coché ne compte pas, le jour n'aurait pas été
+//    travaillé.
+//  - Aucun jour coché (long arrêt, l'assistante maternelle n'a pas reçu ses horaires) : chaque jour d'arrêt posé
+//    sur un jour possible prend la place d'un jour garanti, jusqu'au nombre de jours garantis de la semaine ;
+//    il est déduit du salaire au prix d'un jour garanti (volume ÷ jours garantis).
+//  - Pour les congés, le plancher des jours garantis reste appliqué : les jours d'arrêt comptés prennent la place
+//    de jours garantis (0,8 chacun), le plancher complète le reste à 1 par jour.
+// Semaine calendaire du jour donné : jours cochés au planning ? jours d'arrêt posés sur les jours possibles ?
+function infoArretSemaineMinVar(c,dateStr){
+  const [yA,mA,dA]=dateStr.split('-').map(Number);
+  const dtA=new Date(yA,mA-1,dA);
+  const srcA=getVersionActive(c,dtA);
+  if(!(srcA.th==='plan'&&(srcA.planType==='min'||srcA.planType==='var'))) return null;
+  let patternA=null, jMaxA=0, volHA=0;
+  if(srcA.planType==='min'){
+    patternA=srcA.joursMin||c.joursMin;
+    jMaxA=srcA.jMaxMin||(patternA?patternA.filter(Boolean).length:0);
+    volHA=srcA.hMin||0;
+  } else {
+    const agendasA=srcA.agendas||c.agendas||[];
+    const agA=agendasA.find(a=>parseDateLoc(a.dateDebut)<=dtA&&parseDateLoc(a.dateFin)>=dtA);
+    const typeA=agA&&agA.semaines&&agA.semaines[getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr))];
+    const volA=typeA&&typeA!=='off'?(srcA.planVar||[]).find((v,i)=>(v.nom||'Volume '+(i+1))===typeA):null;
+    if(!volA) return null;
+    patternA=volA.jours;
+    jMaxA=volA.j||(patternA?patternA.filter(Boolean).length:0);
+    volHA=volA.h||0;
+  }
+  if(!patternA||!jMaxA) return null;
+  const lundiA=new Date(dtA); lundiA.setDate(dtA.getDate()-(dtA.getDay()||7)+1);
+  let cocheA=false; const arretsA=[];
+  for(let iA=0;iA<7;iA++){
+    const xA=new Date(lundiA); xA.setDate(lundiA.getDate()+iA);
+    const xsA=xA.getFullYear()+'-'+String(xA.getMonth()+1).padStart(2,'0')+'-'+String(xA.getDate()).padStart(2,'0');
+    if(c.planning&&c.planning[xsA]&&c.planning[xsA].coche) cocheA=true;
+    if(!patternA[iA]) continue;
+    const fA=c.fiches&&c.fiches[xsA.slice(0,7)];
+    const jA=fA&&fA.jours&&fA.jours.find(z=>z.date===xsA);
+    if(jA&&jA.statut==='arret') arretsA.push(xsA);
+  }
+  return {coche:cocheA,arrets:arretsA,jMax:jMaxA,volH:volHA};
+}
+// Nombre de jours d'arrêt d'un morceau de semaine qui comptent pour l'acquisition (avant plafond aux jours garantis).
+function arretsComptesSemaineCg(c,joursSub,pattern){
+  const arretsC=(joursSub||[]).filter(j=>j.statut==='arret');
+  if(!arretsC.length) return 0;
+  const plC=c.planning||{};
+  const [yC,mC,dC]=arretsC[0].date.split('-').map(Number);
+  const dtC=new Date(yC,mC-1,dC);
+  const lundiC=new Date(dtC); lundiC.setDate(dtC.getDate()-(dtC.getDay()||7)+1);
+  let cocheC=false;
+  for(let iC=0;iC<7;iC++){
+    const xC=new Date(lundiC); xC.setDate(lundiC.getDate()+iC);
+    const xsC=xC.getFullYear()+'-'+String(xC.getMonth()+1).padStart(2,'0')+'-'+String(xC.getDate()).padStart(2,'0');
+    if(plC[xsC]&&plC[xsC].coche){ cocheC=true; break; }
+  }
+  return arretsC.filter(j=>{
+    if(cocheC) return !!(plC[j.date]&&plC[j.date].coche);
+    if(!pattern) return true;
+    const [yJ,mJ,dJ]=j.date.split('-').map(Number);
+    return !!pattern[(new Date(yJ,mJ-1,dJ).getDay()+6)%7];
+  }).length;
+}
 
 // 'reprise' se comporte comme 'travaille' dans les calculs de paie (jour ajouté, pas prévu au planning)
 function estStatutPrevu(s){ return s==='prevu'; }
@@ -9075,8 +9147,11 @@ function majFicheStatut(contratId,key,idx,val){
       const srcArr=getVersionActive(c,parseDateLoc(jArr.date));
       const estMinVarArr=srcArr.th==='plan'&&(srcArr.planType==='min'||srcArr.planType==='var');
       const dejaArrNP=ficheArr.jours.some((jj,ii)=>ii!==idx&&jj.statut==='arret'&&getStatutPrevu(c,jj)==='non-prevu');
-      if(estMinVarArr&&getStatutPrevu(c,jArr)==='non-prevu'&&!dejaArrNP){
-        alerte('Le planning doit être rempli avant de passer un jour en « arrêt de travail », sans quoi aucune heure ne sera déduite.');
+      // 21/09/2026 (Sophie, ligne 55) : une semaine sans aucun jour coché est désormais déduite (long arrêt) ;
+      // l'alerte ne concerne plus qu'un jour non coché d'une semaine qui en compte.
+      const infoArrAl=infoArretSemaineMinVar(c,jArr.date);
+      if(estMinVarArr&&getStatutPrevu(c,jArr)==='non-prevu'&&!dejaArrNP&&infoArrAl&&infoArrAl.coche){
+        alerte('Ce jour n’est pas coché au planning : l’arrêt ne déduira aucune heure et ne comptera pas pour les congés.');
       }
     }
   }
@@ -10288,7 +10363,10 @@ function calcCongesContrat(c, dateRefOverride){
             // raison que pour min (joursMaxSemAjusteMin plus haut) : sans ce garde-fou, ce plancher
             // redonnerait crédit pour le motif hebdomadaire complet dès qu'un jour est travaillé cette
             // semaine-là, au lieu du seul jour travaillé (via joursTravaillePV, compté séparément).
-            let compteEffectifPV=(joursConges16PV===0&&absArretSub===0&&jMaxSemAjustePV>0&&typeSemPV!=='off')?Math.max(jMaxSemAjustePV,joursNormauxPV):joursNormauxPV;
+            // 21/09/2026 (Sophie, ligne 55) : un arrêt ne supprime plus le plancher. Les jours d'arrêt qui comptent
+            // (voir infoArretSemaineMinVar) prennent la place de jours garantis, jamais au-delà.
+            const arretCptPV=typeSemPV==='off'?0:Math.min(arretsComptesSemaineCg(c,joursSub,joursPatternPV),Math.max(0,jMaxSemAjustePV-joursNormauxPV-joursConges16PV));
+            let compteEffectifPV=(joursConges16PV===0&&jMaxSemAjustePV>0&&typeSemPV!=='off')?Math.max(jMaxSemAjustePV-arretCptPV,joursNormauxPV):joursNormauxPV;
             // 12/09/2026 (Sophie) : plan var — « la semaine vaut 1 − absence » (règle Sophie). Le plancher
             // ci-dessus retirait bien les jours d'absence non payée des jours POSSIBLES, mais tant qu'il en
             // restait autant que le volume (4 jours possibles pour un volume de 3), il restait plein : l'absence
@@ -10328,7 +10406,7 @@ function calcCongesContrat(c, dateRefOverride){
             // la semaine (jMaxSem) avant division, par cohérence, même si joursActifs limite déjà
             // normalement le compte aux jours du volume actif.
             const contribCgPV=0;
-            const contribArretPV=absArretSub*(0.8)/jMaxSem;
+            const contribArretPV=arretCptPV*(0.8)/jMaxSem;
             const prorata=Math.max(0,contribNormPV+contribCgPV);
             const estSemUniquementCongesFeriePV=joursSub.every(jCapPV=>{
               const stCapPV=jCapPV.statut||getStatutPrevu(c,jCapPV);
@@ -10551,7 +10629,8 @@ function calcCongesContrat(c, dateRefOverride){
             // réellement, parce que joursMaxSemAjusteMin (déclarée avec let à l'intérieur du bloc)
             // sortait de portée avant d'atteindre ce log, sans lien avec le calcul réel.
             let joursMaxSemAjusteMinLog='(n/a)';
-            if(sourceSem.th==='plan'&&sourceSem.planType==='min'&&joursConges16===0&&absArretSub===0&&!estSemaineOffMin){
+            let arretCptMinG=null; // 21/09/2026 (Sophie, ligne 55) : jours d'arrêt comptés sous le plancher
+            if(sourceSem.th==='plan'&&sourceSem.planType==='min'&&joursConges16===0&&!estSemaineOffMin){
               const sourceMinPl=getVersionActive(c,new Date(joursSub[0].date.split('-')[0],parseInt(joursSub[0].date.split('-')[1])-1,parseInt(joursSub[0].date.split('-')[2])));
               const joursPatternMinPl=sourceMinPl.joursMin||c.joursMin;
               const moisTouchesMinG=[...new Set(joursSub.map(j=>j.date.slice(0,7)))];
@@ -10650,7 +10729,8 @@ function calcCongesContrat(c, dateRefOverride){
               // de congés non acquis comptait pleine. Jamais les jours effectivement travaillés.
               {
                 const nbCongesNonAcquisMin=joursSub.filter(jj=>(jj.statut||getStatutPrevu(c,jj))==='conges-non').length;
-                const plancherMinHorsCn=Math.max(0,joursMaxSemAjusteMin-nbCongesNonAcquisMin);
+                arretCptMinG=Math.min(arretsComptesSemaineCg(c,joursSub,joursPatternMinPl),Math.max(0,joursMaxSemAjusteMin-joursNormaux));
+                const plancherMinHorsCn=Math.max(0,joursMaxSemAjusteMin-nbCongesNonAcquisMin-arretCptMinG);
                 if(plancherMinHorsCn>0) joursNormaux=Math.max(joursNormaux,plancherMinHorsCn);
               }
               joursMaxSemAjusteMinLog=joursMaxSemAjusteMin;
@@ -10681,7 +10761,11 @@ function calcCongesContrat(c, dateRefOverride){
               contributionConges=0;
             }
             const penaliteModifFSM=penaliteSemaineModifieeCg(c,joursSub,joursMaxSem);
-            const contributionArret=absArretSub*(0.8)/joursMaxSem;
+            const estMinArretFSM=sourceSem.th==='plan'&&sourceSem.planType==='min';
+            const arretCptFSM=!estMinArretFSM?absArretSub
+              :(arretCptMinG!==null?arretCptMinG
+                :(estSemaineOffMin?0:Math.min(arretsComptesSemaineCg(c,joursSub,sourceSem.joursMin||c.joursMin),Math.max(0,joursMaxSem-joursNormaux-joursConges16))));
+            const contributionArret=arretCptFSM*(0.8)/joursMaxSem;
             const prorata=penaliteModifFSM>0
               ?Math.max(0,Math.min(1,contributionNormale+contributionConges)-penaliteModifFSM/joursMaxSem)
               :Math.max(0,contributionNormale+contributionConges);
@@ -13846,7 +13930,12 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       }
       return false;
     })();
-    const estAbsDeduite=absDeduites.includes(statut)||estArretSurJourPrevu||estArretEnSemaineOff;
+    // 21/09/2026 (Sophie, ligne 55) : plan min / var, aucun jour coché dans la semaine — l'arrêt est déduit au prix
+    // d'un jour garanti, jusqu'au nombre de jours garantis de la semaine (compté sur la semaine entière, même à
+    // cheval sur deux mois).
+    const infoArretSP=(statut==='arret'&&!estArretEnSemaineOff&&!(j.heureDebPrev&&j.heureFinPrev)&&j.date)?infoArretSemaineMinVar(c,j.date):null;
+    const estArretSansPlanning=!!(infoArretSP&&!infoArretSP.coche&&infoArretSP.arrets.indexOf(j.date)>=0&&infoArretSP.arrets.indexOf(j.date)<infoArretSP.jMax);
+    const estAbsDeduite=absDeduites.includes(statut)||estArretSurJourPrevu||estArretEnSemaineOff||estArretSansPlanning;
     if(estPresent&&j.heureDebReel&&j.heureFinReel){
       const debReel=toM(j.heureDebReel);
       const finReel=toM(j.heureFinReel);
@@ -14060,6 +14149,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             hPrev=totS>0?(totH/totS)/nbJPoss2:0;
           }
         } else { hPrev=0; }
+      } else if(estArretSansPlanning){
+        hPrev=infoArretSP.volH/infoArretSP.jMax;
       } else if(j.heureDebPrev&&j.heureFinPrev){
         hPrev=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
       // 07/09/2026 (Sophie, contrat 52 fixe → 46 var, rupture du 20/11/2025) : les branches qui suivent
