@@ -381,6 +381,10 @@ input[type=time].fi{width:auto;min-width:92px}
       <div class="ctitle" style="display:flex;align-items:center;justify-content:space-between">Informations de base<span class="pastille" onclick="ouvrirAide('formulaire')" title="Informations de base">?</span></div>
       <div class="fg"><label class="fl">Nom du contrat <small>(ex&nbsp;: Emma Martin)</small></label><input class="fi" type="text" id="f-nom" placeholder="ex&nbsp;: Emma Martin"></div>
       <div class="fg"><label class="fl">Date de d&eacute;but de contrat</label><input class="fi" type="date" id="f-datedeb" oninput="calcCDD();calcSal()" onchange="calcCDD();calcSal()"></div>
+      <div class="fg" id="fg-fratrie">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" id="f-fratrie" onchange="majFratrie()"> Un enfant de la m&ecirc;me famille est actuellement accueilli</label>
+        <div id="fg-fratrie-date" style="display:none;margin-top:8px"><label class="fl">Pr&eacute;cisez la date de d&eacute;but de son contrat</label><input class="fi" type="date" id="f-fratrie-datedeb"></div>
+      </div>
 
       <div class="fg" id="fg-type-duree">
         <label class="fl">Durée du contrat</label>
@@ -2073,6 +2077,7 @@ function buildFicheContenu(source, c){
       ...(c.cddMotif==='attente'&&c.dateDeb?[['Date limite (9 mois)', (()=>{const d=new Date(c.dateDeb);d.setMonth(d.getMonth()+9);return d.toLocaleDateString('fr-FR');})()]]:[] ),
     ]:[]),
     ['Date de début',c.dateDeb?new Date(c.dateDeb).toLocaleDateString('fr-FR'):'—'],
+    ...(c.fratrieAccueilli&&c.fratrieDateDeb?[['Enfant de la même famille accueilli depuis',new Date(c.fratrieDateDeb).toLocaleDateString('fr-FR')]]:[]),
     ['Période d\'essai', periodeEssaiL],
     ['Type de contrat',tcL],
     ['Type d\'horaires',thL],
@@ -15355,7 +15360,8 @@ function modif(id){
   S.enEd=id;goTo('form');
   setTimeout(()=>{
            resetForm();
-    sv('f-nom',c.nom);sv('f-datedeb',c.dateDeb);sv('f-periode-essai',c.periodeEssai);sv('f-periode-essai-cdd',c.periodeEssaiCdd);sv('f-txbrut',c.txBrut);
+    sv('f-nom',c.nom);sv('f-datedeb',c.dateDeb);
+    if(c.fratrieAccueilli){const cbFM=document.getElementById('f-fratrie');if(cbFM)cbFM.checked=true;sv('f-fratrie-datedeb',c.fratrieDateDeb||'');majFratrie();}sv('f-periode-essai',c.periodeEssai);sv('f-periode-essai-cdd',c.periodeEssaiCdd);sv('f-txbrut',c.txBrut);
     sv('f-maj-comp',c.majComp);sv('f-maj-sup',c.majSup);
     sv('f-nbsem',c.nbSem);sv('f-hmin',c.hMin);
     // Charger CDI/CDD
@@ -15454,8 +15460,16 @@ function modif(id){
 function sv(id,v){const el=document.getElementById(id);if(el&&v!=null&&v!=='')el.value=v;}
 
 // ══ RESET FORM ══
+// 21/09/2026 (Sophie, plan de tests ligne 50) : fratrie — deux enfants d'une même famille accueillis sans interruption
+// entre les deux contrats : le droit à l'indemnité de rupture s'apprécie à partir du début du contrat du premier enfant.
+function majFratrie(){
+  const cb=document.getElementById('f-fratrie');
+  const bloc=document.getElementById('fg-fratrie-date');
+  if(bloc) bloc.style.display=(cb&&cb.checked)?'':'none';
+}
 function resetForm(){
   S.tc=null;S.th=null;S.planType=null;planVarN=0;S.nbSem=0;
+  {const cbF=document.getElementById('f-fratrie');if(cbF)cbF.checked=false;const fgF=document.getElementById('fg-fratrie');if(fgF)fgF.style.display='';majFratrie();}
   S.typeDuree='cdi';S.cddMotif=null;S.cddTerme=null;
   document.querySelectorAll('.ro').forEach(r=>r.classList.remove('on'));
   document.querySelectorAll('.cond').forEach(c=>c.classList.remove('on'));
@@ -17349,6 +17363,11 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
   if(!nom){toast('Veuillez saisir un nom de contrat');return;}
   const dateDeb=document.getElementById('f-datedeb').value;
   if(!dateDeb){toast('Veuillez saisir une date de début');return;}
+  if(document.getElementById('f-fratrie')?.checked){
+    const dFrat=document.getElementById('f-fratrie-datedeb')?.value;
+    if(!dFrat){alerte('Précisez la date de début du contrat de l\u2019enfant de la même famille.');return;}
+    if(dFrat>=dateDeb){alerte('La date de début du contrat de l\u2019enfant de la même famille doit être antérieure à celle de ce contrat.');return;}
+  }
   // 30/08/2026 : même contrôle qu'à la signature, mais dès l'enregistrement — sinon un brouillon
   // avec une année invalide (faute de frappe type "0024") crée quand même un agenda avec cette
   // date fausse, qui reste corrompu même après correction ultérieure du champ.
@@ -17442,6 +17461,8 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
          nom:nomEl?nomEl.value:('Volume '+n)};
 }):null
   const data={nom,dateDeb:document.getElementById('f-datedeb').value,tc:S.tc,th:S.th,planType:S.planType,
+  fratrieAccueilli:!!document.getElementById('f-fratrie')?.checked,
+  fratrieDateDeb:document.getElementById('f-fratrie')?.checked?(document.getElementById('f-fratrie-datedeb')?.value||null):null,
   typeDuree:S.typeDuree||'cdi',
   cddMotif:S.typeDuree==='cdd'?S.cddMotif:null,
   cddTerme:S.typeDuree==='cdd'?S.cddTerme:null,
@@ -18296,7 +18317,10 @@ function calcSemainesEquivalentesPreavis(c, dateDebutNonEffectue, dateFinPreavis
 }
 
 function calcIndemniteRupture(c, dateFin, indemCongesBrut=0, regulBrut=0){
-  const [ddy,ddm,ddd]=c.dateDeb.split('-').map(Number);
+  // 21/09/2026 (Sophie, ligne 50) : fratrie — l'ancienneté de 9 mois se compte depuis le début du contrat du premier
+  // enfant de la famille ; le montant reste calculé sur les seuls salaires de ce contrat.
+  const dateAncStr=(c.fratrieAccueilli&&c.fratrieDateDeb&&c.fratrieDateDeb<c.dateDeb)?c.fratrieDateDeb:c.dateDeb;
+  const [ddy,ddm,ddd]=dateAncStr.split('-').map(Number);
   const dateDebContrat=new Date(ddy,ddm-1,ddd);
   const diffMois=(dateFin-dateDebContrat)/(1000*60*60*24*30.44);
   if(diffMois<9) return null;
@@ -21168,6 +21192,7 @@ function remplirFormulaireAvenant(c,av,d){
     // Afficher date d'embauche en lecture seule et champ date d'effet
     const labelDatedeb=document.querySelector('label[for="f-datedeb"]');
     const inputDatedeb=document.getElementById('f-datedeb');
+    {const fgFA=document.getElementById('fg-fratrie');if(fgFA)fgFA.style.display='none';}
     if(inputDatedeb){
       inputDatedeb.value=c.dateDeb;
       inputDatedeb.disabled=true;
