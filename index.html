@@ -6665,6 +6665,10 @@ function planningNonEnregistrePourMois(c, moisKey){
   const estPlanVarMinPNE=(srcDebutPNE.th==='plan'&&(srcDebutPNE.planType==='min'||srcDebutPNE.planType==='var'))
     ||(srcFinPNE.th==='plan'&&(srcFinPNE.planType==='min'||srcFinPNE.planType==='var'));
   if(estPlanVarMinPNE&&!(c.planningConfirmeMois&&c.planningConfirmeMois[moisKey])) return true;
+  // 21/09/2026 (Sophie, Enaël janvier 2024 enregistré avant le dernier avenant, agenda non pointé) : un enregistrement
+  // fait alors que l'agenda n'est pas pointé ne vaut rien — le mois redevient à enregistrer, ce qui ne sera possible
+  // qu'une fois l'agenda pointé.
+  if(estPlanVarMinPNE&&semainesSansAgendaMois(c,moisKey).length) return true;
   if(cacheNonInitialisePNE||!c.planning) return false;
   const [ay,am]=moisKey.split('-').map(Number);
   const dernierJour=new Date(ay,am,0).getDate();
@@ -6686,9 +6690,33 @@ function marquerPlanningNonEnregistre(contratId, moisKey){
 
 // Vérifie et enregistre le planning d'un mois : heure de fin après début, et volume de chaque semaine
 // (toutes les semaines du mois, pas seulement celle en cours de saisie)
+// 21/09/2026 (Sophie) : lundis des semaines du mois dont l'agenda n'est pas pointé (ou sans agenda du tout), pour
+// un contrat qui en a besoin — jours sous contrat seulement.
+function semainesSansAgendaMois(c, moisKey){
+  const [yS,mS]=moisKey.split('-').map(Number);
+  const nbJ=new Date(yS,mS,0).getDate();
+  const lundis=[];
+  for(let dS=1; dS<=nbJ; dS++){
+    const dsS=yS+'-'+String(mS).padStart(2,'0')+'-'+String(dS).padStart(2,'0');
+    let infS=null; try{ infS=getInfosJourPlanning(c,dsS); }catch(e){ infS=null; }
+    if(!infS||!infS.agendaManquant) continue;
+    const dtS=new Date(yS,mS-1,dS); dtS.setDate(dtS.getDate()-(dtS.getDay()||7)+1);
+    const lunS=dtS.toLocaleDateString('fr-FR');
+    if(!lundis.includes(lunS)) lundis.push(lunS);
+  }
+  return lundis;
+}
 function enregistrerPlanningMois(contratId, moisKey){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c) return;
+  // 21/09/2026 (Sophie) : un planning dont l'agenda n'est pas pointé ne peut pas être enregistré.
+  {
+    const sansAgendaE=semainesSansAgendaMois(c,moisKey);
+    if(sansAgendaE.length){
+      alerte('Le planning ne peut pas être enregistré : l\u2019agenda n\u2019est pas pointé pour '+(sansAgendaE.length>1?'les semaines du ':'la semaine du ')+sansAgendaE.join(', ')+'. Pointez l\u2019agenda d\u2019abord.');
+      return;
+    }
+  }
   const [ay,am]=moisKey.split('-').map(Number);
   const finMoisDate=new Date(ay,am,0);
   const erreurs=[];
@@ -21795,6 +21823,14 @@ function signerAvenant(){
       });
     }
   });
+  // 21/09/2026 (Sophie) : et les plannings déjà enregistrés à partir du mois de la date d'effet sont à réenregistrer
+  // (sauf mois dont la feuille est validée) — un enregistrement fait avec les anciens horaires ne vaut plus.
+  if(!avenantGardeAgenda(av)&&c.planningConfirmeMois){
+    const moisAvC=av.dateAvenant.slice(0,7);
+    Object.keys(c.planningConfirmeMois).forEach(kC=>{
+      if(kC>=moisAvC&&!(c.fiches&&c.fiches[kC]&&c.fiches[kC].valide)) delete c.planningConfirmeMois[kC];
+    });
+  }
   // Forcer nbSem=52 si passage vers contrat 52 sem
   if(av.tc==='52') av.nbSem=52;
   // Passage CDD → CDI : ce champ ne vit que sur le contrat (pas par avenant), donc le reporter ici
