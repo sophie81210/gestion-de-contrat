@@ -8869,7 +8869,7 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
   // plus de la mensualisation, or l'occasionnel n'en a aucune : ses heures de repos travaillé, de férié
   // ou de 1er mai sont déjà dans « Heures normales », elles seraient comptées deux fois à l'écran.
   const hasHComp=!recap.isOcc&&(parseFloat(recap.hBaseComp||0)>0||parseFloat(recap.hMajFerie||0)>0||parseFloat(recap.hMajRepos||0)>0||parseFloat(recap.hMaj1erMai||0)>0);
-  const hasMaj=parseFloat(recap.hComp||0)>0||parseFloat(recap.hSup||0)>0||parseFloat(recap.hSupDeplace||0)>0||parseFloat(recap.montantMajComp||0)>0||parseFloat(recap.montantMajSup||0)>0||parseFloat(recap.montantMajFerieNP||0)>0||parseFloat(recap.montantMajFeriePrevu2||0)>0||parseFloat(recap.montantMajRepos||0)>0||parseFloat(recap.montantMaj1erMai||0)>0;
+  const hasMaj=parseFloat(recap.hComp||0)>0||parseFloat(recap.hSup||0)>0||parseFloat(recap.hSupDeplace||0)!==0||parseFloat(recap.montantMajComp||0)>0||parseFloat(recap.montantMajSup||0)>0||parseFloat(recap.montantMajFerieNP||0)>0||parseFloat(recap.montantMajFeriePrevu2||0)>0||parseFloat(recap.montantMajRepos||0)>0||parseFloat(recap.montantMaj1erMai||0)>0;
   if(hasHComp||hasMaj){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:1px solid var(--mb)"></td></tr>';
     if(hasHComp) html+='<tr><td colspan="2" style="padding:4px 4px 2px;font-weight:700;color:var(--m);font-size:12px">Heures complémentaires et majorées</td></tr>';
@@ -8898,6 +8898,8 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
     // 13/09/2026 (Sophie) : heures au-delà de 45 h dues au planning modifié (jour déplacé) — base déjà dans
     // la mensualisation, majoration seule
     if(parseFloat(recap.hSupDeplace||0)>0) html+=ligneG('Majoration heures sup (planning modifié)', parseFloat(recap.hSupDeplace).toFixed(2)+' h — +'+parseFloat(recap.montantMajSupDeplace||0).toFixed(2)+' €');
+    // 21/09/2026 (Sophie, ligne 60) : semaines allégées par le planning — majoration mensualisée non due
+    if(parseFloat(recap.hSupDeplace||0)<0) html+=ligneG('Majoration heures sup non due (planning modifié)', Math.abs(parseFloat(recap.hSupDeplace)).toFixed(2)+' h — −'+Math.abs(parseFloat(recap.montantMajSupDeplace||0)).toFixed(2)+' €');
     const totalMajFerie=(parseFloat(recap.montantMajFeriePrevu2||0)+parseFloat(recap.montantMajFerieNP||0));
     const totalHMajFerie=(parseFloat(recap.hMajFerie||0)+parseFloat(recap.hMajFeriePrevu||0)+parseFloat(recap.hFerieMajSeule||0));
     if(totalMajFerie>0) html+=ligneG('Majoration férié', totalHMajFerie.toFixed(2)+' h — +'+totalMajFerie.toFixed(2)+' €');
@@ -14550,6 +14552,49 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       }
     }
   });
+  // 21/09/2026 (Sophie, plan de tests ligne 60) : mois en modifications autorisées — la majoration des heures sup
+  // mensualisées suit la semaine réellement organisée. Une semaine allégée par le planning (un jour déplacé vers une
+  // autre semaine) perd la part de majoration qu'elle ne dépasse plus : heures sup du contrat pour cette semaine
+  // (volume du contrat − 45 h) moins heures sup du planning (heures prévues − 45 h). La semaine qui reçoit le jour
+  // gagne déjà sa majoration en plus (hSupDeplace ci-dessus). Seules les semaines sans absence, congé ni jour hors
+  // contrat sont comparées (une absence réduit déjà la majoration par la déduction d'absence). Une semaine à cheval
+  // sur deux mois est comptée avec le mois de son dimanche, une fois ses deux parties connues.
+  let hSupPerdue=0;
+  {
+    const modifPrecHSP=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisPrecStr]);
+    if((sourceActif.tc||c.tc)!=='occ'&&hMensuMaj>0&&(modifMoisHS||modifPrecHSP)){
+      const fmtHSP=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
+      const statutsPayesHSP=['prevu','travaille','reprise','ferie','abs-partielle','abs-rem'];
+      const joursHSP=[...(fichePrec?fichePrec.jours:[]),...fiche.jours];
+      const semainesHSP={};
+      fiche.jours.forEach(j=>{
+        const [yH,mH,dH]=j.date.split('-').map(Number);
+        const dtH=new Date(yH,mH-1,dH);
+        const lunH=new Date(dtH); lunH.setDate(dtH.getDate()-(dtH.getDay()||7)+1);
+        const dimH=new Date(lunH); dimH.setDate(lunH.getDate()+6);
+        const lunS=fmtHSP(lunH), dimS=fmtHSP(dimH);
+        if(semainesHSP[lunS]) return;
+        if(dimH.getMonth()!==fiche.mois){ semainesHSP[lunS]={ignoree:true}; return; }
+        const chevalHSP=lunH.getMonth()!==fiche.mois;
+        if(!(modifMoisHS||(chevalHSP&&modifPrecHSP))||(chevalHSP&&!fichePrec)){ semainesHSP[lunS]={ignoree:true}; return; }
+        let exclueHSP=false, planHSP=0;
+        joursHSP.filter(x=>x.date>=lunS&&x.date<=dimS).forEach(x=>{
+          const stX=x.statut||getStatutPrevu(c,x);
+          if(stX==='non-prevu'||stX==='repos') return;
+          if(!statutsPayesHSP.includes(stX)){ exclueHSP=true; return; }
+          if(x.heureDebPrev&&x.heureFinPrev) planHSP+=(toM(x.heureFinPrev)-toM(x.heureDebPrev))/60;
+        });
+        semainesHSP[lunS]={ignoree:exclueHSP,plan:planHSP,semISO:getSemISO(j.date)};
+      });
+      Object.values(semainesHSP).forEach(w=>{
+        if(w.ignoree) return;
+        const structHSP=Math.max(0,(hPrevuParSemaine[w.semISO]||0)-45);
+        const planHSw=Math.max(0,w.plan-45);
+        if(planHSw<structHSP) hSupPerdue+=structHSP-planHSw;
+      });
+    }
+  }
+  hSupDeplace-=hSupPerdue;
   // hCompMaj = somme par semaine de max(0, hCompSem - hSupParSemaine[semKey])
   hCompMaj=Object.keys(hCompParSemaine).reduce((total,semKey)=>{
     const hCompSem=hCompParSemaine[semKey]||0;
