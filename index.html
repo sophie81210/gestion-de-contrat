@@ -382,7 +382,7 @@ input[type=time].fi{width:auto;min-width:92px}
       <div class="fg"><label class="fl">Nom du contrat <small>(ex&nbsp;: Emma Martin)</small></label><input class="fi" type="text" id="f-nom" placeholder="ex&nbsp;: Emma Martin"></div>
       <div class="fg"><label class="fl">Date de d&eacute;but de contrat</label><input class="fi" type="date" id="f-datedeb" oninput="calcCDD();calcSal()" onchange="calcCDD();calcSal()"></div>
       <div class="fg" id="fg-fratrie">
-        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" id="f-fratrie" onchange="majFratrie()"> Un enfant de la m&ecirc;me famille est actuellement accueilli</label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" id="f-fratrie" onchange="surChangementFratrie()"> Un enfant de la m&ecirc;me famille est actuellement accueilli</label>
         <div id="fg-fratrie-date" style="display:none;margin-top:8px"><label class="fl">Pr&eacute;cisez la date de d&eacute;but de son contrat</label><input class="fi" type="date" id="f-fratrie-datedeb"></div>
       </div>
 
@@ -432,6 +432,11 @@ input[type=time].fi{width:auto;min-width:92px}
         <div id="essai-cdi-wrap" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <input class="fi fi-sm" type="number" id="f-periode-essai" min="0" max="3" step="1" placeholder="0 à 3" style="width:80px" oninput="validerEssai()"> 
           <span style="font-size:13px;color:var(--tx2)">mois</span>
+        </div>
+        <!-- CDI avec un enfant de la même famille déjà accueilli : en jours calendaires, 30 au plus -->
+        <div id="essai-cdi-frat-wrap" style="display:none;align-items:center;gap:8px;flex-wrap:wrap">
+          <input class="fi fi-sm" type="number" id="f-periode-essai-jours" min="0" max="30" step="1" placeholder="0 à 30" style="width:80px" oninput="limiterEntier(this)">
+          <span style="font-size:13px;color:var(--tx2)">jours calendaires (enfant de la m&ecirc;me famille d&eacute;j&agrave; accueilli : 30 au plus)</span>
         </div>
         <!-- CDD : en jours -->
         <div id="essai-cdd-wrap" style="display:none;align-items:center;gap:8px;flex-wrap:wrap">
@@ -2066,7 +2071,7 @@ function buildFicheContenu(source, c){
   const cddDateMinL=c.cddDateMin?new Date(c.cddDateMin).toLocaleDateString('fr-FR'):'—';
   const periodeEssaiL=c.typeDuree==='cdd'
     ?(c.periodeEssaiCdd>0?(c.periodeEssaiCdd+' jours'):'Aucune')
-    :(c.periodeEssai>0?(c.periodeEssai+' mois'):'Aucune');
+    :(c.periodeEssaiJours>0?(c.periodeEssaiJours+' jours calendaires'):(c.periodeEssai>0?(c.periodeEssai+' mois'):'Aucune'));
 
   const lignesBase=[
     ['Durée du contrat', typeDureeL],
@@ -15361,7 +15366,7 @@ function modif(id){
   setTimeout(()=>{
            resetForm();
     sv('f-nom',c.nom);sv('f-datedeb',c.dateDeb);
-    if(c.fratrieAccueilli){const cbFM=document.getElementById('f-fratrie');if(cbFM)cbFM.checked=true;sv('f-fratrie-datedeb',c.fratrieDateDeb||'');majFratrie();}sv('f-periode-essai',c.periodeEssai);sv('f-periode-essai-cdd',c.periodeEssaiCdd);sv('f-txbrut',c.txBrut);
+    if(c.fratrieAccueilli){const cbFM=document.getElementById('f-fratrie');if(cbFM)cbFM.checked=true;sv('f-fratrie-datedeb',c.fratrieDateDeb||'');majFratrie();}sv('f-periode-essai',c.periodeEssai);sv('f-periode-essai-jours',c.periodeEssaiJours);sv('f-periode-essai-cdd',c.periodeEssaiCdd);sv('f-txbrut',c.txBrut);
     sv('f-maj-comp',c.majComp);sv('f-maj-sup',c.majSup);
     sv('f-nbsem',c.nbSem);sv('f-hmin',c.hMin);
     // Charger CDI/CDD
@@ -15466,6 +15471,27 @@ function majFratrie(){
   const cb=document.getElementById('f-fratrie');
   const bloc=document.getElementById('fg-fratrie-date');
   if(bloc) bloc.style.display=(cb&&cb.checked)?'':'none';
+  // 21/09/2026 (Sophie) : CDI — un enfant de la même famille déjà accueilli limite la période d'essai à 30 jours
+  // calendaires : le champ en mois est remplacé par un champ en jours.
+  const estCdiEssai=S.typeDuree!=='cdd'&&S.tc!=='occ';
+  const frat=!!(cb&&cb.checked);
+  const wMois=document.getElementById('essai-cdi-wrap');
+  const wJours=document.getElementById('essai-cdi-frat-wrap');
+  if(wMois) wMois.style.display=(estCdiEssai&&!frat)?'flex':'none';
+  if(wJours) wJours.style.display=(estCdiEssai&&frat)?'flex':'none';
+}
+// Cocher ou décocher la case vide la période d'essai CDI : une valeur en mois n'est jamais lue comme des jours.
+function surChangementFratrie(){
+  ['f-periode-essai','f-periode-essai-jours'].forEach(id=>{const e=document.getElementById(id);if(e&&!e.disabled)e.value='';});
+  majFratrie();
+}
+// Date de fin nominale de la période d'essai d'un CDI (sans prolongation) : en jours calendaires si fratrie, sinon en mois.
+function dateFinEssaiNominaleCdi(c){
+  if(!c.dateDeb) return null;
+  const [yE,mE,dE]=c.dateDeb.split('-').map(Number);
+  if(c.periodeEssaiJours>0) return new Date(yE,mE-1,dE+c.periodeEssaiJours);
+  if(c.periodeEssai>0) return new Date(yE,mE-1+c.periodeEssai,dE);
+  return null;
 }
 function resetForm(){
   S.tc=null;S.th=null;S.planType=null;planVarN=0;S.nbSem=0;
@@ -15589,6 +15615,7 @@ function selTypeDuree(v){
   document.getElementById('bloc-cdd').style.display=v==='cdd'?'block':'none';
   document.getElementById('bloc-essai-cdi').style.display='block'; // toujours visible
   document.getElementById('essai-cdi-wrap').style.display=(v==='cdd'||v==='occ')?'none':'flex';
+  majFratrie();
   if(v==='occ'){
     const fpe=document.getElementById('f-periode-essai');
     if(fpe) fpe.value='';
@@ -17379,7 +17406,12 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
     }
   }
   // Bloquer une période d'essai supérieure au max légal (2 mois si ≥4j/semaine, 3 mois sinon)
-  if(S.typeDuree!=='cdd'&&S.tc!=='occ'){
+  const fratrieEssai=S.typeDuree!=='cdd'&&S.tc!=='occ'&&!!document.getElementById('f-fratrie')?.checked;
+  if(fratrieEssai){
+    const pjVal=parseFloat(document.getElementById('f-periode-essai-jours')?.value)||0;
+    if(pjVal>30){alerte('Un enfant de la même famille est déjà accueilli : période d\u2019essai limitée à 30 jours calendaires.');return;}
+  }
+  if(S.typeDuree!=='cdd'&&S.tc!=='occ'&&!fratrieEssai){
     const peVal=parseFloat(document.getElementById('f-periode-essai')?.value)||0;
     if(peVal>0){
       const joursCochesVal=getMaxJoursSemaineForm();
@@ -17469,7 +17501,14 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
   cddDateFin:S.typeDuree==='cdd'&&S.cddTerme==='precis'?document.getElementById('f-cdd-datefin')?.value:null,
   cddDateMin:S.typeDuree==='cdd'&&S.cddTerme==='imprecis'?document.getElementById('f-cdd-datemin')?.value:null,
   periodeEssaiCdd:S.typeDuree==='cdd'?(parseFloat(document.getElementById('f-periode-essai-cdd')?.value)||0):null,
+  periodeEssaiJours:(S.typeDuree!=='cdd'&&S.tc!=='occ'&&document.getElementById('f-fratrie')?.checked)
+    ?(()=>{const v=document.getElementById('f-periode-essai-jours')?.value;return (v===''||v==null)?null:(parseInt(v)||0);})():null,
   periodeEssai:(()=>{
+    // CDI avec fratrie : la durée est en jours (periodeEssaiJours) ; 0 mois, ou non renseigné si les jours manquent.
+    if(S.typeDuree!=='cdd'&&S.tc!=='occ'&&document.getElementById('f-fratrie')?.checked){
+      const vj=document.getElementById('f-periode-essai-jours')?.value;
+      return (vj===''||vj==null)?null:0;
+    }
     const peVal=document.getElementById('f-periode-essai')?.value;
     if(peVal===''||peVal===null||peVal===undefined) return null; // non renseigné
     const pe=parseFloat(peVal)||0;
@@ -19309,9 +19348,7 @@ function renderRupture(c, cont){
     // Calculer la date max de fin de période d'essai
     const [ddy2,ddm2,ddd2]=(c.dateDeb||'').split('-').map(Number);
     const dateDebContratEssai=c.dateDeb?new Date(ddy2,ddm2-1,ddd2):null;
-    const periodeEssaiMois=c.periodeEssai||0;
-    const dateFinPeriodeEssaiNominale=dateDebContratEssai&&periodeEssaiMois>0?
-      new Date(ddy2,ddm2-1+periodeEssaiMois,ddd2):null;
+    const dateFinPeriodeEssaiNominale=dateFinEssaiNominaleCdi(c);
     const dateFinPeriodeEssai=calcFinEssaiAvecProlongation(c,dateDebContratEssai,dateFinPeriodeEssaiNominale);
     const dateMaxNotif=dateFinPeriodeEssai?(dateFinPeriodeEssai.getFullYear()+'-'+String(dateFinPeriodeEssai.getMonth()+1).padStart(2,'0')+'-'+String(dateFinPeriodeEssai.getDate()).padStart(2,'0')):'';
     const erreurEssai=dateNotif&&dateFinPeriodeEssai&&dateNotif>dateFinPeriodeEssai?
@@ -19509,11 +19546,11 @@ function renderRupture(c, cont){
           <option value="demission" ${motif==='demission'?'selected':''}>Démission</option>
           <option value="retrait-force" ${motif==='retrait-force'?'selected':''}>Retrait forcé</option>
           ${(()=>{
-            if(c.periodeEssai>0){
+            if(c.periodeEssai>0||c.periodeEssaiJours>0){
               const [ddyE,ddmE,dddE]=(c.dateDeb||'').split('-').map(Number);
               const dateDebEssaiCdi=c.dateDeb?new Date(ddyE,ddmE-1,dddE):null;
-              const dateFinEssaiNominaleCdi=dateDebEssaiCdi?new Date(ddyE,ddmE-1+c.periodeEssai,dddE):null;
-              const dateFinEssai=calcFinEssaiAvecProlongation(c,dateDebEssaiCdi,dateFinEssaiNominaleCdi);
+              const finNominaleEssaiCdiR=dateFinEssaiNominaleCdi(c);
+              const dateFinEssai=calcFinEssaiAvecProlongation(c,dateDebEssaiCdi,finNominaleEssaiCdiR);
               if(dateFinEssai&&(dateSit||new Date())>dateFinEssai){
                 return `<option value="fin-essai" disabled style="color:var(--tx3)">Fin de période d'essai (délai dépassé)</option>`;
               }
