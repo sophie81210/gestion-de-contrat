@@ -416,7 +416,7 @@ input[type=time].fi{width:auto;min-width:92px}
           <div class="ro" id="ro-occ" onclick="selTC(this,'occ')" id="ro-occ-wrap"><input type="radio" name="tc"><label>Accueil occasionnel</label></div>
         </div>
         <div class="cond" id="cond-nbsem">
-          <div class="fg" style="margin-top:10px;margin-bottom:0"><label class="fl">Nombre de semaines travaill&eacute;es</label><input class="fi fi-sm" type="number" id="f-nbsem" min="1" max="46" oninput="if(parseInt(this.value)>46)this.value=46;calc()"></div>
+          <div class="fg" style="margin-top:10px;margin-bottom:0"><label class="fl">Nombre de semaines travaill&eacute;es</label><input class="fi fi-sm" type="number" id="f-nbsem" min="1" max="46" step="1" oninput="limiterEntier(this);if(parseInt(this.value)>46)this.value=46;calc()"></div>
         </div>
         <div class="fg" style="margin-top:14px" id="bloc-essai-cdi">
         <label class="fl">Durée de la période d'essai
@@ -468,7 +468,7 @@ input[type=time].fi{width:auto;min-width:92px}
         <div class="cond" id="cond-plan-min">
   <div class="fg" style="margin-top:10px">
     <label class="fl">Heures minimales hebdomadaires prévues</label>
-    <input class="fi fi-sm" type="number" id="f-hmin" step="0.5" oninput="calc()" placeholder="ex : 20">
+    <input class="fi fi-sm" type="number" id="f-hmin" step="0.01" oninput="limiterDeuxDecimales(this);calc()" placeholder="ex : 20">
   </div>
   <div class="fg">
     <label class="fl">Nombre de jours maximum travaillés par semaine</label>
@@ -15780,7 +15780,7 @@ function addSem(){
     <div class="tbar"><span>Total hebdo</span><span id="tot-sem-${n}">0h00</span></div>
  <div class="fg" style="margin-top:9px;margin-bottom:0">
       <label class="fl">Nombre de semaines concernées</label>
-      <input class="fi fi-sm" type="number" id="nbsem-${n}" min="1" step="1" oninput="checkSem()" style="width:80px">
+      <input class="fi fi-sm" type="number" id="nbsem-${n}" min="1" step="1" oninput="limiterEntier(this);checkSem()" style="width:80px">
     </div>`;
   wrap.appendChild(d);
   initJ('j-sem'+n,'sem'+n);
@@ -15825,12 +15825,12 @@ function addPlanVar(){
     </div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:7px">
       <span style="font-size:13px;color:var(--tx2)">Heures / sem.</span>
-      <input class="fi fi-sm" type="number" id="pv-h-${n}" step="0.5" placeholder="h/sem" style="width:85px" oninput="checkPlanVar()">
+      <input class="fi fi-sm" type="number" id="pv-h-${n}" step="0.01" placeholder="h/sem" style="width:85px" oninput="limiterDeuxDecimales(this);checkPlanVar()">
       <span style="font-size:13px;color:var(--tx2)">h/sem</span>
     </div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:7px">
       <span style="font-size:13px;color:var(--tx2)">Nombre de semaines</span>
-      <input class="fi fi-sm" type="number" id="pv-s-${n}" min="1" step="1" placeholder="nb sem." style="width:85px" oninput="checkPlanVar()">
+      <input class="fi fi-sm" type="number" id="pv-s-${n}" min="1" step="1" placeholder="nb sem." style="width:85px" oninput="limiterEntier(this);checkPlanVar()">
       <span style="font-size:13px;color:var(--tx2)">semaines</span>
     </div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -17153,6 +17153,32 @@ function getJoursData(prefix){
     return{d:document.getElementById(prefix+'-d-'+i)?.value||'',f:document.getElementById(prefix+'-f-'+i)?.value||''};
   });
 }
+// 21/09/2026 (Sophie, plan de tests lignes 56 et 59) : volume hebdomadaire limite a 2 decimales. Avec trois (35,163 h),
+// il ne tombe pas sur une minute entiere (35 h 09 min 47 s) et l'enveloppe du planning s'arrondit differemment selon
+// l'ecran. La saisie s'arrete a la deuxieme decimale ; un contrat existant qui en porte davantage doit etre corrige
+// avant d'etre enregistre, jamais arrondi en silence (le volume fixe la mensualisation).
+// 21/09/2026 (Sophie) : nombres de semaines limites aux entiers (nombre de semaines travaillees, semaines de chaque
+// volume du plan variable, semaines de chaque semaine type). Une valeur a virgule etait acceptee (Enael, avenant du
+// 01/02/2023). La saisie s'arrete a la virgule ; une valeur existante non entiere doit etre corrigee avant
+// d'enregistrer, jamais arrondie en silence.
+function limiterEntier(el){
+  if(!el||typeof el.value!=='string') return;
+  const m=el.value.match(/^(-?\d*)[.,]/);
+  if(m) el.value=m[1];
+}
+function semainesNonEntieres(){
+  const champs=[document.getElementById('f-nbsem'),...document.querySelectorAll('[id^="pv-s-"]'),...document.querySelectorAll('[id^="nbsem-"]')].filter(Boolean);
+  return champs.some(el=>{ const v=String(el.value||'').trim(); return v!==''&&/[.,]/.test(v)&&el.offsetParent!==null; });
+}
+function limiterDeuxDecimales(el){
+  if(!el||typeof el.value!=='string') return;
+  const m=el.value.match(/^(-?\d*)[.,](\d{3,})$/);
+  if(m) el.value=m[1]+'.'+m[2].slice(0,2);
+}
+function volumesAvecTropDeDecimales(){
+  const champs=[document.getElementById('f-hmin'),...document.querySelectorAll('[id^="pv-h-"]')].filter(Boolean);
+  return champs.some(el=>{ const m=String(el.value||'').match(/[.,](\d+)$/); return !!(m&&m[1].length>2&&el.offsetParent!==null); });
+}
 function valider(){
          if(document.getElementById('btn-val').disabled) return;
   // Forcer le recalcul des heures avant signature
@@ -17219,6 +17245,8 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
     }
   }
   if(S.tc!=='occ'&&!S.th){toast('Veuillez choisir un type d\'horaires');return;}
+  if(volumesAvecTropDeDecimales()){alerte('Le volume hebdomadaire est limité à 2 décimales — corrigez-le avant d\u2019enregistrer.');return;}
+  if(semainesNonEntieres()){alerte('Les nombres de semaines doivent être des nombres entiers — corrigez-les avant d\u2019enregistrer.');return;}
   const prefs=S.th==='fixe'?['fixe']:
     Array.from(document.querySelectorAll('[id^="nbsem-"]')).map(el=>'sem'+el.id.replace('nbsem-',''));
   for(const p of prefs){
@@ -17356,6 +17384,8 @@ function validerAvenant(){
   const {cid,avid}=S.enAvenant;
   const c=S.contrats.find(x=>x.id==cid);
   if(!c)return;
+  if(volumesAvecTropDeDecimales()){alerte('Le volume hebdomadaire est limité à 2 décimales — corrigez-le avant d\u2019enregistrer.');return;}
+  if(semainesNonEntieres()){alerte('Les nombres de semaines doivent être des nombres entiers — corrigez-les avant d\u2019enregistrer.');return;}
   const av=c.avenants.find(a=>a.id==avid);
   if(!av)return;
 
