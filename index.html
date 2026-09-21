@@ -22135,7 +22135,10 @@ function buildCgAmDetail(anneeDebut,data){
 
   // Précalcul des jours restants par contrat pour la bordure pointillée
   const anneeAcqPose=anneeDebut; // pose de anneeDebut = acquisition anneeDebut-1
-  const joursRestantsParContrat=contratsActifs.map(c=>{
+  // 21/09/2026 (Sophie) : un contrat dont la rupture est confirmée n'a plus de jours à poser ici (restants payés à la
+  // rupture) — retiré du résumé des jours restants et des jours proposés en pointillés.
+  const contratsResumeCg=contratsActifs.filter(c=>!c.rupture?.confirmee);
+  const joursRestantsParContrat=contratsResumeCg.map(c=>{
     const cgAcq=c.conges&&c.conges[anneeAcqPose-1];
     // 03/09/2026 (Sophie) : même ajustement que le résumé juste en dessous (jours déjà programmés,
     // pas encore validés, soustraits) — pour que les pointillés restent cohérents avec le nombre
@@ -22203,7 +22206,7 @@ function buildCgAmDetail(anneeDebut,data){
 
   // Résumé des jours restants par contrat
   let resumeHtml='<div style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:8px">';
-  contratsActifs.forEach(c=>{
+  contratsResumeCg.forEach(c=>{
     // Utiliser les données déjà calculées dans c.conges (pas de recalcul)
     // Trouver l'année d'acquisition correspondant à cette période AM
     const anneeAcq=anneeDebut; // la pose de anneeDebut correspond à l'acquisition anneeDebut-1
@@ -22312,7 +22315,9 @@ function buildCgAmDetail(anneeDebut,data){
     // deux fondées sur l'hypothèse erronée que la fenêtre de 30 dépendait de l'acquis réel).
     joursFragMax=Math.max(joursFragMax,calcJoursFractionnement(c,anneeDebut-1));
   });
-  const joursMax=30+joursFragMax;
+  // 21/09/2026 (Sophie) : les jours de fractionnement se choisissent dans l'onglet Congés du contrat, ils ne
+  // s'ajoutent plus au compteur de ce calendrier. Seuls les jours reportés après un arrêt s'ajoutent aux 30.
+  const joursMax=limiteJoursCgAm(anneeDebut);
   // 25/08/2026 (Sophie) : bannière "✓ X jours posés dont 5 samedis" supprimée (comptait à tort des
   // samedis fériés comme si c'étaient des samedis "consommés") — toujours le simple compteur.
   const alertHtml=`<div style="font-size:15px;font-weight:600;color:var(--tx2);margin-bottom:10px;display:flex;align-items:center;gap:6px">${nb}/${joursMax} jours cochés${pastille('i','Jours cochés','Les jours fériés cochés ne sont pas comptés dans ce total car ils sont généralement acquis pour au moins un contrat. Si vous pensez que ce n&#39;est pas le cas, cochez un jour de moins par férié non acquis. Les congés annuels sont à poser avant le 1er mars.')}</div>`;
@@ -22346,6 +22351,7 @@ function buildCgAmDetail(anneeDebut,data){
       ${alertHtml}
       <div style="font-size:11px;color:var(--tx3);margin-bottom:10px">
         Cliquez sur les jours pour les cocher.<br>
+        Les jours de fractionnement ne se posent pas sur ce calendrier : ils se choisissent sur la partie « congés » du contrat concerné.<br>
         <span style="background:#f0f0f0;padding:1px 4px;border-radius:3px">Gris</span> = jour de repos —
         <span style="background:#fff8e1;padding:1px 4px;border-radius:3px;color:#854F0B">Jaune</span> = férié
       </div>
@@ -22479,6 +22485,16 @@ function feriePeutEtreCocheCommePremierJour(anneeDebut,dateStr,reposHebdo,joursD
   return joursData[veilleRefStr]==='pose';
 }
 
+// 21/09/2026 (Sophie) : nombre de jours à poser sur le calendrier d'une année de pose — 30, plus le plus grand report
+// pour arrêt maladie reçu par un contrat en cours (année d'acquisition anneeDebut−1).
+function limiteJoursCgAm(anneeDebut){
+  let reportMax=0;
+  (S.contrats||[]).filter(c=>c.signe&&!estContratCloture(c)&&!c.rupture?.confirmee).forEach(c=>{
+    const rA=c.conges&&c.conges[anneeDebut-1]&&c.conges[anneeDebut-1].reportArret;
+    if(rA&&rA.jours>reportMax) reportMax=rA.jours;
+  });
+  return 30+reportMax;
+}
 function toggleCgAm(anneeDebut,dateStr){
   if(!S.congesAM) S.congesAM={};
   if(!S.congesAM[anneeDebut]) S.congesAM[anneeDebut]={enfants:0,jours:{}};
@@ -22486,7 +22502,13 @@ function toggleCgAm(anneeDebut,dateStr){
   if(data.jours[dateStr]==='pose'){
     delete data.jours[dateStr];
   } else {
-    // Pas de limite au nombre de jours cochés (certains contrats peuvent avoir plus de jours restants)
+    // 21/09/2026 (Sophie) : 30 jours à poser par année de pose (fériés non comptés), plus les jours reportés après
+    // un arrêt maladie — au-delà, cocher un jour est refusé.
+    if(!isFerie(dateStr,{})){
+      const nbCochesT=Object.keys(data.jours||{}).filter(k=>data.jours[k]==='pose'&&!isFerie(k,{})).length;
+      const limiteT=limiteJoursCgAm(anneeDebut);
+      if(nbCochesT>=limiteT){ alerte(limiteT+' jours de congés sont déjà cochés sur ce calendrier (fériés non compris).'); return; }
+    }
     const parts=dateStr.split('-');
     const jourDate=new Date(parseInt(parts[0]),parseInt(parts[1])-1,parseInt(parts[2]));
     // Un férié pas encore coché ne peut pas devenir le 1er jour d'une pose (règle Sophie 20/08)
