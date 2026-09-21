@@ -6100,7 +6100,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
         // semaine entièrement parcourue (cette bande est écrite avant que les jours suivants soient
         // comptés, son total n'est donc pas encore connu ici).
         return `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:${bgApresAvP};font-size:11px;font-weight:600;color:var(--tx2);border-top:3px solid var(--m)">
-          <span title="Depuis l'avenant">Après avenant${jMaxApresAvP?' — maximum '+jMaxApresAvP+' jours':''}${volHApresAvP?' — '+volHApresAvP+'h max':''}</span>
+          <span title="Depuis l'avenant">Après avenant${jMaxApresAvP?' — maximum '+jMaxApresAvP+' jours':''}${volHApresAvP?' — '+fmtH(volHApresAvP*60)+' max':''}</span>
           ${semCoupeeAvP?'<span>Total : <span class="pln-total-apres">__TOTAL_APRES_AV__</span></span>':''}
         </div>`;
       })():'';
@@ -6122,7 +6122,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
     return `<div class="pln-sem" data-semkey="${semKeyDom}" data-contrat="${c.id}" data-jmax="${jMaxSem}"
       style="border:1px solid ${brdSem};border-radius:var(--rs);margin-bottom:8px;overflow:hidden">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:${bgSem};font-size:11px;font-weight:600;color:var(--tx2)">
-        <span>Semaine ${getSemISO(sem.jours[0].date)}${(estVarTile&&modifMoisActive)?'':(jMaxSem?' — maximum '+jMaxSem+' jours':'')+(volHSem?' — '+volHSem+'h max':'')}</span>
+        <span>Semaine ${getSemISO(sem.jours[0].date)}${(estVarTile&&modifMoisActive)?'':(jMaxSem?' — maximum '+jMaxSem+' jours':'')+(volHSem?' — '+fmtH(volHSem*60)+' max':'')}</span>
         <span>Total : <span class="pln-total">${fmtH(semCoupeeAvP?minSemAvantAv:(estFixeOuSemTile?totalSemMinFS:totalSemMin))}</span></span>
       </div>
       ${joursHtml}
@@ -7014,7 +7014,11 @@ function enregistrerPlanningMois(contratId, moisKey){
           : `Ce mois totalise ${fmtH(pV.minReels)} pour une enveloppe de ${fmtH(pV.env.minutes)} — limitez le nombre d'heures à celui prévu au contrat (les heures complémentaires seront à ajouter sur la feuille de présence)`);
       });
     } else if(hSupMoisV>0.001){
-      complSupInfoV=`, dont ${fmtH(Math.round(hSupMoisV))} heures supplémentaires`;
+      // 21/09/2026 (Sophie, plan de tests lignes 56, 58, 59 et 61) : mention retirée du message
+      // d'enregistrement. Elle affichait en outre des heures comme s'il s'agissait de minutes
+      // (0,50 h de majoration en mai 2021 annoncées « 0h01 »). Les heures supplémentaires restent
+      // calculées et payées sur la feuille de présence.
+      complSupInfoV='';
     }
   }
   if(erreurs.length){
@@ -8957,6 +8961,21 @@ function majFicheStatut(contratId,key,idx,val){
     }
   }
   if(!ficheSource.fiches?.[key]) return;
+  // 21/09/2026 (Sophie, Enaël janvier 2022, plan de tests ligne 53) : en plan minimum ou variable, un jour
+  // « non prévu » n'a pas d'heures prévues — un arrêt de travail posé dessus ne déduit donc rien. Le planning
+  // doit être rempli d'abord. Avertissement (sans blocage) au premier arrêt du mois posé sur un jour non prévu.
+  if(val==='arret'){
+    const ficheArr=ficheSource.fiches[key];
+    const jArr=ficheArr.jours&&ficheArr.jours[idx];
+    if(jArr&&jArr.date){
+      const srcArr=getVersionActive(c,parseDateLoc(jArr.date));
+      const estMinVarArr=srcArr.th==='plan'&&(srcArr.planType==='min'||srcArr.planType==='var');
+      const dejaArrNP=ficheArr.jours.some((jj,ii)=>ii!==idx&&jj.statut==='arret'&&getStatutPrevu(c,jj)==='non-prevu');
+      if(estMinVarArr&&getStatutPrevu(c,jArr)==='non-prevu'&&!dejaArrNP){
+        alerte('Le planning doit être rempli avant de passer un jour en « arrêt de travail », sans quoi aucune heure ne sera déduite.');
+      }
+    }
+  }
   // Bloquer abs-enfant si déjà 5 jours dans l'année de contrat
   if(val==='abs-enfant'){
     const fiche=ficheSource.fiches[key];
