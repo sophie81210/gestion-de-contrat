@@ -8303,8 +8303,10 @@ function calcDateFinContratBruteCalc(c){
   if(aPreavis&&rp.statutPreavis==='partiel'&&rp.dateFinPreavis){
     return new Date(rp.dateFinPreavis);
   }
-  if((motif==='fin-essai'||motif==='fin-essai-am')&&rp.dateNotif&&rp.delaiPrev){
-    const finNotifDelai=new Date(new Date(rp.dateNotif).getTime()+parseInt(rp.delaiPrev)*24*60*60*1000);
+  // 21/09/2026 (Sophie) : sans délai de prévenance (0 ou vide), le contrat s'arrête le jour de la notification —
+  // aucune date de fin n'était déterminée jusqu'ici.
+  if((motif==='fin-essai'||motif==='fin-essai-am')&&rp.dateNotif){
+    const finNotifDelai=new Date(new Date(rp.dateNotif).getTime()+(parseInt(rp.delaiPrev)||0)*24*60*60*1000);
     // 21/09/2026 (Sophie) : jamais au-delà du dernier jour de la période d'essai (CDI)
     const finEssaiMax=dateFinEssaiCdiEffective(c);
     return (finEssaiMax&&finNotifDelai>finEssaiMax)?new Date(finEssaiMax):finNotifDelai;
@@ -15488,9 +15490,15 @@ function surChangementFratrie(){
   ['f-periode-essai','f-periode-essai-jours'].forEach(id=>{const e=document.getElementById(id);if(e&&!e.disabled)e.value='';});
   majFratrie();
 }
-// 21/09/2026 (Sophie) : dernier jour de la période d'essai d'un CDI, prolongation pour absences comprise (null si aucune).
+// 21/09/2026 (Sophie) : dernier jour de la période d'essai (CDI ou CDD), prolongation pour absences comprise (null si aucune).
 function dateFinEssaiCdiEffective(c){
-  const nomE=dateFinEssaiNominaleCdi(c);
+  // CDD : période d'essai en jours, le jour de début compte (14 jours à partir du 21/09 finissent le 04/10).
+  let nomE;
+  if(c.typeDuree==='cdd'){
+    if(!(c.periodeEssaiCdd>0)||!c.dateDeb) return null;
+    const [yC,mC,dC]=c.dateDeb.split('-').map(Number);
+    nomE=new Date(yC,mC-1,dC+c.periodeEssaiCdd-1);
+  } else nomE=dateFinEssaiNominaleCdi(c);
   if(!nomE) return null;
   const [yF,mF,dF]=c.dateDeb.split('-').map(Number);
   return calcFinEssaiAvecProlongation(c,new Date(yF,mF-1,dF),nomE);
@@ -18557,9 +18565,15 @@ function rafraichirRupture(cid){
   // 21/09/2026 (Sophie) : rupture pendant la période d'essai — une notification postérieure à la fin de l'essai est
   // refusée (la rupture ne relève plus de l'essai).
   c._notifEssaiRefusee=null;
+  // Le délai de prévenance doit tenir dans l'essai : dernière notification possible = fin de l'essai − délai
+  // (15 jours d'essai, 5 jours de délai : notification au plus tard au bout de 10 jours de contrat).
+  c._notifEssaiMax=null;
   if((motif==='fin-essai'||motif==='fin-essai-am')&&dateNotifFinal){
     const finEssaiR=dateFinEssaiCdiEffective(c);
-    if(finEssaiR&&dateNotifFinal>dateToStr(finEssaiR)){ c._notifEssaiRefusee=dateNotifFinal; dateNotifFinal=''; }
+    if(finEssaiR){
+      const notifMaxR=new Date(finEssaiR); notifMaxR.setDate(notifMaxR.getDate()-delaiPrev);
+      if(dateNotifFinal>dateToStr(notifMaxR)){ c._notifEssaiRefusee=dateNotifFinal; c._notifEssaiMax=dateToStr(notifMaxR); dateNotifFinal=''; }
+    }
   }
   // Recalculer dateFinPreavis légale si préavis effectué
   let dateFinPreavisFinal=dateFinPreavis;
@@ -19082,10 +19096,7 @@ function renderRuptureCDD(c, cont){
           ${motifsList.map(m=>{
             // Désactiver fin-essai si la période d'essai est dépassée
             if((m.v==='fin-essai'||m.v==='fin-essai-am')&&c.periodeEssaiCdd>0){
-              const dateDebEssaiCdd=new Date(c.dateDeb);
-              const dateFinEssaiNominaleCdd=new Date(c.dateDeb);
-              dateFinEssaiNominaleCdd.setDate(dateFinEssaiNominaleCdd.getDate()+c.periodeEssaiCdd);
-              const dateFinEssai=calcFinEssaiAvecProlongation(c,dateDebEssaiCdd,dateFinEssaiNominaleCdd);
+              const dateFinEssai=dateFinEssaiCdiEffective(c);
               const aujourdhui=dateSit||new Date();
               if(aujourdhui>dateFinEssai){
                 return `<option value="${m.v}" disabled style="color:var(--tx3)">${m.l} (délai dépassé)</option>`;
@@ -19104,6 +19115,7 @@ function renderRuptureCDD(c, cont){
       ${(motif==='fin-essai'||motif==='fin-essai-am')?`<div style="margin-top:10px">
         <label style="font-size:12px;color:var(--tx2)">Date de notification</label>
         <input type="text" id="rp-date-notif-${cid}" value="${dateISOversTexte(rp.dateNotif||'')}" placeholder="JJ/MM/AAAA" oninput="formaterSaisieDate(this)" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
+        ${c._notifEssaiRefusee&&c._notifEssaiMax?`<div style="color:var(--al);font-size:12px;margin-top:4px">⚠ Date refusée (${dateISOversTexte(c._notifEssaiRefusee)}) : pour une rupture de la période d'essai, la notification doit avoir lieu au plus tard le ${dateISOversTexte(c._notifEssaiMax)}.</div>`:''}
         <label style="font-size:12px;color:var(--tx2);display:block;margin-top:8px">Délai de prévenance (jours)</label>
         <input type="number" min="0" max="8" id="rp-delai-prev-${cid}" value="${rp.delaiPrev||''}" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
       </div>`:''}
@@ -19373,7 +19385,7 @@ function renderRupture(c, cont){
     if(dateFinEssai&&dateFinPeriodeEssai&&dateFinEssai>dateFinPeriodeEssai) dateFinEssai=new Date(dateFinPeriodeEssai);
     const dateMaxNotif=dateFinPeriodeEssai?(dateFinPeriodeEssai.getFullYear()+'-'+String(dateFinPeriodeEssai.getMonth()+1).padStart(2,'0')+'-'+String(dateFinPeriodeEssai.getDate()).padStart(2,'0')):'';
     const erreurEssai=c._notifEssaiRefusee&&dateFinPeriodeEssai
-      ?`<div style="color:var(--al);font-size:12px;margin-top:4px">⚠ Date refusée (${dateISOversTexte(c._notifEssaiRefusee)}) : pendant la période d'essai, la notification doit avoir lieu au plus tard le ${dateFinPeriodeEssai.toLocaleDateString('fr-FR')}.</div>`
+      ?`<div style="color:var(--al);font-size:12px;margin-top:4px">⚠ Date refusée (${dateISOversTexte(c._notifEssaiRefusee)}) : pour une rupture de la période d'essai, la notification doit avoir lieu au plus tard le ${dateISOversTexte(c._notifEssaiMax||dateToStr(dateFinPeriodeEssai))}.</div>`
       :dateNotif&&dateFinPeriodeEssai&&dateNotif>dateFinPeriodeEssai?
       `<div style="color:var(--al);font-size:12px;margin-top:4px">⚠ La date de notification dépasse la fin de la période d'essai (${dateFinPeriodeEssai.toLocaleDateString('fr-FR')})</div>`:
       '';
