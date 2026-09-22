@@ -15507,6 +15507,18 @@ async function supprCompteConnexion(mode){
 }
 async function supprCompteVerifier(user){
   fenetreSupprCompte('<h3>Supprimer mon compte</h3><p style="font-size:13px">Vérification du compte…</p>');
+  // 22/09/2026 (Sophie) : se connecter avec Google CRÉE le compte s'il n'existe pas. Un compte créé à l'instant par
+  // cette connexion n'a rien à supprimer : on le retire aussitôt et on le dit.
+  try{
+    const md=user.metadata||{};
+    const creation=md.creationTime?new Date(md.creationTime).getTime():0;
+    if(creation&&Math.abs(Date.now()-creation)<120000){
+      if(window.fbDeleteUser) await window.fbDeleteUser();
+      window._suppressionTerminee=true;
+      fenetreSupprCompte(`<h3>Aucun compte à supprimer</h3><p style="font-size:13px">Ce compte n’existe plus : la connexion vient d’en créer un nouveau, vide, qui a été supprimé aussitôt.</p><div class="modal-btns"><button class="btn bp" onclick="location.reload()">Terminer</button></div>`);
+      return;
+    }
+  }catch(e){ console.error('Suppression compte — compte tout juste créé',e); }
   const emailNorm=(user.email||'').trim().toLowerCase();
   // Compte employeur : même suppression que depuis son accès (accès au contrat, puis compte)
   try{
@@ -15561,6 +15573,7 @@ async function executerSupprCompte(){
     if(btn) btn.disabled=false; return;
   }
   ['cam_c','cam_cgam','cam_params'].forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} });
+  window._suppressionTerminee=true;
   fenetreSupprCompte(`<h3>Compte supprimé</h3><p style="font-size:13px">Votre compte et toutes ses données ont été supprimés.</p><div class="modal-btns"><button class="btn bp" onclick="location.reload()">Terminer</button></div>`);
 }
 // Pack de documents d'un contrat : toutes ses feuilles validées (la dernière porte le solde de fin de contrat) puis la
@@ -25168,6 +25181,8 @@ window.addEventListener('popstate',function(){
 // Avertissement générique (texte non personnalisable, imposé par le navigateur) à la fermeture
 // d'onglet, l'actualisation, ou la saisie d'une nouvelle adresse — n'apparaît pas sur Safari iOS
 window.addEventListener('beforeunload',function(e){
+  // 22/09/2026 (Sophie) : après la suppression d'un compte, il n'y a plus rien à perdre — pas d'avertissement.
+  if(window._suppressionTerminee) return;
   e.preventDefault();
   e.returnValue='';
 });
