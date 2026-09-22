@@ -73,6 +73,21 @@ window.fbResendVerification = async()=>{
     return{ok:true};
   }catch(e){return{ok:false,err:e.message};}
 };
+// 22/09/2026 (Sophie) : suppression d'un compte d'assistante maternelle — accès employeurs, contrats, réglages et
+// calendriers, puis le compte de connexion. Les données sont effacées avant le compte : en cas d'échec, rien n'est perdu
+// à moitié côté connexion et l'opération peut être relancée.
+window.fbSupprimerCompteAM = async(emailsEmployeurs)=>{
+  try{
+    const u=auth.currentUser;
+    if(!u) return{ok:false,err:'Aucun utilisateur connecté'};
+    for(const em of (emailsEmployeurs||[])){ try{ await deleteDoc(doc(db,'acces_employeurs',em)); }catch(e){ console.error('Suppression accès employeur',em,e); } }
+    const snapC=await getDocs(collection(db,'users',u.uid,'contrats'));
+    for(const d of snapC.docs){ await deleteDoc(d.ref); }
+    await deleteDoc(doc(db,'users',u.uid,'app','meta'));
+    await u.delete();
+    return{ok:true};
+  }catch(e){return{ok:false,err:e.message,code:e.code};}
+};
 window.fbDeleteUser = async()=>{
   try{
     if(!auth.currentUser) return{ok:false,err:'Aucun utilisateur connecté'};
@@ -353,6 +368,10 @@ input[type=time].fi{width:auto;min-width:92px}
         <div style="text-align:center;margin-top:6px;font-size:12px;color:var(--tx2)" id="email-mode-toggle"></div>
       </div>
       <div class="rmb" style="margin-top:10px"><input type="checkbox" id="rmb" checked><label for="rmb">Rester connect&eacute;e</label></div>
+    </div>
+    <div style="text-align:center;margin-top:20px;display:flex;flex-direction:column;gap:8px;align-items:center">
+      <button class="btn bs bsm" onclick="ouvrirAideModal('connexion.html','Connexion')">❓ Aide à la connexion</button>
+      <a href="#" onclick="ouvrirSuppressionCompte();return false;" style="font-size:12px;color:var(--tx2)">Supprimer mon compte</a>
     </div>
   </div>
 </div>
@@ -927,6 +946,7 @@ let planVarN=0;
 
 // ══ FIREBASE AUTH ══
 window.entrerApresAuth = async function(user){
+  if(window._suppressionCompte) return; // 22/09/2026 : parcours « Supprimer mon compte » de l'écran de connexion
   window.FB_USER = user;
   document.getElementById('pg-login').style.display='none';
 const btnP=document.getElementById('btn-params');
@@ -15448,10 +15468,136 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
 }
 
 
+// 22/09/2026 (Sophie) : « Supprimer mon compte » depuis l'écran de connexion — connexion, contrôle des contrats en
+// cours (signés et non clôturés : suppression refusée), pack de documents par contrat, puis « SUPPRIMER » à taper.
+function fenetreSupprCompte(html){
+  let ov=document.getElementById('suppr-compte-overlay');
+  if(!ov){ ov=document.createElement('div'); ov.id='suppr-compte-overlay'; ov.className='modal-wrap'; document.body.appendChild(ov); }
+  ov.innerHTML=`<div class="modal" style="max-width:460px;max-height:90vh;overflow-y:auto">${html}</div>`;
+}
+async function fermerSupprCompte(deconnecter){
+  const ov=document.getElementById('suppr-compte-overlay'); if(ov) ov.remove();
+  if(deconnecter&&window.fbLogout){ try{ await window.fbLogout(); }catch(e){} }
+  window._suppressionCompte=false;
+  S.contrats=[]; S.congesAM={};
+}
+function ouvrirSuppressionCompte(){
+  fenetreSupprCompte(`<h3>Supprimer mon compte</h3>
+    <p style="font-size:13px">Connectez-vous avec le compte à supprimer. Rien n'est supprimé à cette étape.</p>
+    <button class="bg-btn" style="margin-top:12px" onclick="supprCompteConnexion('google')">Continuer avec Google</button>
+    <div style="text-align:center;font-size:12px;color:var(--tx2);margin:10px 0">ou</div>
+    <input class="fi" type="email" id="sc-email" placeholder="Adresse email" style="margin-bottom:8px">
+    <input class="fi" type="password" id="sc-pwd" placeholder="Mot de passe" style="margin-bottom:10px">
+    <button class="bg-btn" style="background:var(--m);color:#fff;border-color:var(--m)" onclick="supprCompteConnexion('email')">Continuer avec l'email</button>
+    <div id="sc-erreur" style="color:var(--al);font-size:12px;margin-top:8px"></div>
+    <div class="modal-btns"><button class="btn bs" onclick="fermerSupprCompte(false)">Annuler</button></div>`);
+}
+async function supprCompteConnexion(mode){
+  const errEl=document.getElementById('sc-erreur');
+  window._suppressionCompte=true;
+  let r;
+  if(mode==='google') r=window.fbLoginGoogle?await window.fbLoginGoogle():{ok:false,err:'Firebase en cours de chargement'};
+  else{
+    const em=(document.getElementById('sc-email')?.value||'').trim(), pw=document.getElementById('sc-pwd')?.value||'';
+    if(!em||!pw){ window._suppressionCompte=false; if(errEl) errEl.textContent='Saisissez l\u2019adresse et le mot de passe.'; return; }
+    r=window.fbLoginEmail?await window.fbLoginEmail(em,pw):{ok:false,err:'Firebase en cours de chargement'};
+  }
+  if(!r||!r.ok){ window._suppressionCompte=false; if(errEl) errEl.textContent='Connexion impossible : '+((r&&r.err)||''); return; }
+  await supprCompteVerifier(r.user);
+}
+async function supprCompteVerifier(user){
+  fenetreSupprCompte('<h3>Supprimer mon compte</h3><p style="font-size:13px">Vérification du compte…</p>');
+  const emailNorm=(user.email||'').trim().toLowerCase();
+  // Compte employeur : même suppression que depuis son accès (accès au contrat, puis compte)
+  try{
+    const acc=emailNorm&&window.fbGetAccesEmployeur?await window.fbGetAccesEmployeur(emailNorm):null;
+    if(acc&&acc.ok&&acc.exists&&acc.data&&acc.data.uid!==user.uid){
+      S._supprCompteEmployeur=emailNorm;
+      fenetreSupprCompte(`<h3>Supprimer mon compte</h3>
+        <p style="font-size:13px">Ce compte est un compte employeur. Sa suppression retire votre accès au contrat ; vous devrez redemander un accès si besoin.</p>
+        ${blocConfirmationSupprCompte()}`);
+      return;
+    }
+  }catch(e){ console.error('Suppression compte — accès employeur',e); }
+  const rd=window.fbLoadData?await window.fbLoadData(user.uid):{ok:false,err:'Firebase en cours de chargement'};
+  if(!rd.ok){ fenetreSupprCompte(`<h3>Supprimer mon compte</h3><p style="font-size:13px;color:var(--al)">Chargement impossible : ${rd.err||''}</p><div class="modal-btns"><button class="btn bs" onclick="fermerSupprCompte(true)">Fermer</button></div>`); return; }
+  S.contrats=rd.data.contrats||[]; S.congesAM=rd.data.congesAM||{}; S.params=rd.data.params||JSON.parse(JSON.stringify(PARAMS_DEFAUT));
+  try{ const rp=window.fbLoadParamsPartages?await window.fbLoadParamsPartages():null; if(rp&&rp.ok&&rp.exists&&rp.data){ if(rp.data.coefficients) S.params.coefficients=rp.data.coefficients; if(rp.data.indemEntretien) S.params.indemEntretien=rp.data.indemEntretien; } }catch(e){}
+  S._supprCompteEmployeur=null;
+  const enCours=S.contrats.filter(c=>c.signe&&!estContratCloture(c));
+  if(enCours.length){
+    fenetreSupprCompte(`<h3>Supprimer mon compte</h3>
+      <p style="font-size:13px">Ces contrats sont encore en cours : <strong>${enCours.map(c=>c.nom).join(', ')}</strong>.</p>
+      <p style="font-size:13px;margin-top:8px">Clôturez-les (rupture confirmée et dernière feuille validée) ou supprimez-les avant de supprimer votre compte.</p>
+      <div class="modal-btns"><button class="btn bs" onclick="fermerSupprCompte(true)">Fermer</button></div>`);
+    return;
+  }
+  const avecDocs=S.contrats.filter(c=>Object.values(c.fiches||{}).some(f=>f.valide));
+  fenetreSupprCompte(`<h3>Supprimer mon compte</h3>
+    <p style="font-size:13px">Avant de supprimer votre compte, téléchargez les documents de vos contrats : feuilles de présence validées, régularisation et solde de fin de contrat. Dans la fenêtre d'impression, choisissez « Enregistrer au format PDF ».</p>
+    <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px">${avecDocs.length?avecDocs.map(c=>`<button class="btn bs bsm" onclick="imprimerPackContrat(${c.id})">📄 Télécharger les documents de ${c.nom}</button>`).join(''):'<div style="font-size:12px;color:var(--tx2)">Aucune feuille validée.</div>'}</div>
+    <p style="font-size:13px;margin-top:14px">La suppression efface définitivement vos contrats, vos réglages, vos calendriers de congés et les accès donnés aux employeurs.</p>
+    ${blocConfirmationSupprCompte()}`);
+}
+function blocConfirmationSupprCompte(){
+  return `<p style="margin-top:10px;font-size:13px">Pour confirmer, tapez <strong>SUPPRIMER</strong> :</p>
+    <input class="fi" type="text" autocomplete="off" oninput="document.getElementById('btn-suppr-compte').disabled=this.value.trim().toUpperCase()!=='SUPPRIMER'" style="margin-top:6px">
+    <div id="sc-erreur" style="color:var(--al);font-size:12px;margin-top:8px"></div>
+    <div class="modal-btns"><button class="btn bs" onclick="fermerSupprCompte(true)">Annuler</button><button class="btn bd" id="btn-suppr-compte" disabled onclick="executerSupprCompte()">Supprimer mon compte</button></div>`;
+}
+async function executerSupprCompte(){
+  const btn=document.getElementById('btn-suppr-compte'); if(btn) btn.disabled=true;
+  const errEl=document.getElementById('sc-erreur');
+  let r;
+  if(S._supprCompteEmployeur){
+    try{ if(window.fbDeleteAccesEmployeur) await window.fbDeleteAccesEmployeur(S._supprCompteEmployeur); }catch(e){}
+    r=window.fbDeleteUser?await window.fbDeleteUser():{ok:false,err:'Firebase en cours de chargement'};
+  } else {
+    const emails=[...new Set((S.contrats||[]).map(c=>c.emailEmployeurAutorise).filter(Boolean))];
+    r=window.fbSupprimerCompteAM?await window.fbSupprimerCompteAM(emails):{ok:false,err:'Firebase en cours de chargement'};
+  }
+  if(!r||!r.ok){
+    if(errEl) errEl.textContent=(r&&r.code==='auth/requires-recent-login')?'Par sécurité, fermez cette fenêtre et recommencez la suppression depuis le début.':'La suppression a échoué : '+((r&&r.err)||'');
+    if(btn) btn.disabled=false; return;
+  }
+  ['cam_c','cam_cgam','cam_params'].forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} });
+  fenetreSupprCompte(`<h3>Compte supprimé</h3><p style="font-size:13px">Votre compte et toutes ses données ont été supprimés.</p><div class="modal-btns"><button class="btn bp" onclick="location.reload()">Terminer</button></div>`);
+}
+// Pack de documents d'un contrat : toutes ses feuilles validées (la dernière porte le solde de fin de contrat) puis la
+// régularisation, dans une seule page à imprimer, un document par page. Les pages d'impression existantes sont reprises
+// telles quelles (fenêtres interceptées), sans recalcul propre.
+function imprimerPackContrat(cid){
+  const c=S.contrats.find(x=>x.id==cid); if(!c) return;
+  const docs=[];
+  const vraiOpen=window.open;
+  window.open=function(){ const buf={h:''}; docs.push(buf); return {document:{write(x){buf.h+=x;},close(){}},print(){},focus(){},close(){},addEventListener(){},onload:null}; };
+  try{
+    Object.keys(c.fiches||{}).filter(k=>c.fiches[k].valide).sort().forEach(k=>{ try{ imprimerFiche(cid,k); }catch(e){ console.error('Pack feuille',k,e); } });
+    try{ const resReg=calcRegulOnglet(c); if(resReg&&(resReg.annees||[]).length) imprimerRegulTotal(cid); }catch(e){}
+  } finally { window.open=vraiOpen; }
+  const styles=[], corps=[];
+  docs.forEach(d=>{
+    const h=d.h.replace(/<script[\s\S]*?<\/script>/gi,'');
+    (h.match(/<style[^>]*>[\s\S]*?<\/style>/gi)||[]).forEach(st=>{ if(!styles.includes(st)) styles.push(st); });
+    const mb=h.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+    corps.push(mb?mb[1]:h);
+  });
+  if(!corps.length){ alerte('Aucun document à imprimer pour ce contrat.'); return; }
+  const w=vraiOpen.call(window,'','_blank');
+  if(!w){ alerte('Autorisez les fenêtres pour ce site afin de télécharger les documents.'); return; }
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Documents — ${c.nom}</title>${styles.join('')}
+    <style>.doc-pack{page-break-after:always;break-after:page}.doc-pack:last-child{page-break-after:auto;break-after:auto}</style></head>
+    <body>${corps.map(b=>'<div class="doc-pack">'+b+'</div>').join('')}<script>window.onload=function(){window.print();}<\/script></body></html>`);
+  w.document.close();
+}
 function confSuppr(id){
   const c=S.contrats.find(x=>x.id==id);if(!c)return;
   const m=document.createElement('div');m.className='modal-wrap';
-  m.innerHTML=`<div class="modal"><h3>Supprimer ?</h3><p>Le contrat <strong>${c.nom||''}</strong> sera supprimé définitivement.</p><div class="modal-btns"><button class="btn bs" onclick="this.closest('.modal-wrap').remove()">Annuler</button><button class="btn bd" onclick="suppr(${id})">Supprimer</button></div></div>`;
+  // 22/09/2026 (Sophie) : confirmation renforcée — le mot SUPPRIMER doit être tapé pour activer le bouton.
+  m.innerHTML=`<div class="modal"><h3>Supprimer ?</h3><p>Le contrat <strong>${c.nom||''}</strong> sera supprimé définitivement, avec toutes ses feuilles.</p>
+    <p style="margin-top:10px;font-size:13px">Pour confirmer, tapez <strong>SUPPRIMER</strong> :</p>
+    <input class="fi" type="text" autocomplete="off" oninput="this.closest('.modal').querySelector('.btn-suppr-conf').disabled=this.value.trim().toUpperCase()!=='SUPPRIMER'" style="margin-top:6px">
+    <div class="modal-btns"><button class="btn bs" onclick="this.closest('.modal-wrap').remove()">Annuler</button><button class="btn bd btn-suppr-conf" disabled onclick="suppr(${id})">Supprimer</button></div></div>`;
   document.body.appendChild(m);
 }
 function suppr(id){
