@@ -9243,6 +9243,25 @@ function majFicheStatut(contratId,key,idx,val){
       }
     }
   }
+  // 22/09/2026 (Sophie) : arrêt posé sur une semaine d'absence de l'employeur — une fois par semaine.
+  if(val==='arret'){
+    const ficheOffA=ficheSource.fiches[key];
+    const jOffA=ficheOffA.jours&&ficheOffA.jours[idx];
+    if(jOffA&&jOffA.date){
+      const dOffA=parseDateLoc(jOffA.date);
+      const srcOffA=getVersionActive(c,dOffA);
+      const agOffA=(srcOffA.agendas||c.agendas||[]).find(a=>parseDateLoc(a.dateDebut)<=dOffA&&parseDateLoc(a.dateFin)>=dOffA);
+      const keyOffA=getKeyAgenda(getSemISO(jOffA.date),getSemAnnee(jOffA.date));
+      const estOffA=!!(agOffA&&agOffA.semaines&&agOffA.semaines[keyOffA]==='off');
+      const dejaOffA=ficheOffA.jours.some((jj,ii)=>ii!==idx&&jj.statut==='arret'&&jj.date&&getSemISO(jj.date)===getSemISO(jOffA.date));
+      if(estOffA&&!dejaOffA){
+        alerte('Aucune heure prévue = aucune heure déduite.<br><br>Si la semaine est entièrement en arrêt de travail, au choix :<br>'
+          +'• soit elle est reportée : dans ce cas, la semaine d\u2019arrêt de travail doit être passée en travaillée sur l\u2019agenda, elle sera alors déduite, et la semaine d\u2019absence employeur positionnée ailleurs ;<br>'
+          +'• soit elle n\u2019est pas reportée : dans ce cas, l\u2019agenda n\u2019a pas à être modifié et la semaine ne sera pas déduite ;<br>'
+          +'• si tout le mois est en arrêt de travail, il ne peut pas y avoir de paiement : toutes les semaines du mois doivent alors être indiquées comme travaillées, afin que l\u2019absence soit déduite.');
+      }
+    }
+  }
   // Bloquer abs-enfant si déjà 5 jours dans l'année de contrat
   if(val==='abs-enfant'){
     const fiche=ficheSource.fiches[key];
@@ -14043,7 +14062,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // cheval sur deux mois).
     const infoArretSP=(statut==='arret'&&!estArretEnSemaineOff&&!(j.heureDebPrev&&j.heureFinPrev)&&j.date)?infoArretSemaineMinVar(c,j.date):null;
     const estArretSansPlanning=!!(infoArretSP&&!infoArretSP.coche&&infoArretSP.arrets.indexOf(j.date)>=0&&infoArretSP.arrets.indexOf(j.date)<infoArretSP.jMax);
-    const estAbsDeduite=absDeduites.includes(statut)||estArretSurJourPrevu||estArretEnSemaineOff||estArretSansPlanning;
+    // 22/09/2026 (Sophie) : un arrêt posé sur une semaine d'absence de l'employeur n'est plus déduit — aucune heure
+    // prévue, aucune heure déduite. Une semaine d'absence employeur est toujours complète : un jour déduit n'aurait pas
+    // pu être reporté. Pour déduire (report de la semaine, ou mois entier en arrêt), l'utilisateur repasse la semaine
+    // en travaillée dans l'agenda.
+    const estAbsDeduite=absDeduites.includes(statut)||estArretSurJourPrevu||estArretSansPlanning;
     if(estPresent&&j.heureDebReel&&j.heureFinReel){
       const debReel=toM(j.heureDebReel);
       const finReel=toM(j.heureFinReel);
@@ -22364,9 +22387,9 @@ function buildCgAmDetail(anneeDebut,data){
           style="width:60px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:14px;margin-top:6px"
           onchange="majCgAmEnfants(${anneeDebut},this.value)">
       </div>
-      <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;cursor:pointer">
+      <div style="display:flex;align-items:center;gap:8px;margin-top:12px"><label style="display:inline-flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
         <input type="checkbox" ${data.limite5Samedis?'checked':''} onchange="majCgAmLimiteSamedis(${anneeDebut},this)"> 5 samedis décomptés
-      </label>
+      </label>${pastille('i','5 samedis décomptés','Je coche la case si je ne travaille pas le samedi et si mon contrat comporte une clause limitant le décompte des samedis à 5 par année de pose.')}</div>
 
     </div>
     <div class="card" id="cgam-cal-card-${anneeDebut}">
