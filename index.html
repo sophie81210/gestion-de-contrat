@@ -22877,6 +22877,24 @@ function feriePeutEtreCocheCommePremierJour(anneeDebut,dateStr,reposHebdo,joursD
 
 // 21/09/2026 (Sophie) : nombre de jours à poser sur le calendrier d'une année de pose — 30, plus le plus grand report
 // pour arrêt maladie reçu par un contrat en cours (année d'acquisition anneeDebut−1).
+// 22/09/2026 (Sophie) : jours encore à poser par contrat pour cette année de pose — même calcul que le résumé affiché
+// sur le calendrier (acquis de l'année de référence, moins les jours pris sur feuilles validées et ceux déjà programmés).
+function contratsAvecJoursRestantsCgAm(anneeDebut){
+  const debPose=anneeDebut+'-05-01', finPose=(anneeDebut+1)+'-04-30';
+  const debAnt=(anneeDebut-1)+'-06-01', finAnt=anneeDebut+'-04-30';
+  return (S.contrats||[]).filter(c=>c.signe&&!estContratCloture(c)&&!c.rupture?.confirmee).map(c=>{
+    const cgAcq=c.conges&&c.conges[anneeDebut-1];
+    const prog=Object.values(c.fiches||{}).reduce((n,f)=>{
+      if(f.valide) return n;
+      return n+(f.jours||[]).filter(j=>{
+        if(['conges-acq','decompte-acq'].includes(j.statut)) return j.date>=debPose&&j.date<=finPose;
+        if(['conges-anticipe','decompte-anticipe'].includes(j.statut)) return j.date>=debAnt&&j.date<=finAnt;
+        return false;
+      }).length;
+    },0);
+    return {nom:c.nom,restants:Math.max(0,(cgAcq?.restants||0)-prog)};
+  }).filter(x=>x.restants>0);
+}
 function limiteJoursCgAm(anneeDebut){
   let reportMax=0;
   (S.contrats||[]).filter(c=>c.signe&&!estContratCloture(c)&&!c.rupture?.confirmee).forEach(c=>{
@@ -22897,7 +22915,13 @@ function toggleCgAm(anneeDebut,dateStr){
     if(!isFerie(dateStr,{})){
       const nbCochesT=Object.keys(data.jours||{}).filter(k=>data.jours[k]==='pose'&&!isFerie(k,{})).length;
       const limiteT=limiteJoursCgAm(anneeDebut);
-      if(nbCochesT>=limiteT){ alerte(limiteT+' jours de congés sont déjà cochés sur ce calendrier (fériés non compris).'); return; }
+      if(nbCochesT>=limiteT){
+        // 22/09/2026 (Sophie) : au-delà de la limite, cocher reste possible tant qu'un contrat a des jours restants —
+        // le décompte diffère d'un contrat à l'autre (un jour non travaillé par l'un l'est par l'autre). Le résumé du
+        // calendrier indique déjà pour quels contrats il reste des jours.
+        const restantsT=contratsAvecJoursRestantsCgAm(anneeDebut);
+        if(!restantsT.length){ alerte(limiteT+' jours de congés sont déjà cochés sur ce calendrier (fériés non compris) et aucun contrat n’a de jour restant à poser.'); return; }
+      }
     }
     const parts=dateStr.split('-');
     const jourDate=new Date(parseInt(parts[0]),parseInt(parts[1])-1,parseInt(parts[2]));
