@@ -780,7 +780,7 @@ function renderParams(){
     '<tr style="font-size:12px;color:var(--tx2)"><th style="text-align:left;padding:4px">Date début</th><th style="padding:4px">Coefficient</th><th></th></tr>'+
     S.params.coefficients.map((p,i)=>`<tr>
       <td><input class="fi" type="date" value="${p.debut}" oninput="S.params.coefficients[${i}].debut=this.value" style="width:130px"></td>
-      <td><input class="fi" type="text" inputmode="decimal" value="${p.valeur}" oninput="S.params.coefficients[${i}].valeur=parseFloat(this.value.replace(',','.'))" style="width:110px"></td>
+      <td><input class="fi" type="text" inputmode="decimal" value="${p.valeur??''}" placeholder="ex : 0.7812" oninput="S.params.coefficients[${i}].valeur=this.value.trim()===''?null:parseFloat(this.value.replace(',','.'))" style="width:110px"></td>
       <td><button class="btn bd" style="padding:2px 8px;font-size:12px" onclick="delParamRow('coeff',${i})">✕</button></td>
     </tr>`).join('');
   const ti=document.getElementById('tbl-indem');
@@ -788,16 +788,18 @@ function renderParams(){
     '<tr style="font-size:12px;color:var(--tx2)"><th style="text-align:left;padding:4px">Date début</th><th style="padding:4px">Par jour</th><th style="padding:4px">Par heure</th><th></th></tr>'+
     S.params.indemEntretien.map((p,i)=>`<tr>
       <td><input class="fi" type="date" value="${p.debut}" oninput="S.params.indemEntretien[${i}].debut=this.value" style="width:130px"></td>
-      <td><input class="fi" type="text" inputmode="decimal" value="${p.parJour}" oninput="S.params.indemEntretien[${i}].parJour=parseFloat(this.value.replace(',','.'))" style="width:75px"></td>
-      <td><input class="fi" type="text" inputmode="decimal" value="${p.parHeure}" oninput="S.params.indemEntretien[${i}].parHeure=parseFloat(this.value.replace(',','.'))" style="width:75px"></td>
+      <td><input class="fi" type="text" inputmode="decimal" value="${p.parJour??''}" placeholder="ex : 2.65" oninput="S.params.indemEntretien[${i}].parJour=this.value.trim()===''?null:parseFloat(this.value.replace(',','.'))" style="width:75px"></td>
+      <td><input class="fi" type="text" inputmode="decimal" value="${p.parHeure??''}" placeholder="ex : 0.425" oninput="S.params.indemEntretien[${i}].parHeure=this.value.trim()===''?null:parseFloat(this.value.replace(',','.'))" style="width:75px"></td>
       <td><button class="btn bd" style="padding:2px 8px;font-size:12px" onclick="delParamRow('indem',${i})">✕</button></td>
     </tr>`).join('');
 }
 
 function addParamRow(type){
   if(!S.params) S.params=JSON.parse(JSON.stringify(PARAMS_DEFAUT));
-  if(type==='coeff') S.params.coefficients.push({debut:new Date().toISOString().slice(0,10),valeur:0.7811975});
-  else S.params.indemEntretien.push({debut:new Date().toISOString().slice(0,10),parJour:2.65,parHeure:0.4250});
+  // 23/09/2026 (Sophie) : ligne ajoutée VIDE — elle arrivait préremplie (date du jour, taux par défaut), au risque de
+  // passer inaperçue et de changer des taux sans le vouloir.
+  if(type==='coeff') S.params.coefficients.push({debut:'',valeur:null});
+  else S.params.indemEntretien.push({debut:'',parJour:null,parHeure:null});
   renderParams();
 }
 
@@ -827,6 +829,23 @@ function delParamRowConfirme(type,idx){
 
 function saveParams(){
   if(!S.params) S.params=JSON.parse(JSON.stringify(PARAMS_DEFAUT));
+  // 23/09/2026 (Sophie) : une ligne incomplète fausserait les calculs — enregistrement refusé, rien n'est supprimé en
+  // silence. Une date doit être plausible, comme ailleurs dans l'App.
+  {
+    const incompletes=[];
+    (S.params.coefficients||[]).forEach((p,i)=>{
+      const an=parseInt((p.debut||'').split('-')[0]);
+      if(!p.debut||!(an>=2000&&an<=2100)||!(p.valeur>0)) incompletes.push('coefficient, ligne '+(i+1));
+    });
+    (S.params.indemEntretien||[]).forEach((p,i)=>{
+      const an=parseInt((p.debut||'').split('-')[0]);
+      if(!p.debut||!(an>=2000&&an<=2100)||!(p.parJour>0)||!(p.parHeure>0)) incompletes.push('indemnité d’entretien, ligne '+(i+1));
+    });
+    if(incompletes.length){
+      alerte('Ligne incomplète : '+incompletes.join(', ')+'.<br><br>Complétez la date et les montants, ou supprimez la ligne avec la croix.');
+      return;
+    }
+  }
   S.params.coefficients.sort((a,b)=>a.debut.localeCompare(b.debut));
   S.params.indemEntretien.sort((a,b)=>a.debut.localeCompare(b.debut));
   localStorage.setItem('cam_params',JSON.stringify(S.params));
