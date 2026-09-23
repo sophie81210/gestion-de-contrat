@@ -23316,6 +23316,26 @@ function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
   //   uniquement (même résolution que getHeuresPrevues, déjà utilisée par
   //   dernierJourDecompte) ; une semaine sans type/volume (off ou pointée congés)
   //   n'offre aucun jour de reprise possible.
+  // 23/09/2026 (Sophie, Enaël semaine du 15 mai 2023) : plan min ou var — le nombre de jours de la semaine est plafonné.
+  // Quand les jours cochés au planning atteignent déjà ce maximum (fériés cochés compris), un jour non coché n'aurait
+  // pas pu être travaillé : il n'ouvre pas le décompte des congés et n'en consomme pas.
+  // 23/09/2026 (Sophie) : une semaine de congés PARTIELLE (l'Ass'Mat travaille une partie de la
+  // semaine et pose le reste) a ses jours travaillés cochés sur le planning. Un jour posé non coché
+  // n'y est donc pas un jour prévu : le décompte ne doit pas démarrer dessus. L'exception « un jour
+  // de congés n'est jamais coché par construction » (11/08/2026) ne vaut que pour une semaine
+  // entièrement posée, où rien n'est cochable.
+  function semaineAvecJourCocheCg(c,dateStr){
+    const [ySC,mSC,dSC]=dateStr.split('-').map(Number);
+    const dtSC=new Date(ySC,mSC-1,dSC);
+    const lunSC=new Date(dtSC); lunSC.setDate(dtSC.getDate()-((dtSC.getDay()+6)%7));
+    const plSC=c.planning||{};
+    for(let iSC=0;iSC<7;iSC++){
+      const xSC=new Date(lunSC); xSC.setDate(lunSC.getDate()+iSC);
+      const xsSC=xSC.getFullYear()+'-'+String(xSC.getMonth()+1).padStart(2,'0')+'-'+String(xSC.getDate()).padStart(2,'0');
+      if(plSC[xsSC]&&plSC[xsSC].coche===true) return true;
+    }
+    return false;
+  }
   function premierJourTravaille(c,debut,fin,pourReprise=false){
     const d=new Date(debut);
     const f=new Date(fin);
@@ -23416,7 +23436,7 @@ function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
               const volPointePT52=typeSemainePointe(c,d);
               const motifPossiblePT52=volPointePT52?!!(volPointePT52.jours&&volPointePT52.jours[jourIdx])
                                                     :(srcPT.planVar||c.planVar).some(v=>v.jours&&v.jours[jourIdx]);
-              if(estJourCongesPT52){
+              if(estJourCongesPT52&&!semaineAvecJourCocheCg(c,dsPT52)){
                 jourPossible=motifPossiblePT52;
               } else {
                 const cochePT52=!!(c.planning&&c.planning[dsPT52]&&c.planning[dsPT52].coche===true);
@@ -23429,7 +23449,7 @@ function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
             // 11/08/2026 (Sophie) : même exception congés que var — jamais coché par construction.
             const dsMinPT=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
             const estJourCongesMinPT=!!(S.congesAM&&Object.values(S.congesAM).some(am=>am.jours&&am.jours[dsMinPT]==='pose'));
-            if(estJourCongesMinPT){
+            if(estJourCongesMinPT&&!semaineAvecJourCocheCg(c,dsMinPT)){
               jourPossible=!!(srcPT.joursMin||c.joursMin)[jourIdx];
             } else {
               const cocheMinPT=!!(c.planning&&c.planning[dsMinPT]&&c.planning[dsMinPT].coche===true);
@@ -24344,6 +24364,8 @@ if(tousNonPrevus){
             // Vérifier si le jour est prévu au planning ET hors de la période cochée (sinon = décompte automatique)
             const srcJour=getVersionActive(c,cur);
             const prevusJour=getHeuresPrevues(srcJour,cur);
+            // 23/09/2026 (Sophie) : le quota de la semaine ne joue qu'au DÉMARRAGE du décompte (voir
+            // premierJourTravaille) — une fois la pose commencée, tous les jours ouvrables comptent jusqu'à la reprise.
             const estJourPrevu=!!(prevusJour.debut&&prevusJour.debut!=='prévu')||!!(prevusJour.planVar);
             // Préserver le statut reprise (posé par l'utilisateur) — et, depuis le 14/09/2026 (Sophie), « travaillé »
             // sur un jour NON coché du milieu de la période (décompte → reprise → travaillé) : sans ça, il repassait
