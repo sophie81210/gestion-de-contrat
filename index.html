@@ -555,7 +555,7 @@ input[type=time].fi{width:auto;min-width:92px}
       <div class="fg">
         <label class="fl">Jour de repos hebdomadaire <small>(% &mdash; min 25%)</small></label>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:4px">
-          <select class="fi" id="f-repos-hebdo" style="width:140px" onchange="controlerDateDebRepos()">
+          <select class="fi" id="f-repos-hebdo" style="width:140px" onchange="controlerReposCommun();controlerDateDebRepos()">
             <option value="0">Dimanche</option>
             <option value="1">Lundi</option>
             <option value="2">Mardi</option>
@@ -15798,6 +15798,24 @@ function dateFinEssaiNominaleCdi(c){
 // contrôle n'existait qu'à la signature. Le contrat commence au premier jour d'accueil.
 // 23/09/2026 (Sophie) : année invalide refusée quand on quitte le champ — pas pendant la frappe, où le navigateur
 // signale chaque état intermédiaire de l'année (0002, 0020, 0202…) et où le champ se viderait sous les doigts.
+// 23/09/2026 (Sophie) : le jour de repos hebdomadaire est celui de l'assistante maternelle — il est donc le même sur
+// tous ses contrats en cours (signés et non clôturés). Un contrat qui en choisit un autre est refusé.
+function reposHebdoCommun(idExclu){
+  const enCours=(S.contrats||[]).filter(c=>c.signe&&!estContratCloture(c)&&(idExclu===undefined||c.id!=idExclu)&&c.reposHebdo!==null&&c.reposHebdo!==undefined);
+  return enCours.length?parseInt(enCours[0].reposHebdo):null;
+}
+function controlerReposCommun(){
+  const el=document.getElementById('f-repos-hebdo');
+  if(!el) return true;
+  const idEnCoursR=S.enAvenant?S.enAvenant.cid:S.enEd;
+  const commun=reposHebdoCommun(idEnCoursR);
+  if(commun===null) return true;
+  if(parseInt(el.value)===commun) return true;
+  alerte('Le jour de repos hebdomadaire est commun à tous vos contrats.');
+  el.value=String(commun);
+  if(typeof controlerDateDebRepos==='function') controlerDateDebRepos();
+  return false;
+}
 function controlerAnneeDateDeb(){
   if(S.enAvenant) return;
   const el=document.getElementById('f-datedeb');
@@ -17879,6 +17897,7 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
   if(!nom){toast('Veuillez saisir un nom de contrat');return;}
   const dateDeb=document.getElementById('f-datedeb').value;
   if(!dateDeb){toast('Veuillez saisir une date de début');return;}
+  if(!controlerReposCommun()) return;
   if(document.getElementById('f-fratrie')?.checked){
     const dFrat=document.getElementById('f-fratrie-datedeb')?.value;
     if(!dFrat){alerte('Précisez la date de début du contrat de l\u2019enfant de la même famille.');return;}
@@ -18084,6 +18103,7 @@ function validerAvenant(){
   if(!c)return;
   if(volumesAvecTropDeDecimales()){alerte('Le volume hebdomadaire est limité à 2 décimales — corrigez-le avant d\u2019enregistrer.');return;}
   if(semainesNonEntieres()){alerte('Les nombres de semaines doivent être des nombres entiers — corrigez-les avant d\u2019enregistrer.');return;}
+  if(!controlerReposCommun()) return;
   const av=c.avenants.find(a=>a.id==avid);
   if(!av)return;
 
@@ -21362,6 +21382,13 @@ async function signerContrat(){
     if(c.tc!=='occ'&&(c.periodeEssai===null||c.periodeEssai===undefined)) manquants.push("durée de la période d'essai (mettre 0 si aucune)");
   }
   if(c.tc!=='52'&&c.tc!=='occ'&&!c.dateCg) manquants.push("mode de paiement des congés");
+  {
+    const communSig=reposHebdoCommun(c.id);
+    if(communSig!==null&&parseInt(c.reposHebdo||0)!==communSig){
+      alerte('Le jour de repos hebdomadaire est commun à tous vos contrats.');
+      return;
+    }
+  }
   if(!c.tc) manquants.push("type de contrat");
   if(c.tc!=='occ'&&!c.th) manquants.push("type d'horaires");
   if(!c.txBrut) manquants.push("taux horaire brut");
