@@ -18607,6 +18607,27 @@ function calcSoldeConges46(c, dateRupture){
         const nbAcq=fV.jours.filter(j=>j.statut==='conges-acq').length;
         dejaPaye+=nbAcq*(ind.montantJournalierNet||0);
       }
+      // 24/09/2026 (Sophie, Enaël) : les jours pris PAR ANTICIPATION sont payés par la feuille de juin
+      // qui suit l'année d'acquisition (voir le calcul de cette feuille : anticipés du 1er juin au
+      // 30 avril, feuilles validées, hors régime 52). Ils n'étaient pas comptés ici, faute de statut
+      // « congés acquis » : leur indemnité était réclamée une seconde fois dans le solde de tout compte
+      // (10 jours de décembre 2021 payés en juin 2022, 11 jours de décembre 2022 payés en juin 2023).
+      const keyJuinAntSC=(parseInt(anneeRef)+1)+'-06';
+      if(c.fiches?.[keyJuinAntSC]?.valide){
+        const limiteBasAntSC=parseInt(anneeRef)+'-06-01';
+        const limiteHautAntSC=(parseInt(anneeRef)+1)+'-05-01';
+        let nbAntSC=0;
+        Object.values(c.fiches||{}).forEach(fAnt=>{
+          if(!fAnt||!fAnt.valide) return;
+          (fAnt.jours||[]).forEach(jAnt=>{
+            if(!jAnt.date||jAnt.date<limiteBasAntSC||jAnt.date>=limiteHautAntSC) return;
+            if(jAnt.statut!=='conges-anticipe'&&jAnt.statut!=='decompte-anticipe') return;
+            const srcAntSC=getVersionActive(c,parseDateLoc(jAnt.date));
+            if(srcAntSC.tc!=='52') nbAntSC++;
+          });
+        });
+        dejaPaye+=nbAntSC*(ind.montantJournalierNet||0);
+      }
       dejaPaye=parseFloat(dejaPaye.toFixed(2));
     }
     if(window.DEBUG_CGAM)console.log('[CGAM-soldeConges46-dejaPaye]',anneeRef,'| meilleurNet:',ind.meilleurNet,'| dejaPaye:',dejaPaye,'| resteNet (avant Math.max 0):',ind.meilleurNet-dejaPaye);
