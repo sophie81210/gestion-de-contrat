@@ -15170,6 +15170,42 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           indemCongeNbJours=nbAcqMois;
           indemCongeMois=parseFloat((tauxChaque46*partCeMois.propres+tauxReportChaque*partCeMois.rep).toFixed(2));
         }
+        // 24/09/2026 (Sophie, Enaël août 2023) : le versement qui SOLDE l'année verse le reste dû
+        // exactement — indemnité de l'année moins ce que les feuilles validées ont déjà versé — au lieu
+        // de reprendre jours × taux journalier. Les arrondis successifs laissaient sinon un centime non
+        // versé (326,11 payés pour 326,12 dus), et l'onglet Congés comme le solde de tout compte, qui
+        // additionnent les montants réellement versés, annonçaient un autre chiffre que la feuille.
+        // Cas simples seulement : ni jour pris sous un contrat 52, ni report d'arrêt (taux différents),
+        // et jamais sur la feuille de juin, qui compose déjà plusieurs versements.
+        // Tous les jours de l'année sont alors consommés : ceux déjà payés, ceux de ce mois, et ceux
+        // pris par anticipation (payés par la feuille de juin, ils ne passent pas par dejaPayesAcq).
+        let antAnneeScg=0;
+        {
+          const basAntScg=anneeAcq+'-06-01';
+          const hautAntScg=(anneeAcq+1)+'-05-01';
+          Object.values(c.fiches||{}).forEach(fAntScg=>{
+            if(!fAntScg||!fAntScg.valide) return;
+            (fAntScg.jours||[]).forEach(jAntScg=>{
+              if(!jAntScg.date||jAntScg.date<basAntScg||jAntScg.date>=hautAntScg) return;
+              if(jAntScg.statut!=='conges-anticipe'&&jAntScg.statut!=='decompte-anticipe') return;
+              if(getVersionActive(c,parseDateLoc(jAntScg.date)).tc!=='52') antAnneeScg++;
+            });
+          });
+        }
+        if(nbAcqMois>0&&fiche.mois!==4&&fiche.mois!==5&&deja52Cg.jours===0&&joursReportChaque===0
+           &&(dejaPayesAcq+nbAcqMois+antAnneeScg)>=totalAcquis&&!window._soldeCgEnCours){
+          const [ayScg,amScg]=moisKeyCur.split('-').map(Number);
+          const dPrecScg=new Date(ayScg,amScg-2,1);
+          const moisPrecScg=dPrecScg.getFullYear()+'-'+String(dPrecScg.getMonth()+1).padStart(2,'0');
+          window._soldeCgEnCours=true;
+          let dejaVerseScg=0;
+          try{ dejaVerseScg=montantVerse46Annee(c,anneeAcq,{jusqua:moisPrecScg}); }catch(e){ dejaVerseScg=-1; }
+          window._soldeCgEnCours=false;
+          if(dejaVerseScg>=0){
+            const resteScg=parseFloat(Math.max(0,ind.meilleurNet-dejaVerseScg).toFixed(2));
+            if(resteScg>0) indemCongeMois=resteScg;
+          }
+        }
         // Rattrapage des jours de mai sur la fiche de juin. Ces jours relèvent de la MÊME année
         // d'acquisition que le versement de juin : l'année de prise court du 1er mai au 30 avril, donc
         // un jour posé en mai 2025 consomme les droits acquis du 01/06/2024 au 31/05/2025 — ceux que
