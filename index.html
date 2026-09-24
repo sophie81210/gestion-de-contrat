@@ -25160,6 +25160,22 @@ async function enregistrerCgAm(){
   // plus la remise à zéro (avant, seul cgAmModifie était remis, tout à la fin, et jamais si une erreur survenait).
   S.cgAmModifie=false;
   S._cgAmModifieDepuisOuverture=false;
+  // 24/09/2026 (Sophie) : une année du calendrier qui ne recouvre AUCUN contrat — même archivé — est
+  // supprimée. Elle n'est affichée nulle part (l'onglet ne montre que les années couvertes par un
+  // contrat), donc impossible à corriger, alors que ses jours posés continuaient d'agir : prise de
+  // 12 jours réclamée indéfiniment, et jours vus comme des congés par le reste de l'App. Cas rencontré
+  // après la suppression d'un contrat, ou sur des jours posés par erreur avant tout contrat.
+  const anneeAmConcerneUnContrat=anneeDebut=>{
+    const debAnCg=anneeDebut+'-05-01', finAnCg=(anneeDebut+1)+'-04-30';
+    return (S.contrats||[]).some(cCg=>{
+      if(!cCg.dateDeb||cCg.dateDeb>finAnCg) return false;
+      const dFinCg=getDateFinContrat(cCg);
+      return !dFinCg||dateToStr(dFinCg)>=debAnCg;
+    });
+  };
+  Object.keys(S.congesAM||{}).forEach(amOrph=>{
+    if(!anneeAmConcerneUnContrat(parseInt(amOrph))) delete S.congesAM[amOrph];
+  });
   invaliderSemsCongesGlobal();
   saveCongesAM();
   const echecsCgAm=[];
@@ -25194,6 +25210,7 @@ async function enregistrerCgAm(){
     const dataAm=S.congesAM[am];
     const aDesJoursPoses=dataAm&&dataAm.jours&&Object.values(dataAm.jours).some(v=>v==='pose');
     if(!aDesJoursPoses) return;
+    if(!anneeAmConcerneUnContrat(anneeAm)) return;
     if(!verifier12JoursConsecutifs(anneeAm)){
       avertissements.push('⚠ '+anneeAm+'/'+(anneeAm+1)+' : aucune prise de 12 jours consécutifs entre mai et octobre.');
     }
