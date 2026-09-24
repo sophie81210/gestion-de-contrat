@@ -4675,7 +4675,7 @@ function ouvrirFiche(contratId,key){
         // facilement — la feuille est longue, on est souvent en bas quand il s'affiche en haut.
         // Alerte à fermer à la place : on l'a forcément vue. Court à dessein, les messages longs ne
         // sont pas lus ; le pourquoi est dans les notices.
-        setTimeout(()=>alerte('⚠ <strong>Agenda incomplet</strong><br><br>Certaines semaines de ce mois ne sont pas pointées. La feuille n\'est pas prête et ne pourra pas être validée.'),300);
+        setTimeout(()=>alerte('⚠ <strong>Agenda incomplet</strong><br><br>Certaines semaines de ce mois ne sont pas pointées sur l’agenda (en bas de l’onglet « Contrat »). La feuille n\'est pas prête et ne pourra pas être validée.'),300);
       } else {
         // Agenda complet : vérifier que le planning couvre bien les jours possibles du mois
         const srcPlanW=getVersionActive(c,debutMoisV);
@@ -15928,6 +15928,22 @@ function controlerAnneeDateDeb(){
   if(typeof majAttenteDate==='function') majAttenteDate();
   if(typeof majSimAgendaVisibilite==='function') majSimAgendaVisibilite();
 }
+// 24/09/2026 (Sophie) : aucun début de contrat ne peut avoir lieu pendant une période de congés.
+// Renvoie l'année du calendrier Ass'Mat (1er mai → 30 avril) couvrant cette date si ce calendrier
+// n'a encore aucune pose — l'App ne peut alors pas savoir si la date tombe en congés — sinon null.
+function anneeAmNonRemplieDeb(dateStr){
+  if(!dateStr||!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+  const [yAm,mAm]=dateStr.split('-').map(Number);
+  if(!(yAm>=2000&&yAm<=2100)) return null;
+  const anAm=mAm>=5?yAm:yAm-1;
+  const dataAm=S.congesAM&&S.congesAM[anAm];
+  const rempli=!!(dataAm&&Object.values(dataAm.jours||{}).some(v=>v==='pose'));
+  return rempli?null:anAm;
+}
+function messageCalendrierAmDateDeb(anAm){
+  return 'Les dates de congés doivent d’abord être renseignées sur le calendrier de congés de l’Ass’Mat '
+    +anAm+'/'+(anAm+1)+', aucun début de contrat ne pouvant avoir lieu pendant une période de congés.';
+}
 function controlerDateDebRepos(){
   if(S.enAvenant) return;
   const el=document.getElementById('f-datedeb');
@@ -15939,6 +15955,14 @@ function controlerDateDebRepos(){
   // la signature, qui la nomment. Et la date proposée se construit à partir de l'année réelle : une année à deux
   // chiffres serait ramenée à 1900 par le navigateur.
   if(!(anD>=2000&&anD<=2100)) return;
+  // 24/09/2026 (Sophie) : date posée en congés sur le calendrier Ass'Mat — refusée comme le jour de repos.
+  if(isJourCongeAM(v)){
+    alerte('Aucun début de contrat ne pouvant avoir lieu pendant une période de congés.');
+    el.value='';
+    if(typeof majAttenteDate==='function') majAttenteDate();
+    if(typeof majSimAgendaVisibilite==='function') majSimAgendaVisibilite();
+    return;
+  }
   const d=new Date(anD,moD-1,joD);
   if(d.getDay()!==repos) return;
   const lend=new Date(anD,moD-1,joD+1);
@@ -17999,6 +18023,12 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
   const dateDeb=document.getElementById('f-datedeb').value;
   if(!dateDeb){toast('Veuillez saisir une date de début');return;}
   if(!controlerReposCommun()) return;
+  // 24/09/2026 (Sophie) : le calendrier des congés n'est pas toujours rempli au moment de la saisie du
+  // contrat — on laisse enregistrer, mais on prévient ; la signature, elle, sera refusée (voir signerContrat).
+  {
+    const anAmDeb=anneeAmNonRemplieDeb(dateDeb);
+    if(anAmDeb!==null) alerte(messageCalendrierAmDateDeb(anAmDeb));
+  }
   if(document.getElementById('f-fratrie')?.checked){
     const dFrat=document.getElementById('f-fratrie-datedeb')?.value;
     if(!dFrat){alerte('Précisez la date de début du contrat de l\u2019enfant de la même famille.');return;}
@@ -21438,8 +21468,14 @@ async function signerContrat(){
   // 11/08/2026 (Sophie) : garde-fou — pas de signature possible si la date de début tombe sur un
   // jour posé congés dans le calendrier AM.
   if(c.dateDeb&&S.congesAM&&Object.values(S.congesAM).some(am=>am.jours&&am.jours[c.dateDeb]==='pose')){
-    toast('⚠ Impossible de signer : la date de début ('+c.dateDeb+') tombe sur un jour de congés posé.');
+    alerte('Aucun début de contrat ne pouvant avoir lieu pendant une période de congés.');
     return;
+  }
+  // 24/09/2026 (Sophie) : sans calendrier rempli, l'App ne peut pas savoir si la date tombe en congés —
+  // la signature est refusée tant qu'il ne l'est pas.
+  if(c.dateDeb){
+    const anAmSig=anneeAmNonRemplieDeb(c.dateDeb);
+    if(anAmSig!==null){ alerte(messageCalendrierAmDateDeb(anAmSig)); return; }
   }
   // 13/09/2026 (Sophie) : pas de début de contrat sur le jour de repos hebdomadaire — le contrat commence le
   // premier jour d'accueil. (Les contrats déjà signés ne sont pas concernés : contrôle à la signature.)
