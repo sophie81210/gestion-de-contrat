@@ -22051,6 +22051,26 @@ function agendaManquantADate(c,dateStr){
   const cleSem=getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr));
   return !(ag.semaines&&ag.semaines[cleSem]);
 }
+// 24/09/2026 (Sophie, contrat « janvier » : avenant au 02/06/2025 sur un contrat débuté le 01/06/2024) :
+// le contrôle du 18/09 cherchait une semaine pointée À LA DATE D'EFFET dans l'agenda de la version en
+// vigueur — c'est-à-dire le contrat initial, tant que l'avenant n'est pas signé. Un avenant prenant
+// effet juste après la fin de l'agenda du contrat se bloquait donc lui-même, en réclamant un agenda
+// pour une semaine qui ne relève plus de lui. Ce qui doit être couvert, c'est la période QUI PRÉCÈDE
+// l'avenant : les sept jours qui le précèdent, hors jours de repos et jours hors contrat.
+function agendaManquantAvantAvenant(c,dateEffetStr){
+  const dEff=parseDateLoc(dateEffetStr);
+  for(let iAv=1;iAv<=7;iAv++){
+    const dAv=new Date(dEff); dAv.setDate(dEff.getDate()-iAv);
+    const dsAv=dateToStr(dAv);
+    if(c.dateDeb&&dsAv<c.dateDeb) continue;
+    const srcAv=getVersionActive(c,dAv)||c;
+    if(!contratNeedAgenda(srcAv)) continue;
+    if(dAv.getDay()===(srcAv.reposHebdo??c.reposHebdo??0)) continue;
+    if(getStatutPrevu(c,{date:dsAv,jourSemaine:dAv.getDay()})==='hors-contrat') continue;
+    if(agendaManquantADate(c,dsAv)) return true;
+  }
+  return false;
+}
 function avenantCoupeUnePoseCg(c,dateEffetStr){
   const posesAmAv={};
   Object.values(S.congesAM||{}).forEach(am=>Object.entries(am.jours||{}).forEach(([ds,st])=>{ if(st==='pose') posesAmAv[ds]=true; }));
@@ -22262,8 +22282,8 @@ function signerAvenant(){
   }
   // 18/09/2026 (Sophie) : sans agenda couvrant la date d'effet, l'app ne connaît aucune semaine travaillée —
   // tous les jours passent en « congés Ass'Mat » et les calculs du mois seraient faux.
-  if(agendaManquantADate(c,av.dateAvenant)){
-    alerte('Veuillez remplir l’agenda jusqu’à la date de signature.');
+  if(agendaManquantAvantAvenant(c,av.dateAvenant)){
+    alerte('Veuillez remplir l’agenda jusqu’à la date d’effet de l’avenant.');
     return;
   }
   // 11/09/2026 (Sophie) : même principe étendu à toute la période de congés (voir avenantCoupeUnePoseCg).
