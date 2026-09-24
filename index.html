@@ -23129,6 +23129,11 @@ function limiteJoursCgAm(anneeDebut){
   return 30+reportMax;
 }
 function toggleCgAm(anneeDebut,dateStr){
+  // 24/09/2026 (Sophie) : au-delà de la limite, le jour coché doit DÉCOMPTER un jour à un contrat qui
+  // en a encore — sinon le dépassement est sans objet. Cas rencontré : un contrat n'ayant que le lundi
+  // de prévu laissait cocher tout le calendrier tant qu'on évitait les lundis, ses jours restants ne
+  // baissant jamais. L'état d'avant est retenu ici, le contrôle se fait après le recalcul, plus bas.
+  let avantDepassementCg=null;
   if(!S.congesAM) S.congesAM={};
   if(!S.congesAM[anneeDebut]) S.congesAM[anneeDebut]={enfants:0,jours:{}};
   const data=S.congesAM[anneeDebut];
@@ -23165,6 +23170,8 @@ function toggleCgAm(anneeDebut,dateStr){
         // calendrier indique déjà pour quels contrats il reste des jours.
         const restantsT=contratsAvecJoursRestantsCgAm(anneeDebut);
         if(!restantsT.length){ alerte(limiteT+' jours de congés sont déjà cochés sur ce calendrier (fériés non compris) et aucun contrat n’a de jour restant à poser.'); return; }
+        avantDepassementCg={};
+        restantsT.forEach(xT=>{ avantDepassementCg[xT.nom]=xT.restants; });
       }
     }
     const parts=dateStr.split('-');
@@ -23217,6 +23224,22 @@ function toggleCgAm(anneeDebut,dateStr){
   // détecte, laissant le cache d'affichage périmé jusqu'à un rafraîchissement fortuit ailleurs.
   invaliderSemsCongesGlobal();
   majFichesCgAm(anneeDebut,false); // convergence gérée en interne (cf. majFichesCgAm)
+  if(avantDepassementCg){
+    const apresDep=contratsAvecJoursRestantsCgAm(anneeDebut);
+    const mapApresDep={};
+    apresDep.forEach(xD=>{ mapApresDep[xD.nom]=xD.restants; });
+    const aConsommeDep=Object.keys(avantDepassementCg).some(nomD=>(mapApresDep[nomD]||0)<avantDepassementCg[nomD]);
+    if(!aConsommeDep){
+      delete data.jours[dateStr];
+      S.congesAM[anneeDebut]=data;
+      localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM));
+      invaliderSemsCongesGlobal();
+      majFichesCgAm(anneeDebut,false);
+      alerte('La limite de jours de ce calendrier est atteinte (fériés non compris).<br><br>Un jour supplémentaire n’est accepté que s’il décompte un jour de congés à un contrat auquel il en reste — ce jour-ci n’en décompte aucun.');
+      ouvrirCgAm(anneeDebut);
+      return;
+    }
+  }
   ouvrirCgAm(anneeDebut);
 }
 
