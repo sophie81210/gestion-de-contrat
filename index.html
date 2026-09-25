@@ -22824,10 +22824,29 @@ function buildCgAmDetail(anneeDebut,data){
       // seul un jour qui SUIT directement un jour déjà posé peut ne pas être prévu, la pose se poursuivant.
       // Sans jours restants, le jour ne doit PAS être prévu : le proposer ferait poser des congés non acquis.
       if(restants>0){
+        // 25/09/2026 (Sophie) : un jour DÉJÀ décompté par une pose en cours n'ajoute rien — poser le lundi
+        // décompte toute la semaine, et le mardi suivant était proposé alors que le cocher est refusé.
+        // La bordure ne marque plus que des jours qui apportent réellement un décompte.
+        {
+          const fBord=c.fiches&&c.fiches[dateStr.slice(0,7)];
+          const jBord=fBord&&(fBord.jours||[]).find(x=>x.date===dateStr);
+          const stBord=jBord&&jBord.statut;
+          if(stBord&&/^conges|^decompte/.test(stBord)) return false;
+        }
         if(estPrevu) return true;
         const veilleB=new Date(d); veilleB.setDate(d.getDate()-1);
         const veilleBStr=veilleB.getFullYear()+'-'+String(veilleB.getMonth()+1).padStart(2,'0')+'-'+String(veilleB.getDate()).padStart(2,'0');
         return data.jours[veilleBStr]==='pose'&&!isFerie(dateStr,c);
+      }
+      // 25/09/2026 (Sophie) : un jour situé dans une semaine d'ABSENCE EMPLOYEUR ne décompte rien à ce
+      // contrat-là — il ne peut donc pas lui faire poser de congés non acquis et ne doit pas disqualifier
+      // la date. Sans cette exception, deux contrats partageant le même jour prévu, dont l'un n'a plus de
+      // jours restants, empêchaient tout pointillé, y compris sur les semaines où ce contrat est absent.
+      if(estPrevu&&(src.tc||c.tc)!=='52'){
+        const agsBord=src.agendas||c.agendas||[];
+        const agBord=agsBord.find(a=>a&&parseDateLoc(a.dateDebut)<=d&&parseDateLoc(a.dateFin)>=d);
+        const cleBord=getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr));
+        if(agBord&&agBord.semaines&&agBord.semaines[cleBord]==='off') return true;
       }
       return !estPrevu;
     });
