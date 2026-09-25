@@ -5427,7 +5427,7 @@ function ouvrirFiche(contratId,key){
     ${fiche.valide?'<span style="color:var(--vt);font-size:13px;font-weight:600">✓ Validée</span>':''}
     ${(!fiche.valide&&!estLectureSeuleEmployeur())?`<button class="btn bs bsm" style="margin-left:auto" onclick="enregistrerFiche(${contratId},'${key}')">💾</button>`:''}
     </div>
-    ${planningNonEnregistrePourMois(c,key)?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">⚠ Le planning de ce mois a des modifications non enregistrées — retournez sur l'onglet Planning et cliquez sur 💾 Enregistrer avant de continuer, sinon cette feuille ne reflète pas vos derniers changements.</div>`:''}
+    ${planningNonEnregistrePourMois(c,key)?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">⚠ Le planning de ce mois a des modifications non enregistrées — retournez sur l'onglet Planning et cliquez sur 💾 Enregistrer avant de continuer.</div>`:''}
     ${avertirAnticipeManquant?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">⚠ Cette pose de congés a commencé par de l'anticipé le mois précédent — pensez à cocher « Prise de congés par anticipation » plus bas si elle doit continuer sur ce mois-ci.</div>`:''}
     ${avertirAnticipeEnTrop?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404">⚠ Cette pose de congés a commencé sans anticipation le mois précédent — décochez « Prise de congés par anticipation » plus bas : le choix vaut pour toute la prise.</div>`:''}
     <div style="width:100%;overflow:hidden">
@@ -5610,7 +5610,24 @@ function toggleArretReporte(contratId,anneeAcq,checked){
   if(cidx!==-1) S.contrats[cidx]=c;
   _contratsModifies.add(contratId);
   saveToFirestore();
-  if(S.enCours==contratId) renderDetTab(contratId,'conges');
+  // 25/09/2026 (Sophie) : cocher la case repliait l'année — le rendu de l'onglet recrée les encarts
+  // fermés. L'année qui était ouverte est rouverte après le rendu.
+  if(S.enCours==contratId){ const ouvertsArr=idsEncartsCgOuverts(); renderDetTab(contratId,'conges'); rouvrirEncartsCg(ouvertsArr); }
+}
+// Encarts d'années dépliés au moment d'un recalcul, pour les rouvrir ensuite (voir toggleCgContrat).
+function idsEncartsCgOuverts(){
+  return Array.from(document.querySelectorAll('[id^="cg-contrat-"]'))
+    .filter(el=>!el.id.endsWith('-arrow')&&el.style.display==='block')
+    .map(el=>el.id);
+}
+function rouvrirEncartsCg(ids){
+  (ids||[]).forEach(id=>{
+    const el=document.getElementById(id);
+    if(!el) return;
+    el.style.display='block';
+    const fl=document.getElementById(id+'-arrow');
+    if(fl) fl.textContent='⌄';
+  });
 }
 function modifierArretReporteJours(contratId,anneeAcq,val,maxJours){
   const c=S.contrats.find(x=>x.id==contratId);
@@ -5625,7 +5642,8 @@ function modifierArretReporteJours(contratId,anneeAcq,val,maxJours){
   if(cidx!==-1) S.contrats[cidx]=c;
   _contratsModifies.add(contratId);
   saveToFirestore();
-  if(S.enCours==contratId) renderDetTab(contratId,'conges');
+  // 25/09/2026 (Sophie) : même raison que toggleArretReporte — l'année ouverte le reste.
+  if(S.enCours==contratId){ const ouvertsNb=idsEncartsCgOuverts(); renderDetTab(contratId,'conges'); rouvrirEncartsCg(ouvertsNb); }
 }
          
 function confirmerHeuresPrevues(contratId,key,idx){
@@ -9842,7 +9860,7 @@ function validerFiche(contratId,key){
     ||(srcFinVF.th==='plan'&&(srcFinVF.planType==='min'||srcFinVF.planType==='var'));
   if(estPlanVarMinVF){
     if(!(c.planningConfirmeMois&&c.planningConfirmeMois[key])){
-      alerte('Le planning de ce mois n\u2019a jamais été enregistré — retournez sur l\u2019onglet Planning et cliquez sur 💾 Enregistrer (même s\u2019il est vide) avant de valider cette feuille.');
+      alerte('Confirmez le planning avant de remplir la feuille de présence.');
       return;
     }
     // 06/08/2026 (Sophie) : le contrôle ci-dessus ne couvrait que "jamais enregistré" — une fois un
@@ -20865,7 +20883,7 @@ function buildCgAcquisEncarts(c, anneeAcq){
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;font-weight:600">
         <input type="checkbox" ${cg.arretReporte?'checked':''} ${estLectureSeuleEmployeur()?'disabled':''} style="width:15px;height:15px;accent-color:var(--m)"
           onchange="toggleArretReporte(${c.id},${anneeAcq},this.checked)">
-        Jours non pris pour arrêt maladie
+        Jours non pris pour cause d’arrêt maladie
       </label>
       ${cg.arretReporte?`<div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
         <input type="number" min="0" max="${soldeMaxReport}" step="1" value="${arretReporteVal}" ${estLectureSeuleEmployeur()?'disabled':''}
@@ -25457,7 +25475,7 @@ function ouvrirAideChoix(cle,cfg){
   overlay.innerHTML=`<div class="pastille-popup">
     <div class="pastille-popup-close" onclick="fermerAideChoix()">✕</div>
     <div class="pastille-popup-titre">${(cfg.titre||'').replace(/</g,'&lt;')}</div>
-    <div class="pastille-popup-corps">Pour quel type de contrat souhaitez-vous l'information ?</div>
+    
     <div class="aide-choix-liste">${boutons}</div>
   </div>`;
   overlay.addEventListener('click',e=>{if(e.target===overlay) fermerAideChoix();});
