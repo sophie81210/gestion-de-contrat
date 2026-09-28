@@ -1500,6 +1500,28 @@ function showLoginTab(tab){
 }
 
 // ══ NAVIGATION ══
+// ══ HISTORIQUE DES ÉCRANS (28/09/2026, Sophie) ══
+// L'App tient la liste des écrans traversés — page, fiche contrat avec son onglet, feuille de
+// présence — pour que le « Retour » du navigateur redescende cette liste au lieu de quitter l'App.
+// Avant, un seul jalon d'historique était posé au chargement : une fois consommé, le retour suivant
+// sortait de l'App, et depuis une feuille de présence c'était déroutant (signalé par Sophie).
+function memoriserEcran(desc){
+  if(!S._histoEcrans) S._histoEcrans=[];
+  if(S._navRetourEnCours) return;
+  const dernier=S._histoEcrans[S._histoEcrans.length-1];
+  if(dernier&&JSON.stringify(dernier)===JSON.stringify(desc)) return;
+  S._histoEcrans.push(desc);
+  try{ history.pushState({ecran:S._histoEcrans.length-1},'',location.href); }catch(e){}
+}
+function afficherEcran(desc){
+  if(!desc) return;
+  S._navRetourEnCours=true;
+  try{
+    if(desc.t==='page') goTo(desc.p);
+    else if(desc.t==='det') renderDetTab(desc.id,desc.tab);
+    else if(desc.t==='fiche') ouvrirFiche(desc.id,desc.key);
+  } finally { S._navRetourEnCours=false; }
+}
 function goTo(p){
   if(S.cgAmModifie&&S._cgAmModifieDepuisOuverture){
     if(!confirm('Les congés Ass\'Mat ont des modifications non enregistrées. Continuer sans enregistrer ?')) return;
@@ -1552,6 +1574,7 @@ else if(p==='params'){
     document.getElementById('pg-params').scrollTop=0;
   },50);
 }
+  memoriserEcran({t:'page',p});
 }
          
 // ══ AUJOURD'HUI ══
@@ -3825,6 +3848,7 @@ function renderDetTab(id,tab){
       console.error('Tab conges err:',e);
     }
   }
+  memoriserEcran({t:'det',id:id,tab:tab});
 }
          
 function voirContratInitial(cid){
@@ -5610,6 +5634,7 @@ function ouvrirFiche(contratId,key){
       if(!soldeAffich) return '';
       return buildSoldeToutCompteHtml(c, avenantDuMois?recap2:recap, soldeAffich, fiche.valide);
     })()}`;
+  memoriserEcran({t:'fiche',id:contratId,key:key});
 }
 
          function toggleAnticipe(contratId,key,val){
@@ -25653,17 +25678,29 @@ function ouvrirMethodologieDeduction(th,planType){
 initJ('j-fixe','fixe');
 </script>
 <script>
-// Avertissement au clic sur "Retour" du navigateur (l'app est en une seule page)
+// 28/09/2026 (Sophie) : le « Retour » du navigateur redescend les écrans de l’App — d’une feuille de
+// présence à sa fiche contrat, de la fiche à la liste — et ne propose de quitter que depuis le premier
+// écran. Avant, un seul jalon d’historique était posé au chargement : une fois consommé, le retour
+// suivant sortait de l’App sans rien demander (cas vécu depuis une feuille de présence).
 let _allowLeaveBack=false;
 history.pushState(null,'',location.href);
 window.addEventListener('popstate',function(){
   if(_allowLeaveBack) return;
-  history.pushState(null,'',location.href);
-  if(confirm('Attention, vous allez quitter l\'App Cœur d\'Ass\'Mat.\n\nCliquez sur OK pour confirmer.')){
-    _allowLeaveBack=true;
-    history.go(-2);
+  history.pushState(null,'',location.href); // on reste sur l’App, quoi qu’il arrive
+  const pileEcrans=(typeof S!=='undefined'&&S._histoEcrans)||[];
+  if(pileEcrans.length>1){
+    pileEcrans.pop();
+    afficherEcran(pileEcrans[pileEcrans.length-1]);
+    return;
   }
+  const mQuit=document.createElement('div'); mQuit.className='modal-wrap';
+  mQuit.innerHTML=`<div class="modal"><h3>Quitter l’App ?</h3><p style="font-size:13px">Vous êtes sur le premier écran : revenir en arrière vous fera sortir de l’App Cœur d’Ass’Mat.</p><div class="modal-btns"><button class="btn bs" onclick="this.closest(&quot;.modal-wrap&quot;).remove()">Rester</button><button class="btn bd" onclick="this.closest(&quot;.modal-wrap&quot;).remove();quitterAppRetour()">Quitter</button></div></div>`;
+  document.body.appendChild(mQuit);
 });
+function quitterAppRetour(){
+  _allowLeaveBack=true;
+  history.go(-2);
+}
 
 // Avertissement générique (texte non personnalisable, imposé par le navigateur) à la fermeture
 // d'onglet, l'actualisation, ou la saisie d'une nouvelle adresse — n'apparaît pas sur Safari iOS
