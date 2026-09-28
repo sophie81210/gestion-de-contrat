@@ -636,7 +636,7 @@ input[type=time].fi{width:auto;min-width:92px}
           </div>
         </div>
       </div>
-      <div class="fg">
+      <div class="fg" id="fg-repas">
         <label class="fl">Indemnit&eacute; de repas <small>(laisser vide si non fourni)</small></label>
         <div style="display:flex;flex-direction:column;gap:7px;margin-top:4px">
           <div style="display:flex;align-items:center;gap:10px"><span style="font-size:13px;min-width:138px">Petit-d&eacute;jeuner</span><input class="fi" type="number" id="f-repas-0" step="0.01" placeholder="&euro;" style="width:78px"></div>
@@ -646,7 +646,7 @@ input[type=time].fi{width:auto;min-width:92px}
           
         </div>
       </div>
-      <div class="fg" style="margin-bottom:0">
+      <div class="fg" id="fg-km" style="margin-bottom:0">
         <label class="fl">Indemnit&eacute; kilom&eacute;trique</label>
         <div style="display:flex;align-items:center;gap:8px"><input class="fi fi-sm" type="number" id="f-km" step="0.001" placeholder="0.000" style="width:88px"><span style="font-size:13px;color:var(--tx2)">&euro; / km</span></div>
       </div>
@@ -5414,7 +5414,7 @@ function ouvrirFiche(contratId,key){
           if(hDeduit){
             const statutsDeduits=['abs-non','abs-am','ferie-non','arret','abs-enfant','abs-partielle','hors-contrat','conges-non','decompte-conges'];
             const estDeduit=statutsDeduits.includes(statutActuel);
-            return estDeduit?'<span style="color:var(--al)">'+hDeduit+'</span>':'<span style="color:#555">'+hDeduit+'</span>';
+            return estDeduit?'<span style="color:var(--al)">'+hDeduit+'</span>':'<span style="color:var(--tx3)">'+hDeduit+'</span>';
           }
           return '—';
         })()}
@@ -5427,7 +5427,7 @@ function ouvrirFiche(contratId,key){
         if(hDeduit){
           const statutsDeduits2=['abs-non','abs-am','ferie-non','arret','abs-enfant','abs-partielle','hors-contrat','conges-non','decompte-conges'];
           if(statutsDeduits2.includes(statutActuel)) return '<span style="color:var(--al)">'+hDeduit+'</span>';
-          return '<span style="color:#555">'+hDeduit+'</span>';
+          return '<span style="color:var(--tx3)">'+hDeduit+'</span>';
         }
         return '—';
       })()}</td>`
@@ -16149,7 +16149,9 @@ function pinceauxSimAgenda(){
   }
   // 23/09/2026 (Sophie) : les semaines de congés se pointent à la main dans la simulation — elle ne dépend plus du
   // calendrier des congés de l'Ass'Mat. Cinq semaines attendues (CCN article 102-2).
-  liste.push({val:'conges',label:'🟣 Congés',attendu:5,cc:{bg:'#9B7A94',txt:'#6E5068',brd:'#9B7A94'}});
+  // 28/09/2026 (Sophie) : jamais sur un contrat de 52 semaines — toutes ses semaines se pointent, il n'y a pas de
+  // semaine de congés à part.
+  if(S.tc!=='52') liste.push({val:'conges',label:'🟣 Congés',attendu:5,cc:{bg:'#9B7A94',txt:'#6E5068',brd:'#9B7A94'}});
   return liste;
 }
 function simAgendaEligible(){
@@ -16260,6 +16262,8 @@ function resetForm(){
   setTimeout(()=>{ if(typeof majAttenteDate==='function') majAttenteDate(); },0);
   {const zS=document.getElementById('sim-agenda-zone');if(zS){zS.style.display='none';zS.innerHTML='';}const cS=document.getElementById('card-sim-agenda');if(cS)cS.style.display='none';}
   {const cbF=document.getElementById('f-fratrie');if(cbF)cbF.checked=false;const fgF=document.getElementById('fg-fratrie');if(fgF)fgF.style.display='';majFratrie();}
+  // 28/09/2026 (Sophie) : repas et kilomètres réaffichés pour un contrat (ils ne sont masqués qu'en avenant).
+  {const fgR=document.getElementById('fg-repas');if(fgR)fgR.style.display='';const fgK=document.getElementById('fg-km');if(fgK)fgK.style.display='';}
   S.typeDuree='cdi';S.cddMotif=null;S.cddTerme=null;
   document.querySelectorAll('.ro').forEach(r=>r.classList.remove('on'));
   document.querySelectorAll('.cond').forEach(c=>c.classList.remove('on'));
@@ -18464,8 +18468,11 @@ function validerAvenant(){
   av.clauseRegul52=document.getElementById('f-clause-regul52')?.checked||false;
   if(clauseRegul52EligibleVersion({tc:S.tc,th:S.th,planType:S.th==='plan'?S.planType:null})){ const figeeS=clauseRegul52Figee(c,dateAvenant||null); if(figeeS!==null) av.clauseRegul52=figeeS; }
   av.indemPer=document.querySelector('[name="ind-per"]:checked')?.value||null;
-  av.repas=[0,1,2,3,4].map(i=>parseFloat(document.getElementById('f-repas-'+i)?.value)||null);
-  av.km=parseFloat(document.getElementById('f-km')?.value)||null;
+  // 28/09/2026 (Sophie) : repas et kilomètres ne se saisissent plus sur un avenant — ils sont repris du contrat
+  // de base, seule source utilisée par les calculs. Sans cette recopie, l'avenant naissait avec des cases vides,
+  // qui effaçaient les indemnités repas lors de la fusion contrat + avenant (bug d'août, correctif du 27/08).
+  av.repas=Array.isArray(c.repas)?c.repas.slice():[null,null,null,null,null];
+  av.km=c.km??null;
   av.feriesTravailles=Array.from(document.querySelectorAll('[name="feries"]:checked')).map(cb=>cb.value);
   av.majFerie=document.getElementById('f-maj-ferie')?.value!==''?parseFloat(document.getElementById('f-maj-ferie').value):null;
   av.maj1erMai=document.getElementById('f-maj-1ermai')?.value!==''?parseFloat(document.getElementById('f-maj-1ermai').value):null;
@@ -19378,7 +19385,7 @@ async function sauvegarderRupture(cid){
     if(dateFinSav){
       const moisFinSav=dateFinSav.getFullYear()+'-'+String(dateFinSav.getMonth()+1).padStart(2,'0');
       if(c.fiches?.[moisFinSav]?.valide){
-        alerte('La feuille de présence de '+moisFinSav+' est déjà validée. Vous ne pouvez pas confirmer une rupture sur cette période.');
+        alerte('La feuille de présence de '+moisFinSav+' est déjà validée : vous ne pouvez pas confirmer une rupture sur une période figée.<br><br>Déverrouillez cette feuille, confirmez la rupture, puis revalidez-la — rien n’y sera modifié si la fin de contrat tombe le dernier jour du mois.');
         return;
       }
     }
@@ -19521,7 +19528,7 @@ function confirmerRupture(cid){
   if(dateFinR){
     const moisFinR=dateFinR.getFullYear()+'-'+String(dateFinR.getMonth()+1).padStart(2,'0');
     if(c.fiches?.[moisFinR]?.valide){
-      alerte('La feuille de présence de '+moisFinR+' est déjà validée. Vous ne pouvez pas confirmer une rupture sur cette période.');
+      alerte('La feuille de présence de '+moisFinR+' est déjà validée : vous ne pouvez pas confirmer une rupture sur une période figée.<br><br>Déverrouillez cette feuille, confirmez la rupture, puis revalidez-la — rien n’y sera modifié si la fin de contrat tombe le dernier jour du mois.');
       return;
     }
   }
@@ -22054,6 +22061,11 @@ function remplirFormulaireAvenant(c,av,d){
     const labelDatedeb=document.querySelector('label[for="f-datedeb"]');
     const inputDatedeb=document.getElementById('f-datedeb');
     {const fgFA=document.getElementById('fg-fratrie');if(fgFA)fgFA.style.display='none';}
+    // 28/09/2026 (Sophie) : repas et kilomètres retirés du formulaire d'avenant — ils ne sont lus que sur le
+    // contrat de base, et leurs cases vides par défaut avaient effacé les indemnités repas (correctif du 27/08).
+    // Ils restent modifiables, ajoutables et supprimables depuis la ligne du récapitulatif.
+    {const fgRA=document.getElementById('fg-repas');if(fgRA)fgRA.style.display='none';}
+    {const fgKA=document.getElementById('fg-km');if(fgKA)fgKA.style.display='none';}
     if(inputDatedeb){
       inputDatedeb.value=c.dateDeb;
       inputDatedeb.disabled=true;
