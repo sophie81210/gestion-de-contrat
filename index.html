@@ -9594,16 +9594,23 @@ function buildRecapPajemploi(recap,c,regulExterne){
   const _txNetE2=parseFloat(recap.txNet||0);
   const _indemCongeMoisE2=parseFloat(recap.indemCongeMois||0);
   const _hCongesPayesDecl=_txNetE2>0?_indemCongeMoisE2/_txNetE2:0;
-  const _hNormDecl=recap.isOcc?parseFloat(recap.hBase||0):Math.max(0,(recap.hMensuNorm||recap.hMensu||0)-((recap.hAbsDeduit||0)-(recap.hAbsDeduitHS||0))-parseFloat(recap.hSupDeplace||0)+_hRegul46)+_hCongesPayesDecl;
-  html+=ligneG('Heures normales', _hNormDecl.toFixed(2)+' h', true, '', (_hasRegul&&_hRegul46>0)||_hCongesPayesDecl>0);
+  // 29/09/2026 (Sophie) : les heures de congés payés se déclarent partagées entre heures normales et heures
+  // supplémentaires, au prorata de la mensualisation — elles rémunèrent les unes et les autres. Tout était
+  // déclaré en heures normales jusqu'ici.
+  const _hMensuTotDecl=parseFloat(recap.hMensu||0);
+  const _hCongesSupDecl=(_hMajE2>0&&_hMensuTotDecl>0)?parseFloat((_hCongesPayesDecl*_hMajE2/_hMensuTotDecl).toFixed(2)):0;
+  const _hCongesNormDecl=parseFloat((_hCongesPayesDecl-_hCongesSupDecl).toFixed(2));
+  const _hNormDecl=recap.isOcc?parseFloat(recap.hBase||0):Math.max(0,(recap.hMensuNorm||recap.hMensu||0)-((recap.hAbsDeduit||0)-(recap.hAbsDeduitHS||0))-parseFloat(recap.hSupDeplace||0)+_hRegul46)+_hCongesNormDecl;
+  html+=ligneG('Heures normales', _hNormDecl.toFixed(2)+' h', true, '', (_hasRegul&&_hRegul46>0)||_hCongesNormDecl>0);
   if(_hasRegul&&_hRegul46>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--tx2)">dont '+_hRegul46.toFixed(2)+' h régularisées</td></tr>';
-  if(_hCongesPayesDecl>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--tx2)">dont '+_hCongesPayesDecl.toFixed(2)+' h de congés payés</td></tr>';
+  if(_hCongesNormDecl>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--tx2)">dont '+_hCongesNormDecl.toFixed(2)+' h de congés payés</td></tr>';
   if(parseFloat(recap.hComp||0)>0||parseFloat(recap.hSup||0)>0||parseFloat(recap.hSupDeplace||0)>0||parseFloat(recap.hMensuMaj||0)>0) html+=ligneG('Taux horaire net', recap.txNet+' \u20AC', true);
   const _hCompDecl=parseFloat(recap.hComp||0);
   if(_hCompDecl>0) html+=ligneG('Heures complémentaires', _hCompDecl.toFixed(2)+' h', true);
   const _hAbsDeduitHS2=parseFloat(recap.hAbsDeduitHS||0);
-  const _hSupDecl=Math.max(0,_hMajE2-_hAbsDeduitHS2+parseFloat(recap.hSup||0)+parseFloat(recap.hSupDeplace||0));
-  if(_hSupDecl>0) html+=ligneG('Heures supplémentaires', _hSupDecl.toFixed(2)+' h', true);
+  const _hSupDecl=Math.max(0,_hMajE2-_hAbsDeduitHS2+parseFloat(recap.hSup||0)+parseFloat(recap.hSupDeplace||0))+_hCongesSupDecl;
+  if(_hSupDecl>0) html+=ligneG('Heures supplémentaires', _hSupDecl.toFixed(2)+' h', true, '', _hCongesSupDecl>0);
+  if(_hCongesSupDecl>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--tx2)">dont '+_hCongesSupDecl.toFixed(2)+' h de congés payés</td></tr>';
   const _regul52Diff=recap.regul52Fiche?parseFloat(recap.regul52Fiche.diff||0):0;
   html+=ligneG('Salaire net', (parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)+parseFloat(recap.indemFractionnementMois||0)+_diffEuros+_regul52Diff).toFixed(2)+' €', true, 'var(--m)', _hasRegul&&_diffEuros>0);
   if(_hasRegul&&_diffEuros>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--tx2)">dont '+_diffEuros.toFixed(2)+' € de régularisation de salaire</td></tr>';
@@ -15647,6 +15654,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // de la feuille de présence porte alors la pastille de la notice « conge-avenant ».
   let indemCongeAvenant=false;
   let indemCongeNbJours=0;
+  // 29/09/2026 (Sophie) : exonération de charges portée par l'indemnité de congés versée ce mois. Elle sort du
+  // montant de l'indemnité — qui ne se déclare pas avec elle — et rejoint la ligne « dont … € d'exonération de
+  // charges » du bas de la feuille, au prorata des jours payés dans le mois.
+  let _indCgPourExo=null;
   let indemFractionnementMois=0;
   let indemFractionnementNbJours=0;
   // 11/09/2026 (Sophie) : nombre de jours de congés posés en mai dont le paiement est reporté sur la
@@ -15675,6 +15686,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const deja52Cg=ind?montantCongesVersesSous52(c,anneeAcq,dateAv5246||finMoisAffCg):{montant:0,jours:0};
     if(ind&&dateAv5246&&deja52Cg.jours>=(ind.acquis||0)) ind=null;
     if(ind&&(dateAv5246||deja52Cg.jours>0)) indemCongeAvenant=true;
+    if(ind) _indCgPourExo=ind; // pour reporter l'exonération sur la ligne du bas de la feuille
     if(ind){
       if(sourceActif.dateCg==='chaque'){
         // Compter les jours acquis déjà payés dans les fiches précédentes validées.
@@ -16069,7 +16081,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     montantBaseComp, montantBaseSup, montantBaseFerieNP, montantBaseRepos, montantBase1erMai,
     hCompMaj:hCompMaj.toFixed(2),
     montantMajComp, montantMajSup, montantMajFerieNP, montantMajFeriePrevu2, montantMajRepos, montantMaj1erMai,
-    montantExo, exoSupPart, exoMensuSupPart, hMensuMajExoBrut, hTotalComp:hTotalComp.toFixed(2), montantTotalComp, montantTotalSup, hBaseComp:hBaseComp.toFixed(2),
+    // 29/09/2026 (Sophie) : l'exonération portée par l'indemnité de congés versée ce mois rejoint celle du
+    // mois, pour se lire sur la ligne « dont … € d'exonération de charges ». Au prorata des jours payés.
+    montantExo:parseFloat((montantExo+((_indCgPourExo&&_indCgPourExo.acquis>0&&indemCongeNbJours>0)
+      ?(_indCgPourExo.exoRetenue||0)*Math.min(indemCongeNbJours,_indCgPourExo.acquis)/_indCgPourExo.acquis:0)).toFixed(2)),
+    exoSupPart, exoMensuSupPart, hMensuMajExoBrut, hTotalComp:hTotalComp.toFixed(2), montantTotalComp, montantTotalSup, hBaseComp:hBaseComp.toFixed(2),
     hAbs:hAbs.toFixed(2), hAbsDeduit, hAbsDeduitHS, montantAbsences, montantAbsMaj:montantAbsMajStored,
     // 29/09/2026 (Sophie) : montant déduit au titre des seuls jours d'arrêt, séparé par nature. La déduction
     // étant proportionnelle aux heures, la part se déduit du rapport des heures.
@@ -21182,14 +21198,18 @@ function calcIndemniteConges(c, anneeRef, opts){
   // Exonération ajoutée après coup, selon la méthode retenue (jamais les deux) — montant déjà net,
   // pas de coefficient à appliquer dessus.
   const exoRetenue=maintien>=dixieme?maintienExo:dixiemeExo;
-  const meilleurNet=parseFloat((meilleur*coefNet+exoRetenue).toFixed(2));
+  // 29/09/2026 (Sophie) : l'exonération de charges ne fait plus partie du montant de l'indemnité. Elle ne se
+  // déclare pas, et elle doit se lire sur la ligne « dont … € d'exonération de charges » de la feuille de
+  // présence, pas se fondre dans un montant de congés. Le montant journalier ne la comptait déjà pas : payer
+  // jour par jour ou en une fois donne désormais la même somme, ce qui n'était pas le cas.
+  const meilleurNet=parseFloat((meilleur*coefNet).toFixed(2));
   // 27/08/2026 (Sophie) : maintienNet/dixiemeNet exposés séparément (même coefficient historique
   // coefNet que meilleurNet ci-dessus, chacun avec sa propre exonération) — l'onglet congé affichait
   // ces deux méthodes en les recalculant lui-même avec le coefficient ACTUEL (S.params.coefNet) au
   // lieu de celui de l'année concernée, contrairement à "Montant le plus favorable" qui utilisait
   // déjà meilleurNet correctement.
-  const maintienNet=parseFloat((maintien*coefNet+maintienExo).toFixed(2));
-  const dixiemeNet=parseFloat((dixieme*coefNet+dixiemeExo).toFixed(2));
+  const maintienNet=parseFloat((maintien*coefNet).toFixed(2));
+  const dixiemeNet=parseFloat((dixieme*coefNet).toFixed(2));
   const nomMethode=maintien>=dixieme?'Méthode du maintien de salaire':'Méthode du 10ème';
   const montantJournalierBrut=cg.acquis>0?parseFloat((meilleur/cg.acquis).toFixed(4)):0;
   const montantJournalierNet=parseFloat((montantJournalierBrut*coefNet).toFixed(4));
