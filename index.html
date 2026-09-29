@@ -13142,6 +13142,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   }
   if(nbJoursPrevu===0) nbJoursPrevu=nbJoursMoisCalc||Math.round(hMensu/8)||20;
   let hComp=0, hSup=0, hAbs=0;
+  let hAbsArretMalRec=0, hAbsArretProRec=0; // 29/09/2026 (Sophie) : heures d'arrêt, maladie et accident du travail
   let hMajFerie=0, hMajFeriePrevu=0, hMajRepos=0, hMaj1erMai=0; // heures jours spéciaux travaillés
   let hReposMajSeule=0; // 14/09/2026 : heures du jour de repos payées en comp / sup, majoration repos seule ici
   let hFerieMajSeule=0, h1erMaiMajSeule=0; // 14/09/2026 : idem pour un férié / 1er mai sur jour non prévu
@@ -15180,6 +15181,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       }
       if(window.DEBUG_CGAM&&sourceActif.planType==='min'&&hAbsJour>0)console.log('[CGAM-minAbsJour]',j.date,'| statut:',statut,'| hPrev:',hPrev,'| hAbsJour:',hAbsJour);
       hAbs+=hAbsJour;
+      // 29/09/2026 (Sophie) : part des heures déduites qui vient d'un arrêt de travail, séparée par nature —
+      // la base du 10ème reprend ces journées (80 % pour la maladie, 100 % pour l'accident du travail).
+      if(statut==='arret'){ if(j.arretPro) hAbsArretProRec+=hAbsJour; else hAbsArretMalRec+=hAbsJour; }
     }
     if(estPresent&&(j.heureDebReel||j.heureDebPrev)){
       let hJour=0;
@@ -16066,7 +16070,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     hCompMaj:hCompMaj.toFixed(2),
     montantMajComp, montantMajSup, montantMajFerieNP, montantMajFeriePrevu2, montantMajRepos, montantMaj1erMai,
     montantExo, exoSupPart, exoMensuSupPart, hMensuMajExoBrut, hTotalComp:hTotalComp.toFixed(2), montantTotalComp, montantTotalSup, hBaseComp:hBaseComp.toFixed(2),
-    hAbs:hAbs.toFixed(2), hAbsDeduit, hAbsDeduitHS, montantAbsences, montantAbsMaj:montantAbsMajStored, hAbsHS:typeof hAbsHS!=='undefined'?hAbsHS:0, hAbsNorm:typeof hAbsNorm!=='undefined'?hAbsNorm:0,
+    hAbs:hAbs.toFixed(2), hAbsDeduit, hAbsDeduitHS, montantAbsences, montantAbsMaj:montantAbsMajStored,
+    // 29/09/2026 (Sophie) : montant déduit au titre des seuls jours d'arrêt, séparé par nature. La déduction
+    // étant proportionnelle aux heures, la part se déduit du rapport des heures.
+    montantArretMaladie:(hAbs>0?parseFloat((montantAbsences*hAbsArretMalRec/hAbs).toFixed(2)):0),
+    montantArretPro:(hAbs>0?parseFloat((montantAbsences*hAbsArretProRec/hAbs).toFixed(2)):0), hAbsHS:typeof hAbsHS!=='undefined'?hAbsHS:0, hAbsNorm:typeof hAbsNorm!=='undefined'?hAbsNorm:0,
     nbJoursTrav:Math.max(0,parseFloat(nbJoursTrav.toFixed(1))),
     th:sourceActif.th, planType:sourceActif.planType, nbJoursMoisContrat, nbJoursMoisCalc, joursEnPlus, joursEnMoins:parseFloat(joursEnMoins.toFixed(1)),
     nbAbsEnfantMois, nbAbsEnfantAnneeCont,
@@ -19003,6 +19011,29 @@ function calcBrutTotal(c, dateDebut, dateFin){
   return parseFloat(total.toFixed(2));
 }
 
+// 29/09/2026 (Sophie) : reprise des périodes d'arrêt dans la base du 10ème. Le salaire de ces journées a été
+// déduit, elles ne pèsent donc rien dans le brut versé. La loi les y fait rentrer : à 80 % pour un arrêt maladie
+// — la même réduction que l'acquisition, qui compte 0,8 par jour — et en entier pour un accident du travail ou
+// une maladie professionnelle, assimilé à du travail effectif. Les autres absences restent hors de la base.
+// Ne sert QUE pour le 10ème : la base de l'indemnité de rupture reste les salaires réellement versés.
+function calcArretRepriseDixieme(c, dateDebut, dateFin){
+  let total=0;
+  Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
+    if(!fiche.valide) return;
+    const [yA,mA]=key.split('-').map(Number);
+    const debutMoisA=new Date(yA,mA-1,1), finMoisA=new Date(yA,mA,0);
+    if(dateDebut&&finMoisA<dateDebut) return;
+    if(dateFin&&debutMoisA>dateFin) return;
+    let r=null;
+    try{ r=calcRecapFiche(c,fiche); }catch(e){ return; }
+    if(!r) return;
+    const coefA=getParamAt('coefficients',key+'-01').valeur||0.7811975;
+    const netA=(r.montantArretMaladie||0)*0.8+(r.montantArretPro||0);
+    if(netA>0) total+=netA/coefA; // les montants déduits sont nets, la base du 10ème est brute
+  });
+  return parseFloat(total.toFixed(2));
+}
+
 // 24/08/2026 (Sophie) : miroir de calcBrutTotal, mais somme le brut des heures sup mensualisées
 // (hMensuMajExoBrut, absence déduite) au lieu du salaire — sert à isoler la part de l'indemnité
 // congés (méthode 10ème) attribuable aux heures sup mensualisées, éligibles à l'exonération de
@@ -21126,7 +21157,8 @@ function calcIndemniteConges(c, anneeRef, opts){
   // compensatrice de l'année en cours) plutôt qu'un recalcul manuel heures×taux — corrige à la fois
   // le taux figé sur celui de mai (bug confirmé, écart de 1,39€) et gère nativement un avenant en
   // cours de mois (scindé avant/après), que le recalcul manuel ne gérait pas.
-  const totalBrut=calcBrutTotal(c,new Date(anneeRef,5,1),dateMai);
+  const totalBrut=calcBrutTotal(c,new Date(anneeRef,5,1),dateMai)
+    +calcArretRepriseDixieme(c,new Date(anneeRef,5,1),dateMai);
   let dixieme=parseFloat((totalBrut*0.1).toFixed(2));
   // 03/09/2026 (Sophie) : mis à l'échelle des jours bonus "enfants à charge" — sans ça, le total du
   // 10ème reste fixe (basé sur le salaire) alors que cg.acquis grossit avec le bonus ; comme le
