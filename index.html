@@ -12961,6 +12961,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const _keyMoisArretRec=(fiche&&fiche.annee!==undefined&&fiche.mois!==undefined)
     ?(fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0')):null;
   let _moisToutArretRec=false;
+  let _moisArretJourExcluRec=false;
   try{ _moisToutArretRec=!!(_keyMoisArretRec&&moisEntierementEnArret(c,_keyMoisArretRec)); }catch(e){ _moisToutArretRec=false; }
   // Filtrer les jours si une période est spécifiée
  if(dateDebPeriode||dateFinPeriode){
@@ -14629,9 +14630,19 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // 29/09/2026 (Sophie) : le férié devenu non acquis compte ici comme un jour d'arrêt — pour que le mois
     // tombe vraiment à zéro, il doit être déduit lui aussi, même sans heures prévues. Le 1er mai fait
     // exception : il reste acquis et payé.
-    const estArretMoisEntier=(statut==='arret'||statut==='ferie-non')&&_moisToutArretRec&&!estArretEnSemaineOff&&!estArretSurJourPrevu
+    // 29/09/2026 (Sophie, Silene) : ne pas écarter les jours « d'arrêt sur jour prévu ». Ce drapeau dit que le
+    // jour appartient au rythme du contrat, pas qu'il porte des heures sur la feuille : en plan minimum et
+    // variable il est vrai alors que la feuille est vide, et ces jours étaient alors déduits de zéro. Un jour
+    // qui porte vraiment ses heures prévues passe de toute façon par la première branche du calcul.
+    const estArretMoisEntier=(statut==='arret'||statut==='ferie-non')&&_moisToutArretRec&&!estArretEnSemaineOff
       &&j.date&&jourPossibleContratCg(c,j.date)&&arretMoisEntierApplicable(c,_keyMoisArretRec,j.date);
-    const estAbsDeduite=absDeduites.includes(statut)||estArretSurJourPrevu||estArretMoisEntier; // (déduction « semaine sans planning » retirée le 23/09/2026, remplacée le 29/09 par le mois entier)
+    const estAbsDeduite=absDeduites.includes(statut)||estArretSurJourPrevu||estArretMoisEntier;
+    // 29/09/2026 (Sophie) : un jour d'un mois entièrement en arrêt qui n'est finalement pas déduit (semaine
+    // d'absence de l'employeur, ou semaine à cheval dont le mois voisin autorise les modifications de
+    // planning) empêche de caler la déduction sur le salaire du mois, plus bas.
+    if(_moisToutArretRec&&(statut==='arret'||statut==='ferie-non')&&j.date&&jourPossibleContratCg(c,j.date)&&!estAbsDeduite){
+      _moisArretJourExcluRec=true;
+    } // (déduction « semaine sans planning » retirée le 23/09/2026, remplacée le 29/09 par le mois entier)
     if(estPresent&&j.heureDebReel&&j.heureFinReel){
       const debReel=toM(j.heureDebReel);
       const finReel=toM(j.heureFinReel);
@@ -15294,6 +15305,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   hComp=hCompMaj;
   const hMoyParJour=nbJoursMoisContrat>0?hMensu/nbJoursMoisContrat:hMensu/20;
   let hAbsHS=0,hAbsNorm=0,hAbsDeduitHS=0,montantAbsMajStored=0;
+  // 29/09/2026 (Sophie, Silene janvier 2022) : mois entièrement en arrêt, rien d'exclu — la déduction doit
+  // valoir exactement le salaire du mois. Les heures retirées jour par jour (volume ÷ jours garantis pour un
+  // plan minimum, heures du motif ailleurs) ne retombent pas au centime sur les heures théoriques du mois, qui
+  // comptent les semaines partielles au prorata : quelques euros restaient payés. Le mois doit être à zéro.
+  if(_moisToutArretRec&&!_moisArretJourExcluRec&&hTheoriques>0&&hAbs>0&&hAbs<hTheoriques){
+    hAbs=hTheoriques;
+  }
   if(hAbs>0&&hTheoriques>0){
     if(hMensuMaj>0){
       // Approche à deux lignes (mensu unique HN+HS sans majoration, + majoration structurelle seule) :
