@@ -4252,6 +4252,31 @@ function moisEntierementEnArret(c,key){
   }
   return unArretAr;
 }
+// 29/09/2026 (Sophie) : la semaine de ce jour est-elle entièrement en arrêt de travail ? Ne regarde que les
+// statuts réellement enregistrés (un arrêt est toujours posé à la main), jamais le statut déduit — appelée
+// depuis getStatutPrevu, elle ne doit pas s'y rappeler elle-même. Le jour examiné, le repos hebdomadaire, les
+// autres fériés, les jours hors du rythme du contrat et les jours hors contrat sont mis de côté.
+function semaineEntierementEnArret(c,dateStr){
+  const dSe=parseDateLoc(dateStr);
+  const lundiSe=new Date(dSe); lundiSe.setDate(dSe.getDate()-((dSe.getDay()+6)%7));
+  let arretsSe=0, autresSe=0;
+  for(let iSe=0;iSe<7;iSe++){
+    const xSe=new Date(lundiSe); xSe.setDate(lundiSe.getDate()+iSe);
+    const xsSe=dateToStr(xSe);
+    if(xsSe===dateStr) continue;
+    if(xSe.getDay()===(c.reposHebdo||0)) continue;
+    if(c.dateDeb&&xsSe<c.dateDeb) continue;
+    if(isFerie(xsSe,c)) continue;
+    if(!jourPossibleContratCg(c,xsSe)) continue;
+    const fSe=c.fiches&&c.fiches[xsSe.slice(0,7)];
+    const jSe=fSe&&(fSe.jours||[]).find(ySe=>ySe.date===xsSe);
+    const stSe=jSe&&jSe.statut;
+    if(stSe==='arret') arretsSe++;
+    else if(stSe==='hors-contrat') continue;
+    else autresSe++;
+  }
+  return arretsSe>0&&autresSe===0;
+}
 // Le mois contient-il une semaine marquée « absence employeur » sur l'agenda de la version en vigueur ?
 function semaineAbsenceEmployeurDansMois(c,key){
   const fOf=c&&c.fiches&&c.fiches[key];
@@ -4771,6 +4796,11 @@ function getStatutPrevu(c,j){
       let estTravailleF=true;
       if(srcF.joursFixe) estTravailleF=!!(srcF.joursFixe[jourIdxF]&&srcF.joursFixe[jourIdxF].d);
       else if(srcF.semTypes) estTravailleF=srcF.semTypes.some(st=>st.jours&&st.jours[jourIdxF]);
+      // 29/09/2026 (Sophie) : plan minimum et variable n'ont ni jours fixes ni semaines types — le test
+      // répondait donc toujours « oui » et la règle du férié non acquis s'appliquait à TOUS leurs fériés.
+      // Ils ont pourtant leurs jours possibles : ceux du plan minimum, ceux des volumes du plan variable.
+      else if(srcF.th==='plan'&&srcF.planType==='min') estTravailleF=!!((srcF.joursMin||[])[jourIdxF]);
+      else if(srcF.th==='plan'&&srcF.planType==='var') estTravailleF=(srcF.planVar||[]).some(v=>v.jours&&v.jours[jourIdxF]);
       if(estTravailleF){
         // Vérifier si encadré par arret ou abs-am (jour voisin prévu)
         function getStatutJourVoisin(dateStr){
@@ -4801,6 +4831,9 @@ function getStatutPrevu(c,j){
         const ferieNonStatuts=['arret','abs-am'];
         // 1er mai : jamais ferie-non, toujours acquis
         const est1erMai=parts[1]==='05'&&parts[2]==='01';
+        // 29/09/2026 (Sophie) : un férié pris dans une semaine entièrement en arrêt n'est pas acquis, sans
+        // dépendre du jour voisin le plus proche — la semaine elle-même suffit à le dire.
+        if(!est1erMai&&semaineEntierementEnArret(c,j.date)) return 'ferie-non';
         if(!est1erMai&&(ferieNonStatuts.includes(statutsPrev)||ferieNonStatuts.includes(statutsNext))) return 'ferie-non';
       }
       return 'ferie';
@@ -11070,7 +11103,12 @@ function calcCongesContrat(c, dateRefOverride){
             }
             let joursMaxSem=joursMax;
             let typeSemActif46=null;
-            if(sourceSem.joursFixe) joursMaxSem=sourceSem.joursFixe.filter(j=>j).length||joursMax;
+            // 29/09/2026 (Sophie, audit) : plan minimum — les jours garantis viennent de la version EN VIGUEUR.
+            // Sans ce cas, on retombait sur joursMax, calculé une fois pour toutes sur le contrat d'origine :
+            // un contrat devenu plan minimum par avenant gardait les jours du rythme d'avant, et un changement
+            // de « jours maximum par semaine » par avenant restait sans effet sur l'acquisition.
+            if(sourceSem.th==='plan'&&sourceSem.planType==='min'&&sourceSem.jMaxMin) joursMaxSem=sourceSem.jMaxMin;
+            else if(sourceSem.joursFixe) joursMaxSem=sourceSem.joursFixe.filter(j=>j).length||joursMax;
             else if(sourceSem.semTypes){
               if((sourceSem.tc||c.tc)==='52'){
                 const tousAgSem=[...(sourceSem.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
@@ -11436,7 +11474,9 @@ function calcCongesContrat(c, dateRefOverride){
         const dateRepSemC=new Date(jours[0].date.split('-')[0],parseInt(jours[0].date.split('-')[1])-1,parseInt(jours[0].date.split('-')[2]));
         const sourceSemC=getVersionActive(c,dateRepSemC);
         let joursMaxSemC=joursMax;
-        if(sourceSemC.joursFixe) joursMaxSemC=sourceSemC.joursFixe.filter(j=>j).length||joursMax;
+        // 29/09/2026 (Sophie, audit) : même correction que pour une semaine terminée, ci-dessus.
+        if(sourceSemC.th==='plan'&&sourceSemC.planType==='min'&&sourceSemC.jMaxMin) joursMaxSemC=sourceSemC.jMaxMin;
+        else if(sourceSemC.joursFixe) joursMaxSemC=sourceSemC.joursFixe.filter(j=>j).length||joursMax;
         else if(sourceSemC.semTypes){
           if((sourceSemC.tc||c.tc)==='52'){
             const tousAgSemC=[...(sourceSemC.agendas||c.agendas||[]),...(c.avenants||[]).flatMap(av=>av.agendas||[])];
@@ -14264,12 +14304,18 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         } else if(joursPossiblesAbsPVArr[jourIdxPre]){
           hAbsParSemaine[semKeyPre]+=hSemMoyAbsPV/nbJoursPossiblesAbsPV;
         }
-      } else if(c.planType==='fix'||c.planType==='min'){
+      } else if((()=>{const s=getVersionActive(c,new Date(j.date));return s.th==='plan'&&s.planType==='min';})()){
+        // 29/09/2026 (Sophie, audit) : cette branche lisait le contrat d'ORIGINE (joursMin, jours max, volume
+        // minimum), alors que ses voisines, plan variable et semaines types, lisent la version en vigueur. Un
+        // contrat devenu plan minimum par avenant n'y entrait jamais ; un contrat qui le quittait pour des
+        // horaires fixes ou des semaines types y entrait encore, avec l'ancien volume. Elle testait aussi un
+        // type de planning « fix » qui n'existe pas (seuls « min » et « var » sont utilisés).
+        const srcPreMin=getVersionActive(c,new Date(j.date));
         const jourIdxPre=j.jourSemaine===0?6:j.jourSemaine-1;
-        const joursPossibles=c.joursMin||[];
-        const nbJoursCochesMin=joursPossibles.filter(Boolean).length||(c.jMaxMin||5);
+        const joursPossibles=srcPreMin.joursMin||c.joursMin||[];
+        const nbJoursCochesMin=joursPossibles.filter(Boolean).length||(srcPreMin.jMaxMin||c.jMaxMin||5);
         if(joursPossibles[jourIdxPre]){
-          hAbsParSemaine[semKeyPre]+=(c.hMin||0)/nbJoursCochesMin;
+          hAbsParSemaine[semKeyPre]+=(srcPreMin.hMin||c.hMin||0)/nbJoursCochesMin;
         }
       } else if(sourceActif.th==='sem'||c.th==='sem'){
         const jourIdxPreSem=j.jourSemaine===0?6:j.jourSemaine-1;
@@ -14572,7 +14618,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // valeur théorique même sans heures au planning, sauf s'il tombe dans une semaine d'absence de l'employeur
     // (jamais déduite, et consommée) ou dans une semaine à cheval dont le mois voisin autorise les modifications
     // de planning (les heures ont pu y être déplacées).
-    const estArretMoisEntier=statut==='arret'&&_moisToutArretRec&&!estArretEnSemaineOff&&!estArretSurJourPrevu
+    // 29/09/2026 (Sophie) : le férié devenu non acquis compte ici comme un jour d'arrêt — pour que le mois
+    // tombe vraiment à zéro, il doit être déduit lui aussi, même sans heures prévues. Le 1er mai fait
+    // exception : il reste acquis et payé.
+    const estArretMoisEntier=(statut==='arret'||statut==='ferie-non')&&_moisToutArretRec&&!estArretEnSemaineOff&&!estArretSurJourPrevu
       &&j.date&&jourPossibleContratCg(c,j.date)&&arretMoisEntierApplicable(c,_keyMoisArretRec,j.date);
     const estAbsDeduite=absDeduites.includes(statut)||estArretSurJourPrevu||estArretMoisEntier; // (déduction « semaine sans planning » retirée le 23/09/2026, remplacée le 29/09 par le mois entier)
     if(estPresent&&j.heureDebReel&&j.heureFinReel){
@@ -22274,16 +22323,21 @@ function ouvrirProlongationCDD(cid){
   if(nbProlongations>=2){toast('Maximum 2 prolongations atteint');return;}
   // Créer un avenant pré-configuré prolongation
   if(!c.avenants) c.avenants=[];
+  // 29/09/2026 (Sophie, audit) : conditions reprises de la version EN VIGUEUR (dernier avenant signé et
+  // effectif), plus du contrat d'origine. Un CDD déjà modifié par un avenant — une hausse de taux, par
+  // exemple — repartait autrement des conditions initiales sans que rien ne le signale.
+  const srcAv=getVersionActive(c,new Date())||c;
+  const vAv=k=>(srcAv[k]!==undefined&&srcAv[k]!==null)?srcAv[k]:c[k];
   const avid=Date.now();
   const av={id:avid,num:(c.avenants.length+1),dateAvenant:'',typeProlongation:'prolongation',
-    tc:c.tc,th:c.th,planType:c.planType,txBrut:c.txBrut,txNet:c.txNet,
-    majComp:c.majComp,majSup:c.majSup,majRepos:c.majRepos,majFerie:c.majFerie,maj1erMai:c.maj1erMai,
-    hMensu:c.hMensu,hMensuMaj:c.hMensuMaj,hMensuNorm:c.hMensuNorm,nbSem:c.nbSem,
-    hMin:c.hMin,jMaxMin:c.jMaxMin,joursMin:c.joursMin,joursFixe:c.joursFixe,semTypes:c.semTypes,
-    planVar:c.planVar,nbJoursMois:c.nbJoursMois,mensBrute:c.mensBrute,
+    tc:vAv('tc'),th:vAv('th'),planType:vAv('planType'),txBrut:vAv('txBrut'),txNet:vAv('txNet'),
+    majComp:vAv('majComp'),majSup:vAv('majSup'),majRepos:vAv('majRepos'),majFerie:vAv('majFerie'),maj1erMai:vAv('maj1erMai'),
+    hMensu:vAv('hMensu'),hMensuMaj:vAv('hMensuMaj'),hMensuNorm:vAv('hMensuNorm'),nbSem:vAv('nbSem'),
+    hMin:vAv('hMin'),jMaxMin:vAv('jMaxMin'),joursMin:vAv('joursMin'),joursFixe:vAv('joursFixe'),semTypes:vAv('semTypes'),
+    planVar:vAv('planVar'),nbJoursMois:vAv('nbJoursMois'),mensBrute:vAv('mensBrute'),
     cddMotif:c.cddMotif,cddTerme:c.cddTerme,cddDateFin:'',cddDateMin:'',
-    feriesTravailles:c.feriesTravailles,cgAnticipe:c.cgAnticipe,dateCg:c.dateCg,
-    indemType:c.indemType,indemMontant:c.indemMontant,indemPer:c.indemPer,repas:c.repas,km:c.km,
+    feriesTravailles:vAv('feriesTravailles'),cgAnticipe:vAv('cgAnticipe'),dateCg:vAv('dateCg'),
+    indemType:vAv('indemType'),indemMontant:vAv('indemMontant'),indemPer:vAv('indemPer'),repas:vAv('repas'),km:vAv('km'),
     signe:false};
   c.avenants.push(av);
   const cidx=S.contrats.findIndex(x=>x.id==cid);
@@ -22318,16 +22372,21 @@ function ouvrirPassageCDI(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c||c.typeDuree!=='cdd') return;
   if(!c.avenants) c.avenants=[];
+  // 29/09/2026 (Sophie, audit) : conditions reprises de la version EN VIGUEUR (dernier avenant signé et
+  // effectif), plus du contrat d'origine. Un CDD déjà modifié par un avenant — une hausse de taux, par
+  // exemple — repartait autrement des conditions initiales sans que rien ne le signale.
+  const srcAv=getVersionActive(c,new Date())||c;
+  const vAv=k=>(srcAv[k]!==undefined&&srcAv[k]!==null)?srcAv[k]:c[k];
   const avid=Date.now();
   const av={id:avid,num:(c.avenants.length+1),dateAvenant:'',typeProlongation:'cdi',
-    tc:c.tc,th:c.th,planType:c.planType,txBrut:c.txBrut,txNet:c.txNet,
-    majComp:c.majComp,majSup:c.majSup,majRepos:c.majRepos,majFerie:c.majFerie,maj1erMai:c.maj1erMai,
-    hMensu:c.hMensu,hMensuMaj:c.hMensuMaj,hMensuNorm:c.hMensuNorm,nbSem:c.nbSem,
-    hMin:c.hMin,jMaxMin:c.jMaxMin,joursMin:c.joursMin,joursFixe:c.joursFixe,semTypes:c.semTypes,
-    planVar:c.planVar,nbJoursMois:c.nbJoursMois,mensBrute:c.mensBrute,
+    tc:vAv('tc'),th:vAv('th'),planType:vAv('planType'),txBrut:vAv('txBrut'),txNet:vAv('txNet'),
+    majComp:vAv('majComp'),majSup:vAv('majSup'),majRepos:vAv('majRepos'),majFerie:vAv('majFerie'),maj1erMai:vAv('maj1erMai'),
+    hMensu:vAv('hMensu'),hMensuMaj:vAv('hMensuMaj'),hMensuNorm:vAv('hMensuNorm'),nbSem:vAv('nbSem'),
+    hMin:vAv('hMin'),jMaxMin:vAv('jMaxMin'),joursMin:vAv('joursMin'),joursFixe:vAv('joursFixe'),semTypes:vAv('semTypes'),
+    planVar:vAv('planVar'),nbJoursMois:vAv('nbJoursMois'),mensBrute:vAv('mensBrute'),
     typeDuree:'cdi', // passage en CDI
-    feriesTravailles:c.feriesTravailles,cgAnticipe:c.cgAnticipe,dateCg:c.dateCg,
-    indemType:c.indemType,indemMontant:c.indemMontant,indemPer:c.indemPer,repas:c.repas,km:c.km,
+    feriesTravailles:vAv('feriesTravailles'),cgAnticipe:vAv('cgAnticipe'),dateCg:vAv('dateCg'),
+    indemType:vAv('indemType'),indemMontant:vAv('indemMontant'),indemPer:vAv('indemPer'),repas:vAv('repas'),km:vAv('km'),
     signe:false};
   c.avenants.push(av);
   const cidx=S.contrats.findIndex(x=>x.id==cid);
