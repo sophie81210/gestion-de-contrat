@@ -4324,8 +4324,11 @@ function arretMoisEntierApplicable(c,key,dateStr){
 // 21/09/2026 (Sophie) : semaine d'absence de l'employeur en arrêt — elle compte dans l'acquisition (l'utilisateur
 // déplace la semaine d'absence) : 0,8 par jour d'arrêt sur un jour possible, au plus 0,8 semaine.
 function contribArretSemaineOffCg(c,joursSub,jMax){
-  const nA=(joursSub||[]).filter(j=>j.statut==='arret'&&jourPossibleContratCg(c,j.date)).length;
-  return jMax>0?Math.min(nA,jMax)*0.8/jMax:0;
+  const arretsOff=(joursSub||[]).filter(j=>j.statut==='arret'&&jourPossibleContratCg(c,j.date));
+  const nA=Math.min(arretsOff.length,jMax);
+  // 29/09/2026 (Sophie) : accident du travail — 1 par jour au lieu de 0,8, ici comme ailleurs.
+  const nPro=Math.min(nA,arretsOff.filter(j=>j.arretPro).length);
+  return jMax>0?(nPro*1+(nA-nPro)*0.8)/jMax:0;
 }
 // Nombre de jours d'arrêt d'un morceau de semaine qui comptent pour l'acquisition (avant plafond aux jours garantis).
 function arretsComptesSemaineCg(c,joursSub,pattern){
@@ -4541,7 +4544,11 @@ function getStatutOptions(statutPrevu, isPlanMinVar, c, sourceActive){
     'non-prevu':['travaille','arret','init'],
     // Statuts simples : juste réinitialiser
     'travaille':['init'],
-    'arret':['init'],
+    // 29/09/2026 (Sophie) : un arrêt de travail propose l'autre nature, et réciproquement — même principe que
+    // « décompte congés ↔ reprise ». Un arrêt maladie peut devenir maladie professionnelle en cours de route, le
+    // choix se fait donc jour par jour et se change autant de fois qu'il le faut.
+    'arret':['arret-pro','init'],
+    'arret-pro':['arret','init'],
     'abs-partielle':['init'],
     'abs-rem':['init'],
     'abs-enfant':['init'],
@@ -4569,7 +4576,7 @@ function getStatutOptions(statutPrevu, isPlanMinVar, c, sourceActive){
   const labels={
     'prevu':'Prévu','abs-rem':'Absence rémunérée','abs-enfant':'Abs. maladie enfant',
     'abs-non':'Absence non rémunérée','abs-am':'Absence AM','ferie-non':'Férié non acquis',
-    'arret':'Arrêt de travail','non-prevu':'Non prévu','travaille':'Travaillé','repos':'Repos',
+    'arret':'Arrêt de travail','arret-pro':'Arrêt — accident du travail','non-prevu':'Non prévu','travaille':'Travaillé','repos':'Repos',
     'ferie':'Férié','conges-acq':'Congés','conges-non':'Congés','conges-anticipe':'Congés','conges-am':'Congés','conges-6j':'Non prévu',
     'init':'↺ Réinitialiser','hors-contrat':'Hors contrat','abs-partielle':'Absence partielle',
     'decompte-conges':'Non prévu','decompte-acq':'Non prévu','decompte-anticipe':'Non prévu',
@@ -4611,7 +4618,8 @@ function getTooltipStatut(s){
     'abs-non':'Le jour sera déduit du salaire',
     'abs-enfant':"Absence maladie de l'enfant",
     'abs-am':'Absence assistante maternelle',
-    'arret':'Arrêt de travail',
+    'arret':'Arrêt de travail (maladie)',
+    'arret-pro':'Arrêt de travail — accident du travail ou maladie professionnelle',
     'ferie':'Jour férié',
     'ferie-non':'Jour férié non acquis',
     'hors-contrat':'Hors contrat',
@@ -4625,7 +4633,7 @@ function getStatutBg(statut){
     'prevu':'#e8efe1','non-prevu':'#fcfcfc','repos':'#f0ebe4',
     'ferie':'#f7f0dc','conges-acq':eclaircir('#9B7A94',0.75),'conges-non':eclaircir('#9B7A94',0.75),'conges-6j':'#fcfcfc','conges-6j-fin':'#fcfcfc',
     'abs-rem':'#e8efe1','abs-enfant':'#f5e6e2','abs-non':'#f5e6e2','abs-am':'#f5e6e2','ferie-non':'#f5e6e2',
-    'arret':'#f5e6e2','travaille':'#e8efe1','conges':eclaircir('#9B7A94',0.6),
+    'arret':'#f5e6e2','arret-pro':'#f5e6e2','travaille':'#e8efe1','conges':eclaircir('#9B7A94',0.6),
     'conges-anticipe':eclaircir('#9B7A94',0.75),'conges-am':eclaircir('#9B7A94',0.75),
     'abs-partielle':'#faf1ee','hors-contrat':'#fcfcfc','decompte-conges':'#fcfcfc','decompte-acq':'#fcfcfc','decompte-anticipe':'#fcfcfc','reprise':'#e8efe1',
     'fractionnement':eclaircir('#7C93A8',0.75),
@@ -5555,14 +5563,17 @@ function ouvrirFiche(contratId,key){
        ${(fiche.valide||estLectureSeuleEmployeur())?'disabled':`onchange="majFiche(${contratId},'${key}',${idx},'km',this.value)"`}>
     </td>`:aKm?'<td style="padding:3px 2px"><input type="number" style="width:38px;visibility:hidden" class="no-spin"></td>':'';
 
-    const optsBase=['conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','non-prevu','hors-contrat','repos','ferie','ferie-non','arret','fractionnement'].includes(statutActuel)?statutActuel:statutPrevu;
+    // 29/09/2026 (Sophie) : un arrêt marqué « accident du travail » s'affiche et se choisit sous ce nom, alors
+    // que le statut enregistré reste « arret ». Seule la liste déroulante connaît cette distinction.
+    const statutSelect=(statutActuel==='arret'&&j.arretPro)?'arret-pro':statutActuel;
+    const optsBase=['conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','non-prevu','hors-contrat','repos','ferie','ferie-non','arret','arret-pro','fractionnement'].includes(statutSelect)?statutSelect:statutPrevu;
     const opts=getStatutOptions(optsBase, isPlanVar, c, sourceActive);
-    let selectedOpts=opts.replace(`value="${statutActuel}"`,`value="${statutActuel}" selected`);
+    let selectedOpts=opts.replace(`value="${statutSelect}"`,`value="${statutSelect}" selected`);
     if(!selectedOpts.includes('selected')){
     const moisNum=parseInt(key.split('-')[1]);
     const labelAnticipe=moisNum===5?'Congés acquis':'Congés anticipés';
-    const lbl={'conges-acq':'Congés','conges-non':'Congés','conges-anticipe':'Congés','conges-am':'Congés','conges-6j':'Non prévu','conges-6j-fin':'Non prévu','decompte-acq':'Non prévu','decompte-anticipe':'Non prévu','decompte-conges':'Non prévu','travaille':'Travaillé','prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié','ferie-non':'Férié non acquis','abs-rem':'Absence rémunérée','abs-enfant':'Absence maladie de l&rsquo;enfant','abs-non':'Absence non rémunérée','abs-am':'Absence AM','arret':'Arrêt de travail','hors-contrat':'Hors contrat','abs-partielle':'Absence partielle','fractionnement':'Fractionnement'};
-      selectedOpts=`<option value="${statutActuel}" selected>${lbl[statutActuel]||statutActuel}</option>`+opts;
+    const lbl={'conges-acq':'Congés','conges-non':'Congés','conges-anticipe':'Congés','conges-am':'Congés','conges-6j':'Non prévu','conges-6j-fin':'Non prévu','decompte-acq':'Non prévu','decompte-anticipe':'Non prévu','decompte-conges':'Non prévu','travaille':'Travaillé','prevu':'Prévu','non-prevu':'Non prévu','repos':'Repos','ferie':'Férié','ferie-non':'Férié non acquis','abs-rem':'Absence rémunérée','abs-enfant':'Absence maladie de l&rsquo;enfant','abs-non':'Absence non rémunérée','abs-am':'Absence AM','arret':'Arrêt de travail','arret-pro':'Arrêt — accident du travail','hors-contrat':'Hors contrat','abs-partielle':'Absence partielle','fractionnement':'Fractionnement'};
+      selectedOpts=`<option value="${statutSelect}" selected>${lbl[statutSelect]||statutSelect}</option>`+opts;
     }
 
     // Cellule "Prévu" — rendu identique à fixe/sem (coche verte incluse) ; la couleur du type de semaine
@@ -9711,6 +9722,15 @@ function buildRecapCumul(r1,r2,solde,c){
 }
          
 function majFicheStatut(contratId,key,idx,val){
+  // 29/09/2026 (Sophie) : « Arrêt — accident du travail » n'est pas un statut à part entière. Le jour reste un
+  // arrêt de travail pour tout le calcul (déductions, semaine et mois entiers, fériés, refus de pose sans
+  // planning) ; seule une marque le distingue, lue par l'acquisition des congés et par l'ancienneté. Sans quoi
+  // il faudrait revoir les soixante-sept endroits qui reconnaissent l'arrêt, et en oublier un se paierait en
+  // salaire faux.
+  let _arretProDemande=null;
+  if(val==='arret-pro'){ val='arret'; _arretProDemande=true; }
+  else if(val==='arret'){ _arretProDemande=false; }
+
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c) return;
   // Chercher la fiche dans c.fiches ou dans les avenants
@@ -9875,6 +9895,9 @@ function majFicheStatut(contratId,key,idx,val){
   const _statutAvantModif=ficheSource.fiches[key].jours[idx].statut; // sauvegarder avant modification
   const estFerieNonInit=(val==='init')&&_statutAvantModif==='ferie-non'&&isFerie(ficheSource.fiches[key].jours[idx].date,c);
   ficheSource.fiches[key].jours[idx].statut=(val==='init')?(estFerieNonInit?null:(estJourPossible?'non-prevu':null)):val||null;
+  if(_arretProDemande===true) ficheSource.fiches[key].jours[idx].arretPro=true;
+  else if(_arretProDemande===false) delete ficheSource.fiches[key].jours[idx].arretPro;
+  else if(val==='init') delete ficheSource.fiches[key].jours[idx].arretPro;
   // Pour plan min/var : réinitialiser aussi les heures prévues
   if(val==='init'&&(c.th==='plan'&&(c.planType==='min'||c.planType==='var'))){
     ficheSource.fiches[key].jours[idx].heureDebPrev=null;
@@ -10774,7 +10797,7 @@ function calcCongesContrat(c, dateRefOverride){
         // année, même si le jeudi de sa semaine tombe dans l'année suivante (ex. semaine à cheval sur
         // le 31 mai, mardi dans l'année qui se termine, jeudi dans celle qui commence).
         if(!semaines[semKey]) semaines[semKey]={jours:[]};
-        semaines[semKey].jours.push({statut,heureDebReel:j.heureDebReel,date:j.date});
+        semaines[semKey].jours.push({statut,heureDebReel:j.heureDebReel,date:j.date,arretPro:j.arretPro}); // 29/09/2026 (Sophie) : la nature de l'arrêt suit, l'acquisition en dépend
     
         if(statut==='arret') joursArretTotal++;
       });
@@ -11456,7 +11479,13 @@ function calcCongesContrat(c, dateRefOverride){
               :(arretCptMinG!==null?arretCptMinG
                 :(estSemaineOffMin?Math.min(joursSub.filter(jj=>jj.statut==='arret'&&jourPossibleContratCg(c,jj.date)).length,Math.max(0,joursMaxSem-joursNormaux-joursConges16))
                   :Math.min(arretsComptesSemaineCg(c,joursSub,sourceSem.joursMin||c.joursMin),Math.max(0,joursMaxSem-joursNormaux-joursConges16))));
-            const contributionArret=arretCptFSM*(0.8)/joursMaxSem;
+            // 29/09/2026 (Sophie) : un arrêt pour accident du travail ou maladie professionnelle est assimilé à
+            // du travail effectif — il acquiert 1 par jour, soit 2,5 jours par mois, là où la maladie ordinaire
+            // acquiert 0,8, soit 2 jours. Les jours « accident du travail » sont pris en premier dans le compte
+            // déjà plafonné aux jours garantis de la semaine.
+            const arretsProFSM=joursSub.filter(jj=>jj.statut==='arret'&&jj.arretPro&&jourPossibleContratCg(c,jj.date)).length;
+            const nbProComptesFSM=Math.min(arretCptFSM,arretsProFSM);
+            const contributionArret=(nbProComptesFSM*1+(arretCptFSM-nbProComptesFSM)*0.8)/joursMaxSem;
             const prorata=penaliteModifFSM>0
               ?Math.max(0,Math.min(1,contributionNormale+contributionConges)-penaliteModifFSM/joursMaxSem)
               :Math.max(0,contributionNormale+contributionConges);
@@ -19564,7 +19593,7 @@ function joursHorsAnciennete(c,dateDebStr,dateFinStr){
   if(!dateDebStr||!dateFinStr||dateFinStr<dateDebStr) return 0;
   const statutParDate={};
   Object.values(c.fiches||{}).forEach(f=>{
-    (f.jours||[]).forEach(j=>{ if(j.date&&j.date>=dateDebStr&&j.date<=dateFinStr) statutParDate[j.date]=j.statut||null; });
+    (f.jours||[]).forEach(j=>{ if(j.date&&j.date>=dateDebStr&&j.date<=dateFinStr){ statutParDate[j.date]=j.statut||null; statutParDate[j.date+'|obj']=j; } });
   });
   let total=0, dernierExclu=false, enAttente=0;
   const cur=parseDateLoc(dateDebStr), fin=parseDateLoc(dateFinStr);
@@ -19572,7 +19601,9 @@ function joursHorsAnciennete(c,dateDebStr,dateFinStr){
   while(cur<=fin&&garde++<20000){
     const ds=dateToStr(cur);
     const st=statutParDate[ds];
-    if(STATUTS_HORS_ANCIENNETE.includes(st)){
+    const jRef=statutParDate[ds+'|obj'];
+    const estProAnc=st==='arret'&&jRef&&jRef.arretPro; // accident du travail : assimilé à du travail effectif
+    if(STATUTS_HORS_ANCIENNETE.includes(st)&&!estProAnc){
       total+=1+enAttente; // l'attente était encadrée par deux jours exclus
       enAttente=0; dernierExclu=true;
     } else if(st==='repos'){
