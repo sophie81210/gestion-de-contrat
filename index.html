@@ -4278,6 +4278,20 @@ function semaineEntierementEnArret(c,dateStr){
   }
   return arretsSe>0&&autresSe===0;
 }
+// 29/09/2026 (Sophie) : semaine entièrement en arrêt — elle est déduite de sa valeur théorique même si le
+// planning est vide, comme un mois entier. L'objection du 23/09 (des heures déplacées ailleurs par le planning
+// modifié) est écartée par le seul cas où ce déplacement est possible : les modifications de planning
+// autorisées. Les deux mois touchés par la semaine sont regardés, puisqu'une semaine à cheval peut voir ses
+// heures partir de part et d'autre.
+function arretSemaineEntiereDeduite(c,dateStr){
+  if(!semaineEntierementEnArret(c,dateStr)) return false;
+  const dSd=parseDateLoc(dateStr);
+  const lundiSd=new Date(dSd); lundiSd.setDate(dSd.getDate()-((dSd.getDay()+6)%7));
+  const dimSd=new Date(lundiSd); dimSd.setDate(lundiSd.getDate()+6);
+  const modifsSd=c.modifPlanningAutoriseesMois||{};
+  if(modifsSd[dateToStr(lundiSd).slice(0,7)]||modifsSd[dateToStr(dimSd).slice(0,7)]) return false;
+  return true;
+}
 // Le mois contient-il une semaine marquée « absence employeur » sur l'agenda de la version en vigueur ?
 function semaineAbsenceEmployeurDansMois(c,key){
   const fOf=c&&c.fiches&&c.fiches[key];
@@ -12963,6 +12977,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     ?(fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0')):null;
   let _moisToutArretRec=false;
   let _moisArretJourExcluRec=false;
+  const _semArretCacheRec={};
   try{ _moisToutArretRec=!!(_keyMoisArretRec&&moisEntierementEnArret(c,_keyMoisArretRec)); }catch(e){ _moisToutArretRec=false; }
   // Filtrer les jours si une période est spécifiée
  if(dateDebPeriode||dateFinPeriode){
@@ -14637,7 +14652,17 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // qui porte vraiment ses heures prévues passe de toute façon par la première branche du calcul.
     const estArretMoisEntier=(statut==='arret'||statut==='ferie-non')&&_moisToutArretRec&&!estArretEnSemaineOff
       &&j.date&&jourPossibleContratCg(c,j.date)&&arretMoisEntierApplicable(c,_keyMoisArretRec,j.date);
-    const estAbsDeduite=absDeduites.includes(statut)||estArretSurJourPrevu||estArretMoisEntier;
+    // 29/09/2026 (Sophie) : semaine entièrement en arrêt, hors mois entier déjà traité. Résultat mis en cache
+    // par semaine : la recherche parcourt sept jours et plusieurs fiches, et la feuille rappelle ce calcul
+    // pour chaque jour.
+    const estArretSemaineEntiere=statut==='arret'&&!estArretEnSemaineOff&&!estArretMoisEntier&&j.date
+      &&jourPossibleContratCg(c,j.date)&&(()=>{
+        const lSe=parseDateLoc(j.date); lSe.setDate(lSe.getDate()-((lSe.getDay()+6)%7));
+        const cleSe=dateToStr(lSe);
+        if(_semArretCacheRec[cleSe]===undefined) _semArretCacheRec[cleSe]=arretSemaineEntiereDeduite(c,j.date);
+        return _semArretCacheRec[cleSe];
+      })();
+    const estAbsDeduite=absDeduites.includes(statut)||estArretSurJourPrevu||estArretMoisEntier||estArretSemaineEntiere;
     // 29/09/2026 (Sophie) : un jour d'un mois entièrement en arrêt qui n'est finalement pas déduit (semaine
     // d'absence de l'employeur, ou semaine à cheval dont le mois voisin autorise les modifications de
     // planning) empêche de caler la déduction sur le salaire du mois, plus bas.
@@ -14866,7 +14891,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       // jour hors contrat valait 10h (130h ÷ 13 jours du contrat initial, mardi-mercredi-jeudi de 8h à
       // 18h) au lieu des 7h de l'avenant (moyenne 35h ÷ 5 jours union). Piège identifié par Sophie le
       // matin même sur le plafond de jours, présent ici aussi.
-      } else if(sourceActif.th==='plan'&&(sourceActif.planType==='min'||sourceActif.planType==='var')&&statut!=='hors-contrat'&&!estArretMoisEntier){
+      } else if(sourceActif.th==='plan'&&(sourceActif.planType==='min'||sourceActif.planType==='var')&&statut!=='hors-contrat'&&!estArretMoisEntier&&!estArretSemaineEntiere){
         // Plan min/var : sans heures prévues saisies → pas de déduction (sauf hors-contrat, et sauf mois
         // entièrement en arrêt, qui passe aux branches de volume juste en dessous — 29/09/2026)
         hPrev=0;
@@ -24969,9 +24994,8 @@ if(tousNonPrevus){
             // Priorité : voisin arret ou abs-am → ferie-non, non décompté
             const svPrev=getStatutVoisinBoucle(dateStr,-1);
             const svNext=getStatutVoisinBoucle(dateStr,1);
-            // 1er mai : jamais ferie-non
-            const est1erMaiBoucle=dateStr.slice(5)==='05-01';
-            if(!est1erMaiBoucle&&(['arret','abs-am'].includes(svPrev)||['arret','abs-am'].includes(svNext))){
+            // 29/09/2026 (Sophie) : le 1er mai n'est plus une exception — même règle que dans getStatutPrevu.
+            if(['arret','abs-am'].includes(svPrev)||['arret','abs-am'].includes(svNext)){
               if(!fiche.valide) jour.statut='ferie-non';
               cur.setDate(cur.getDate()+1);continue;
             }
