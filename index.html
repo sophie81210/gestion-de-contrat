@@ -4252,6 +4252,19 @@ function moisEntierementEnArret(c,key){
   }
   return unArretAr;
 }
+// Le mois contient-il une semaine marquée « absence employeur » sur l'agenda de la version en vigueur ?
+function semaineAbsenceEmployeurDansMois(c,key){
+  const fOf=c&&c.fiches&&c.fiches[key];
+  if(!fOf||!Array.isArray(fOf.jours)) return false;
+  return fOf.jours.some(jOf=>{
+    if(!jOf.date) return false;
+    const dOf=parseDateLoc(jOf.date);
+    const srcOf=getVersionActive(c,dOf);
+    const agOf=(srcOf.agendas||c.agendas||[]).find(a=>parseDateLoc(a.dateDebut)<=dOf&&parseDateLoc(a.dateFin)>=dOf);
+    const kOf=getKeyAgenda(getSemISO(jOf.date),getSemAnnee(jOf.date));
+    return !!(agOf&&agOf.semaines&&agOf.semaines[kOf]==='off');
+  });
+}
 // Semaine à cheval sur le mois voisin : les heures de cette semaine ont pu être déplacées vers le mois voisin si
 // les modifications de planning y sont autorisées. Dans ce seul cas, les jours de la semaine gardent la règle
 // habituelle (seuls les jours cochés sont déduits).
@@ -10170,6 +10183,13 @@ function validerFiche(contratId,key){
   const now3=new Date();
   const moisActuel3=now3.getFullYear()+'-'+String(now3.getMonth()+1).padStart(2,'0');
   if(key>moisActuel3){alerte('Cette fiche est à venir — elle ne peut pas encore être validée.');return;}
+  // 29/09/2026 (Sophie) : mois entièrement en arrêt de travail contenant une semaine d'absence de l'employeur.
+  // Cette semaine n'a aucune heure prévue, donc rien à déduire, et le mois ne peut pas tomber à zéro : la
+  // validation est refusée tant que la semaine n'est pas repassée en travaillée sur l'agenda.
+  if(moisEntierementEnArret(c,key)&&semaineAbsenceEmployeurDansMois(c,key)){
+    alerte('Le mois est entièrement en arrêt de travail, aucune rémunération ne peut être versée, la semaine d’absence employeur doit être passée en « travaillé » sur l’agenda du contrat afin qu’elle soit déduite.');
+    return;
+  }
   // 04/08/2026 (confirmé Sophie) : pour var/min, le planning doit avoir été explicitement enregistré
   // au moins une fois pour ce mois (même vide) avant de valider la feuille — pour que l'utilisateur
   // prenne conscience que le planning ne contient rien plutôt que de valider une fiche à 0h sans s'en
