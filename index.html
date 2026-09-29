@@ -9668,13 +9668,29 @@ function buildRecapCumul(r1,r2,solde,c){
   // Pajemploi d'un mois ordinaire (buildRecapPajemploi) — hMensu les comptait une seconde fois, déjà
   // présentes dans « Heures supplémentaires » juste en dessous. Même chose pour hSupDeplace.
   const _hNormCumul=r=>Math.max(0,(r.hMensuNorm||r.hMensu||0)-((r.hAbsDeduit||0)-(r.hAbsDeduitHS||0))-parseFloat(r.hSupDeplace||0));
-  const hNormales=_hNormCumul(r1)+_hNormCumul(r2)+_cumulHRegul;
+  // 29/09/2026 (Sophie) : un mois coupé par un avenant ne déclarait AUCUNE heure de congés payés, et ne
+  // comptait pas non plus l'indemnité dans le salaire net ni dans le total — seuls les jours s'affichaient.
+  // Chaque portion apporte ses heures, à son propre taux net et à sa propre mensualisation, partagées entre
+  // heures normales et heures supplémentaires comme sur un mois ordinaire.
+  const _hCgCumul=r=>{
+    const txN=parseFloat(r.txNet||0), mtC=parseFloat(r.indemCongeMois||0);
+    const hTot=txN>0?mtC/txN:0;
+    const hMaj=parseFloat(r.hMensuMaj||0), hMens=parseFloat(r.hMensu||0);
+    const hSupC=(hMaj>0&&hMens>0)?parseFloat((hTot*hMaj/hMens).toFixed(2)):0;
+    return {norm:parseFloat((hTot-hSupC).toFixed(2)), sup:hSupC};
+  };
+  const _cgC1=_hCgCumul(r1), _cgC2=_hCgCumul(r2);
+  const hCongesNormC=parseFloat((_cgC1.norm+_cgC2.norm).toFixed(2));
+  const hCongesSupC=parseFloat((_cgC1.sup+_cgC2.sup).toFixed(2));
+  const hNormales=_hNormCumul(r1)+_hNormCumul(r2)+_cumulHRegul+hCongesNormC;
   const hComp=parseFloat(r1.hComp||0)+parseFloat(r2.hComp||0);
   const _hSup1=Math.max(0,parseFloat(r1.hMensuMaj||0)-parseFloat(r1.hAbsDeduitHS||0)+parseFloat(r1.hSup||0)+parseFloat(r1.hSupDeplace||0));
   const _hSup2=Math.max(0,parseFloat(r2.hMensuMaj||0)-parseFloat(r2.hAbsDeduitHS||0)+parseFloat(r2.hSup||0)+parseFloat(r2.hSupDeplace||0));
-  const hSup=_hSup1+_hSup2;
+  const hSup=_hSup1+_hSup2+hCongesSupC;
   const _regul52DiffC=(r1.regul52Fiche?parseFloat(r1.regul52Fiche.diff||0):0)+(r2.regul52Fiche?parseFloat(r2.regul52Fiche.diff||0):0);
-  const salaireNet=parseFloat(r1.salaireNet||0)+parseFloat(r2.salaireNet||0)+_cumulDiffEuros+_regul52DiffC;
+  const salaireNet=parseFloat(r1.salaireNet||0)+parseFloat(r2.salaireNet||0)+_cumulDiffEuros+_regul52DiffC
+    +parseFloat(r1.indemCongeMois||0)+parseFloat(r2.indemCongeMois||0)
+    +parseFloat(r1.indemFractionnementMois||0)+parseFloat(r2.indemFractionnementMois||0);
   const indemE=parseFloat(r1.indemEntretienTotal||0)+parseFloat(r2.indemEntretienTotal||0);
   const indemR=parseFloat(r1.indemRepasTotal||0)+parseFloat(r2.indemRepasTotal||0);
   const indemK=parseFloat(r1.indemKmTotal||0)+parseFloat(r2.indemKmTotal||0);
@@ -9707,9 +9723,11 @@ function buildRecapCumul(r1,r2,solde,c){
   if(montantCongesPayesMoisC>0) html+=ligneG('Jours de congés payés'+((r1.indemCongeAvenant||r2.indemCongeAvenant)?pastilleAide('conge-avenant'):''), nbCongesPayesMoisC+' j', true);
   html+=ligneG('Jours d\'activité', nbJoursTrav.toFixed(1)+' j', true);
   html+=ligneG('Heures normales', hNormales.toFixed(2)+' h', true);
+  if(hCongesNormC>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--tx2)">dont '+hCongesNormC.toFixed(2)+' h de congés payés</td></tr>';
   if(hComp>0||hSup>0) html+=ligneG('Taux horaire net', (parseFloat(r1.txNet||r2.txNet||0)).toFixed(2)+' \u20AC', true);
   if(hComp>0) html+=ligneG('Heures complémentaires', hComp.toFixed(2)+' h', true);
   if(hSup>0) html+=ligneG('Heures supplémentaires', hSup.toFixed(2)+' h', true);
+  if(hCongesSupC>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--tx2)">dont '+hCongesSupC.toFixed(2)+' h de congés payés</td></tr>';
   html+=ligneG('Salaire net', salaireNet.toFixed(2)+' €', true, 'var(--m)');
   if(r1.regul52Fiche) html+=ligneG('Régularisation congés '+r1.regul52Fiche.anneeRef+'/'+(r1.regul52Fiche.anneeRef+1)+(r1.regul52Fiche.motif==='garantie46'?pastilleAide('conge-avenant'):' (10ème)'), parseFloat(r1.regul52Fiche.diff||0).toFixed(2)+' € net', true, 'var(--m)');
   if(r2.regul52Fiche) html+=ligneG('Régularisation congés '+r2.regul52Fiche.anneeRef+'/'+(r2.regul52Fiche.anneeRef+1)+(r2.regul52Fiche.motif==='garantie46'?pastilleAide('conge-avenant'):' (10ème)'), parseFloat(r2.regul52Fiche.diff||0).toFixed(2)+' € net', true, 'var(--m)');
