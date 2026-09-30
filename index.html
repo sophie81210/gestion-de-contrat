@@ -34,17 +34,34 @@ window.fbLoginEmail = async(email,pwd)=>{try{const r=await signInWithEmailAndPas
 window.fbCreateEmail = async(email,pwd)=>{try{const r=await createUserWithEmailAndPassword(auth,email,pwd);try{await sendEmailVerification(r.user,{url:'https://app-coeurdassmat.web.app/'});}catch(e2){console.error('Envoi email vérification:',e2);}return{ok:true,user:r.user};}catch(e){return{ok:false,err:e.message};}};
 window.fbResetPwd = async(email)=>{try{await sendPasswordResetEmail(auth,email);return{ok:true};}catch(e){return{ok:false,err:e.message};}};
 window.fbLogout = async()=>{try{await signOut(auth);return{ok:true};}catch(e){return{ok:false,err:e.message};}};
+// 30/09/2026 (Sophie) : les contrats sont envoyés l'un APRÈS l'autre, et non plus tous en même temps. Un
+// contrat pèse ses feuilles comprises — jusqu'à 400 ko sur le compte de test — et les envoyer ensemble
+// faisait un pic de débit que Firestore refuse (« This database has exceeded their maximum bandwidth for
+// writes »). Chaque écriture refusée pour saturation est réessayée en espaçant les tentatives, comme le
+// conseille le message de Firebase lui-même ; les autres erreurs remontent immédiatement, comme avant.
 window.fbSaveData = async(uid,data)=>{
+  const ecrireAvecReprise = async(ref,contenu)=>{
+    let attente=500;
+    for(let essai=1;;essai++){
+      try{ await setDoc(ref,contenu); return; }
+      catch(e){
+        const texte=String((e&&(e.code||e.message))||'');
+        const sature=/resource-exhausted|bandwidth|quota|unavailable/i.test(texte);
+        if(!sature||essai>=4) throw e;
+        await new Promise(r=>setTimeout(r,attente));
+        attente*=3;
+      }
+    }
+  };
   try{
-    await setDoc(doc(db,'users',uid,'app','meta'),{
+    await ecrireAvecReprise(doc(db,'users',uid,'app','meta'),{
       params:data.params||{},
       congesAM:data.congesAM||{},
       updatedAt:new Date().toISOString()
     });
-    const promises=(data.contrats||[]).map(c=>
-      setDoc(doc(db,'users',uid,'contrats',String(c.id)),c)
-    );
-    await Promise.all(promises);
+    for(const c of (data.contrats||[])){
+      await ecrireAvecReprise(doc(db,'users',uid,'contrats',String(c.id)),c);
+    }
     return{ok:true};
   }catch(e){return{ok:false,err:e.message};}
 };
