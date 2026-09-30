@@ -4312,6 +4312,32 @@ function arretSemaineEntiereDeduite(c,dateStr){
 // 29/09/2026 (Sophie) : un seul texte pour les deux moments où le cas se présente — la pose du dernier jour en
 // arrêt et le refus de validation — pour qu'ils ne divergent jamais.
 const MSG_MOIS_ARRET_SEMAINE_OFF='Le mois est entièrement en arrêt de travail, aucune rémunération ne peut être versée, la semaine d’absence employeur doit être passée en « travaillé » sur l’agenda du contrat afin d’être déduite.';
+// 30/09/2026 (Sophie) : part du volume d'un jour férié devenu NON ACQUIS, sur un plan minimum ou variable.
+// Le plan VARIABLE sait produire cette fraction — c'est ce qu'il donne à un jour possible non coché ; il suffit
+// de l'interroger sur une copie du planning privée de la coche de ce jour. Le plan MINIMUM, lui, ne calcule
+// aucune fraction (il répond « prévu » sans heures pour tous ses jours possibles) : sa part est le volume
+// minimum divisé par les jours cochés, comme partout ailleurs pour lui.
+// Renvoie 0 si le jour ne relève pas du rythme du contrat : rien n'était dû, rien n'est retiré.
+function partVolumeFerieNonCg(c,dateStr,source){
+  if(!c||!dateStr||!source||source.th!=='plan') return 0;
+  if(!jourPossibleContratCg(c,dateStr)) return 0;
+  if(source.planType==='min'){
+    const joursMinP=source.joursMin||c.joursMin||[];
+    const nbP=joursMinP.filter(Boolean).length||(source.jMaxMin||c.jMaxMin||4);
+    return nbP>0?(source.hMin||c.hMin||0)/nbP:0;
+  }
+  if(source.planType!=='var') return 0;
+  const cSansCocheP=Object.assign({},c,{planning:Object.assign({},c.planning||{})});
+  delete cSansCocheP.planning[dateStr];
+  if(c._planningSauvegarde){
+    cSansCocheP._planningSauvegarde=Object.assign({},c._planningSauvegarde);
+    delete cSansCocheP._planningSauvegarde[dateStr];
+  }
+  let hpP=null;
+  try{ hpP=getHeuresPrevues(cSansCocheP,parseDateLoc(dateStr),source); }catch(e){ return 0; }
+  if(!hpP||!hpP.debut||!hpP.fin||hpP.debut==='prévu') return 0;
+  return Math.max(0,(toM(hpP.fin)-toM(hpP.debut))/60);
+}
 // Le mois contient-il une semaine marquée « absence employeur » sur l'agenda de la version en vigueur ?
 function semaineAbsenceEmployeurDansMois(c,key){
   const fOf=c&&c.fiches&&c.fiches[key];
@@ -5549,6 +5575,15 @@ function ouvrirFiche(contratId,key){
     // 29/09/2026 (Sophie) : « férié non acquis » ajouté. Il figurait dans la liste qui décide de la couleur
     // rouge, mais pas dans celle qui CALCULE les heures à montrer : la colonne restait vide alors que la
     // journée était bel et bien déduite, et rien ne le signalait à l'écran.
+    } else if(statutActuel==='ferie-non'&&!(j.heureDebPrev&&j.heureFinPrev)&&(()=>{
+      // 30/09/2026 (Sophie) : sur un plan minimum ou variable, un férié non acquis n'a pas d'heures inscrites
+      // mais vaut sa part du volume — déduite depuis ce matin. La colonne restait muette, donc la déduction
+      // invisible. Même valeur que le calcul, par la fonction commune.
+      const srcFNA=getVersionActive(c,new Date(j.date));
+      const partFNA=partVolumeFerieNonCg(c,j.date,srcFNA);
+      if(partFNA>0) hDeduit='−'+fmtH(Math.round(partFNA*60));
+      return true;
+    })()){
     } else if(['abs-non','abs-am','arret','abs-enfant','ferie-non'].includes(statutActuel)&&j.heureDebPrev&&j.heureFinPrev){
       // En semaine off : utiliser hSemMoy/nbJoursPossibles au lieu des heures prévues
       const agKeyAff=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
@@ -15010,17 +15045,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       // 18h) au lieu des 7h de l'avenant (moyenne 35h ÷ 5 jours union). Piège identifié par Sophie le
       // matin même sur le plafond de jours, présent ici aussi.
       } else if(estFerieNonVolume){
-        // La fraction est celle qu'aurait ce jour s'il n'était pas coché : on interroge le calcul habituel
-        // sur une copie du planning privée de cette coche, plutôt que de refaire sa répartition à côté.
-        const cSansCocheFN=Object.assign({},c,{planning:Object.assign({},c.planning||{})});
-        delete cSansCocheFN.planning[j.date];
-        if(c._planningSauvegarde){
-          cSansCocheFN._planningSauvegarde=Object.assign({},c._planningSauvegarde);
-          delete cSansCocheFN._planningSauvegarde[j.date];
-        }
-        let hpFN=null;
-        try{ hpFN=getHeuresPrevues(cSansCocheFN,new Date(j.date),sourceActif); }catch(e){ hpFN=null; }
-        hPrev=(hpFN&&hpFN.debut&&hpFN.fin&&hpFN.debut!=='prévu')?Math.max(0,(toM(hpFN.fin)-toM(hpFN.debut))/60):0;
+        hPrev=partVolumeFerieNonCg(c,j.date,sourceActif);
       } else if(sourceActif.th==='plan'&&(sourceActif.planType==='min'||sourceActif.planType==='var')&&statut!=='hors-contrat'&&!estArretMoisEntier&&!estArretSemaineEntiere){
         // Plan min/var : sans heures prévues saisies → pas de déduction (sauf hors-contrat, et sauf mois
         // entièrement en arrêt, qui passe aux branches de volume juste en dessous — 29/09/2026)
