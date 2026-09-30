@@ -9969,6 +9969,19 @@ function majFicheStatut(contratId,key,idx,val){
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  // 30/09/2026 (Sophie) : passer un jour en arrêt — ou l'en sortir — change ce que valent les fériés voisins,
+  // mais rien ne les réévaluait : ils gardaient le statut écrit à la création de la feuille. Le calcul, lui,
+  // répondait déjà « férié non acquis » dès qu'on le sollicitait (constaté sur 52fixe-46var, 8 mai 2026 :
+  // statut enregistré « férié », statut recalculé « férié non acquis »). Deux réponses pour le même jour selon
+  // qui posait la question. Les fériés du mois sont donc recalculés ici, sauf sur une feuille validée.
+  if((val==='arret'||_statutAvantModif==='arret')&&!ficheSource.fiches[key].valide){
+    (ficheSource.fiches[key].jours||[]).forEach(jFer=>{
+      if(!jFer.date||!['ferie','ferie-non'].includes(jFer.statut)) return;
+      let neuf=null;
+      try{ neuf=getStatutPrevu(c,Object.assign({},jFer,{statut:null})); }catch(e){ return; }
+      if((neuf==='ferie'||neuf==='ferie-non')&&neuf!==jFer.statut) jFer.statut=neuf;
+    });
+  }
   // 29/09/2026 (Sophie) : le jour qui vient d'être passé en arrêt était le dernier du mois à ne pas l'être —
   // pas forcément le 31. Le mois est désormais complet, l'annoncer tout de suite.
   if(val==='arret'&&_statutAvantModif!=='arret'&&moisEntierementEnArret(c,key)){
@@ -14759,6 +14772,14 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         if(_semArretCacheRec[cleSe]===undefined) _semArretCacheRec[cleSe]=arretSemaineEntiereDeduite(c,j.date);
         return _semArretCacheRec[cleSe];
       })();
+    // 30/09/2026 (Sophie) : un férié devenu NON ACQUIS garde sa part du volume de la semaine. Coché au
+    // planning sans heures, il restait « prévu » — l'App attendait des heures que personne ne saisira, un
+    // jour férié n'étant pas travaillé — et ne retirait donc rien. Sa part ne doit pas non plus repartir aux
+    // autres jours : la semaine ne peut pas dépasser son volume, et un jour non acquis n'en libère pas
+    // (règle Sophie). Il vaut donc la fraction que l'App calcule déjà pour un jour possible non coché.
+    const estFerieNonVolume=statut==='ferie-non'&&j.date&&sourceActif.th==='plan'
+      &&(sourceActif.planType==='min'||sourceActif.planType==='var')
+      &&!(j.heureDebPrev&&j.heureFinPrev)&&jourPossibleContratCg(c,j.date);
     const estAbsDeduite=absDeduites.includes(statut)||estArretSurJourPrevu||estArretMoisEntier||estArretSemaineEntiere;
     // 29/09/2026 (Sophie) : un jour d'un mois entièrement en arrêt qui n'est finalement pas déduit (semaine
     // d'absence de l'employeur, ou semaine à cheval dont le mois voisin autorise les modifications de
@@ -14988,6 +15009,18 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       // jour hors contrat valait 10h (130h ÷ 13 jours du contrat initial, mardi-mercredi-jeudi de 8h à
       // 18h) au lieu des 7h de l'avenant (moyenne 35h ÷ 5 jours union). Piège identifié par Sophie le
       // matin même sur le plafond de jours, présent ici aussi.
+      } else if(estFerieNonVolume){
+        // La fraction est celle qu'aurait ce jour s'il n'était pas coché : on interroge le calcul habituel
+        // sur une copie du planning privée de cette coche, plutôt que de refaire sa répartition à côté.
+        const cSansCocheFN=Object.assign({},c,{planning:Object.assign({},c.planning||{})});
+        delete cSansCocheFN.planning[j.date];
+        if(c._planningSauvegarde){
+          cSansCocheFN._planningSauvegarde=Object.assign({},c._planningSauvegarde);
+          delete cSansCocheFN._planningSauvegarde[j.date];
+        }
+        let hpFN=null;
+        try{ hpFN=getHeuresPrevues(cSansCocheFN,new Date(j.date),sourceActif); }catch(e){ hpFN=null; }
+        hPrev=(hpFN&&hpFN.debut&&hpFN.fin&&hpFN.debut!=='prévu')?Math.max(0,(toM(hpFN.fin)-toM(hpFN.debut))/60):0;
       } else if(sourceActif.th==='plan'&&(sourceActif.planType==='min'||sourceActif.planType==='var')&&statut!=='hors-contrat'&&!estArretMoisEntier&&!estArretSemaineEntiere){
         // Plan min/var : sans heures prévues saisies → pas de déduction (sauf hors-contrat, et sauf mois
         // entièrement en arrêt, qui passe aux branches de volume juste en dessous — 29/09/2026)
