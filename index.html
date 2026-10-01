@@ -14422,6 +14422,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   const hAbsJoursCpt={};
   const hAbsDedJoursCpt={};
   const hAbsDedJoursCpt2={};
+  // 01/10/2026 (Sophie) : cumul des heures déduites par semaine, pour qu'une semaine ne rende jamais plus que
+  // son volume. Un jour qui porte des heures est déduit de ses heures réelles, un jour sans heures vaut une
+  // part forfaitaire : additionnés sans borne, les deux dépassaient le volume de la semaine (mesuré sur Silene,
+  // semaine du 3 janvier 2022 : 1,25 h + 8 h + trois parts de 4,58 h = 23 h pour un volume de 18,33 h).
+  const hAbsSemCumulArret={};
   const hAbsDedRestantHCplanvar={};
   const localCompteurHCD={}; // 05/08/2026 : remplace fiche._joursADeduireHCDCache — un cache posé sur l'objet fiche persistait une valeur figée d'un calcul plus ancien à travers les rechargements, jamais réinitialisée, bloquant tout correctif suivant sans erreur visible. Variable locale à cet appel : jamais de valeur périmée.
   if(sourceActif.th==='plan'||c.th==='plan'||sourceActif.th==='sem'||c.th==='sem'){
@@ -15065,8 +15070,53 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         if(jourPossible){
           // Toujours volume/jours cochés, jamais jMax — cohérent avec calcHTheoriquesPlanMin (plan min
           // n'a qu'un seul rythme possible, pas d'ambiguïté à trancher qu'il soit hors contrat ou non)
-          const jouchesCochesMin=joursMinActif.filter(Boolean).length||(srcMinAbs.jMaxMin||4);
-          hPrev=(srcMinAbs.hMin||0)/jouchesCochesMin;
+          // 01/10/2026 (Sophie) : EXCEPTION pour un jour déduit au titre d'un ARRÊT (mois entier ou semaine
+          // entière) — il vaut alors volume ÷ jours MAXIMUM, le même diviseur que le plancher garanti de la
+          // semaine. Sans ça, une semaine de cinq jours possibles pour quatre jours maximum ne se déduisait
+          // jamais entièrement : cinq parts de hMin÷5 valent le volume, mais seuls les jours du rythme sont
+          // en arrêt. Le reste (jour hors contrat, rupture, avenant) garde le diviseur des jours cochés.
+          let estArretDeduitMin=estArretMoisEntier||estArretSemaineEntiere;
+          // 01/10/2026 (Sophie) : semaine à cheval sur deux mois. Le mois du DÉBUT de semaine ne déduit aucun
+          // jour sans heures : tant que la fin de semaine peut encore absorber le volume, on ne sait pas ce qui
+          // y sera effectué — c'est la règle déjà appliquée aux heures théoriques, qui ne comptent pas non plus
+          // ces jours-là. Le mois de la FIN de semaine porte alors le volume entier, réparti sur ses seuls
+          // jours possibles, pour qu'une semaine sans aucun travail soit retirée une fois et une seule.
+          const lunMinCh=parseDateLoc(j.date); lunMinCh.setDate(lunMinCh.getDate()-((lunMinCh.getDay()+6)%7));
+          const dimMinCh=new Date(lunMinCh); dimMinCh.setDate(lunMinCh.getDate()+6);
+          const moisJourMinCh=j.date.slice(0,7);
+          const debutDeSemaineACheval=dateToStr(dimMinCh).slice(0,7)>moisJourMinCh;
+          const finDeSemaineACheval=dateToStr(lunMinCh).slice(0,7)<moisJourMinCh;
+          if(estArretDeduitMin&&debutDeSemaineACheval) estArretDeduitMin=false;
+          let divMin=estArretDeduitMin
+            ? (parseFloat(srcMinAbs.jMaxMin||c.jMaxMin||0)||joursMinActif.filter(Boolean).length||4)
+            : (joursMinActif.filter(Boolean).length||(srcMinAbs.jMaxMin||4));
+          if(estArretDeduitMin&&finDeSemaineACheval){
+            let joursDansCeMoisMinCh=0;
+            for(let iCh=0;iCh<7;iCh++){
+              const xCh=new Date(lunMinCh); xCh.setDate(lunMinCh.getDate()+iCh);
+              const dsCh=dateToStr(xCh);
+              if(dsCh.slice(0,7)!==moisJourMinCh) continue;
+              const idxCh=xCh.getDay()===0?6:xCh.getDay()-1;
+              if(joursMinActif[idxCh]) joursDansCeMoisMinCh++;
+            }
+            if(joursDansCeMoisMinCh>0) divMin=Math.min(divMin,joursDansCeMoisMinCh);
+          }
+          // 01/10/2026 (Sophie) : une semaine ne peut pas rendre plus que son volume. Le plan variable comptait
+          // déjà ses jours déduits pour s'arrêter aux jours maximum ; le plan minimum ne le faisait pas, et une
+          // semaine de cinq jours possibles pour quatre maximum se déduisait cinq fois. Même compteur, même
+          // plafond. Mesuré sur Silene, janvier 2022 : 74,49 h d'absence pour 73,32 h théoriques.
+          if(estArretDeduitMin){
+            const semKeyMinAbs=getSemISO(j.date)+'-'+getSemAnnee(j.date);
+            if(!hAbsDedJoursCpt2[semKeyMinAbs]) hAbsDedJoursCpt2[semKeyMinAbs]=0;
+            if(hAbsDedJoursCpt2[semKeyMinAbs]<divMin){
+              hPrev=(srcMinAbs.hMin||0)/divMin;
+              hAbsDedJoursCpt2[semKeyMinAbs]++;
+            } else {
+              hPrev=0;
+            }
+          } else {
+            hPrev=(srcMinAbs.hMin||0)/divMin;
+          }
         } else {
           hPrev=0;
         }
@@ -15303,6 +15353,41 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         hAbsJour=hPrev;
       }
       if(window.DEBUG_CGAM&&sourceActif.planType==='min'&&hAbsJour>0)console.log('[CGAM-minAbsJour]',j.date,'| statut:',statut,'| hPrev:',hPrev,'| hAbsJour:',hAbsJour);
+      // 01/10/2026 (Sophie) : une semaine ne peut pas rendre plus que son volume. Ne s'applique qu'aux plans
+      // minimum et variable, et seulement aux semaines qui portent au moins un jour d'arrêt : ailleurs, rien
+      // ne change. Les heures réellement déduites et les parts forfaitaires se cumulent dans le même compteur,
+      // puisque c'est leur addition qui débordait.
+      if(hAbsJour>0&&sourceActif.th==='plan'&&(sourceActif.planType==='min'||sourceActif.planType==='var')&&j.date){
+        const semKeyPlaf=getSemISO(j.date)+'-'+getSemAnnee(j.date);
+        if(hAbsSemCumulArret[semKeyPlaf]===undefined){
+          let volPlaf=0;
+          if(sourceActif.planType==='min') volPlaf=parseFloat(sourceActif.hMin||c.hMin||0)||0;
+          else {
+            const agKeyPlaf=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
+            const typePlaf=agendaMois&&agendaMois.semaines&&agendaMois.semaines[agKeyPlaf];
+            const volVarPlaf=typePlaf?(sourceActif.planVar||c.planVar||[]).find((v,i)=>(v.nom||'Volume '+(i+1))===typePlaf):null;
+            volPlaf=volVarPlaf?(parseFloat(volVarPlaf.h||0)||0):0;
+          }
+          // semaine sans arrêt, ou volume introuvable : pas de plafond (Infinity = comportement d'avant)
+          const aUnArretPlaf=(()=>{
+            const lP=parseDateLoc(j.date); lP.setDate(lP.getDate()-((lP.getDay()+6)%7));
+            for(let iP=0;iP<7;iP++){
+              const xP=new Date(lP); xP.setDate(lP.getDate()+iP);
+              const dsP=dateToStr(xP);
+              const fP=c.fiches&&c.fiches[dsP.slice(0,7)];
+              const jP=fP&&(fP.jours||[]).find(yP=>yP.date===dsP);
+              if(jP&&jP.statut==='arret') return true;
+            }
+            return false;
+          })();
+          hAbsSemCumulArret[semKeyPlaf]={reste:(volPlaf>0&&aUnArretPlaf)?volPlaf:Infinity};
+        }
+        const potPlaf=hAbsSemCumulArret[semKeyPlaf];
+        if(potPlaf.reste!==Infinity){
+          hAbsJour=Math.max(0,Math.min(hAbsJour,potPlaf.reste));
+          potPlaf.reste=Math.max(0,potPlaf.reste-hAbsJour);
+        }
+      }
       hAbs+=hAbsJour;
       // 29/09/2026 (Sophie) : part des heures déduites qui vient d'un arrêt de travail, séparée par nature —
       // la base du 10ème reprend ces journées (80 % pour la maladie, 100 % pour l'accident du travail).
