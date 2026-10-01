@@ -10044,6 +10044,47 @@ function majFicheStatut(contratId,key,idx,val){
     ficheSource.fiches[key].jours[idx].heureFinReel=null;
   }
 
+  // 01/10/2026 (Sophie) : une semaine ENTIÈREMENT en arrêt n'offre plus ses heures à la saisie du planning
+  // (publié le même jour). Ce qui y était déjà saisi doit donc partir, sinon il subsiste des heures que
+  // l'enveloppe ne couvre plus — des valeurs fantômes, du genre de celles qui avaient faussé une déduction
+  // après une rupture. Les coches du planning sont retirées, les heures prévues des jours concernés effacées,
+  // et le planning du mois redemande confirmation, exactement comme après une rupture ou un avenant qui change
+  // rétroactivement ce qui était disponible. Vaut dans les deux sens : la semaine qui cesse d'être entièrement
+  // en arrêt rend ses heures, donc le planning est à revoir là aussi. Plan minimum et variable seulement.
+  if(isPlanMinVarStatut){
+    const jSemArr=ficheSource.fiches[key].jours[idx];
+    const concerneArret=val==='arret'||val==='arret-pro'||_statutAvantModif==='arret';
+    if(jSemArr&&jSemArr.date&&concerneArret){
+      const lunArr=parseDateLoc(jSemArr.date); lunArr.setDate(lunArr.getDate()-((lunArr.getDay()+6)%7));
+      const joursSemArr=[];
+      for(let iSA=0;iSA<7;iSA++){
+        const xSA=new Date(lunArr); xSA.setDate(lunArr.getDate()+iSA);
+        joursSemArr.push(dateToStr(xSA));
+      }
+      const toutEnArretArr=joursSemArr.every(dsSA=>{
+        if(!jourPossibleContratCg(c,dsSA)) return true;
+        const fSA=c.fiches&&c.fiches[dsSA.slice(0,7)];
+        const jSA=fSA&&(fSA.jours||[]).find(ySA=>ySA.date===dsSA);
+        return !!(jSA&&jSA.statut==='arret');
+      })&&joursSemArr.some(dsSA=>jourPossibleContratCg(c,dsSA));
+      const moisTouchesArr=[...new Set(joursSemArr.map(dsSA=>dsSA.slice(0,7)))];
+      if(toutEnArretArr){
+        joursSemArr.forEach(dsSA=>{
+          const fSA=c.fiches&&c.fiches[dsSA.slice(0,7)];
+          if(fSA&&fSA.valide) return; // feuille validée : valeurs figées, jamais retouchées
+          if(c.planning&&c.planning[dsSA]) delete c.planning[dsSA];
+          const jSA=fSA&&(fSA.jours||[]).find(ySA=>ySA.date===dsSA);
+          if(jSA){ jSA.heureDebPrev=null; jSA.heureFinPrev=null; jSA.planVarPrevu=false; }
+        });
+      }
+      if(c.planningConfirmeMois) moisTouchesArr.forEach(mSA=>{
+        const fMois=c.fiches&&c.fiches[mSA];
+        if(fMois&&fMois.valide) return; // mois déjà validé : son planning n'a plus à être rouvert
+        delete c.planningConfirmeMois[mSA];
+      });
+    }
+  }
+
   const cidx=S.contrats.findIndex(x=>x.id==contratId);
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
