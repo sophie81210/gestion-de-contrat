@@ -4297,6 +4297,26 @@ function semaineEntierementEnArret(c,dateStr){
   }
   return arretsSe>0&&autresSe===0;
 }
+// 01/10/2026 (Sophie) : tous les jours possibles de la semaine sont-ils en arrêt, CELUI-CI COMPRIS ? Sert au
+// planning, qui n'a plus rien à y proposer : les heures de cette semaine ne sont plus disponibles et celles qui
+// y étaient saisies ont été retirées. Différent de semaineEntierementEnArret, qui juge les AUTRES jours pour
+// décider du sort de celui qu'on examine.
+function semaineToutArretPlanning(c,dateStr){
+  if(!c||!dateStr) return false;
+  const dPl=parseDateLoc(dateStr);
+  const lunPl=new Date(dPl); lunPl.setDate(dPl.getDate()-((dPl.getDay()+6)%7));
+  let possibles=0, enArret=0;
+  for(let iPl=0;iPl<7;iPl++){
+    const xPl=new Date(lunPl); xPl.setDate(lunPl.getDate()+iPl);
+    const dsPl=dateToStr(xPl);
+    if(!jourPossibleContratCg(c,dsPl)) continue;
+    possibles++;
+    const fPl=c.fiches&&c.fiches[dsPl.slice(0,7)];
+    const jPl=fPl&&(fPl.jours||[]).find(yPl=>yPl.date===dsPl);
+    if(jPl&&jPl.statut==='arret') enArret++;
+  }
+  return possibles>0&&enArret===possibles;
+}
 // 29/09/2026 (Sophie) : semaine entièrement en arrêt — elle est déduite de sa valeur théorique même si le
 // planning est vide, comme un mois entier. L'objection du 23/09 (des heures déplacées ailleurs par le planning
 // modifié) est écartée par le seul cas où ce déplacement est possible : les modifications de planning
@@ -6624,6 +6644,8 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       const nomJourAbr=JOURS_ABR_P[j.dt.getDay()===0?6:j.dt.getDay()-1];
       const numJour=j.dt.getDate();
       const estCongeAM=isJourCongeAM(j.date);
+      // 01/10/2026 (Sophie) : une semaine entièrement en arrêt n'offre plus rien au planning.
+      const semArretPln=semaineToutArretPlanning(c,j.date);
       const planData=(c.planning&&c.planning[j.date])||{};
       const dejaCoche=!!planData.coche;
       // 06/09/2026 (Sophie, cas isolé par elle : « si je décoche, les 10h restent affichées dans le
@@ -6747,7 +6769,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       // vérifié le 23/07/2026). Un férié hors du type pointé n'est cochable que si la modification
       // est autorisée ce mois-là — bug confirmé Sophie 23/07/2026 : il était jusqu'ici toujours
       // cochable, même sans modification autorisée, dès qu'il n'appartenait à aucun type pointé.
-      const estSaisissable=(infos.jourPossible||(infos.ferieChome&&!ferieDansConges&&(infos.jourPossible||modifMoisActive))||(estCongeAM&&estSemCongesPartiellePln))&&(!estCongeAM||estSemCongesPartiellePln)&&!moisVerrouille&&!casesVerrouillee;
+      const estSaisissable=(infos.jourPossible||(infos.ferieChome&&!ferieDansConges&&(infos.jourPossible||modifMoisActive))||(estCongeAM&&estSemCongesPartiellePln))&&(!estCongeAM||estSemCongesPartiellePln)&&!semArretPln&&!moisVerrouille&&!casesVerrouillee;
       let contenu;
       // 04/09/2026 (Sophie) : un jour de fractionnement choisi ne doit jamais être déplaçable via
       // l'échange de jour (executerEchangeJourFS) — sinon la date choisie perd son lien avec un jour
@@ -6757,6 +6779,8 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
       if(estJourFractionnementChoisi(c,j.date)){
         // 14/09/2026 (Sophie) : même police et même couleur que les autres jours (plus de bleu gras).
         contenu=`<span style="color:var(--tx3);font-size:12px">Jour de fractionnement</span>`;
+      } else if(semArretPln){
+        contenu=`<span style="color:#9a6a5a;font-size:12px">Arrêt de travail</span>`;
       } else if(estCongeAM&&estSemCongesPartiellePln&&infos.jourPossible){
         contenu=`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);cursor:${(moisVerrouille||casesVerrouillee)?'default':'pointer'}">
           <input type="checkbox" ${dejaCoche?'checked':''} ${(moisVerrouille||casesVerrouillee)?'disabled':''}
