@@ -10089,6 +10089,16 @@ function majFicheStatut(contratId,key,idx,val){
       // qui est disponible au planning. Un jour isolé n'y touche pas — le réenregistrement était d'abord demandé
       // à chaque pose, et le message revenait sans fin, un jour après l'autre.
       const sortDeLArretArr=_statutAvantModif==='arret'&&val!=='arret'&&val!=='arret-pro';
+      // 01/10/2026 (Sophie) : la semaine etait-elle DEJA entierement en arret avant cette pose ? Le jour modifie
+      // est juge sur son ancien statut. Sans ce test, le message revenait a chaque jour pose dans une semaine
+      // deja complete — y compris un samedi hors rythme, qui ne change pourtant rien.
+      const dejaToutEnArretAvantArr=joursSemArr.every(dsSA=>{
+        if(!jourPossibleContratCg(c,dsSA)) return true;
+        if(dsSA===jSemArr.date) return _statutAvantModif==='arret';
+        const fSC=c.fiches&&c.fiches[dsSA.slice(0,7)];
+        const jSC=fSC&&(fSC.jours||[]).find(ySC=>ySC.date===dsSA);
+        return !!(jSC&&jSC.statut==='arret');
+      })&&joursSemArr.some(dsSA=>jourPossibleContratCg(c,dsSA));
       const etaitToutEnArretArr=sortDeLArretArr&&joursSemArr.every(dsSA=>{
         if(dsSA===jSemArr.date) return true;
         if(!jourPossibleContratCg(c,dsSA)) return true;
@@ -10096,7 +10106,8 @@ function majFicheStatut(contratId,key,idx,val){
         const jSB=fSB&&(fSB.jours||[]).find(ySB=>ySB.date===dsSA);
         return !!(jSB&&jSB.statut==='arret');
       });
-      if(c.planningConfirmeMois&&(toutEnArretArr||etaitToutEnArretArr)){
+      const basculeArr=(toutEnArretArr&&!dejaToutEnArretAvantArr)||etaitToutEnArretArr;
+      if(c.planningConfirmeMois&&basculeArr){
         if(!c.planningArretReconfirmMois) c.planningArretReconfirmMois={};
         moisTouchesArr.forEach(mSA=>{
           const fMois=c.fiches&&c.fiches[mSA];
@@ -10106,7 +10117,7 @@ function majFicheStatut(contratId,key,idx,val){
         });
         setTimeout(()=>alerte(toutEnArretArr
           ? 'Cette semaine est maintenant <b>entièrement en arrêt de travail</b>, les heures saisies sur le planning ont été retirées, il est à réenregistrer avant de valider la feuille.'
-          : 'Cette semaine n’est plus entièrement en arrêt de travail : elle rend ses heures au planning.<br><br>Le planning du mois est à réenregistrer avant de valider la feuille.'),80);
+          : 'Cette semaine n’est plus entièrement en arrêt de travail, le planning du mois est à réenregistrer avant de valider la feuille.'),80);
       }
     }
   }
