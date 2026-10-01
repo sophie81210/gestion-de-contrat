@@ -7589,7 +7589,7 @@ function enregistrerPlanningMois(contratId, moisKey){
             // entier, sinon part réduite d'autant que ce qu'il reste de disponible dans l'enveloppe.
             // Réservé à ce contrôle de sécurité — "Volume disponible" reste volontairement non
             // coordonné entre mois (décision Sophie du jour), plus réactif mais moins précis.
-            const envCeMoisEnr=calcEnveloppeMoisVar(c,ay,am);
+            const envCeMoisEnr=calcEnveloppeMoisVar(c,ay,am,null,null,true);
             let reelCeMoisEnr=0;
             // 30/08/2026 (Sophie) : même limite de rupture que les autres endroits corrigés le même jour.
             const dateRuptureCEnr=(()=>{const _dfcR=getDateFinContrat(c);return _dfcR?dateToStr(_dfcR):null;})();
@@ -7643,7 +7643,7 @@ function enregistrerPlanningMois(contratId, moisKey){
           if(joursPattern[dd6b]&&jd6b.getDay()!==(c.reposHebdo||0)) joursPossiblesMoisPrecEnr++;
         }
         const structShareMoisPrecEnr=Math.min(joursPossiblesMoisPrecEnr,jMaxVol)*(volH/jMaxVol);
-        const envMoisPrecEnr=calcEnveloppeMoisVar(c,moisPrecAyEnr,moisPrecAmEnr);
+        const envMoisPrecEnr=calcEnveloppeMoisVar(c,moisPrecAyEnr,moisPrecAmEnr,null,null,true);
         let reelMoisPrecEnr=0;
         Object.keys(c.planning).forEach(dtPrec=>{
           const [dtpy,dtpm]=dtPrec.split('-').map(Number);
@@ -8477,7 +8477,12 @@ function enregistrerFiche(contratId,key){
 // comportement est strictement identique à avant (mois entier), donc tous les appels existants sont
 // inchangés. Nécessaire parce qu'un mois coupé par un avenant contient deux parts contractuelles
 // distinctes, chacune avec sa propre enveloppe : les heures ne franchissent jamais la date d'avenant.
-function calcEnveloppeMoisVar(c,ay,am,limDebV,limFinV){
+// 01/10/2026 (Sophie) : pourSaisiePlanningV — la reduction due a l'arret de travail ne vaut QUE pour la saisie du
+// planning (empecher de cocher des jours qui ne peuvent plus etre travailles). Les heures theoriques du mois ont
+// leur propre regle, desormais accordee avec les deductions : les toucher ici reduisait la deduction au lieu de
+// l'augmenter (mesure sur Enael, janvier 2022 : 140,65 h theoriques devenaient 149,44 h, et le salaire montait
+// de 311,99 a 318,11 EUR). Sans ce drapeau, rien ne change pour aucun autre appelant.
+function calcEnveloppeMoisVar(c,ay,am,limDebV,limFinV,pourSaisiePlanningV){
   const finMoisDate=new Date(ay,am,0);
   let joursBaseV=0, minBaseV=0;
   const semainesVuesV=new Set();
@@ -8654,6 +8659,37 @@ function calcEnveloppeMoisVar(c,ay,am,limDebV,limFinV){
           // revalider (avertissement déjà en place ailleurs), plutôt que d'essayer de le prévenir ici.
           const jMaxSemaine3=Math.min(vol3.j||1, joursPossiblesSemaine3);
           const volHSemaine3=(vol3.h||0)*jMaxSemaine3/(vol3.j||1);
+          // 01/10/2026 (Sophie) : l'arrêt de travail retire ses heures de l'enveloppe, comme les congés posés
+          // depuis le 06/09 — mais seulement quand elles ne peuvent plus être replacées ailleurs. Un jour isolé
+          // en arrêt ne change donc rien : la semaine peut les reporter sur ses autres jours. Deux cas seulement :
+          // une semaine ENTIÈREMENT en arrêt n'apporte plus rien, et un DÉBUT de semaine à cheval entièrement en
+          // arrêt n'apporte plus sa part au mois qui se termine — cohérent avec la déduction, qui ne retient rien
+          // sur ce début de semaine non plus.
+          const joursArretSem3=(dateDeb3,dateFin3)=>{
+            let possibles=0, enArret=0;
+            for(let dA=0;dA<7;dA++){
+              const jA=new Date(lundiSem3); jA.setDate(lundiSem3.getDate()+dA);
+              const dsA=jA.getFullYear()+'-'+String(jA.getMonth()+1).padStart(2,'0')+'-'+String(jA.getDate()).padStart(2,'0');
+              if(dateDeb3&&dsA<dateDeb3) continue;
+              if(dateFin3&&dsA>dateFin3) continue;
+              if(!(vol3.jours&&vol3.jours[dA])) continue;
+              if(c.dateDeb&&dsA<c.dateDeb) continue;
+              possibles++;
+              const fA=c.fiches&&c.fiches[dsA.slice(0,7)];
+              const jjA=fA&&(fA.jours||[]).find(yA=>yA.date===dsA);
+              if(jjA&&jjA.statut==='arret') enArret++;
+            }
+            return {possibles,enArret};
+          };
+          const totSem3=joursArretSem3(null,null);
+          const semaineToutArret3=totSem3.possibles>0&&totSem3.enArret===totSem3.possibles;
+          const finMoisStr3=ay+'-'+String(am).padStart(2,'0')+'-'+String(new Date(ay,am,0).getDate()).padStart(2,'0');
+          const debutSem3=joursApresCeMoisV>0?joursArretSem3(null,finMoisStr3):{possibles:0,enArret:0};
+          const debutChevalToutArret3=joursApresCeMoisV>0&&debutSem3.possibles>0&&debutSem3.enArret===debutSem3.possibles;
+          if(pourSaisiePlanningV&&(semaineToutArret3||debutChevalToutArret3)){
+            if(window.DEBUG_CGAM)console.log('[CGAM-envMoisVar-arret]',semKeyISO3,'| semaine tout arret:',semaineToutArret3,'| debut de semaine a cheval tout arret:',debutChevalToutArret3,'| retire de l enveloppe');
+            continue;
+          }
           let jMaxRestant3, volHRestant3;
           if(joursApresCeMoisV>0){
             // Ce mois est celui du DÉBUT de la semaine à cheval (elle continue sur un mois plus
