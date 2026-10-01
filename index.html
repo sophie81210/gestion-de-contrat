@@ -7927,6 +7927,8 @@ function enregistrerPlanningMois(contratId, moisKey){
   c._modifAutoriseesSauvegarde=JSON.parse(JSON.stringify(c.modifPlanningAutoriseesMois||{}));
   if(!c.planningConfirmeMois) c.planningConfirmeMois={};
   c.planningConfirmeMois[moisKey]=true;
+  // 01/10/2026 (Sophie) : la demande de reconfirmation posee par un passage en arret est levee ici.
+  if(c.planningArretReconfirmMois) delete c.planningArretReconfirmMois[moisKey];
   saveToFirestore();
   const btn=document.getElementById('pln-mois-'+contratId+'-'+moisKey+'-btn-save');
   if(btn){ btn.disabled=true; btn.textContent='Enregistré ✓'; }
@@ -9884,7 +9886,13 @@ function majFicheStatut(contratId,key,idx,val){
       ||(srcFinAP.th==='plan'&&(srcFinAP.planType==='min'||srcFinAP.planType==='var'));
     if(estMinVarAP){
       let msgAP='';
-      if(!(c.planningConfirmeMois&&c.planningConfirmeMois[key]))
+      // 01/10/2026 (Sophie) : quand c'est l'App elle-meme qui a remis le planning a reconfirmer — une semaine
+      // devenue entierement en arret — la pose des arrets suivants n'est plus bloquee. Sans ca, chaque jour
+      // passe en arret renvoyait vers le planning, un aller-retour par jour. Le bandeau et le refus de
+      // validation de la feuille, eux, restent en place.
+      const reconfArretAP=!!(c.planningArretReconfirmMois&&c.planningArretReconfirmMois[key]);
+      if(reconfArretAP) msgAP='';
+      else if(!(c.planningConfirmeMois&&c.planningConfirmeMois[key]))
         msgAP='Le planning de ce mois n’a jamais été enregistré — retournez sur l’onglet Planning et cliquez sur 💾 Enregistrer (même s’il est vide) avant de passer un jour en arrêt de travail.';
       else if(planningNonEnregistrePourMois(c,key))
         msgAP='Le planning de ce mois a des modifications non enregistrées — retournez sur l’onglet Planning et cliquez sur 💾 Enregistrer avant de passer un jour en arrêt de travail.';
@@ -10088,11 +10096,18 @@ function majFicheStatut(contratId,key,idx,val){
         const jSB=fSB&&(fSB.jours||[]).find(ySB=>ySB.date===dsSA);
         return !!(jSB&&jSB.statut==='arret');
       });
-      if(c.planningConfirmeMois&&(toutEnArretArr||etaitToutEnArretArr)) moisTouchesArr.forEach(mSA=>{
-        const fMois=c.fiches&&c.fiches[mSA];
-        if(fMois&&fMois.valide) return; // mois déjà validé : son planning n'a plus à être rouvert
-        delete c.planningConfirmeMois[mSA];
-      });
+      if(c.planningConfirmeMois&&(toutEnArretArr||etaitToutEnArretArr)){
+        if(!c.planningArretReconfirmMois) c.planningArretReconfirmMois={};
+        moisTouchesArr.forEach(mSA=>{
+          const fMois=c.fiches&&c.fiches[mSA];
+          if(fMois&&fMois.valide) return; // mois déjà validé : son planning n'a plus à être rouvert
+          delete c.planningConfirmeMois[mSA];
+          c.planningArretReconfirmMois[mSA]=true;
+        });
+        setTimeout(()=>alerte(toutEnArretArr
+          ? 'Cette semaine est maintenant <b>entièrement en arrêt de travail</b> : elle n’offre plus d’heures au planning, et celles qui y étaient saisies ont été retirées.<br><br>Le planning du mois est à réenregistrer avant de valider la feuille.'
+          : 'Cette semaine n’est plus entièrement en arrêt de travail : elle rend ses heures au planning.<br><br>Le planning du mois est à réenregistrer avant de valider la feuille.'),80);
+      }
     }
   }
 
