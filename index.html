@@ -6944,7 +6944,7 @@ function renderPlanningMoisTile(c, annee, moisIdx, ouvert){
   // qui sera refusée — c'est précisément ce que la note du 27/08 reprochait à l'ancien affichage.
   // Remplace aussi le test "type de contrat au 1er du mois", qui faisait disparaître complètement
   // cette ligne sur un mois d'avenant sem→var (la partie var n'était alors ni affichée ni contrôlée).
-  const portionsTileEnvV=estCaseModifTile?getPortionsEnveloppeMois(c,annee,moisIdx+1).filter(p=>p.estVarMin):[];
+  const portionsTileEnvV=estCaseModifTile?getPortionsEnveloppeMois(c,annee,moisIdx+1,null,true).filter(p=>p.estVarMin):[];
   const estMinVarTileEnvV=portionsTileEnvV.length>0;
   // 27/08/2026 (Sophie) : plafond à 0 retiré — un dépassement doit s'afficher en négatif, pour que
   // l'utilisateur le voie avant d'enregistrer, plutôt que d'être masqué par un 0 trompeur.
@@ -7237,7 +7237,7 @@ function majPlanningJour(contratId, dateStr, champ, val, semKeyDom){
       // 06/09/2026 (Sophie) : une ligne par partie contractuelle du mois, comme au rendu complet —
       // les deux passent par la même fonction, l'affichage en direct ne peut plus diverger de ce que
       // le bouton Enregistrer refusera.
-      const portionsLive=getPortionsEnveloppeMois(c,ayLive,amLive,minParDateLive).filter(pL=>pL.estVarMin);
+      const portionsLive=getPortionsEnveloppeMois(c,ayLive,amLive,minParDateLive,true).filter(pL=>pL.estVarMin);
       volDispoEl.style.color='';
       volDispoEl.innerHTML=portionsLive.map(pL=>{
         const joursDispoLive=pL.env.jours-pL.joursReels;
@@ -7807,7 +7807,7 @@ function enregistrerPlanningMois(contratId, moisKey){
   // dates — une portion fixe/sem est simplement ignorée (pas de notion d'enveloppe : les jours s'y
   // déplacent sans jamais changer de volume, confirmé Sophie).
   const portionsEnvV=(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisKey])
-    ?getPortionsEnveloppeMois(c,ay,am).filter(p=>p.estVarMin):[];
+    ?getPortionsEnveloppeMois(c,ay,am,null,true).filter(p=>p.estVarMin):[];
   if(portionsEnvV.length){
     // 27/08/2026 (Sophie) : calcEnveloppeMoisVarCoordonnee (au lieu de calcEnveloppeMoisVar seule) —
     // ajuste l'enveloppe pour la semaine de début de mois à cheval sur le mois précédent, si celui-ci
@@ -7892,7 +7892,7 @@ function enregistrerPlanningMois(contratId, moisKey){
     // travaillée, hors absences employeur et congés ; semaine à cheval sur le mois suivant : ce qu'il peut accueillir y
     // part ; case « modifications autorisées » cochée : volume du mois. Partie par partie en cas d'avenant.
     let minNonUtiliseEnr=0;
-    getPortionsEnveloppeMois(c,ay,am).filter(pNU=>pNU.estVarMin).forEach(pNU=>{
+    getPortionsEnveloppeMois(c,ay,am,null,true).filter(pNU=>pNU.estVarMin).forEach(pNU=>{
       minNonUtiliseEnr+=Math.max(0,calcHPrevuReg(c,false,pNU.debut,pNU.fin)*60-pNU.minReels);
     });
     if(minNonUtiliseEnr>=1) avertissementsInfo.splice(1,0,`Il reste ${fmtH(Math.round(minNonUtiliseEnr))} non utilisé`);
@@ -8748,8 +8748,10 @@ function calcEnveloppeMoisVar(c,ay,am,limDebV,limFinV,pourSaisiePlanningV){
 // celui-ci a aussi modifications autorisées actif : calcEnveloppeMoisVar donne alors à ce mois-ci sa
 // part structurelle NON coordonnée pour cette semaine partagée, trop généreuse si le mois précédent a
 // déjà consommé plus que sa propre part structurelle ailleurs dans son enveloppe.
-function calcEnveloppeMoisVarCoordonnee(c,ay,am,limDebV,limFinV){
-  const env=calcEnveloppeMoisVar(c,ay,am,limDebV,limFinV);
+// 01/10/2026 (Sophie) : pourSaisiePlanningV transmis jusqu'au bout — c'est par cette chaine que passe le
+// controle d'enregistrement du planning, pas par les appels directs.
+function calcEnveloppeMoisVarCoordonnee(c,ay,am,limDebV,limFinV,pourSaisiePlanningV){
+  const env=calcEnveloppeMoisVar(c,ay,am,limDebV,limFinV,pourSaisiePlanningV);
   let minBaseV=env.minutes;
   const srcMoisFS=getVersionActive(c,new Date(ay,am-1,1));
   if(srcMoisFS.th!=='plan'||(srcMoisFS.planType!=='var'&&srcMoisFS.planType!=='min')) return env;
@@ -8850,7 +8852,7 @@ function calcEnveloppeMoisVarCoordonnee(c,ay,am,limDebV,limFinV){
 // "modifications autorisées" est coché, mais ne franchissent jamais la date d'avenant.
 // minParDate (optionnel) : {date: minutes} lu depuis les champs à l'écran, pour la mise à jour en
 // direct pendant la frappe — sinon les totaux sont lus dans c.planning (état enregistré/en mémoire).
-function getPortionsEnveloppeMois(c,ay,am,minParDate){
+function getPortionsEnveloppeMois(c,ay,am,minParDate,pourSaisiePlanningV){
   const finMoisPE=new Date(ay,am,0);
   const fmtPE=(y,m,j)=>y+'-'+String(m).padStart(2,'0')+'-'+String(j).padStart(2,'0');
   const debutMoisPE=fmtPE(ay,am,1), finMoisPE2=fmtPE(ay,am,finMoisPE.getDate());
@@ -8875,7 +8877,7 @@ function getPortionsEnveloppeMois(c,ay,am,minParDate){
     const resPE={debut:bPE.debut,fin:bPE.fin,index:iPE,nbPortions:bornesPE.length,src:srcPE,estVarMin:estVarMinPE,env:null,joursReels:0,minReels:0};
     if(!estVarMinPE) return resPE;
     // Mois entier : appel sans bornes, strictement identique à l'ancien comportement.
-    resPE.env=calcEnveloppeMoisVarCoordonnee(c,ay,am,moisEntierPE?null:bPE.debut,moisEntierPE?null:bPE.fin);
+    resPE.env=calcEnveloppeMoisVarCoordonnee(c,ay,am,moisEntierPE?null:bPE.debut,moisEntierPE?null:bPE.fin,pourSaisiePlanningV);
     for(let dPE=1; dPE<=finMoisPE.getDate(); dPE++){
       const dsPE=fmtPE(ay,am,dPE);
       if(dsPE<bPE.debut||dsPE>bPE.fin) continue;
