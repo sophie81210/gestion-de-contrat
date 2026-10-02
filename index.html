@@ -15600,7 +15600,24 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             }
             return false;
           })();
-          hAbsSemCumulArret[semKeyPlaf]={reste:(volPlaf>0&&aUnArretPlaf)?volPlaf:Infinity};
+          // 02/10/2026 (Sophie) : sur une SEMAINE A CHEVAL, le plafond doit tenir compte de ce que l'AUTRE mois
+          // a deja deduit — il est calcule feuille par feuille et ne le voyait pas. Mars retirait les heures de
+          // ses quatre jours en arret, et avril reprenait le volume entier par-dessus : la semaine etait deduite
+          // deux fois. On retranche donc les heures prevues des jours en arret qui appartiennent a l'autre mois.
+          let dejaAutreMoisPlaf=0;
+          if(volPlaf>0&&aUnArretPlaf){
+            const lA=parseDateLoc(j.date); lA.setDate(lA.getDate()-((lA.getDay()+6)%7));
+            for(let iA=0;iA<7;iA++){
+              const xA=new Date(lA); xA.setDate(lA.getDate()+iA);
+              const dsA=dateToStr(xA);
+              if(dsA.slice(0,7)===j.date.slice(0,7)) continue; // ce mois-ci : deja compte par le cumul
+              const fA=c.fiches&&c.fiches[dsA.slice(0,7)];
+              const jA=fA&&(fA.jours||[]).find(yA=>yA.date===dsA);
+              if(!jA||jA.statut!=='arret') continue;
+              if(jA.heureDebPrev&&jA.heureFinPrev) dejaAutreMoisPlaf+=(toM(jA.heureFinPrev)-toM(jA.heureDebPrev))/60;
+            }
+          }
+          hAbsSemCumulArret[semKeyPlaf]={reste:(volPlaf>0&&aUnArretPlaf)?Math.max(0,volPlaf-dejaAutreMoisPlaf):Infinity};
         }
         const potPlaf=hAbsSemCumulArret[semKeyPlaf];
         if(potPlaf.reste!==Infinity){
