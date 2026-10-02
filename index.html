@@ -12608,6 +12608,13 @@ function partSemaineChevalMoisMinTh(c,fiche,joursDesSem,joursHCExclus,joursMinTh
     const idx=dObj.getDay()===0?6:dObj.getDay()-1;
     return joursMinTh[idx];
   }).length;
+  // 02/10/2026 (Sophie) : jours coches de l'autre portion, calcules ici pour servir aux deux branches.
+  const nbJoursCochesAutrePortionTh=joursSemaineComplete.filter(dStr=>{
+    if(joursDesSemDates.has(dStr)) return false;
+    const dObj=new Date(dStr);
+    const idx=dObj.getDay()===0?6:dObj.getDay()-1;
+    return joursMinTh[idx]&&c.planning&&c.planning[dStr]&&c.planning[dStr].coche;
+  }).length;
   // 27/08/2026 (Sophie) : si CE mois a modifications autorisées actif, ses heures dues sur cette
   // semaine à cheval peuvent avoir été consommées n'importe où ailleurs dans SON PROPRE mois —
   // compter seulement ses jours cochés sur cette semaine précise (branche jours cochés ci-dessous)
@@ -12643,7 +12650,22 @@ function partSemaineChevalMoisMinTh(c,fiche,joursDesSem,joursHCExclus,joursMinTh
     });
     const resteMoisCourantTh=Math.max(0,(envMoisCourantTh.minutes/60)-reelMoisCourantTh);
     const consommeMoisCourantTh=Math.max(0,structShareMoisCourantTh-resteMoisCourantTh);
-    const plancherMoisCourantTh=Math.max(0,jMaxMinTh-Math.min(nbJoursPossiblesAutrePortion,jMaxMinTh))*(hMinTh/jMaxMinTh);
+    // 02/10/2026 (Sophie, Silene fevrier 2022) : le plancher se calculait sur les jours POSSIBLES de l'autre
+    // portion, alors que celle-ci ne retient, elle, que ses jours COCHES — plus ce que ce mois-ci ne peut pas
+    // absorber. Les deux mois ne raisonnaient donc pas sur la meme chose et une journee tombait entre les deux :
+    // semaine du 31 janvier au 6 fevrier, le 31 non coche, janvier en retenait zero et fevrier se limitait
+    // pourtant a trois jours (13,75 h au lieu de 18,33). Meme regle que la branche sans modifications
+    // autorisees, juste en dessous : jours coches d'abord, puis priorite au mois suivant.
+    // Les deux cas ne sont pas symetriques (regle Sophie du 06/08) : c'est la portion de FIN DE MOIS qui cede
+    // la place a celle du mois SUIVANT, jamais l'inverse. Quand ce mois-ci porte le DEBUT de la semaine, l'autre
+    // portion — le mois suivant — peut absorber tous ses jours possibles, et ce mois-ci ne garde que ce qu'elle
+    // ne peut pas prendre. Quand ce mois-ci porte la FIN de la semaine, l'autre portion ne retient que ses jours
+    // COCHES, plus ce que ce mois-ci ne peut pas absorber.
+    const ceMoisPorteLeDebutTh=joursDesSemDates.has(joursSemaineComplete[0]);
+    const joursRetenusAutrePortionTh=ceMoisPorteLeDebutTh
+      ? nbJoursPossiblesAutrePortion
+      : Math.max(nbJoursCochesAutrePortionTh,Math.max(0,jMaxMinTh-nbJoursPossiblesMoisCourant));
+    const plancherMoisCourantTh=Math.max(0,jMaxMinTh-Math.min(joursRetenusAutrePortionTh,jMaxMinTh))*(hMinTh/jMaxMinTh);
     const contributionChevalTh=Math.min(structShareMoisCourantTh,Math.max(plancherMoisCourantTh,consommeMoisCourantTh));
     hTheoriques+=contributionChevalTh;
     if(window.DEBUG_CGAM)console.log('[CGAM-minTh-cheval-modif]',c.nom||c.prenom||c.id,'|',semKey,'| mois calculé:',moisCourantKeyTh,'| nbJoursPossiblesMoisCourant:',nbJoursPossiblesMoisCourant,'| structShare:',structShareMoisCourantTh,'| envMoisCourant(h):',envMoisCourantTh.minutes/60,'| reelMoisCourant:',reelMoisCourantTh,'| reste:',resteMoisCourantTh,'| consomme:',consommeMoisCourantTh,'| plancher:',plancherMoisCourantTh,'| contribution:',contributionChevalTh);
