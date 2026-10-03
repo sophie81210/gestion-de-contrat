@@ -6045,6 +6045,32 @@ function ouvrirFiche(contratId,key){
   // encore zéro à ce moment-là et le message n'aurait jamais été vu. Une fois par ouverture de l'App et par
   // contrat, et plus du tout dès que la case est cochée et tous les jours choisis.
   avertirFractionnementNovembre(c,key);
+  avertirTermeCDD(c,key);
+}
+
+// 03/10/2026 (Sophie) : le terme d'un CDD n'est pas une fin de contrat pour l'App — passe le terme elle
+// continue a produire des feuilles et a payer la mensualisation entiere (mesure sur le contrat de test
+// Ccd precis : decembre 2026, janvier et juin 2027 paient 259,98 € net chacun). C'est juste au fond, un CDD
+// poursuivi au-dela de son terme etant requalifie en CDI, mais rien ne le disait. Averti a l'ouverture de la
+// feuille du mois du terme, et rappele a chaque validation de cette feuille.
+function messageTermeCDD(c,key){
+  if(!c||c.typeDuree!=='cdd'||c.cddTerme!=='precis'||!c.cddDateFin) return null;
+  if(key!==c.cddDateFin.slice(0,7)) return null;
+  if(c.rupture&&c.rupture.confirmee) return null;
+  if((c.avenants||[]).some(a=>a&&a.signe&&a.typeProlongation==='cdi')) return null;
+  return 'Le CDD en cours arrive à son terme le '+new Date(c.cddDateFin).toLocaleDateString('fr-FR')
+    +'.<br><br>S’il n’est ni prolongé, ni rompu à son terme, il sera automatiquement requalifié en CDI.';
+}
+// Une fois par ouverture de l'App et par contrat, comme l'avertissement du fractionnement : ouvrirFiche est
+// rappelee a chaque clic sur la feuille, la fenetre reviendrait sans cesse.
+function avertirTermeCDD(c,key){
+  const msgT=messageTermeCDD(c,key);
+  if(!msgT) return;
+  if(!S._termeCddAvise) S._termeCddAvise={};
+  const cleT=c.id+'-'+c.cddDateFin;
+  if(S._termeCddAvise[cleT]) return;
+  S._termeCddAvise[cleT]=true;
+  setTimeout(()=>alerte(msgT,'Requalification en CDI'),400);
 }
 
 // Novembre N appartient à la période de pose du 1er mai N au 30 avril N+1, donc à l'année d'acquisition N−1.
@@ -10795,6 +10821,9 @@ function _validerFicheSuite(contratId,key,c){
   if(S.congesAM&&S.congesAM[anneeAmSuivante]) majFichesCgAm(anneeAmSuivante,false);
   // Valider la fiche
   c.fiches[key].valide=true;c.fiches[key].complete=true;
+  // 03/10/2026 (Sophie) : rappel du terme du CDD a la validation de SA feuille, a chaque fois — c'est le
+  // dernier moment ou le choix se pose (prolonger, rompre au terme, ou laisser requalifier en CDI).
+  {const msgTV=messageTermeCDD(c,key); if(msgTV) setTimeout(()=>alerte(msgTV,'Requalification en CDI'),600);}
   c.fiches[key]._anticipeActifSauvegarde=c.fiches[key].anticipeActif||false;
   c._regulDirty=true; // invalider le cache régularisation
   S.ficheModifiee=false;
@@ -26896,7 +26925,9 @@ function toast(msg){
   setTimeout(()=>el.classList.remove('on'),3000);
 }
 
-function alerte(msg){
+// 03/10/2026 (Sophie) : libelle du bouton personnalisable, 'OK' par defaut — certains messages
+// gagnent a nommer ce qui va se passer plutot qu'a faire acquiescer.
+function alerte(msg,libelleBouton){
   // Supprime une alerte existante
   const existing=document.getElementById('alerte-overlay');
   if(existing) existing.remove();
@@ -26906,7 +26937,7 @@ function alerte(msg){
   overlay.innerHTML=`<div class="alerte-box">
     <div style="font-size:22px;margin-bottom:10px">⚠</div>
     <div>${msg}</div>
-    <button class="alerte-btn" onclick="document.getElementById('alerte-overlay').remove()">OK</button>
+    <button class="alerte-btn" onclick="document.getElementById('alerte-overlay').remove()">${libelleBouton||'OK'}</button>
   </div>`;
   overlay.addEventListener('click',e=>{if(e.target===overlay) overlay.remove();});
   overlay.addEventListener('touchstart',e=>{if(e.target===overlay) overlay.remove();},{passive:true});
