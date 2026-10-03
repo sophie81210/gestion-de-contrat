@@ -19339,6 +19339,36 @@ toast('Contrat '+nom+' enregistré !');
 }
 }
 
+// 03/10/2026 (Sophie) : un seul juge de la date d'effet d'un avenant, pour les trois moments ou elle est
+// controlee — la SAISIE, l'enregistrement et la signature. Sophie : « ca aurait ete mieux que la date soit
+// refusee des la saisie » : elle avait rempli tout un formulaire avant d'apprendre que la date etait
+// anterieure a l'avenant n°1. Les textes etaient ecrits deux fois, un seul endroit evite qu'ils divergent.
+// Renvoie {msg, fenetre} ou null. fenetre : true = fenetre centree, false = bandeau.
+function controlerDateEffetAvenant(c,av,dateStr){
+  if(!c||!dateStr) return null;
+  const anneeD=parseInt(dateStr.split('-')[0]);
+  if(anneeD<2000||anneeD>2100) return {msg:'⚠ Date d’effet invalide : année incohérente ('+anneeD+')',fenetre:false};
+  if(c.typeDuree==='cdd'&&c.cddTerme==='precis'&&c.cddDateFin&&!(av&&av.typeProlongation)&&dateStr>c.cddDateFin)
+    return {msg:'Le CDD se termine le '+new Date(c.cddDateFin).toLocaleDateString('fr-FR')+'.<br>Un avenant ne peut pas prendre effet après cette date<br><br>Il deviendrait le dernier avenant signé, et bloquerait ensuite toute modification et toute prolongation',fenetre:true};
+  const dernierD=[...(c.avenants||[])].reverse().find(a=>a.signe&&a.id!==(av&&av.id));
+  const dateMinD=dernierD?dernierD.dateAvenant:c.dateDeb;
+  if(dateStr<=dateMinD){
+    if(dernierD&&dernierD.typeProlongation==='prolongation') return {msg:'Une prolongation de CDD est déjà signée, avec effet au '+new Date(dateMinD).toLocaleDateString('fr-FR')+'.<br>Un avenant ne peut pas prendre effet avant elle<br><br>Pour modifier les conditions avant cette date : annulez la prolongation, signez l’avenant, puis refaites la prolongation',fenetre:true};
+    return {msg:'⚠ La date d’effet doit être postérieure au '+(dernierD?'dernier avenant':'contrat initial')+' ('+new Date(dateMinD).toLocaleDateString('fr-FR')+')',fenetre:false};
+  }
+  return null;
+}
+// Appele a la sortie du champ de date d'effet : dit tout de suite ce qui cloche, sans rien effacer de la saisie.
+function controlerDateEffetSaisie(){
+  if(!S.enAvenant) return;
+  const cS=S.contrats.find(x=>x.id==S.enAvenant.cid); if(!cS) return;
+  const avS=(cS.avenants||[]).find(a=>a.id==S.enAvenant.avid);
+  const dS=document.getElementById('f-dateavenant')?.value||'';
+  if(!dS) return;
+  const ctlS=controlerDateEffetAvenant(cS,avS,dS);
+  if(ctlS) ctlS.fenetre?alerte(ctlS.msg):toast(ctlS.msg);
+}
+
 function validerAvenant(){
   const {cid,avid}=S.enAvenant;
   const c=S.contrats.find(x=>x.id==cid);
@@ -19351,38 +19381,13 @@ function validerAvenant(){
 
   const dateAvenant=document.getElementById('f-dateavenant')?.value;
   if(!dateAvenant){toast('Veuillez saisir la date d\'effet de l\'avenant');return;}
-  // 30/08/2026 : mêmes contrôles qu'à la signature (signerAvenant), mais dès l'enregistrement —
-  // sinon un brouillon avec une date invalide peut quand même déclencher des calculs (agenda...)
-  // qui figent la mauvaise valeur avant que la signature ne bloque quoi que ce soit.
+  // 30/08/2026 : memes controles qu'a la signature (signerAvenant), mais des l'enregistrement — sinon un
+  // brouillon avec une date invalide peut quand meme declencher des calculs (agenda...) qui figent la
+  // mauvaise valeur avant que la signature ne bloque quoi que ce soit.
+  // 03/10/2026 (Sophie) : controles regroupes dans controlerDateEffetAvenant, partages avec la saisie.
   {
-    const anneeAvSave=parseInt(dateAvenant.split('-')[0]);
-    if(anneeAvSave<2000||anneeAvSave>2100){
-      toast('⚠ Date d\'effet invalide : année incohérente ('+anneeAvSave+')');
-      return;
-    }
-      // 03/10/2026 (Sophie) : un avenant date APRES le terme d'un CDD a terme precis est refuse. Il ne
-      // changeait aucun calcul (passe le terme il n'y a plus de feuille), mais devenait le dernier avenant
-      // signe : plus aucun avenant ne pouvait prendre effet avant sa date, donc plus rien sur la duree reelle
-      // du contrat, et plus aucune prolongation non plus, celle-ci prenant effet au lendemain du terme.
-      // Une prolongation et un passage en CDI sont exclus du controle : leur date d'effet suit le terme.
-      if(c.typeDuree==='cdd'&&c.cddTerme==='precis'&&c.cddDateFin&&!av.typeProlongation&&dateAvenant>c.cddDateFin){
-        alerte('Le CDD se termine le '+new Date(c.cddDateFin).toLocaleDateString('fr-FR')+'.<br>Un avenant ne peut pas prendre effet après cette date<br><br>Il deviendrait le dernier avenant signé, et bloquerait ensuite toute modification et toute prolongation');
-        return;
-      }
-    const dernierAvSigneSave=[...c.avenants].reverse().find(a=>a.signe&&a.id!==avid);
-    const dateMinSave=dernierAvSigneSave?dernierAvSigneSave.dateAvenant:c.dateDeb;
-    if(dateAvenant<=dateMinSave){
-      // 03/10/2026 (Sophie) : quand le blocage vient d'une PROLONGATION de CDD, le message le dit et donne
-      // l'ordre a suivre. Il parlait du « dernier avenant » sans nommer la prolongation ni dire pourquoi
-      // l'anteriorite est interdite : la prolongation emporte une copie des conditions et reprendrait la main
-      // a sa date, effacant la modification.
-      if(dernierAvSigneSave&&dernierAvSigneSave.typeProlongation==='prolongation'){
-        alerte('Une prolongation de CDD est déjà signée, avec effet au '+new Date(dateMinSave).toLocaleDateString('fr-FR')+'.<br>Un avenant ne peut pas prendre effet avant elle<br><br>Pour modifier les conditions avant cette date : annulez la prolongation, signez l’avenant, puis refaites la prolongation');
-        return;
-      }
-      toast('⚠ La date d\'effet doit être postérieure au '+(dernierAvSigneSave?'dernier avenant':'contrat initial')+' ('+new Date(dateMinSave).toLocaleDateString('fr-FR')+')');
-      return;
-    }
+    const ctlSave=controlerDateEffetAvenant(c,av,dateAvenant);
+    if(ctlSave){ ctlSave.fenetre?alerte(ctlSave.msg):toast(ctlSave.msg); return; }
   }
 
   // Récupérer toutes les données du formulaire
@@ -23223,6 +23228,12 @@ function remplirFormulaireAvenant(c,av,d){
     // est retire (il est recree par ouvrirProlongationCDD).
     document.querySelectorAll('.pro-masque').forEach(elPM=>elPM.classList.remove('pro-masque'));
     {const fgPro=document.getElementById('fg-cdd-prolongation');if(fgPro)fgPro.remove();}
+    // 03/10/2026 (Sophie) : l'encadre vert « Passage en CDI — l'anciennete est calculee depuis le ... » restait
+    // en place une fois cree, et n'etait jamais reconstruit (test d'existence avant creation). Il s'affichait donc
+    // sur le formulaire d'avenant de TOUT contrat ouvert ensuite, avec la date du contrat ou le passage en CDI
+    // avait ete ouvert : Sophie l'a vu sur Mayronn, debute en 2023, portant le 01/01/2025 de Capucine. Retire a
+    // chaque ouverture, il est refait avec la bonne date par ouvrirPassageCDI.
+    {const fgCdi=document.getElementById('fg-cdi-info');if(fgCdi)fgCdi.remove();}
     // 30/09/2026 (Sophie) : date d'effet rendue à la saisie libre — seule une prolongation de CDD la verrouille,
     // juste après cette ouverture, et le verrou ne doit pas rester sur l'avenant ordinaire suivant.
     {
@@ -23242,7 +23253,7 @@ function remplirFormulaireAvenant(c,av,d){
       fg.className='fg';
       fg.id='fg-dateavenant';
       fg.innerHTML=`<label class="fl">Date d'effet de l'avenant</label>
-        <input class="fi" type="date" id="f-dateavenant" value="${d.dateAvenant||''}" oninput="majAttenteDate()" onchange="if(typeof calcSal==='function')calcSal();majAttenteDate();majSimAgendaVisibilite()">`;
+        <input class="fi" type="date" id="f-dateavenant" value="${d.dateAvenant||''}" oninput="majAttenteDate()" onchange="if(typeof calcSal==='function')calcSal();majAttenteDate();majSimAgendaVisibilite();controlerDateEffetSaisie()">`;
       inputDatedeb.parentElement.parentElement.insertBefore(fg,inputDatedeb.parentElement.nextSibling);
     } else {
       document.getElementById('f-dateavenant').value=d.dateAvenant||'';
@@ -23752,22 +23763,12 @@ function signerAvenant(){
     return;
   }
          
-  // Vérifier que la date d'effet n'est pas antérieure au contrat ou au dernier avenant signé
-  // 03/10/2026 (Sophie) : meme refus qu'a l'enregistrement, voir le commentaire la-bas.
-  if(c.typeDuree==='cdd'&&c.cddTerme==='precis'&&c.cddDateFin&&!av.typeProlongation&&av.dateAvenant>c.cddDateFin){
-    alerte('Le CDD se termine le '+new Date(c.cddDateFin).toLocaleDateString('fr-FR')+'.<br>Un avenant ne peut pas prendre effet après cette date<br><br>Il deviendrait le dernier avenant signé, et bloquerait ensuite toute modification et toute prolongation');
-    return;
-  }
-  const dernierAvSigne=[...c.avenants].reverse().find(a=>a.signe&&a.id!==avid);
-  const dateMin=dernierAvSigne?dernierAvSigne.dateAvenant:c.dateDeb;
-  if(av.dateAvenant<=dateMin){
-    // 03/10/2026 (Sophie) : meme message qu'a l'enregistrement quand c'est une prolongation qui bloque.
-    if(dernierAvSigne&&dernierAvSigne.typeProlongation==='prolongation'){
-      alerte('Une prolongation de CDD est déjà signée, avec effet au '+new Date(dateMin).toLocaleDateString('fr-FR')+'.<br>Un avenant ne peut pas prendre effet avant elle<br><br>Pour modifier les conditions avant cette date : annulez la prolongation, signez l’avenant, puis refaites la prolongation');
-      return;
-    }
-    toast('⚠ La date d\'effet doit être postérieure au '+(dernierAvSigne?'dernier avenant':'contrat initial')+' ('+new Date(dateMin).toLocaleDateString('fr-FR')+')');
-    return;
+  // Verifier que la date d'effet n'est pas anterieure au contrat ou au dernier avenant signe, et qu'elle ne
+  // depasse pas le terme d'un CDD a terme precis.
+  // 03/10/2026 (Sophie) : controles regroupes dans controlerDateEffetAvenant, partages avec la saisie.
+  {
+    const ctlSig=controlerDateEffetAvenant(c,av,av.dateAvenant);
+    if(ctlSig){ ctlSig.fenetre?alerte(ctlSig.msg):toast(ctlSig.msg); return; }
   }
          
   // 16/09/2026 (Sophie) : avenant sans coupure — comparé à la version en vigueur la veille de la date d'effet.
