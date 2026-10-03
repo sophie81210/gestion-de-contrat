@@ -322,6 +322,8 @@ input[type=time].fi{width:auto;min-width:92px}
 /* 22/09/2026 (Sophie) : formulaire du contrat ou de l'avenant — rien après la date tant qu'elle n'est pas saisie */
 #pg-form.attente-date .apres-date{display:none !important}
 #pg-form.attente-date .card ~ .card{display:none !important}
+/* 03/10/2026 (Sophie) : prolongation de CDD — tout le formulaire est masqué sauf la nouvelle date de fin */
+.pro-masque{display:none !important}
 .toast{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(0.9);background:#fff;color:var(--tx);padding:14px 24px;border-radius:12px;font-size:14px;font-weight:500;z-index:9999;transition:transform .3s,opacity .3s;box-shadow:0 6px 24px rgba(0,0,0,.25);border:2px solid var(--m);white-space:normal;max-width:85vw;text-align:center;opacity:0;pointer-events:none}
 .toast.on{transform:translate(-50%,-50%) scale(1);opacity:1}
 .alerte-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:10000;display:flex;align-items:center;justify-content:center;padding:14px}
@@ -459,7 +461,7 @@ input[type=time].fi{width:auto;min-width:92px}
 
       </div>
 
-      <div class="fg apres-date">
+      <div class="fg apres-date" id="fg-type-contrat">
         <label class="fl">Type de contrat</label>
         <div class="rg">
           <div class="ro" id="ro-52" onclick="selTC(this,'52')"><input type="radio" name="tc"><label>Accueil de 52 semaines par p&eacute;riode de 12 mois</label></div>
@@ -496,7 +498,7 @@ input[type=time].fi{width:auto;min-width:92px}
       </div>
     </div>
 
-    <div class="card">
+    <div class="card" id="card-horaires">
       <div class="ctitle">Horaires<span class="pastille" onclick="ouvrirAide('mensualisation')" title="Horaires">?</span></div>
       <div class="rg row" style="gap:7px">
         <div class="ro" id="ro-fixe" onclick="selTH(this,'fixe')" style="flex:1;min-width:90px"><input type="radio" name="th"><label>Fixe</label></div>
@@ -23018,11 +23020,17 @@ function ouvrirProlongationCDD(cid){
   ouvrirFormulaireAvenant(cid,avid);
   // Après ouverture du formulaire, ajouter champs CDD spécifiques
   setTimeout(()=>{
-    // Masquer les boutons CDI/CDD (prolongation reste CDD)
-    const blocCDI=document.getElementById('ro-cdi');
-    const blocCDD=document.getElementById('ro-cdd');
-    if(blocCDI) blocCDI.style.display='none';
-    if(blocCDD) blocCDD.style.display='none';
+    // 03/10/2026 (Sophie) : une prolongation ne change QUE le terme du CDD — les conditions sont recopiees telles
+    // quelles depuis la version en vigueur. Le formulaire complet s'ouvrait pourtant (horaires, mensualisation,
+    // feries, conges, indemnites, type de contrat, periode d'essai, bouton Report) : une prolongation pouvait donc
+    // servir a changer un taux horaire sans que rien ne le signale. Tout est masque ; seuls restent le nom, la date
+    // de debut, la date d'effet et la nouvelle date de fin. Le marqueur est retire a l'ouverture d'un avenant
+    // ordinaire (remplirFormulaireAvenant), pour ne rien laisser cache ensuite.
+    ['card-horaires','card-mens','card-feries','card-cg','card-ind','card-sim-agenda',
+     'fg-type-duree','fg-type-contrat','bloc-cdd','bloc-essai-cdi','btn-report'].forEach(idPro=>{
+      const elPro=document.getElementById(idPro);
+      if(elPro) elPro.classList.add('pro-masque');
+    });
     // Ajouter champ nouvelle date de fin
     if(!document.getElementById('fg-cdd-prolongation')){
       const fg=document.createElement('div');
@@ -23033,8 +23041,10 @@ function ouvrirProlongationCDD(cid){
         <div style="font-size:12px;color:var(--tx2);margin-bottom:4px">Date actuelle : ${dateCourante?new Date(dateCourante).toLocaleDateString('fr-FR'):'—'}</div>
         <input class="fi" type="date" id="f-cdd-prolongation-datefin" ${dateMax?'max="'+dateMax+'"':''}">
         ${c.cddMotif==='attente'?'<div class="ibox" style="margin-top:4px">Limite 9 mois : '+new Date(dateMax).toLocaleDateString('fr-FR')+'</div>':'' }`;
+      // 03/10/2026 (Sophie) : place DANS la carte, juste sous la date d'effet. Le champ s'affichait en dehors,
+      // entre deux cartes, sans encadrement.
       const dateAvEl=document.getElementById('f-dateavenant');
-      if(dateAvEl) dateAvEl.parentElement.parentElement.after(fg);
+      if(dateAvEl) dateAvEl.parentElement.after(fg);
     }
     // 30/09/2026 (Sophie) : une prolongation de CDD ne peut commencer qu'au LENDEMAIN du terme en cours — sinon
     // il y aurait un trou ou un chevauchement entre les deux périodes. La date d'effet n'est donc plus à saisir :
@@ -23135,6 +23145,11 @@ function remplirFormulaireAvenant(c,av,d){
     {const fgKA=document.getElementById('fg-km');if(fgKA)fgKA.style.display='none';}
     {const nCA=document.getElementById('note-ind-contrat');if(nCA)nCA.style.display='none';const nAA=document.getElementById('note-ind-avenant');if(nAA)nAA.style.display='';}
     {const bSB=document.getElementById('btn-suppr-brouillon');if(bSB)bSB.style.display='';}
+    // 03/10/2026 (Sophie) : le formulaire reduit de la prolongation de CDD ne doit pas rester en place sur
+    // l'avenant ordinaire suivant — tout ce qui avait ete masque revient, et le champ de nouvelle date de fin
+    // est retire (il est recree par ouvrirProlongationCDD).
+    document.querySelectorAll('.pro-masque').forEach(elPM=>elPM.classList.remove('pro-masque'));
+    {const fgPro=document.getElementById('fg-cdd-prolongation');if(fgPro)fgPro.remove();}
     // 30/09/2026 (Sophie) : date d'effet rendue à la saisie libre — seule une prolongation de CDD la verrouille,
     // juste après cette ouverture, et le verrou ne doit pas rester sur l'avenant ordinaire suivant.
     {
