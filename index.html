@@ -18267,8 +18267,15 @@ function ouvrirModifAgenda(cid,agid){
   S.agendaEnModif=agid; // Marquer l'agenda en cours de modification (masque les warnings)
   // 17/09/2026 (Sophie) : semaines telles qu'à l'ouverture de la modification, pour ne réinitialiser à la validation
   // que les semaines réellement changées.
+  // 03/10/2026 (Sophie) : la photo n'est prise qu'a la PREMIERE ouverture. Chaque clic sur une semaine
+  // (peindreAgenda) rouvre ce panneau, et la reouverture reprenait la photo : a la validation, elle etait
+  // identique a l'etat d'arrivee, aucune semaine n'etait vue comme changee, et plus aucune feuille n'etait
+  // rafraichie depuis le 17/09. Invisible sur les jours ordinaires, qui se remettent d'eux-memes au calcul
+  // suivant ; visible sur les statuts proteges — arret, travaille, absences — qui gardaient leurs heures
+  // prevues (constate par Sophie : trois jours en arret sur une semaine passee en absence employeur, avec
+  // les heures en moins dans la colonne h+-). La photo est effacee a la validation et a l'annulation.
   if(!S.agendaSemainesAvantModif) S.agendaSemainesAvantModif={};
-  S.agendaSemainesAvantModif[agid]=JSON.parse(JSON.stringify(ag.semaines||{}));
+  if(S.agendaSemainesAvantModif[agid]===undefined) S.agendaSemainesAvantModif[agid]=JSON.parse(JSON.stringify(ag.semaines||{}));
   // Cacher le calendrier lecture seule
   const calDiv=document.getElementById('cal-'+agid);
   if(calDiv)calDiv.style.display='none';
@@ -18808,6 +18815,7 @@ function validerModifAgenda(cid,agid){
   // avenant, jusqu'à l'actualisation de la page).
   const statutsDerives=[null,undefined,'','prevu','non-prevu','repos','ferie','ferie-non','a-selectionner','hors-contrat',
     'conges-acq','conges-anticipe','conges-non','conges-am','conges-6j','conges-6j-fin','decompte-acq','decompte-anticipe','decompte-conges'];
+  let nbArretOffVal=0; // jours d'arret retires des semaines devenues « absence employeur » — annonces a la fin
   Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
     if(fiche.valide) return;
     if(key<agDebutStr||key>agFinStr) return;
@@ -18820,7 +18828,12 @@ function validerModifAgenda(cid,agid){
     joursTouches.forEach(j=>{
       const n=neuve.jours.find(x=>x.date===j.date); if(!n) return;
       j.heureDebPrev=n.heureDebPrev; j.heureFinPrev=n.heureFinPrev; j.planVarPrevu=n.planVarPrevu; j._jourPossible=n._jourPossible;
-      if(statutsDerives.includes(j.statut)) j.statut=n.statut;
+      // 03/10/2026 (Sophie) : une semaine devenue ABSENCE EMPLOYEUR ne doit plus porter d'arret de travail —
+      // aucun travail n'y est du, un arret n'y veut rien dire. Le jour revient au statut que la feuille lui
+      // donne normalement (non prevu, repos, ferie). Les pointages reels ne sont pas touches.
+      const estSemOffVal=((ag.semaines||{})[getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))])==='off';
+      if(estSemOffVal&&j.statut==='arret'){ j.statut=n.statut; delete j.arretPro; nbArretOffVal++; }
+      else if(statutsDerives.includes(j.statut)) j.statut=n.statut;
     });
     delete fiche._recapCache; delete fiche._recapCacheAvant; delete fiche._recapCacheApres;
   });
@@ -18828,6 +18841,10 @@ function validerModifAgenda(cid,agid){
   if(S.congesAM){
     Object.keys(S.congesAM).forEach(am=>{majFichesCgAm(parseInt(am),false);});
   }
+  // 03/10/2026 (Sophie) : l'App ne retire jamais un arrêt de travail sans le dire.
+  if(nbArretOffVal>0) alerte(nbArretOffVal===1
+    ?'Un jour était en arrêt de travail sur une semaine passée en absence employeur : il a été remis à zéro sur la feuille de présence, aucun travail n’étant dû cette semaine-là.'
+    :nbArretOffVal+' jours étaient en arrêt de travail sur des semaines passées en absence employeur : ils ont été remis à zéro sur la feuille de présence, aucun travail n’étant dû ces semaines-là.');
   // Sauvegarder via le debounce (inclut les fiches réinitialisées)
   _contratsModifies.add(c.id);
   saveToFirestore();
