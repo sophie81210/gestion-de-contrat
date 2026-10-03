@@ -683,6 +683,10 @@ input[type=time].fi{width:auto;min-width:92px}
 
     <div style="padding:14px 0 18px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
   <button class="btn bp" id="btn-val" onclick="valider()">Enregistrer</button>
+  <!-- 03/10/2026 (Sophie) : supprimer un brouillon d'avenant. Rien ne permettait de s'en debarrasser : il
+       restait dans la liste, decalait la numerotation des suivants, et sur un CDD il consommait un droit a
+       prolongation. Affiche uniquement en edition d'avenant (voir ouvrirFormulaireAvenant). -->
+  <button class="btn bd" id="btn-suppr-brouillon" style="display:none" onclick="if(S.enAvenant) annulerAvenant(S.enAvenant.cid,S.enAvenant.avid)">Supprimer ce brouillon</button>
   <button class="btn" id="btn-signe" style="display:none;background:#3a6b4a;color:#e8f5ee;border:none" onclick="if(confirm('Avez-vous enregistré les dernières modifications ? Le contrat sera verrouillé et ne pourra plus être modifié ensuite. Confirmer la signature ?')) signerContrat()">✓ Signer le contrat</button>
   <button class="btn bs" onclick="
   if(S.enAvenant){
@@ -2485,7 +2489,7 @@ return `<div style="text-align:right"><span id="${idK}-aff">${valK?valK+' €/km
   </tr>`).join('');
 
   // Boutons CDD
-  const nbProlongations=(c.avenants||[]).filter(av=>av.typeProlongation==='prolongation').length;
+  const nbProlongations=(c.avenants||[]).filter(av=>av.typeProlongation==='prolongation'&&av.signe).length; // 03/10/2026 (Sophie) : seules les prolongations SIGNEES comptent — ouvrir le formulaire ne doit pas consommer un droit
   const cddBoutonsHtml=c.typeDuree==='cdd'&&c.signe?`
     <div class="card" style="margin-top:10px">
       <div class="ctitle">Actions CDD</div>
@@ -17175,6 +17179,7 @@ function resetForm(){
   // 28/09/2026 (Sophie) : repas et kilomètres réaffichés pour un contrat (ils ne sont masqués qu'en avenant).
   {const fgR=document.getElementById('fg-repas');if(fgR)fgR.style.display='';const fgK=document.getElementById('fg-km');if(fgK)fgK.style.display='';}
   {const nC=document.getElementById('note-ind-contrat');if(nC)nC.style.display='';const nA=document.getElementById('note-ind-avenant');if(nA)nA.style.display='none';}
+  {const bSB2=document.getElementById('btn-suppr-brouillon');if(bSB2)bSB2.style.display='none';}
   S.typeDuree='cdi';S.cddMotif=null;S.cddTerme=null;
   document.querySelectorAll('.ro').forEach(r=>r.classList.remove('on'));
   document.querySelectorAll('.cond').forEach(c=>c.classList.remove('on'));
@@ -19408,10 +19413,10 @@ function validerAvenant(){
       }
     }
     const nouvelleDateFin=document.getElementById('f-cdd-prolongation-datefin')?.value;
-    if(nouvelleDateFin){
-      av.cddDateFin=nouvelleDateFin;
-      c.cddDateFin=nouvelleDateFin; // mettre à jour aussi le contrat principal
-    }
+    // 03/10/2026 (Sophie) : le brouillon n'ecrit plus la nouvelle date de fin sur le CONTRAT. Il le faisait des
+    // l'enregistrement, avant toute signature : le contrat de test affichait une fin au 31/12/2026 alors qu'aucun
+    // avenant n'etait signe. La date reste sur l'avenant, et c'est la signature qui la reporte sur le contrat.
+    if(nouvelleDateFin) av.cddDateFin=nouvelleDateFin;
   }
 
   const cidx=S.contrats.findIndex(x=>x.id==cid);
@@ -22854,7 +22859,25 @@ function annulerAvenant(cid, avid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c) return;
   const av=c.avenants&&c.avenants.find(a=>a.id===avid);
-  if(!av||!av.signe) return;
+  if(!av) return;
+  // 03/10/2026 (Sophie) : un avenant NON SIGNE peut desormais etre supprime. Rien ne permettait de se
+  // debarrasser d'un brouillon : il restait dans la liste, decalait la numerotation des suivants, et sur un CDD
+  // il consommait un droit a prolongation. Il n'a jamais rien produit, donc il part sans autre precaution.
+  if(!av.signe){
+    alerteChoix('Supprimer le brouillon d’avenant n°'+av.num+' ?<br><br>Il n’a pas été signé : rien de ce qu’il contient n’a servi aux calculs.',
+      'Supprimer',()=>{
+        c.avenants=(c.avenants||[]).filter(a=>a.id!==avid);
+        (c.avenants||[]).forEach((a,i)=>{ a.num=i+1; });
+        const cidxB=S.contrats.findIndex(x=>x.id==cid);
+        if(cidxB!==-1) S.contrats[cidxB]=c;
+        S.enAvenant=null;
+        enregistrerContrats([c.id],true);
+        toast('Brouillon d’avenant supprimé');
+        goTo('det');
+        if(typeof renderDet==='function') renderDet(c.id);
+      },'Garder',null);
+    return;
+  }
   // Vérifier qu'aucune fiche le concernant n'est validée
   const fichesValidees=Object.entries(c.fiches||{}).filter(([key,f])=>f.valide&&key>=av.dateAvenant.slice(0,7));
   if(fichesValidees.length>0){
@@ -22962,17 +22985,23 @@ function getDonneesActives(c){
 function ouvrirProlongationCDD(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c||c.typeDuree!=='cdd') return;
-  const nbProlongations=(c.avenants||[]).filter(av=>av.typeProlongation==='prolongation').length;
+  const nbProlongations=(c.avenants||[]).filter(av=>av.typeProlongation==='prolongation'&&av.signe).length; // 03/10/2026 (Sophie) : seules les prolongations SIGNEES comptent — ouvrir le formulaire ne doit pas consommer un droit
   if(nbProlongations>=2){toast('Maximum 2 prolongations atteint');return;}
   // Créer un avenant pré-configuré prolongation
   if(!c.avenants) c.avenants=[];
+  // 03/10/2026 (Sophie) : rouvrir le formulaire ne cree plus un nouvel avenant. Chaque ouverture en ajoutait un,
+  // et la numerotation grimpait sans raison (Sophie voyait « avenant n°2 » sur un contrat qui n'en avait aucun).
+  // Un brouillon de prolongation non signe est repris tel quel.
+  {
+  }
+  const brouillonPro=(c.avenants||[]).find(a=>a&&!a.signe&&a.typeProlongation==='prolongation');
   // 29/09/2026 (Sophie, audit) : conditions reprises de la version EN VIGUEUR (dernier avenant signé et
   // effectif), plus du contrat d'origine. Un CDD déjà modifié par un avenant — une hausse de taux, par
   // exemple — repartait autrement des conditions initiales sans que rien ne le signale.
   const srcAv=getVersionActive(c,new Date())||c;
   const vAv=k=>(srcAv[k]!==undefined&&srcAv[k]!==null)?srcAv[k]:c[k];
-  const avid=Date.now();
-  const av={id:avid,num:(c.avenants.length+1),dateAvenant:'',typeProlongation:'prolongation',
+  const avid=brouillonPro?brouillonPro.id:Date.now();
+  const av=brouillonPro||{id:avid,num:(c.avenants.length+1),dateAvenant:'',typeProlongation:'prolongation',
     tc:vAv('tc'),th:vAv('th'),planType:vAv('planType'),txBrut:vAv('txBrut'),txNet:vAv('txNet'),
     majComp:vAv('majComp'),majSup:vAv('majSup'),majRepos:vAv('majRepos'),majFerie:vAv('majFerie'),maj1erMai:vAv('maj1erMai'),
     hMensu:vAv('hMensu'),hMensuMaj:vAv('hMensuMaj'),hMensuNorm:vAv('hMensuNorm'),nbSem:vAv('nbSem'),
@@ -22982,7 +23011,7 @@ function ouvrirProlongationCDD(cid){
     feriesTravailles:vAv('feriesTravailles'),cgAnticipe:vAv('cgAnticipe'),dateCg:vAv('dateCg'),
     indemType:vAv('indemType'),indemMontant:vAv('indemMontant'),indemPer:vAv('indemPer'),repas:vAv('repas'),km:vAv('km'),
     signe:false};
-  c.avenants.push(av);
+  if(!brouillonPro) c.avenants.push(av);
   const cidx=S.contrats.findIndex(x=>x.id==cid);
   if(cidx!==-1) S.contrats[cidx]=c;
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
@@ -23105,6 +23134,7 @@ function remplirFormulaireAvenant(c,av,d){
     {const fgRA=document.getElementById('fg-repas');if(fgRA)fgRA.style.display='none';}
     {const fgKA=document.getElementById('fg-km');if(fgKA)fgKA.style.display='none';}
     {const nCA=document.getElementById('note-ind-contrat');if(nCA)nCA.style.display='none';const nAA=document.getElementById('note-ind-avenant');if(nAA)nAA.style.display='';}
+    {const bSB=document.getElementById('btn-suppr-brouillon');if(bSB)bSB.style.display='';}
     // 30/09/2026 (Sophie) : date d'effet rendue à la saisie libre — seule une prolongation de CDD la verrouille,
     // juste après cette ouverture, et le verrou ne doit pas rester sur l'avenant ordinaire suivant.
     {
@@ -23517,7 +23547,10 @@ function signerAvenant(){
     return;
   }
   // 13/09/2026 (Sophie) : pas de date d'effet sur le jour de repos hebdomadaire, comme pour le début du contrat.
-  if(parseDateLoc(av.dateAvenant).getDay()===(av.reposHebdo??c.reposHebdo??0)){
+  // 03/10/2026 (Sophie) : sauf pour une PROLONGATION de CDD, dont la date d'effet est imposee au lendemain du
+  // terme — il n'y a aucun choix a faire, et refuser bloquerait toute prolongation d'un CDD finissant la veille
+  // du jour de repos.
+  if(av.typeProlongation!=='prolongation'&&parseDateLoc(av.dateAvenant).getDay()===(av.reposHebdo??c.reposHebdo??0)){
     const lendemainAv=parseDateLoc(av.dateAvenant); lendemainAv.setDate(lendemainAv.getDate()+1);
     alerte('La date d’effet du '+dateISOversTexte(av.dateAvenant)+' tombe sur le jour de repos hebdomadaire.<br><br>Choisissez le premier jour d’accueil, par exemple le '+dateISOversTexte(dateToStr(lendemainAv))+'.');
     return;
@@ -23651,6 +23684,9 @@ function signerAvenant(){
 
   // Signer
   av.signe=true;
+  // 03/10/2026 (Sophie) : c'est la SIGNATURE qui reporte le nouveau terme sur le contrat. Le brouillon ne le
+  // fait plus : il l'ecrivait des l'enregistrement, avant toute signature.
+  if(av.typeProlongation==='prolongation'&&av.cddDateFin) c.cddDateFin=av.cddDateFin;
   if(sansCoupureSC) av.sansCoupure=true; else delete av.sansCoupure;
   if(!sansCoupureSC&&!avenantChangeStructure(versionVeilleSC,av,true)) av.agendaConserve=true; else delete av.agendaConserve;
   av.dateSigne=new Date().toISOString().slice(0,10);
