@@ -2379,7 +2379,6 @@ function buildFicheContenu(source, c){
       ['Terme', cddTermeL],
       ...(c.cddTerme==='precis'?[['Date de fin', cddDateFinL]]:
          c.cddTerme==='imprecis'?[['Date minimale', cddDateMinL]]:[]),
-      ...(c.cddMotif==='attente'&&c.dateDeb?[['Date limite (9 mois)', (()=>{const d=new Date(c.dateDeb);d.setMonth(d.getMonth()+9);return d.toLocaleDateString('fr-FR');})()]]:[] ),
     ]:[]),
     ['Date de début',c.dateDeb?new Date(c.dateDeb).toLocaleDateString('fr-FR'):'—'],
     ...(c.fratrieAccueilli&&c.fratrieDateDeb?[['Enfant de la même famille accueilli depuis',new Date(c.fratrieDateDeb).toLocaleDateString('fr-FR')]]:[]),
@@ -16829,7 +16828,6 @@ function modif(id){
     // Charger CDI/CDD
     if(c.typeDuree==='cdd'){
       selTypeDuree('cdd');
-      if(c.cddMotif) selCDDMotif(c.cddMotif);
       if(c.cddTerme) selCDDTerme(c.cddTerme);
       if(c.cddDateFin) sv('f-cdd-datefin',c.cddDateFin);
       if(c.cddDateMin) sv('f-cdd-datemin',c.cddDateMin);
@@ -17246,7 +17244,6 @@ function resetForm(){
   document.getElementById('essai-cdi-wrap').style.display='flex';
   document.getElementById('essai-cdd-wrap').style.display='none';
   document.getElementById('ro-occ').style.display='';
-  document.getElementById('cdd-date-max-info')?.style.setProperty('display','none');
   document.getElementById('btn-val').textContent='Valider et enregistrer';
 }
 
@@ -17351,17 +17348,13 @@ function selTypeDuree(v){
   calcCDD();
 }
 
-function selCDDMotif(v){
-  S.cddMotif=v;
-  document.getElementById('ro-cdd-rem').classList.toggle('on',v==='remplacement');
-  document.getElementById('ro-cdd-att').classList.toggle('on',v==='attente');
-  // Cocher le bon radio
-  const rem=document.querySelector('#ro-cdd-rem input[type="radio"]');
-  const att=document.querySelector('#ro-cdd-att input[type="radio"]');
-  if(rem) rem.checked=v==='remplacement';
-  if(att) att.checked=v==='attente';
-  calcCDD();
-}
+// 03/10/2026 (Sophie) : selCDDMotif retiree. Le choix du motif du CDD a ete supprime du formulaire — le
+// motif « attente de place » n'est pas autorise (jurisprudence) — mais la fonction qui cochait ses boutons
+// est restee, et elle les cherchait sans verifier qu'ils existent. Le chargement d'un contrat l'appelait des
+// qu'un motif etait enregistre : erreur « Cannot read properties of null », sans filet autour, donc tout ce
+// qui vient apres dans modif() n'etait jamais rempli — terme, dates, horaires, taux, conges, indemnites.
+// Constate sur un contrat portant encore cddMotif:'remplacement'. La limite de 9 mois qui en dependait est
+// retiree avec elle.
 
 function selCDDTerme(v){
   S.cddTerme=v;
@@ -17380,29 +17373,12 @@ function selCDDTerme(v){
 function calcCDD(){
   if(S.typeDuree!=='cdd') return;
   const dateDeb=document.getElementById('f-datedeb')?.value;
-  const motif=S.cddMotif;
   const terme=S.cddTerme;
 
-  // Date max pour "attente de place" (9 mois)
-  const infoMax=document.getElementById('cdd-date-max-info');
-  const valMax=document.getElementById('cdd-date-max-val');
-  if(motif==='attente'&&dateDeb&&infoMax&&valMax){
-    const d=new Date(dateDeb);
-    d.setMonth(d.getMonth()+9);
-    valMax.textContent=d.toLocaleDateString('fr-FR');
-    infoMax.style.display='block';
-    // Limiter la date de fin à 9 mois
-    const maxStr=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-    const finEl=document.getElementById('f-cdd-datefin');
-    if(finEl) finEl.max=maxStr;
-    const minEl=document.getElementById('f-cdd-datemin');
-    if(minEl) minEl.max=maxStr;
-  } else if(infoMax){
-    infoMax.style.display='none';
-    const finEl=document.getElementById('f-cdd-datefin');
-    if(finEl) finEl.removeAttribute('max');
-    const minEl=document.getElementById('f-cdd-datemin');
-    if(minEl) minEl.removeAttribute('max');
+  // 03/10/2026 (Sophie) : limite de 9 mois retiree avec le motif « attente de place ».
+  {
+    const finEl=document.getElementById('f-cdd-datefin'); if(finEl) finEl.removeAttribute('max');
+    const minEl=document.getElementById('f-cdd-datemin'); if(minEl) minEl.removeAttribute('max');
   }
 
   // Calcul période d'essai CDD → afficher le max dans le champ
@@ -23126,11 +23102,12 @@ function ouvrirProlongationCDD(cid){
       const fg=document.createElement('div');
       fg.className='fg';fg.id='fg-cdd-prolongation';
       const dateCourante=c.cddDateFin||c.cddDateMin||'';
-      const dateMax=c.cddMotif==='attente'?(()=>{const d=new Date(c.dateDeb);d.setMonth(d.getMonth()+9);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');})():'';
+      // 03/10/2026 (Sophie) : plus de limite de 9 mois — le motif « attente de place » a ete retire.
+      const dateMax='';
       fg.innerHTML=`<label class="fl">Nouvelle date de fin (prolongation)</label>
         <div style="font-size:12px;color:var(--tx2);margin-bottom:4px">Date actuelle : ${dateCourante?new Date(dateCourante).toLocaleDateString('fr-FR'):'—'}</div>
         <input class="fi" type="date" id="f-cdd-prolongation-datefin" value="${av.cddDateFin||''}" ${dateMax?'max="'+dateMax+'"':''}>
-        ${c.cddMotif==='attente'?'<div class="ibox" style="margin-top:4px">Limite 9 mois : '+new Date(dateMax).toLocaleDateString('fr-FR')+'</div>':'' }`;
+`;
       // 03/10/2026 (Sophie) : place DANS la carte, juste sous la date d'effet. Le champ s'affichait en dehors,
       // entre deux cartes, sans encadrement.
       const dateAvEl=document.getElementById('f-dateavenant');
