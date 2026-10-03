@@ -17262,6 +17262,27 @@ function resetForm(){
 }
 
 // ══ SELECTORS ══
+// 03/10/2026 (Sophie) : la duree d'un CDD a terme precis ne peut exceder 18 MOIS, prolongations comprises
+// (code du travail, L1242-8-1). Les exceptions legales — 9 mois pour l'attente d'un salarie recrute en CDI ou
+// les travaux urgents de securite, 24 mois pour l'etranger, la suppression d'un poste ou une commande a
+// l'exportation — ne peuvent jouer chez un particulier employeur, et la convention collective ne dit rien sur
+// la duree des CDD (son article 62 renvoie au droit commun). Un contrat de 18 mois commence le 1er janvier
+// s'acheve le 30 juin de l'annee suivante : la date de fin maximale est donc le debut plus 18 mois, moins un
+// jour. Renvoie cette date (AAAA-MM-JJ), ou null si la question ne se pose pas.
+function dateMaxCDD(dateDeb){
+  if(!dateDeb) return null;
+  const dM=parseDateLoc(dateDeb);
+  dM.setMonth(dM.getMonth()+18);
+  dM.setDate(dM.getDate()-1);
+  return dateToStr(dM);
+}
+function messageDureeCDD(dateDeb,dateFin){
+  const maxD=dateMaxCDD(dateDeb);
+  if(!maxD||!dateFin||dateFin<=maxD) return null;
+  return 'La durée d’un CDD ne peut excéder 18 mois prolongations incluses, date de fin le '
+    +new Date(maxD).toLocaleDateString('fr-FR')+' au plus tard';
+}
+
 function validerDateCDD(id){
   const el=document.getElementById(id);
   if(!el||!el.value) return;
@@ -19152,6 +19173,11 @@ setTimeout(()=>document.getElementById('btn-val').disabled=false, 2000);
   const dateDeb=document.getElementById('f-datedeb').value;
   if(!dateDeb){toast('Veuillez saisir une date de début');return;}
   if(!controlerReposCommun()) return;
+  // 03/10/2026 (Sophie) : plafond de 18 mois du CDD a terme precis.
+  if(S.typeDuree==='cdd'&&S.cddTerme==='precis'){
+    const msgD=messageDureeCDD(dateDeb,document.getElementById('f-cdd-datefin')?.value||'');
+    if(msgD){ alerte(msgD); return; }
+  }
   if(document.getElementById('f-fratrie')?.checked){
     const dFrat=document.getElementById('f-fratrie-datedeb')?.value;
     if(!dFrat){alerte('Précisez la date de début du contrat de l\u2019enfant de la même famille.');return;}
@@ -19481,6 +19507,12 @@ function validerAvenant(){
     // 03/10/2026 (Sophie) : le brouillon n'ecrit plus la nouvelle date de fin sur le CONTRAT. Il le faisait des
     // l'enregistrement, avant toute signature : le contrat de test affichait une fin au 31/12/2026 alors qu'aucun
     // avenant n'etait signe. La date reste sur l'avenant, et c'est la signature qui la reporte sur le contrat.
+    // 03/10/2026 (Sophie) : le plafond de 18 mois se compte depuis le debut du CONTRAT, prolongations
+    // comprises — c'est ce que dit la loi (renouvellements compris).
+    {
+      const msgDP=messageDureeCDD(c.dateDeb,nouvelleDateFin||'');
+      if(msgDP){ alerte(msgDP); return; }
+    }
     if(nouvelleDateFin) av.cddDateFin=nouvelleDateFin;
   }
 
@@ -22714,6 +22746,11 @@ async function signerContrat(){
   if(c.dateDeb){
     const anneeDebC=parseInt(c.dateDeb.split('-')[0]);
     if(anneeDebC<2000||anneeDebC>2100) manquants.push("date de début : année invalide ("+anneeDebC+")");
+  }
+  // 03/10/2026 (Sophie) : plafond de 18 mois du CDD a terme precis, meme controle qu'a l'enregistrement.
+  if(c.typeDuree==='cdd'&&c.cddTerme==='precis'){
+    const msgDS=messageDureeCDD(c.dateDeb,c.cddDateFin||'');
+    if(msgDS){ alerte(msgDS); return; }
   }
   // 11/08/2026 (Sophie) : garde-fou — pas de signature possible si la date de début tombe sur un
   // jour posé congés dans le calendrier AM.
