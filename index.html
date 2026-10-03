@@ -3991,7 +3991,8 @@ function renderDetTab(id,tab){
           const avActif=avsEffectifs2[avsEffectifs2.length-1];
           const aDejaServiActif=Object.entries(c.fiches||{}).some(([key,f])=>f.valide&&key>=avActif.dateAvenant.slice(0,7));
           if(aDejaServiActif) return '';
-          return `<button class="btn bs" onclick="annulerAvenant(${c.id},${avActif.id})">Annuler l'avenant n°${avActif.num}</button>`;
+          // 03/10/2026 (Sophie) : une prolongation de CDD est nommée comme telle sur le bouton.
+          return `<button class="btn bs" onclick="annulerAvenant(${c.id},${avActif.id})">Annuler ${avActif.typeProlongation==='prolongation'?'la prolongation':'l\'avenant'} n°${avActif.num}</button>`;
         })()}
         <span style="display:inline-flex;align-items:center;gap:5px;padding:8px 14px;background:#e8f5ee;color:#3a6b4a;border-radius:20px;font-size:13px;font-weight:600">✓ Signé</span>`
       :`<button class="btn bp" onclick="modif(${c.id})">Modifier</button>`)}
@@ -4084,7 +4085,7 @@ function voirAvenant(cid,avid){
       <span style="font-weight:700;font-size:15px;color:#C97B5C">Avenant n°${av.num}</span>
       <span style="font-size:12px;color:#C97B5C;font-weight:600">✓ Signé — effectif le ${new Date(av.dateAvenant).toLocaleDateString('fr-FR')}</span>
       ${av.sansCoupure?`<span style="font-size:12px;color:var(--tx2)">Sans coupure : ni la mensualisation ni l'organisation du travail ne changent, le mois n'est pas coupé et l'agenda en cours continue</span>`:''}
-      ${aDejaServi?'':`<button class="btn bd bsm" style="margin-left:auto" onclick="annulerAvenant(${cid},${avid})">Annuler cet avenant</button>`}
+      ${aDejaServi?'':`<button class="btn bd bsm" style="margin-left:auto" onclick="annulerAvenant(${cid},${avid})">Annuler ${av.typeProlongation==='prolongation'?'cette prolongation':'cet avenant'}</button>`}
     </div>
     ${buildFicheContenu(av,c)}
     ${av.agendas&&av.agendas.length?`
@@ -22903,7 +22904,20 @@ function annulerAvenant(cid, avid){
     alerte('Impossible d\'annuler cet avenant : des feuilles de présence sont déjà validées pour la période concernée ('+fichesValidees[0][0]+' et suivants).');
     return;
   }
-  if(!confirm('Annuler l\'avenant n°'+av.num+' du '+new Date(av.dateAvenant).toLocaleDateString('fr-FR')+' ?\n\nCette action est irréversible.')) return;
+  // 03/10/2026 (Sophie) : annuler une PROLONGATION de CDD doit rendre son terme au contrat. Le terme d'avant
+  // est memorise sur l'avenant depuis la signature ; pour une prolongation signee avant cette regle, on
+  // retombe sur le terme de la prolongation precedente, et a defaut on le dit au lieu de deviner.
+  const estProAnn=av.typeProlongation==='prolongation';
+  let termeRenduAnn=null;
+  if(estProAnn){
+    if(av._cddDateFinAvant) termeRenduAnn=av._cddDateFinAvant;
+    else {
+      const proAvantAnn=(c.avenants||[]).filter(a=>a&&a.signe&&a.typeProlongation==='prolongation'&&a.id!==avid&&a.cddDateFin&&a.dateAvenant&&a.dateAvenant<av.dateAvenant)
+        .sort((x,y)=>x.dateAvenant.localeCompare(y.dateAvenant)).pop();
+      if(proAvantAnn) termeRenduAnn=proAvantAnn.cddDateFin;
+    }
+  }
+  const procederAnn=()=>{
   // 07/09/2026 (Sophie, note n° 7) : l'annulation retirait l'avenant sans rien nettoyer derrière lui.
   // Les jours saisis sous ses règles restaient sur les feuilles postérieures — y compris sur des jours
   // qui ne sont pas prévus au contrat de base — et le planning gardait ses entrées, faisant apparaître
@@ -22939,12 +22953,25 @@ function annulerAvenant(cid, avid){
     actuel.semaines=actuel.semaines||{};
     Object.entries(agAvant.semaines||{}).forEach(([k,v])=>{ if(actuel.semaines[k]===undefined) actuel.semaines[k]=v; });
   });
+  if(estProAnn&&termeRenduAnn) c.cddDateFin=termeRenduAnn;
   c.avenants=c.avenants.filter(a=>a.id!==avid);
   c._regulDirty=true;
   _contratsModifies.add(c.id);
   saveToFirestore();
   renderDetTab(cid,'contrat');
-  toast('Avenant annulé ✓');
+  toast(estProAnn?'Prolongation annulée ✓':'Avenant annulé ✓');
+  };
+  if(estProAnn){
+    alerteChoix('Annuler la prolongation n°'+av.num+' du '+new Date(av.dateAvenant).toLocaleDateString('fr-FR')+' ?<br><br>'
+      +(termeRenduAnn
+        ?'Le terme du contrat revient au <b>'+new Date(termeRenduAnn).toLocaleDateString('fr-FR')+'</b>.'
+        :'Le terme d’avant cette prolongation n’a pas été mémorisé : il restera au '+(c.cddDateFin?new Date(c.cddDateFin).toLocaleDateString('fr-FR'):'—')+', à corriger à la main dans le contrat.')
+      +'<br><br>Cette action est irréversible.',
+      'Annuler la prolongation',procederAnn,'Garder',null);
+    return;
+  }
+  if(!confirm('Annuler l\'avenant n°'+av.num+' du '+new Date(av.dateAvenant).toLocaleDateString('fr-FR')+' ?\n\nCette action est irréversible.')) return;
+  procederAnn();
 }
 
 function creerAvenant(id){
@@ -23056,12 +23083,18 @@ function ouvrirProlongationCDD(cid){
       const dateMax=c.cddMotif==='attente'?(()=>{const d=new Date(c.dateDeb);d.setMonth(d.getMonth()+9);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');})():'';
       fg.innerHTML=`<label class="fl">Nouvelle date de fin (prolongation)</label>
         <div style="font-size:12px;color:var(--tx2);margin-bottom:4px">Date actuelle : ${dateCourante?new Date(dateCourante).toLocaleDateString('fr-FR'):'—'}</div>
-        <input class="fi" type="date" id="f-cdd-prolongation-datefin" ${dateMax?'max="'+dateMax+'"':''}">
+        <input class="fi" type="date" id="f-cdd-prolongation-datefin" value="${av.cddDateFin||''}" ${dateMax?'max="'+dateMax+'"':''}>
         ${c.cddMotif==='attente'?'<div class="ibox" style="margin-top:4px">Limite 9 mois : '+new Date(dateMax).toLocaleDateString('fr-FR')+'</div>':'' }`;
       // 03/10/2026 (Sophie) : place DANS la carte, juste sous la date d'effet. Le champ s'affichait en dehors,
       // entre deux cartes, sans encadrement.
       const dateAvEl=document.getElementById('f-dateavenant');
       if(dateAvEl) dateAvEl.parentElement.after(fg);
+    } else {
+      // 03/10/2026 (Sophie) : rouvrir un brouillon reaffiche la date deja saisie. Le champ revenait VIDE alors
+      // que la date etait bien enregistree sur l'avenant : impossible de verifier ce que le brouillon contient
+      // sans la retaper, et un enregistrement fait sans la retaper l'ecrasait par du vide.
+      const elProEx=document.getElementById('f-cdd-prolongation-datefin');
+      if(elProEx) elProEx.value=av.cddDateFin||'';
     }
     // 30/09/2026 (Sophie) : une prolongation de CDD ne peut commencer qu'au LENDEMAIN du terme en cours — sinon
     // il y aurait un trou ou un chevauchement entre les deux périodes. La date d'effet n'est donc plus à saisir :
@@ -23718,7 +23751,13 @@ function signerAvenant(){
   av.signe=true;
   // 03/10/2026 (Sophie) : c'est la SIGNATURE qui reporte le nouveau terme sur le contrat. Le brouillon ne le
   // fait plus : il l'ecrivait des l'enregistrement, avant toute signature.
-  if(av.typeProlongation==='prolongation'&&av.cddDateFin) c.cddDateFin=av.cddDateFin;
+  // 03/10/2026 (Sophie) : le terme d'avant est garde sur l'avenant, pour que son annulation le rende au
+  // contrat. Sans cette memoire, annuler une prolongation retirait l'avenant mais laissait le terme allonge :
+  // le contrat restait prolonge sans qu'aucun avenant ne le justifie, et le compteur repassait a 0/2.
+  if(av.typeProlongation==='prolongation'&&av.cddDateFin){
+    if(av._cddDateFinAvant===undefined) av._cddDateFinAvant=c.cddDateFin||null;
+    c.cddDateFin=av.cddDateFin;
+  }
   if(sansCoupureSC) av.sansCoupure=true; else delete av.sansCoupure;
   if(!sansCoupureSC&&!avenantChangeStructure(versionVeilleSC,av,true)) av.agendaConserve=true; else delete av.agendaConserve;
   av.dateSigne=new Date().toISOString().slice(0,10);
