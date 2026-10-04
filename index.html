@@ -53,12 +53,33 @@ window.fbSaveData = async(uid,data)=>{
       }
     }
   };
+  // 04/10/2026 (Sophie, plan de tests ligne 115) : deux appareils ouverts sur le meme compte ne se voyaient
+  // pas. Chacun chargeait les donnees une fois au demarrage et renvoyait ensuite son propre etat : le dernier
+  // qui enregistrait ecrasait l'autre, sans un mot. Cas vecu : pointage sur le telephone, puis une pose de
+  // conges modifiee sur le PC reste ouvert, et le pointage perdu.
+  // Regle retenue par Sophie : REFUSER l'ecriture et demander un rechargement des qu'une autre session a
+  // ecrit depuis le chargement de cette page. Rien n'est fusionne, donc rien ne peut etre ecrase de travers ;
+  // au pire la saisie en cours sur la page perimee est a refaire, et le refus arrive des la premiere
+  // modification, pas a la fin de la seance.
+  // La marque est la date de derniere ecriture deja portee par le document meta. Si sa RELECTURE echoue
+  // (reseau coupe), l'ecriture part quand meme : une coupure ne doit pas bloquer le travail.
   try{
+    if(window._marqueCompte){
+      let marqueServeur=null, lectureOk=false;
+      try{
+        const snapM=await getDoc(doc(db,'users',uid,'app','meta'));
+        marqueServeur=snapM.exists()?(snapM.data().updatedAt||null):null;
+        lectureOk=true;
+      }catch(e){ lectureOk=false; }
+      if(lectureOk&&marqueServeur&&marqueServeur!==window._marqueCompte) return{ok:false,conflit:true};
+    }
+    const marqueNeuve=new Date().toISOString();
     await ecrireAvecReprise(doc(db,'users',uid,'app','meta'),{
       params:data.params||{},
       congesAM:data.congesAM||{},
-      updatedAt:new Date().toISOString()
+      updatedAt:marqueNeuve
     });
+    window._marqueCompte=marqueNeuve;
     for(const c of (data.contrats||[])){
       await ecrireAvecReprise(doc(db,'users',uid,'contrats',String(c.id)),c);
     }
@@ -129,7 +150,8 @@ window.fbLoadData = async(uid)=>{
     return{ok:true,data:{
       contrats,
       params:meta.params||{},
-      congesAM:meta.congesAM||{}
+      congesAM:meta.congesAM||{},
+      marque:meta.updatedAt||null
     }};
   }catch(e){return{ok:false,err:e.message};}
 };
@@ -1334,6 +1356,7 @@ async function saveToFirestoreSync(){
   // la suppression du contrat comme à celle de son compte (constaté par Sophie sur la base : des
   // documents orphelins contenant un seul contrat). Les trois fonctions d'envoi sont fermées ici.
   if(estLectureSeuleEmployeur()) return;
+  if(_ecritureBloquee) return {ok:false,conflit:true};
   if(_contratsModifies.size===0) return {ok:true}; // rien à sauvegarder
   const contratsCompresses=getContratsCompresses();
   const contratsClean=contratsCompresses.filter(c=>_contratsModifies.has(c.id));
@@ -1348,10 +1371,23 @@ async function saveToFirestoreSync(){
 
 let _saveTimer=null;
 let _saveEnCours=false; // écriture Firestore en cours (fetch envoyée, réponse pas encore reçue)
+// 04/10/2026 (Sophie, ligne 115) : une autre session a ecrit depuis le chargement de cette page. Plus rien
+// n'est envoye depuis elle tant qu'elle n'a pas ete rechargee, et la fenetre ne s'affiche qu'une fois.
+let _ecritureBloquee=false;
+function signalerConflitSession(){
+  if(_ecritureBloquee) return;
+  _ecritureBloquee=true;
+  if(_saveTimer){ clearTimeout(_saveTimer); _saveTimer=null; }
+  alerteRechargement('Vos données ont été modifiées depuis un autre appareil ou un autre onglet.'
+    +'<br><br>Cette page travaille sur une version dépassée : ce que vous venez d’y saisir n’a pas été '
+    +'enregistré, et ne le sera pas.'
+    +'<br><br>Rechargez la page pour repartir des données à jour.');
+}
 const _contratsModifies=new Set(); // IDs des contrats modifiés depuis la dernière sauvegarde
 async function _flushSaveFirestore(){
   if(!window.FB_USER||!window.fbSaveData) return;
   if(estLectureSeuleEmployeur()) return; // voir la note de saveToFirestoreSync
+  if(_ecritureBloquee) return;
   _saveEnCours=true;
   let idsEnvoyesSave=[];
   try{
@@ -1370,6 +1406,7 @@ async function _flushSaveFirestore(){
     // 17/09/2026 (Sophie) : fbSaveData ne lève pas d'erreur, il renvoie {ok:false} — un échec (document trop gros,
     // réseau) passait inaperçu. Les contrats non écrits sont remis en file pour la prochaine sauvegarde.
     const resSave=await window.fbSaveData(window.FB_USER.uid, dataClean);
+    if(resSave&&resSave.conflit){ signalerConflitSession(); return; }
     if(!resSave||!resSave.ok) throw new Error((resSave&&resSave.err)||'écriture refusée');
   }catch(e){
     console.error('Save Firebase:',e);
@@ -1392,6 +1429,7 @@ function enregistrerContrats(ids, immediat){
 async function saveToFirestore(){
   if(!window.FB_USER||!window.fbSaveData) return;
   if(estLectureSeuleEmployeur()) return; // voir la note de saveToFirestoreSync
+  if(_ecritureBloquee) return;
   // Sauvegarder immédiatement dans localStorage
   localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
   // Debounce : attendre 2s d'inactivité avant d'écrire sur Firestore
@@ -1417,6 +1455,8 @@ async function loadFromFirestore(){
   try{
     const r=await window.fbLoadData(window.FB_USER.uid);
     if(r.ok&&r.data){
+      // 04/10/2026 (Sophie, ligne 115) : marque de derniere ecriture du compte, relue avant chaque envoi.
+      window._marqueCompte=r.data.marque||null;
       if(r.data.contrats){
         S.contrats=r.data.contrats;
         // 30/08/2026 (Sophie) : purge _dateFinContratCache au chargement — sauvegardé par erreur comme
@@ -26786,15 +26826,15 @@ function saveCongesAM(){
   // 14/09/2026 (Sophie, point 18) : ne marque plus TOUS les contrats à enregistrer — majFichesCgAm marque
   // lui-même ceux qu'il a réellement modifiés. Ici, seul le calendrier des congés est enregistré.
   localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM));
-  if(window.FB_USER&&window._fbModules){
-    const {doc,setDoc}=window._fbModules;
-    if(doc&&setDoc){
-      setDoc(doc(window.db,'users',window.FB_USER.uid,'app','meta'),{
-        params:S.params||{},
-        congesAM:S.congesAM,
-        updatedAt:new Date().toISOString()
-      }).catch(e=>console.error('Save cgam:',e));
-    }
+  // 04/10/2026 (Sophie, ligne 115) : ce chemin ecrit le document meta DIRECTEMENT, sans passer par
+  // fbSaveData. Il doit donc respecter les memes regles : ne rien envoyer depuis une page perimee, et
+  // surtout mettre a jour la marque du compte — sinon la session se verrait elle-meme en conflit a
+  // l'enregistrement suivant.
+  if(_ecritureBloquee) return;
+  if(window.FB_USER&&window.fbSaveData){
+    window.fbSaveData(window.FB_USER.uid,{params:S.params||{},congesAM:S.congesAM,contrats:[]})
+      .then(r=>{ if(r&&r.conflit) signalerConflitSession(); })
+      .catch(e=>console.error('Save cgam:',e));
   }
 }
 
@@ -27007,6 +27047,23 @@ function alerte(msg,libelleBouton){
 // 28/09/2026 (Sophie) : fenêtre centrée à deux boutons, pour les messages qui posent une question au lieu
 // d'informer — les dernières fenêtres natives du navigateur en dépendaient. Fermer la fenêtre en touchant le
 // fond revient à refuser.
+// 04/10/2026 (Sophie) : fenetre du conflit de sessions. Un seul bouton, et il recharge — « plus tard est
+// inutile, il faut que l'utilisateur voie les donnees a jour ». Elle ne se ferme pas en touchant le fond :
+// tant que la page n'est pas rechargee, plus rien ne peut etre enregistre depuis elle.
+function alerteRechargement(msg){
+  const existantR=document.getElementById('alerte-overlay');
+  if(existantR) existantR.remove();
+  const ovR=document.createElement('div');
+  ovR.id='alerte-overlay';
+  ovR.className='alerte-overlay';
+  ovR.innerHTML=`<div class="alerte-box">
+    <div style="font-size:22px;margin-bottom:10px">⚠</div>
+    <div>${msg}</div>
+    <button class="alerte-btn" onclick="location.reload()">Recharger la page</button>
+  </div>`;
+  document.body.appendChild(ovR);
+}
+
 function alerteChoix(msg,libelleOui,siOui,libelleNon,siNon){
   const existing=document.getElementById('alerte-overlay');
   if(existing) existing.remove();
