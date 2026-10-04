@@ -1366,7 +1366,16 @@ async function saveToFirestoreSync(){
     params:S.params||{},
     congesAM:S.congesAM||{}
   }));
-  return await window.fbSaveData(window.FB_USER.uid, data);
+  // 04/10/2026 (Sophie) : le refus pour conflit de sessions est signale ICI, pas par chaque appelant — le
+  // premier essai a deux appareils a affiche « Erreur Firestore — donnees peut-etre trop volumineuses »,
+  // le message generique de l'enregistrement d'une feuille, et la fenetre de rechargement n'est jamais venue.
+  // Les contrats refuses restent en file : ils ne doivent pas etre perdus si l'ecriture repart.
+  const resSync=await window.fbSaveData(window.FB_USER.uid, data);
+  if(resSync&&resSync.conflit){
+    contratsClean.forEach(c=>_contratsModifies.add(c.id));
+    signalerConflitSession();
+  }
+  return resSync;
 }
 
 let _saveTimer=null;
@@ -8522,6 +8531,9 @@ function enregistrerFiche(contratId,key){
     showLoader('Enregistrement en cours...');
     saveToFirestoreSync().then((r)=>{
       hideLoader();
+      // 04/10/2026 (Sophie) : un refus pour conflit de sessions a deja ouvert sa propre fenetre — ne pas
+      // l'annoncer comme une erreur de taille.
+      if(r&&r.conflit) return;
       if(r&&r.ok===false){
         toast('⚠ Erreur Firestore — données peut-être trop volumineuses');
         return;
