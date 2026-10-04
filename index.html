@@ -6399,6 +6399,53 @@ function imprimerRegulTotal(cid){
 }
 
 // ══ PLANNING (plan min/var) — coquille visuelle, pas encore branchée au calcul de paie ══
+// 04/10/2026 (Sophie) : reste-t-il des heures a placer au planning ? La question se pose par SEMAINE quand
+// les modifications de planning ne sont pas autorisees (les heures ne circulent pas d'une semaine a l'autre),
+// et par MOIS quand elles le sont. Sert a prevenir quand un jour est passe en « travaille » alors que le
+// volume mensualise n'est pas epuise : ce jour sera paye en heures complementaires, alors que ses heures
+// auraient pu venir du volume. Sophie : « avec les modifications de planning on ne sait pas vraiment d'ou
+// viennent les heures ». Plan minimum et variable uniquement. Renvoie des heures, 0 si rien ne reste.
+function heuresRestantesPlanning(c,dateStr){
+  if(!c||!dateStr) return 0;
+  const srcRP=getVersionActive(c,parseDateLoc(dateStr));
+  if(!(srcRP.th==='plan'&&(srcRP.planType==='min'||srcRP.planType==='var'))) return 0;
+  const moisRP=dateStr.slice(0,7);
+  const modifRP=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisRP]);
+  if(modifRP){
+    const [ayRP,amRP]=moisRP.split('-').map(Number);
+    let resteRP=0;
+    try{
+      (getPortionsEnveloppeMois(c,ayRP,amRP,null,true)||[]).filter(pRP=>pRP.estVarMin).forEach(pRP=>{
+        const plafondRP=(pRP.env&&typeof pRP.env.minutes==='number')?pRP.env.minutes:Infinity;
+        resteRP+=Math.max(0,Math.min(calcHPrevuReg(c,false,pRP.debut,pRP.fin)*60,plafondRP)-pRP.minReels)/60;
+      });
+    }catch(e){ return 0; }
+    return resteRP;
+  }
+  // Semaine : volume de la semaine moins ce qui y est pointe, compte comme le fait la tuile du planning.
+  const infosRP=getInfosJourPlanning(c,dateStr);
+  // Une semaine d'absence employeur, de conges ou entierement en arret n'attend aucune heure : son volume
+  // n'est pas « disponible ». Sans cette garde, le plan minimum lui comptait son volume entier (il renvoie
+  // hMin quel que soit l'etat de la semaine) et l'avertissement serait parti pour rien.
+  if(infosRP&&(infosRP.semaineOff||infosRP.semaineCongesAM)) return 0;
+  try{ if(semaineToutArretPlanning(c,dateStr)) return 0; }catch(e){}
+  const volRP=infosRP&&infosRP.volH||0;
+  if(!volRP) return 0;
+  const lundiRP=parseDateLoc(dateStr); lundiRP.setDate(lundiRP.getDate()-((lundiRP.getDay()+6)%7));
+  const dimRP=new Date(lundiRP); dimRP.setDate(lundiRP.getDate()+6);
+  const debRP=dateToStr(lundiRP), finRP=dateToStr(dimRP);
+  let pointeesRP=0;
+  Object.keys(c.planning||{}).forEach(dsRP=>{
+    if(dsRP<debRP||dsRP>finRP) return;
+    const pdRP=c.planning[dsRP];
+    if(!pdRP||!pdRP.coche) return;
+    const iRP=getInfosJourPlanning(c,dsRP);
+    if(!jourComptePlanning(c,dsRP,iRP)) return;
+    pointeesRP+=(pdRP.d&&pdRP.f)?(toM(pdRP.f)-toM(pdRP.d))/60:((iRP.volH||0)/(iRP.jMax||1));
+  });
+  return Math.max(0,volRP-pointeesRP);
+}
+
 function getInfosJourPlanning(c, dateStr){
   const d=new Date(dateStr);
   const src=getVersionActive(c, d);
@@ -10185,6 +10232,19 @@ function majFicheStatut(contratId,key,idx,val){
   if(statutsEffacerHeures.includes(val)){
     ficheSource.fiches[key].jours[idx].heureDebReel=null;
     ficheSource.fiches[key].jours[idx].heureFinReel=null;
+  }
+
+  // 04/10/2026 (Sophie) : un jour passe en TRAVAILLE est paye en heures complementaires. S'il reste des heures
+  // disponibles au planning, ces heures-la auraient pu venir du volume mensualise : l'App le dit. La question
+  // se pose par SEMAINE quand les modifications de planning ne sont pas autorisees, par MOIS quand elles le
+  // sont — Sophie : « avec les modifications de planning on ne sait pas vraiment d'ou viennent les heures ».
+  // Plan minimum et variable uniquement, et a chaque fois : c'est un choix qui se repose a chaque jour ajoute.
+  if(val==='travaille'&&!ficheSource.fiches[key].valide){
+    try{
+      const resteTR=heuresRestantesPlanning(c,ficheSource.fiches[key].jours[idx].date);
+      if(resteTR>0) setTimeout(()=>alerte('Un jour passé en « travaillé » est payé en heures complémentaires.'
+        +'<br><br>Pour utiliser en priorité les heures mensualisées, ajoutez-le au planning.'),300);
+    }catch(e){}
   }
 
   // 01/10/2026 (Sophie) : une semaine ENTIÈREMENT en arrêt n'offre plus ses heures à la saisie du planning
