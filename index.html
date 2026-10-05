@@ -26620,6 +26620,23 @@ function estJourPrevuFrac(c,dateStr){
   return false;
 }
 
+// 05/10/2026 (Sophie) : les autres contrats qu'un jour de fractionnement toucherait. Un contrat prevu ce
+// jour-la, et qui n'a rien de son cote, se voit deduire la journee en absence non remuneree (regle du
+// 04/09). Sortie du selecteur pour servir aussi au moment du clic : la bordure orange ne se voyait qu'au
+// SURVOL, donc jamais sur un telephone. Renvoie [{nom, moisValide}] — moisValide dit si la feuille de ce
+// mois est deja validee chez lui, auquel cas plus rien ne peut y changer.
+function contratsDeduitsParFractionnement(contratId,dateStr){
+  const moisDF=dateStr.slice(0,7);
+  return (S.contrats||[]).filter(x=>x.id!=contratId&&x.signe&&!estContratCloture(x)&&!estJourFractionnementChoisi(x,dateStr))
+    .filter(x=>{
+      const fDF=x.fiches&&x.fiches[moisDF];
+      const jDF=fDF&&(fDF.jours||[]).find(jj=>jj.date===dateStr);
+      if(!jDF) return false;
+      return (jDF.statut||getStatutPrevu(x,jDF))==='prevu';
+    })
+    .map(x=>({nom:x.nom||'',moisValide:!!(x.fiches&&x.fiches[moisDF]&&x.fiches[moisDF].valide)}));
+}
+
 function fracDateSelectionnable(c,anneeAcq,dateStr){
   // Vrai si dateStr peut être AJOUTÉ à la sélection (pas déjà choisi, quota pas atteint, règle 1er
   // jour prévu / 2e jour peut suivre directement le 1er même non prévu, hors repos/férié — 04/09/2026
@@ -26646,10 +26663,26 @@ function toggleFractionnementDate(contratId,anneeAcq,dateStr){
   if(!c.fractionnementDates[anneeAcq]) c.fractionnementDates[anneeAcq]=[];
   const datesFrac=c.fractionnementDates[anneeAcq];
   const idxFrac=datesFrac.indexOf(dateStr);
+  const ajout=idxFrac===-1;
+  if(ajout&&!fracDateSelectionnable(c,anneeAcq,dateStr)) return;
+  // 05/10/2026 (Sophie) : les autres contrats que ce jour touche. Une feuille VALIDEE chez l'un d'eux
+  // interdit le geste dans les deux sens : l'absence non remuneree n'est pas enregistree sur la feuille,
+  // elle est recalculee a chaque fois, donc une feuille figee ne la verra jamais apparaitre ni disparaitre
+  // et les deux contrats cesseraient d'etre coherents. Un jour choisi avant cette validation reste en
+  // place, simplement non retirable (decision de Sophie).
+  const concernesFR=contratsDeduitsParFractionnement(contratId,dateStr);
+  const bloquantsFR=concernesFR.filter(x=>x.moisValide);
+  if(bloquantsFR.length){
+    const nomsB=bloquantsFR.map(x=>x.nom).filter(Boolean);
+    alerte('La feuille de ce mois est déjà validée sur '+(nomsB.length?nomsB.join(', '):'un autre contrat')+'.'
+      +'<br><br>Ce jour lui est déduit en absence non rémunérée, et une feuille validée ne peut plus changer.'
+      +'<br><br>Déverrouillez sa feuille si vous devez modifier ce jour.');
+    return;
+  }
+  const appliquerFR=()=>{
   if(idxFrac!==-1){
     datesFrac.splice(idxFrac,1);
   } else {
-    if(!fracDateSelectionnable(c,anneeAcq,dateStr)) return;
     datesFrac.push(dateStr);
   }
   const cidxFrac=S.contrats.findIndex(x=>x.id==contratId);
@@ -26659,6 +26692,16 @@ function toggleFractionnementDate(contratId,anneeAcq,dateStr){
   document.querySelector('.modal-wrap')?.remove();
   ouvrirPickerFractionnement(contratId,anneeAcq);
   if(S.enCours==contratId) renderDetTab(contratId,'conges');
+  };
+  // 05/10/2026 (Sophie) : la bordure orange et l'infobulle ne se voyaient qu'au SURVOL — rien sur un
+  // telephone. Choisir un jour qui deduit une journee a un autre contrat demande desormais confirmation.
+  const nomsFR=concernesFR.map(x=>x.nom).filter(Boolean);
+  if(ajout&&nomsFR.length){
+    alerteChoix('Ce jour est prévu sur '+nomsFR.join(', ')+'.<br><br>Le choisir lui déduira cette journée, '
+      +'en absence non rémunérée.','Choisir ce jour',appliquerFR,'Annuler',null);
+    return;
+  }
+  appliquerFR();
 }
 
 function ouvrirPickerFractionnement(contratId,anneeAcq){
@@ -26691,16 +26734,7 @@ function ouvrirPickerFractionnement(contratId,anneeAcq){
   // absence non rémunérée (règle du 04/09, estJourAbsNonFractionnement). Le sélecteur le signale au lieu de
   // laisser croire que tous les jours se valent : bordure orange et nom du contrat concerné, sans jamais
   // empêcher le choix — quand les contrats partagent les mêmes jours, il n'existe parfois aucune date neutre.
-  const contratsDeduitsFrac=dateStr=>{
-    const moisKeyDF=dateStr.slice(0,7);
-    return S.contrats.filter(x=>x.id!=contratId&&x.signe&&!estContratCloture(x)&&!estJourFractionnementChoisi(x,dateStr))
-      .filter(x=>{
-        const fDF=x.fiches&&x.fiches[moisKeyDF];
-        const jDF=fDF&&(fDF.jours||[]).find(jj=>jj.date===dateStr);
-        if(!jDF) return false;
-        return (jDF.statut||getStatutPrevu(x,jDF))==='prevu';
-      }).map(x=>x.nom||'');
-  };
+  const contratsDeduitsFrac=dateStr=>contratsDeduitsParFractionnement(contratId,dateStr).map(x=>x.nom);
 
   let grilleMoisFrac='';
   moisListeFrac.forEach(({annee:aM,mois:mM})=>{
