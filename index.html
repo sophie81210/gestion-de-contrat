@@ -26734,7 +26734,7 @@ function ouvrirPickerFractionnement(contratId,anneeAcq){
   // absence non rémunérée (règle du 04/09, estJourAbsNonFractionnement). Le sélecteur le signale au lieu de
   // laisser croire que tous les jours se valent : bordure orange et nom du contrat concerné, sans jamais
   // empêcher le choix — quand les contrats partagent les mêmes jours, il n'existe parfois aucune date neutre.
-  const contratsDeduitsFrac=dateStr=>contratsDeduitsParFractionnement(contratId,dateStr).map(x=>x.nom);
+  const contratsDeduitsFrac=dateStr=>contratsDeduitsParFractionnement(contratId,dateStr);
 
   let grilleMoisFrac='';
   moisListeFrac.forEach(({annee:aM,mois:mM})=>{
@@ -26754,11 +26754,19 @@ function ouvrirPickerFractionnement(contratId,anneeAcq){
       const estCongeFrac=congesAmData.jours&&congesAmData.jours[dateStrFrac]==='pose';
       const estChoisiFrac=datesFracC.includes(dateStrFrac);
       const nomsAutresFrac=autresContratsFrac[dateStrFrac];
+      // 05/10/2026 (Sophie) : une feuille VALIDEE chez un contrat que ce jour deduirait interdit le
+      // geste. Le jour ne garde donc pas son cercle — il promettrait un clic refuse : grise comme un
+      // repos, mais le clic reste branche pour dire pourquoi. Un repos se devine tout seul, une
+      // feuille validee ailleurs non, et l'infobulle ne se voit pas sur un telephone.
+      const deduitsFrac=contratsDeduitsFrac(dateStrFrac);
+      const bloquesFrac=deduitsFrac.filter(x=>x.moisValide).map(x=>x.nom).filter(Boolean);
       let styleFrac,onclickFrac='',titreFrac='';
       if(estChoisiFrac){
-        styleFrac=`background:${eclaircir(BLEU_FRAC.bg,0.35)};color:${BLEU_FRAC.txt};border:1px solid ${BLEU_FRAC.brd};font-weight:700;cursor:pointer`;
+        styleFrac=`background:${eclaircir(BLEU_FRAC.bg,0.35)};color:${BLEU_FRAC.txt};border:1px solid ${BLEU_FRAC.brd};font-weight:700;cursor:${bloquesFrac.length?'default':'pointer'}`;
         onclickFrac=`onclick="toggleFractionnementDate(${contratId},${anneeAcq},'${dateStrFrac}')"`;
-        titreFrac='Choisi — cliquer pour retirer';
+        titreFrac=bloquesFrac.length
+          ?('Choisi — feuille déjà validée sur '+bloquesFrac.join(', ')+', ce jour ne peut plus être retiré')
+          :'Choisi — cliquer pour retirer';
       } else if(estReposFrac||estFerieFrac||estCongeFrac){
         styleFrac='color:var(--tx3);background:transparent';
         titreFrac=estFerieFrac?'Férié':estCongeFrac?'Congé posé':'Repos';
@@ -26767,14 +26775,16 @@ function ouvrirPickerFractionnement(contratId,anneeAcq){
         // stockage partagé" — pas "non cliquable ici". Un jour déjà pris par un autre contrat reste
         // choisissable pour CE contrat s'il respecte par ailleurs ses propres règles (prévu/quota) —
         // en principe Sophie choisira souvent les mêmes jours pour plusieurs contrats.
-        if(nomsAutresFrac){
+        if(bloquesFrac.length){
+          styleFrac='color:var(--tx3);background:transparent;cursor:default';
+          titreFrac='Feuille déjà validée sur '+bloquesFrac.join(', ')+' — ce jour ne peut pas être choisi';
+        } else if(nomsAutresFrac){
           styleFrac=`background:${eclaircir(BLEU_FRAC.bg,0.6)};border:1px dashed ${BLEU_FRAC.brd};color:${BLEU_FRAC.txt};cursor:pointer`;
           titreFrac='Déjà pris par '+nomsAutresFrac.join(', ')+' — cliquer pour choisir aussi ce jour';
         } else {
-          const deduitsFrac=contratsDeduitsFrac(dateStrFrac);
           if(deduitsFrac.length){
             styleFrac='border:2px solid #C98A3A;background:#fff;color:#8A5B1E;cursor:pointer';
-            titreFrac='Jour prévu sur '+deduitsFrac.join(', ')+' — le choisir déduira cette journée à ce contrat';
+            titreFrac='Jour prévu sur '+deduitsFrac.map(x=>x.nom).filter(Boolean).join(', ')+' — le choisir déduira cette journée à ce contrat';
           } else {
             styleFrac='border:1px solid var(--m);background:#fff;color:var(--m);cursor:pointer';
             titreFrac='Cliquer pour choisir';
