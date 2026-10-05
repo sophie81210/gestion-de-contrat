@@ -711,37 +711,8 @@ input[type=time].fi{width:auto;min-width:92px}
        restait dans la liste, decalait la numerotation des suivants, et sur un CDD il consommait un droit a
        prolongation. Affiche uniquement en edition d'avenant (voir ouvrirFormulaireAvenant). -->
   <button class="btn bd" id="btn-suppr-brouillon" style="display:none" onclick="if(S.enAvenant) annulerAvenant(S.enAvenant.cid,S.enAvenant.avid)">Supprimer ce brouillon</button>
-  <button class="btn" id="btn-signe" style="display:none;background:#3a6b4a;color:#e8f5ee;border:none" onclick="if(confirm('Avez-vous enregistré les dernières modifications ? Le contrat sera verrouillé et ne pourra plus être modifié ensuite. Confirmer la signature ?')) signerContrat()">✓ Signer le contrat</button>
-  <button class="btn bs" onclick="
-  if(S.enAvenant){
-    if(confirm('Les modifications non enregistrées seront perdues.')){
-      const {cid,avid}=S.enAvenant;
-      const c=S.contrats.find(x=>x.id==cid);
-      if(c){
-        const av=c.avenants.find(a=>a.id==avid);
-        // Supprimer l'avenant brouillon uniquement s'il n'a pas de dateAvenant (jamais enregistré)
-        if(av&&!av.dateAvenant){
-          c.avenants=c.avenants.filter(a=>a.id!=avid);
-          const cidx=S.contrats.findIndex(x=>x.id==cid);
-          if(cidx!==-1)S.contrats[cidx]=c;
-          enregistrerContrats([c.id],true);
-        }
-      }
-      S.enAvenant=null;
-      S.enEd=null;
-      S.enCours=cid;S.detTab='contrat';goTo('det');
-    }
-  } else if(!S.enEd&&!S.dernierContratId||confirm('Les modifications non enregistrées seront perdues.')){
-    // 17/08/2026 (Sophie) : S.enEd n'était JAMAIS remis à zéro ici — goTo('det') ne le fait pas non
-    // plus exprès (pour ne pas casser une navigation de sauvegarde réussie). En annulant (pas en
-    // sauvegardant), l'ancien contrat édité restait donc actif en mémoire et pouvait ressurgir dans
-    // le prochain formulaire ouvert, même pour un contrat sans rapport (repéré par Sophie : édition
-    // annulée sur un contrat, formulaire d'avenant d'un AUTRE contrat pré-rempli avec les données
-    // annulées).
-    S.enEd=null;
-    if(S.dernierContratId){S.enCours=S.dernierContratId;S.detTab='contrat';goTo('det');}
-    else goTo('cont');
-  }">Retour</button>
+  <button class="btn" id="btn-signe" style="display:none;background:#3a6b4a;color:#e8f5ee;border:none" onclick="confirmerSignatureContrat()">✓ Signer le contrat</button>
+  <button class="btn bs" onclick="retourFormulaireContrat()">Retour</button>
 </div>
   </div>
 
@@ -1153,7 +1124,11 @@ async function chargerModeEmployeur(uidProprietaire,contratId){
   }
 }
 async function supprimerCompteEmployeur(){
-  if(!confirm('Voulez-vous vraiment supprimer votre compte ?\n\nCette action est irréversible et vous perdrez l\'accès à ce contrat. Vous devrez redemander un accès si besoin.')) return;
+  // 05/10/2026 (Sophie) : fenetre centree de l'App a la place de celle du navigateur.
+  alerteChoix('Voulez-vous vraiment supprimer votre compte ?<br><br>Cette action est irréversible et vous perdrez l\'accès à ce contrat. Vous devrez redemander un accès si besoin.',
+    'Supprimer mon compte',()=>{ supprimerCompteEmployeurSuite(); },'Annuler',null);
+}
+async function supprimerCompteEmployeurSuite(){
   if(!window.FB_USER){toast('Aucun utilisateur connecté');return;}
   const emailNorm=(window.FB_USER.email||'').trim().toLowerCase();
   showLoader('Suppression du compte...');
@@ -1609,18 +1584,22 @@ function afficherEcran(desc){
   } finally { S._navRetourEnCours=false; }
 }
 function goTo(p){
+  // 05/10/2026 (Sophie) : fenetres centrees de l'App. La reponse arrivant par rappel, chaque garde
+  // relance la navigation apres avoir efface son drapeau — la garde suivante est alors evaluee a son tour.
   if(S.cgAmModifie&&S._cgAmModifieDepuisOuverture){
-    if(!confirm('Les congés Ass\'Mat ont des modifications non enregistrées. Continuer sans enregistrer ?')) return;
-    S.cgAmModifie=false;
-    S._cgAmModifieDepuisOuverture=false;
+    alerteChoix('Les congés Ass\'Mat ont des modifications non enregistrées.<br><br>Continuer sans enregistrer ?',
+      'Continuer',()=>{ S.cgAmModifie=false; S._cgAmModifieDepuisOuverture=false; goTo(p); },'Annuler',null);
+    return;
   }
   if(S.ficheModifiee){
-    if(!confirm('Des modifications non enregistrées seront perdues. Continuer ?')) return;
-    S.ficheModifiee=false;
+    alerteChoix('Des modifications non enregistrées seront perdues.<br><br>Continuer ?',
+      'Continuer',()=>{ S.ficheModifiee=false; goTo(p); },'Annuler',null);
+    return;
   }
   if(S.planningModifie){
-    if(!confirm('Des modifications du planning non enregistrées seront perdues. Continuer ?')) return;
-    S.planningModifie=false;
+    alerteChoix('Des modifications du planning non enregistrées seront perdues.<br><br>Continuer ?',
+      'Continuer',()=>{ S.planningModifie=false; goTo(p); },'Annuler',null);
+    return;
   }
   // 01/09/2026 (Sophie) : même correctif que switchDetTab — n'abandonner que le brouillon non
   // enregistré (_ruptureTemp), jamais c.rupture déjà enregistré via le bouton "Enregistrer".
@@ -2306,13 +2285,17 @@ function renderDet(id){
   renderDetTab(id,S.detTab);
 }
 function switchDetTab(tab,id){
+  // 05/10/2026 (Sophie) : fenetres centrees de l'App. La reponse arrivant par rappel, chaque garde
+  // relance la navigation apres avoir efface son drapeau — la garde suivante est alors evaluee a son tour.
   if(S.ficheModifiee){
-    if(!confirm('Des modifications non enregistrées seront perdues. Continuer ?')) return;
-    S.ficheModifiee=false;
+    alerteChoix('Des modifications non enregistrées seront perdues.<br><br>Continuer ?',
+      'Continuer',()=>{ S.ficheModifiee=false; switchDetTab(tab,id); },'Annuler',null);
+    return;
   }
   if(S.planningModifie&&tab!=='planning'){
-    if(!confirm('Des modifications du planning non enregistrées seront perdues. Continuer ?')) return;
-    S.planningModifie=false;
+    alerteChoix('Des modifications du planning non enregistrées seront perdues.<br><br>Continuer ?',
+      'Continuer',()=>{ S.planningModifie=false; switchDetTab(tab,id); },'Annuler',null);
+    return;
   }
   // 01/09/2026 (Sophie) : réinitialiser seulement le BROUILLON non enregistré (_ruptureTemp) quand on
   // quitte l'onglet — jamais c.rupture lui-même, qui peut avoir été explicitement enregistré via le
@@ -5087,7 +5070,12 @@ function calcRegulDiffEurosAuto(c, moisMaxForce, cleFiche){
 // valeur réellement enregistrée (voir l'instantané posé dans ouvrirFiche et mis à jour dans
 // enregistrerFiche/validerFiche).
 function quitterFicheSansEnregistrer(contratId,key){
-  if(S.ficheModifiee&&!confirm('Des modifications non enregistrées seront perdues. Continuer ?')) return;
+  // 05/10/2026 (Sophie) : fenetre centree de l'App a la place de celle du navigateur.
+  if(S.ficheModifiee){
+    alerteChoix('Des modifications non enregistrées seront perdues.<br><br>Continuer ?',
+      'Continuer',()=>{ S.ficheModifiee=false; quitterFicheSansEnregistrer(contratId,key); },'Annuler',null);
+    return;
+  }
   const c=S.contrats.find(x=>x.id==contratId);
   if(c&&c.fiches&&c.fiches[key]&&c.fiches[key]._anticipeActifSauvegarde!==undefined){
     c.fiches[key].anticipeActif=c.fiches[key]._anticipeActifSauvegarde;
@@ -10897,16 +10885,18 @@ function validerFiche(contratId,key){
       }
     }
   }
-  if(!confirm(msgConfirm)) return;
-  const estDerniereFicheRupture=msgConfirm.includes('Dernière feuille');
-  afficherChargement(estDerniereFicheRupture?'Calcul du solde de tout compte en cours…':'Validation en cours…');
-  setTimeout(()=>{
-    try{
-      _validerFicheSuite(contratId,key,c);
-    } finally {
-      masquerChargement();
-    }
-  },10);
+  // 05/10/2026 (Sophie) : fenetre centree de l'App a la place de celle du navigateur.
+  alerteChoix(msgConfirm.split('\n').join('<br>'),'Valider',()=>{
+    const estDerniereFicheRupture=msgConfirm.includes('Dernière feuille');
+    afficherChargement(estDerniereFicheRupture?'Calcul du solde de tout compte en cours…':'Validation en cours…');
+    setTimeout(()=>{
+      try{
+        _validerFicheSuite(contratId,key,c);
+      } finally {
+        masquerChargement();
+      }
+    },10);
+  },'Annuler',null);
 }
 
 function _validerFicheSuite(contratId,key,c){
@@ -11070,32 +11060,35 @@ function deverrouillerFiche(contratId,key){
     alerte('Cette feuille ne peut plus être déverrouillée car la feuille du mois suivant a déjà été validée.');
     return;
   }
-  if(!confirm('Déverrouiller cette feuille pour la modifier ? Pensez à la revalider ensuite.')) return;
-  c.fiches[key].valide=false;
-  // 25/08/2026 (Sophie) : vider le cache calcRecapFiche — sinon la fiche redevenue modifiable
-  // continuerait d'afficher un résultat figé de quand elle était encore validée.
-  delete c.fiches[key]._recapCache;
-  delete c.fiches[key]._recapCacheAvant;
-  delete c.fiches[key]._recapCacheApres;
-  // 13/09/2026 (Sophie) : dégeler les compteurs de congés des années dont une période contient ce mois —
-  // période d'acquisition (juin → mai) : toute l'année ; période de prise (mai → avril) : les jours pris.
-  if(c.congesFiges) Object.keys(c.congesFiges).map(Number).forEach(ar=>{
-    if(key>=ar+'-06'&&key<=(ar+1)+'-05') delete c.congesFiges[ar];
-    else if(key>=(ar+1)+'-05'&&key<=(ar+2)+'-04'&&c.congesFiges[ar]) delete c.congesFiges[ar].prise;
-  });
-  c._regulDirty=true;
-  S.ficheModifiee=false;
-  calcCongesContrat(c);
-  const anneeAmDev=getAnneeAmPourDate(key);
-  if(S.congesAM&&S.congesAM[anneeAmDev]) majFichesCgAm(anneeAmDev,false);
-  const anneeAmDevSuivante=anneeAmDev+1;
-  if(S.congesAM&&S.congesAM[anneeAmDevSuivante]) majFichesCgAm(anneeAmDevSuivante,false);
-  const cidx=S.contrats.findIndex(x=>x.id==contratId);
-  if(cidx!==-1) S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
-  saveToFirestore();
-  toast('Feuille de '+MOIS[c.fiches[key].mois]+' déverrouillée.');
-  renderDetTab(contratId,'presence');
+  // 05/10/2026 (Sophie) : fenetre centree de l'App a la place de celle du navigateur.
+  alerteChoix('Déverrouiller cette feuille pour la modifier ?<br><br>Pensez à la revalider ensuite.',
+    'Déverrouiller',()=>{
+    c.fiches[key].valide=false;
+    // 25/08/2026 (Sophie) : vider le cache calcRecapFiche — sinon la fiche redevenue modifiable
+    // continuerait d'afficher un résultat figé de quand elle était encore validée.
+    delete c.fiches[key]._recapCache;
+    delete c.fiches[key]._recapCacheAvant;
+    delete c.fiches[key]._recapCacheApres;
+    // 13/09/2026 (Sophie) : dégeler les compteurs de congés des années dont une période contient ce mois —
+    // période d'acquisition (juin → mai) : toute l'année ; période de prise (mai → avril) : les jours pris.
+    if(c.congesFiges) Object.keys(c.congesFiges).map(Number).forEach(ar=>{
+      if(key>=ar+'-06'&&key<=(ar+1)+'-05') delete c.congesFiges[ar];
+      else if(key>=(ar+1)+'-05'&&key<=(ar+2)+'-04'&&c.congesFiges[ar]) delete c.congesFiges[ar].prise;
+    });
+    c._regulDirty=true;
+    S.ficheModifiee=false;
+    calcCongesContrat(c);
+    const anneeAmDev=getAnneeAmPourDate(key);
+    if(S.congesAM&&S.congesAM[anneeAmDev]) majFichesCgAm(anneeAmDev,false);
+    const anneeAmDevSuivante=anneeAmDev+1;
+    if(S.congesAM&&S.congesAM[anneeAmDevSuivante]) majFichesCgAm(anneeAmDevSuivante,false);
+    const cidx=S.contrats.findIndex(x=>x.id==contratId);
+    if(cidx!==-1) S.contrats[cidx]=c;
+    localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+    saveToFirestore();
+    toast('Feuille de '+MOIS[c.fiches[key].mois]+' déverrouillée.');
+    renderDetTab(contratId,'presence');
+    },'Annuler',null);
 }
 
  function getDateFromSemISO(sem,annee){
@@ -18962,70 +18955,80 @@ function validerModifAgenda(cid,agid){
   // Vérifier s'il y a des semaines non pointées (bloquant) vs autres warnings (non bloquant)
   const nonPointeesWarning=warnings.filter(w=>w.includes('non pointée'));
   const autresWarnings=warnings.filter(w=>!w.includes('non pointée'));
-  if(nonPointeesWarning.length>0){
-    if(!confirm('⚠ Attention :\n'+nonPointeesWarning.join('\n')+'\n\nDes semaines ne sont pas pointées. Valider quand même ?'))return;
-  } else if(autresWarnings.length>0){
-    if(!confirm('⚠ Attention :\n'+autresWarnings.join('\n')+'\n\nLe minimum de semaines n\'est pas atteint. Valider quand même ?'))return;
-  }
-  // Bloquer si trop de semaines off
-  const compteOff=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
-  const nbSemSrc=getNbSemReel(source,c);
-  // Limite semaines off supprimée
-
-  toast('Agenda enregistré ✓');
-  // Réinitialiser les fiches non validées couvertes par l'agenda modifié
-  const agDebutStr=ag.dateDebut.slice(0,7);
-  const agFinStr=ag.dateFin.slice(0,7);
-  // 17/09/2026 (Sophie) : seules les semaines dont le type a réellement changé sont remises à jour, et seulement leur
-  // partie « prévue » (heures prévues, statut prévu / non prévu / repos / férié / hors contrat). Les pointages, absences,
-  // arrêts, jours travaillés et congés saisis restent. Avant, toutes les feuilles non validées de la période étaient
-  // recréées à neuf, même sans aucun changement : pointages et absences perdus.
-  const avantModif=S.agendaSemainesAvantModif&&S.agendaSemainesAvantModif[agid];
-  if(S.agendaSemainesAvantModif) delete S.agendaSemainesAvantModif[agid];
-  const semainesChangees=avantModif
-    ? new Set([...Object.keys(avantModif),...Object.keys(ag.semaines||{})].filter(k=>(avantModif[k]||null)!==((ag.semaines||{})[k]||null)))
-    : null;
-  // 18/09/2026 (Sophie) : les statuts de congés sont recalculés juste après par majFichesCgAm — les garder laissait
-  // traîner des « congés Ass'Mat » posés quand l'agenda n'était pas encore pointé (message au refus de signature d'un
-  // avenant, jusqu'à l'actualisation de la page).
-  const statutsDerives=[null,undefined,'','prevu','non-prevu','repos','ferie','ferie-non','a-selectionner','hors-contrat',
-    'conges-acq','conges-anticipe','conges-non','conges-am','conges-6j','conges-6j-fin','decompte-acq','decompte-anticipe','decompte-conges'];
-  let nbArretOffVal=0; // jours d'arret retires des semaines devenues « absence employeur » — annonces a la fin
-  Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
-    if(fiche.valide) return;
-    if(key<agDebutStr||key>agFinStr) return;
-    const annee=parseInt(key.split('-')[0]);
-    const mois=parseInt(key.split('-')[1])-1;
-    if(!semainesChangees){ c.fiches[key]=creerFiche(c,annee,mois); return; }
-    const joursTouches=(fiche.jours||[]).filter(j=>j.date&&semainesChangees.has(getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))));
-    if(!joursTouches.length) return;
-    const neuve=creerFiche(c,annee,mois);
-    joursTouches.forEach(j=>{
-      const n=neuve.jours.find(x=>x.date===j.date); if(!n) return;
-      j.heureDebPrev=n.heureDebPrev; j.heureFinPrev=n.heureFinPrev; j.planVarPrevu=n.planVarPrevu; j._jourPossible=n._jourPossible;
-      // 03/10/2026 (Sophie) : une semaine devenue ABSENCE EMPLOYEUR ne doit plus porter d'arret de travail —
-      // aucun travail n'y est du, un arret n'y veut rien dire. Le jour revient au statut que la feuille lui
-      // donne normalement (non prevu, repos, ferie). Les pointages reels ne sont pas touches.
-      const estSemOffVal=((ag.semaines||{})[getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))])==='off';
-      if(estSemOffVal&&j.statut==='arret'){ j.statut=n.statut; delete j.arretPro; nbArretOffVal++; }
-      else if(statutsDerives.includes(j.statut)) j.statut=n.statut;
+  // 05/10/2026 (Sophie) : fenetres centrees de l'App. La reponse arrivant par rappel, la suite de
+  // l'enregistrement est regroupee dans suiteVMA, appelee directement quand aucun avertissement n'est du.
+  const suiteVMA=()=>{
+    // Bloquer si trop de semaines off
+    const compteOff=Object.values(ag.semaines||{}).filter(v=>v==='off').length;
+    const nbSemSrc=getNbSemReel(source,c);
+    // Limite semaines off supprimée
+  
+    toast('Agenda enregistré ✓');
+    // Réinitialiser les fiches non validées couvertes par l'agenda modifié
+    const agDebutStr=ag.dateDebut.slice(0,7);
+    const agFinStr=ag.dateFin.slice(0,7);
+    // 17/09/2026 (Sophie) : seules les semaines dont le type a réellement changé sont remises à jour, et seulement leur
+    // partie « prévue » (heures prévues, statut prévu / non prévu / repos / férié / hors contrat). Les pointages, absences,
+    // arrêts, jours travaillés et congés saisis restent. Avant, toutes les feuilles non validées de la période étaient
+    // recréées à neuf, même sans aucun changement : pointages et absences perdus.
+    const avantModif=S.agendaSemainesAvantModif&&S.agendaSemainesAvantModif[agid];
+    if(S.agendaSemainesAvantModif) delete S.agendaSemainesAvantModif[agid];
+    const semainesChangees=avantModif
+      ? new Set([...Object.keys(avantModif),...Object.keys(ag.semaines||{})].filter(k=>(avantModif[k]||null)!==((ag.semaines||{})[k]||null)))
+      : null;
+    // 18/09/2026 (Sophie) : les statuts de congés sont recalculés juste après par majFichesCgAm — les garder laissait
+    // traîner des « congés Ass'Mat » posés quand l'agenda n'était pas encore pointé (message au refus de signature d'un
+    // avenant, jusqu'à l'actualisation de la page).
+    const statutsDerives=[null,undefined,'','prevu','non-prevu','repos','ferie','ferie-non','a-selectionner','hors-contrat',
+      'conges-acq','conges-anticipe','conges-non','conges-am','conges-6j','conges-6j-fin','decompte-acq','decompte-anticipe','decompte-conges'];
+    let nbArretOffVal=0; // jours d'arret retires des semaines devenues « absence employeur » — annonces a la fin
+    Object.entries(c.fiches||{}).forEach(([key,fiche])=>{
+      if(fiche.valide) return;
+      if(key<agDebutStr||key>agFinStr) return;
+      const annee=parseInt(key.split('-')[0]);
+      const mois=parseInt(key.split('-')[1])-1;
+      if(!semainesChangees){ c.fiches[key]=creerFiche(c,annee,mois); return; }
+      const joursTouches=(fiche.jours||[]).filter(j=>j.date&&semainesChangees.has(getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))));
+      if(!joursTouches.length) return;
+      const neuve=creerFiche(c,annee,mois);
+      joursTouches.forEach(j=>{
+        const n=neuve.jours.find(x=>x.date===j.date); if(!n) return;
+        j.heureDebPrev=n.heureDebPrev; j.heureFinPrev=n.heureFinPrev; j.planVarPrevu=n.planVarPrevu; j._jourPossible=n._jourPossible;
+        // 03/10/2026 (Sophie) : une semaine devenue ABSENCE EMPLOYEUR ne doit plus porter d'arret de travail —
+        // aucun travail n'y est du, un arret n'y veut rien dire. Le jour revient au statut que la feuille lui
+        // donne normalement (non prevu, repos, ferie). Les pointages reels ne sont pas touches.
+        const estSemOffVal=((ag.semaines||{})[getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))])==='off';
+        if(estSemOffVal&&j.statut==='arret'){ j.statut=n.statut; delete j.arretPro; nbArretOffVal++; }
+        else if(statutsDerives.includes(j.statut)) j.statut=n.statut;
+      });
+      delete fiche._recapCache; delete fiche._recapCacheAvant; delete fiche._recapCacheApres;
     });
-    delete fiche._recapCache; delete fiche._recapCacheAvant; delete fiche._recapCacheApres;
-  });
-  // Recalculer les statuts congés car l'agenda a changé
-  if(S.congesAM){
-    Object.keys(S.congesAM).forEach(am=>{majFichesCgAm(parseInt(am),false);});
+    // Recalculer les statuts congés car l'agenda a changé
+    if(S.congesAM){
+      Object.keys(S.congesAM).forEach(am=>{majFichesCgAm(parseInt(am),false);});
+    }
+    // 03/10/2026 (Sophie) : l'App ne retire jamais un arrêt de travail sans le dire.
+    if(nbArretOffVal>0) alerte(nbArretOffVal===1
+      ?'Un jour était en arrêt de travail sur une semaine passée en absence employeur : il a été remis à zéro sur la feuille de présence, aucun travail n’étant dû cette semaine-là.'
+      :nbArretOffVal+' jours étaient en arrêt de travail sur des semaines passées en absence employeur : ils ont été remis à zéro sur la feuille de présence, aucun travail n’étant dû ces semaines-là.');
+    // Sauvegarder via le debounce (inclut les fiches réinitialisées)
+    _contratsModifies.add(c.id);
+    saveToFirestore();
+    const agWrap=document.getElementById('agenda-wrap-'+cid);
+    if(agWrap) agWrap.innerHTML=renderAgendas({...source,id:c.id});
+    fermerModifAgenda(cid,agid);
+  };
+  if(nonPointeesWarning.length>0){
+    alerteChoix('⚠ Attention :<br>'+nonPointeesWarning.join('<br>')+'<br><br>Des semaines ne sont pas pointées.<br><br>Valider quand même ?',
+      'Valider',suiteVMA,'Annuler',null);
+    return;
   }
-  // 03/10/2026 (Sophie) : l'App ne retire jamais un arrêt de travail sans le dire.
-  if(nbArretOffVal>0) alerte(nbArretOffVal===1
-    ?'Un jour était en arrêt de travail sur une semaine passée en absence employeur : il a été remis à zéro sur la feuille de présence, aucun travail n’étant dû cette semaine-là.'
-    :nbArretOffVal+' jours étaient en arrêt de travail sur des semaines passées en absence employeur : ils ont été remis à zéro sur la feuille de présence, aucun travail n’étant dû ces semaines-là.');
-  // Sauvegarder via le debounce (inclut les fiches réinitialisées)
-  _contratsModifies.add(c.id);
-  saveToFirestore();
-  const agWrap=document.getElementById('agenda-wrap-'+cid);
-  if(agWrap) agWrap.innerHTML=renderAgendas({...source,id:c.id});
-  fermerModifAgenda(cid,agid);
+  if(autresWarnings.length>0){
+    alerteChoix('⚠ Attention :<br>'+autresWarnings.join('<br>')+'<br><br>Le minimum de semaines n'+String.fromCharCode(39)+'est pas atteint.<br><br>Valider quand même ?',
+      'Valider',suiteVMA,'Annuler',null);
+    return;
+  }
+  suiteVMA();
 }
 
 function fermerModifAgenda(cid,agid){
@@ -19044,18 +19047,20 @@ function fermerModifAgenda(cid,agid){
 }
 
 function supprimerAgenda(cid,agid){
-  if(!confirm('Supprimer cet agenda ?'))return;
-  const c=S.contrats.find(x=>x.id==cid);
-  if(!c)return;
-  const res=trouverAgenda(c,agid);
-  if(!res)return;
-  const {source}=res;
-  source.agendas=source.agendas.filter(a=>a.id!=agid);
-  const cidx=S.contrats.findIndex(x=>x.id==cid);
-  if(cidx!==-1)S.contrats[cidx]=c;
-  enregistrerContrats([c.id],true);
-  const agWrap2=document.getElementById('agenda-wrap-'+cid);
-  if(agWrap2) agWrap2.innerHTML=renderAgendas({...source,id:c.id});
+  // 05/10/2026 (Sophie) : fenetre centree de l'App a la place de celle du navigateur.
+  alerteChoix('Supprimer cet agenda ?','Supprimer',()=>{
+    const c=S.contrats.find(x=>x.id==cid);
+    if(!c)return;
+    const res=trouverAgenda(c,agid);
+    if(!res)return;
+    const {source}=res;
+    source.agendas=source.agendas.filter(a=>a.id!=agid);
+    const cidx=S.contrats.findIndex(x=>x.id==cid);
+    if(cidx!==-1)S.contrats[cidx]=c;
+    enregistrerContrats([c.id],true);
+    const agWrap2=document.getElementById('agenda-wrap-'+cid);
+    if(agWrap2) agWrap2.innerHTML=renderAgendas({...source,id:c.id});
+  },'Annuler',null);
 }
 // ══ CALCULS ══
 function calc(){
@@ -20468,14 +20473,17 @@ function reinitialiserSimulationRupture(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c) return;
   if(c.rupture?.confirmee) return; // sécurité : ne jamais toucher une rupture confirmée
-  if(!confirm('Réinitialiser la simulation de rupture ? Les informations saisies (motif, date...) seront effacées.')) return;
-  c.rupture={};
-  delete c._dateFinContratCache;
-  c._regulDirty=true;
-  S.ruptureModifiee=false;
-  _contratsModifies.add(c.id);
-  saveToFirestore();
-  renderDetTab(cid,'rupture');
+  // 05/10/2026 (Sophie) : fenetre centree de l'App a la place de celle du navigateur.
+  alerteChoix('Réinitialiser la simulation de rupture ?<br><br>Les informations saisies (motif, date...) seront effacées.',
+    'Réinitialiser',()=>{
+      c.rupture={};
+      delete c._dateFinContratCache;
+      c._regulDirty=true;
+      S.ruptureModifiee=false;
+      _contratsModifies.add(c.id);
+      saveToFirestore();
+      renderDetTab(cid,'rupture');
+    },'Annuler',null);
 }
 function rafraichirRupture(cid){
   const c=S.contrats.find(x=>x.id==cid);
@@ -20667,17 +20675,20 @@ function confirmerRuptureOcc(cid){
     alerte('Veuillez indiquer une date valide pour le dernier jour d\'accueil.');
     return;
   }
-  if(!confirm('Confirmer la fin de l\'accueil au '+dateISOversTexte(dateISO)+' ?\n\nLes jours suivants seront marqués hors-contrat. Cette action est réversible (bouton « Annuler la confirmation »).')) return;
-  c.rupture={motif:'fin-occasionnel',dateSignif:dateISO,confirmee:true};
-  delete c._dateFinContratCache;
-  delete c._ruptureTemp;
-  const cidx=S.contrats.findIndex(x=>x.id==cid);
-  if(cidx!==-1) S.contrats[cidx]=c;
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
-  saveToFirestore();
-  const cont=document.getElementById('det-content');
-  renderRupture(c,cont);
-  toast('Fin de l\'accueil confirmée');
+  // 05/10/2026 (Sophie) : fenetre centree de l'App a la place de celle du navigateur.
+  alerteChoix('Confirmer la fin de l\'accueil au '+dateISOversTexte(dateISO)+' ?<br><br>Les jours suivants seront marqués hors-contrat. Cette action est réversible (bouton « Annuler la confirmation »).',
+    'Confirmer',()=>{
+    c.rupture={motif:'fin-occasionnel',dateSignif:dateISO,confirmee:true};
+    delete c._dateFinContratCache;
+    delete c._ruptureTemp;
+    const cidx=S.contrats.findIndex(x=>x.id==cid);
+    if(cidx!==-1) S.contrats[cidx]=c;
+    localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+    saveToFirestore();
+    const cont=document.getElementById('det-content');
+    renderRupture(c,cont);
+    toast('Fin de l\'accueil confirmée');
+    },'Annuler',null);
 }
 
 function confirmerRupture(cid){
@@ -20685,12 +20696,18 @@ function confirmerRupture(cid){
   if(!c||!c.rupture) return;
   // Utiliser _ruptureTemp si disponible (modifications non enregistrées)
   const rp=c._ruptureTemp||c.rupture;
+  // 05/10/2026 (Sophie) : fenetre centree de l'App. La reponse arrive par rappel : les valeurs non
+  // enregistrees sont alors reprises dans c.rupture, _ruptureTemp disparait, et la confirmation est
+  // relancee — elle repart cette fois sans garde, sur exactement les memes valeurs.
   if(c._ruptureTemp){
-    if(!confirm('Des modifications n\'ont pas été enregistrées. Confirmer quand même avec ces valeurs ?')) return;
-    // Sauvegarder _ruptureTemp avant de confirmer
-    c.rupture={...c._ruptureTemp};
-    delete c._dateFinContratCache;
-    delete c._ruptureTemp;
+    alerteChoix('Des modifications n\'ont pas été enregistrées.<br><br>Confirmer quand même avec ces valeurs ?',
+      'Confirmer',()=>{
+        c.rupture={...c._ruptureTemp};
+        delete c._dateFinContratCache;
+        delete c._ruptureTemp;
+        confirmerRupture(cid);
+      },'Annuler',null);
+    return;
   }
   // 0. Date de signification sur jour de repos ou férié
   if(rp.dateSignif){
@@ -23042,61 +23059,65 @@ if(joursReposIncoherent(c)) manquants.push("des heures ou jours possibles sont i
 function renommerContrat(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c) return;
-  const nouveauNom=prompt('Nouveau nom du contrat :',c.nom);
-  if(!nouveauNom||nouveauNom.trim()===c.nom) return;
-  const nom=nouveauNom.trim();
-  if(!nom){alerte('Le nom ne peut pas être vide.');return;}
-  const doublon=S.contrats.find(x=>x.nom.toLowerCase()===nom.toLowerCase()&&x.id!=cid);
-  if(doublon){alerte('Un contrat avec ce nom existe déjà ("'+doublon.nom+'").');return;}
-  c.nom=nom;
-  document.getElementById('hdr-title').textContent=nom;
-  _contratsModifies.add(cid);
-  saveToFirestore();
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
-  renderDetTab(cid,'contrat');
-  toast('Contrat renommé ✓');
+  // 05/10/2026 (Sophie) : fenetre centree de l'App a la place de la saisie du navigateur.
+  alerteSaisie('Nouveau nom du contrat :',c.nom,'Renommer',nouveauNom=>{
+    if(!nouveauNom||nouveauNom.trim()===c.nom) return;
+    const nom=nouveauNom.trim();
+    if(!nom){alerte('Le nom ne peut pas être vide.');return;}
+    const doublon=S.contrats.find(x=>x.nom.toLowerCase()===nom.toLowerCase()&&x.id!=cid);
+    if(doublon){alerte('Un contrat avec ce nom existe déjà ("'+doublon.nom+'").');return;}
+    c.nom=nom;
+    document.getElementById('hdr-title').textContent=nom;
+    _contratsModifies.add(cid);
+    saveToFirestore();
+    localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+    renderDetTab(cid,'contrat');
+    toast('Contrat renommé ✓');
+  },'Annuler',null);
 }
 async function modifierEmailEmployeur(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c) return;
   const ancienEmail=c.emailEmployeurAutorise||'';
-  const nouvelEmail=prompt('Email de l\'employeur autorisé en lecture seule (laisser vide pour retirer l\'accès) :',ancienEmail);
-  if(nouvelEmail===null) return; // annulé
-  const email=nouvelEmail.trim().toLowerCase();
-  if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
-    alerte('Adresse email invalide.');
-    return;
-  }
-  if(email===ancienEmail) return;
-  if(email){
-    const dejaUtilise=S.contrats.find(x=>x.id!==cid&&(x.emailEmployeurAutorise||'').toLowerCase()===email);
-    if(dejaUtilise){
-      alerte(`Cet email est déjà utilisé comme accès employeur sur le contrat "${dejaUtilise.nom||dejaUtilise.id}". Retirez d'abord cet accès sur l'autre contrat avant de le réutiliser ici.`);
+  // 05/10/2026 (Sophie) : fenetre centree de l'App a la place de la saisie du navigateur.
+  alerteSaisie('Email de l\'employeur autorisé en lecture seule<br><br>Laisser vide pour retirer l\'accès.',
+    ancienEmail,'Enregistrer',async nouvelEmail=>{
+    const email=nouvelEmail.trim().toLowerCase();
+    if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
+      alerte('Adresse email invalide.');
       return;
     }
-  }
-  if(!window.FB_USER||!window.fbSetAccesEmployeur||!window.fbDeleteAccesEmployeur){
-    alerte('Connexion Firebase indisponible, réessayez plus tard.');
-    return;
-  }
-  // Retirer l'ancien accès s'il existait
-  if(ancienEmail){
-    await window.fbDeleteAccesEmployeur(ancienEmail);
-  }
-  // Créer le nouvel accès si un email a été saisi
-  if(email){
-    const r=await window.fbSetAccesEmployeur(email,window.FB_USER.uid,cid);
-    if(!r.ok){
-      alerte('Erreur lors de l\'enregistrement de l\'accès : '+r.err);
+    if(email===ancienEmail) return;
+    if(email){
+      const dejaUtilise=S.contrats.find(x=>x.id!==cid&&(x.emailEmployeurAutorise||'').toLowerCase()===email);
+      if(dejaUtilise){
+        alerte(`Cet email est déjà utilisé comme accès employeur sur le contrat "${dejaUtilise.nom||dejaUtilise.id}". Retirez d'abord cet accès sur l'autre contrat avant de le réutiliser ici.`);
+        return;
+      }
+    }
+    if(!window.FB_USER||!window.fbSetAccesEmployeur||!window.fbDeleteAccesEmployeur){
+      alerte('Connexion Firebase indisponible, réessayez plus tard.');
       return;
     }
-  }
-  c.emailEmployeurAutorise=email||null;
-  _contratsModifies.add(cid);
-  saveToFirestore();
-  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
-  renderDetTab(cid,'contrat');
-  toast(email?'Accès employeur défini ✓':'Accès employeur retiré ✓');
+    // Retirer l'ancien accès s'il existait
+    if(ancienEmail){
+      await window.fbDeleteAccesEmployeur(ancienEmail);
+    }
+    // Créer le nouvel accès si un email a été saisi
+    if(email){
+      const r=await window.fbSetAccesEmployeur(email,window.FB_USER.uid,cid);
+      if(!r.ok){
+        alerte('Erreur lors de l\'enregistrement de l\'accès : '+r.err);
+        return;
+      }
+    }
+    c.emailEmployeurAutorise=email||null;
+    _contratsModifies.add(cid);
+    saveToFirestore();
+    localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+    renderDetTab(cid,'contrat');
+    toast(email?'Accès employeur défini ✓':'Accès employeur retiré ✓');
+    },'Annuler',null);
 }
 
 function annulerAvenant(cid, avid){
@@ -23194,8 +23215,10 @@ function annulerAvenant(cid, avid){
       'Annuler la prolongation',procederAnn,'Garder',null);
     return;
   }
-  if(!confirm('Annuler l\'avenant n°'+av.num+' du '+new Date(av.dateAvenant).toLocaleDateString('fr-FR')+' ?\n\nCette action est irréversible.')) return;
-  procederAnn();
+  // 05/10/2026 (Sophie) : fenetre centree de l'App, comme la branche prolongation ci-dessus.
+  alerteChoix('Annuler l\'avenant n°'+av.num+' du '+new Date(av.dateAvenant).toLocaleDateString('fr-FR')+' ?'
+    +'<br><br>Cette action est irréversible.',
+    'Annuler l'+String.fromCharCode(39)+'avenant',procederAnn,'Garder',null);
 }
 
 function creerAvenant(id){
@@ -23984,207 +24007,217 @@ function signerAvenant(){
   const cgDes1erSC=sansCoupureSC&&parseDateLoc(av.dateAvenant).getDate()!==1&&(av.dateCg||null)!==(versionVeilleSC.dateCg||null);
   if(cgDes1erSC) infoCoupureSC+='\n\n⚠ Le mode de paiement des congés change : la prise d\'effet se fera à compter du 1er du mois.';
   // Confirmer
-  if(!confirm('L\'avenant n°'+av.num+' sera verrouillé après signature et ne pourra plus être modifié.'+infoCoupureSC+'\n\n'+(cgDes1erSC?'Confirmer quand même ?':'Confirmer ?'))) return;
-
-  // Signer
-  av.signe=true;
-  // 03/10/2026 (Sophie) : c'est la SIGNATURE qui reporte le nouveau terme sur le contrat. Le brouillon ne le
-  // fait plus : il l'ecrivait des l'enregistrement, avant toute signature.
-  // 03/10/2026 (Sophie) : le terme d'avant est garde sur l'avenant, pour que son annulation le rende au
-  // contrat. Sans cette memoire, annuler une prolongation retirait l'avenant mais laissait le terme allonge :
-  // le contrat restait prolonge sans qu'aucun avenant ne le justifie, et le compteur repassait a 0/2.
-  if(av.typeProlongation==='prolongation'&&av.cddDateFin){
-    if(av._cddDateFinAvant===undefined) av._cddDateFinAvant=c.cddDateFin||null;
-    c.cddDateFin=av.cddDateFin;
-  }
-  if(sansCoupureSC) av.sansCoupure=true; else delete av.sansCoupure;
-  if(!sansCoupureSC&&!avenantChangeStructure(versionVeilleSC,av,true)) av.agendaConserve=true; else delete av.agendaConserve;
-  av.dateSigne=new Date().toISOString().slice(0,10);
-  c._regulDirty=true;
-  // 11/08/2026 (Sophie) : les modifications de planning jour par jour (échanges, jours modifiés)
-  // enregistrées AVANT cet avenant appartiennent à l'ancien type de contrat — les garder au-delà de
-  // la date de l'avenant fait ressurgir d'anciens horaires qui n'ont plus de sens (ex. un contrat
-  // passé en "1 jour/semaine" qui affiche encore les jours modifiés de l'ancien planning complet).
-  // 16/09/2026 : un avenant sans coupure ne change pas l'organisation — les modifications de planning restent.
-  if(!avenantGardeAgenda(av)) ['planning','_planningSauvegarde'].forEach(champPlanningAv=>{
-    if(c[champPlanningAv]){
-      Object.keys(c[champPlanningAv]).forEach(dateKeyAv=>{
-        if(dateKeyAv>=av.dateAvenant) delete c[champPlanningAv][dateKeyAv];
+  // 05/10/2026 (Sophie) : fenetre centree de l'App a la place de celle du navigateur. infoCoupureSC
+  // est construit plus haut avec des sauts de ligne : ils deviennent des <br> pour la fenetre.
+  alerteChoix('L\'avenant n°'+av.num+' sera verrouillé après signature et ne pourra plus être modifié.'
+    +infoCoupureSC.split('\n').join('<br>')+'<br><br>'+(cgDes1erSC?'Confirmer quand même ?':'Confirmer ?'),
+    'Signer',()=>{
+  
+    // Signer
+    av.signe=true;
+    // 03/10/2026 (Sophie) : c'est la SIGNATURE qui reporte le nouveau terme sur le contrat. Le brouillon ne le
+    // fait plus : il l'ecrivait des l'enregistrement, avant toute signature.
+    // 03/10/2026 (Sophie) : le terme d'avant est garde sur l'avenant, pour que son annulation le rende au
+    // contrat. Sans cette memoire, annuler une prolongation retirait l'avenant mais laissait le terme allonge :
+    // le contrat restait prolonge sans qu'aucun avenant ne le justifie, et le compteur repassait a 0/2.
+    if(av.typeProlongation==='prolongation'&&av.cddDateFin){
+      if(av._cddDateFinAvant===undefined) av._cddDateFinAvant=c.cddDateFin||null;
+      c.cddDateFin=av.cddDateFin;
+    }
+    if(sansCoupureSC) av.sansCoupure=true; else delete av.sansCoupure;
+    if(!sansCoupureSC&&!avenantChangeStructure(versionVeilleSC,av,true)) av.agendaConserve=true; else delete av.agendaConserve;
+    av.dateSigne=new Date().toISOString().slice(0,10);
+    c._regulDirty=true;
+    // 11/08/2026 (Sophie) : les modifications de planning jour par jour (échanges, jours modifiés)
+    // enregistrées AVANT cet avenant appartiennent à l'ancien type de contrat — les garder au-delà de
+    // la date de l'avenant fait ressurgir d'anciens horaires qui n'ont plus de sens (ex. un contrat
+    // passé en "1 jour/semaine" qui affiche encore les jours modifiés de l'ancien planning complet).
+    // 16/09/2026 : un avenant sans coupure ne change pas l'organisation — les modifications de planning restent.
+    if(!avenantGardeAgenda(av)) ['planning','_planningSauvegarde'].forEach(champPlanningAv=>{
+      if(c[champPlanningAv]){
+        Object.keys(c[champPlanningAv]).forEach(dateKeyAv=>{
+          if(dateKeyAv>=av.dateAvenant) delete c[champPlanningAv][dateKeyAv];
+        });
+      }
+    });
+    // 21/09/2026 (Sophie) : et les plannings déjà enregistrés à partir du mois de la date d'effet sont à réenregistrer
+    // (sauf mois dont la feuille est validée) — un enregistrement fait avec les anciens horaires ne vaut plus.
+    if(!avenantGardeAgenda(av)&&c.planningConfirmeMois){
+      const moisAvC=av.dateAvenant.slice(0,7);
+      Object.keys(c.planningConfirmeMois).forEach(kC=>{
+        if(kC>=moisAvC&&!(c.fiches&&c.fiches[kC]&&c.fiches[kC].valide)) delete c.planningConfirmeMois[kC];
       });
     }
-  });
-  // 21/09/2026 (Sophie) : et les plannings déjà enregistrés à partir du mois de la date d'effet sont à réenregistrer
-  // (sauf mois dont la feuille est validée) — un enregistrement fait avec les anciens horaires ne vaut plus.
-  if(!avenantGardeAgenda(av)&&c.planningConfirmeMois){
-    const moisAvC=av.dateAvenant.slice(0,7);
-    Object.keys(c.planningConfirmeMois).forEach(kC=>{
-      if(kC>=moisAvC&&!(c.fiches&&c.fiches[kC]&&c.fiches[kC].valide)) delete c.planningConfirmeMois[kC];
-    });
-  }
-  // Forcer nbSem=52 si passage vers contrat 52 sem
-  if(av.tc==='52') av.nbSem=52;
-  // Passage CDD → CDI : ce champ ne vit que sur le contrat (pas par avenant), donc le reporter ici
-  if(av.typeDuree==='cdi') c.typeDuree='cdi';
-
-  // 17/09/2026 (Sophie) : copie des agendas tels qu'avant la signature, pour que l'annulation de l'avenant puisse
-  // rendre ce que la signature leur retire (date de fin ramenée à la veille, semaines effacées, agendas supprimés).
-  if(!avenantGardeAgenda(av)){
-    av._agendasAvantSignature=[
-      ...(c.agendas||[]).map(ag=>({proprietaire:'contrat',ag:JSON.parse(JSON.stringify(ag))})),
-      ...c.avenants.filter(a=>a.id!==avid&&a.signe).flatMap(a=>(a.agendas||[]).map(ag=>({proprietaire:a.id,ag:JSON.parse(JSON.stringify(ag))})))
-    ];
-  }
-  // Supprimer agendas obsolètes : ceux qui débutent strictement après le mois de l'avenant
-  const debutMoisAvent=av.dateAvenant.slice(0,7)+'-01';
-  if(!c.agendas) c.agendas=[];
-  if(av.dateAvenant&&!avenantGardeAgenda(av)){
-    c.agendas=c.agendas.filter(ag=>{
-      const debAg=ag.dateDebut||ag.dateDeb||'';
-      return debAg<=debutMoisAvent;
-    });
-  }
-  // Faire de même pour les agendas des avenants précédents signés
-  if(!avenantGardeAgenda(av)) c.avenants.forEach(avPrec=>{
-    if(avPrec.id===avid||!avPrec.signe||!avPrec.agendas) return;
-    avPrec.agendas=avPrec.agendas.filter(ag=>{
-      const debAg=ag.dateDebut||ag.dateDeb||'';
-      return debAg<=debutMoisAvent;
-    });
-  });
-  // 07/09/2026 (Sophie, note « agenda se poursuit sur la partie plan sem 46 après un avenant plan
-  // fixe 52 ») : les agendas qui COMMENCENT après l'avenant étaient bien supprimés, mais celui qui
-  // commence avant et se termine après gardait sa date de fin, souvent un an plus loin. Il continuait
-  // donc à afficher — et surtout à être interrogé — des semaines appartenant à la nouvelle version du
-  // contrat, y compris quand celle-ci n'a pas besoin d'agenda du tout (fixe 52, min 52). Sa fin est
-  // maintenant ramenée à la veille de l'avenant, et les types pointés sur les semaines entièrement
-  // postérieures sont retirés : sans ça ils restent trouvables par clé et peuvent resservir à tort
-  // (plusieurs calculs cherchent un agenda par simple chevauchement de mois, puis lisent la clé de la
-  // semaine). La semaine qui contient l'avenant lui-même reste partagée entre les deux agendas, comme
-  // deux agendas consécutifs le font déjà partout ailleurs.
-  if(!avenantGardeAgenda(av)){
-    const pAv=av.dateAvenant.split('-').map(Number);
-    const dVeilleAv=new Date(pAv[0],pAv[1]-1,pAv[2]-1);
-    const veilleAvStr=dVeilleAv.getFullYear()+'-'+String(dVeilleAv.getMonth()+1).padStart(2,'0')+'-'+String(dVeilleAv.getDate()).padStart(2,'0');
-    const tronquerAgendas=(liste)=>{
-      (liste||[]).forEach(ag=>{
-        if(!ag||!ag.dateFin||ag.dateFin<=veilleAvStr) return;
-        ag.dateFin=veilleAvStr;
-        ag._semFin={sem:getSemISO(veilleAvStr),annee:getSemAnnee(veilleAvStr)};
-        if(ag.semaines){
-          Object.keys(ag.semaines).forEach(kSem=>{
-            const pk=kSem.split('-S');
-            const semK=parseInt(pk[1]), anK=parseInt(pk[0]);
-            if(!semK||!anK) return;
-            const lundiK=getDateFromSemISO(semK,anK);
-            const lundiKStr=lundiK.getFullYear()+'-'+String(lundiK.getMonth()+1).padStart(2,'0')+'-'+String(lundiK.getDate()).padStart(2,'0');
-            if(lundiKStr>veilleAvStr) delete ag.semaines[kSem];
-          });
-        }
-      });
-    };
-    tronquerAgendas(c.agendas);
-    c.avenants.forEach(avPrec=>{ if(avPrec.id!==avid&&avPrec.signe) tronquerAgendas(avPrec.agendas); });
-  }
-
-  // Créer l'agenda si nécessaire
-  if(!avenantGardeAgenda(av)&&contratNeedAgenda(av)&&(!av.agendas||!av.agendas.length)){
-    const avParts=av.dateAvenant.split('-').map(Number);
-    const dRef=new Date(avParts[0],avParts[1]-1,avParts[2]);
-    // Fin = exactement la veille de l'anniversaire (12 mois pleins depuis la date de début exacte),
-    // pas la fin du mois précédent
-    const dernierJour=new Date(dRef.getFullYear()+1,dRef.getMonth(),dRef.getDate()-1);
-    const finStr=dernierJour.getFullYear()+'-'+String(dernierJour.getMonth()+1).padStart(2,'0')+'-'+String(dernierJour.getDate()).padStart(2,'0');
-    // Initialiser c.agendas si besoin (contrat occ sans agendas)
+    // Forcer nbSem=52 si passage vers contrat 52 sem
+    if(av.tc==='52') av.nbSem=52;
+    // Passage CDD → CDI : ce champ ne vit que sur le contrat (pas par avenant), donc le reporter ici
+    if(av.typeDuree==='cdi') c.typeDuree='cdi';
+  
+    // 17/09/2026 (Sophie) : copie des agendas tels qu'avant la signature, pour que l'annulation de l'avenant puisse
+    // rendre ce que la signature leur retire (date de fin ramenée à la veille, semaines effacées, agendas supprimés).
+    if(!avenantGardeAgenda(av)){
+      av._agendasAvantSignature=[
+        ...(c.agendas||[]).map(ag=>({proprietaire:'contrat',ag:JSON.parse(JSON.stringify(ag))})),
+        ...c.avenants.filter(a=>a.id!==avid&&a.signe).flatMap(a=>(a.agendas||[]).map(ag=>({proprietaire:a.id,ag:JSON.parse(JSON.stringify(ag))})))
+      ];
+    }
+    // Supprimer agendas obsolètes : ceux qui débutent strictement après le mois de l'avenant
+    const debutMoisAvent=av.dateAvenant.slice(0,7)+'-01';
     if(!c.agendas) c.agendas=[];
-    av.agendas=[{
-      id:Date.now(),
-      dateDebut:av.dateAvenant,
-      dateFin:finStr,
-      _semDebut:{sem:getSemISO(dRef),annee:getSemAnnee(dRef)},
-      _semFin:{sem:getSemISO(finStr),annee:getSemAnnee(finStr)},
-      semaines:{}
-    }];
-  }
-
-  // 17/08/2026 (Sophie) : combler aussi un éventuel trou de couverture sur les agendas du CONTRAT DE
-  // BASE jusqu'à aujourd'hui — sinon un avenant signé avec une date d'effet future, sans que l'agenda
-  // suivant du contrat de base ait été créé manuellement au préalable, laisse un trou entre la fin du
-  // dernier agenda existant et aujourd'hui, avec plus aucun moyen de le créer ensuite (repéré par
-  // Sophie : contrat var 46, avenant 52 sem signé avant la création de l'agenda suivant). Même
-  // logique que `creerAgenda`, en boucle jusqu'à couvrir aujourd'hui, jamais au-delà de l'avenant.
-  if(!avenantGardeAgenda(av)&&contratNeedAgenda(c)){
-    let gardeAgC=0;
-    while(gardeAgC<12){
-      gardeAgC++;
-      const aujourdBoucle=new Date();
-      const dernierAgC=c.agendas&&c.agendas.length?c.agendas[c.agendas.length-1]:null;
-      if(dernierAgC&&new Date(dernierAgC.dateFin)>=aujourdBoucle) break;
-      if(dernierAgC&&new Date(dernierAgC.dateDebut)>aujourdBoucle) break;
-      let dateDebutC;
-      if(dernierAgC){
-        const dFinPrecC=new Date(dernierAgC.dateFin+'T00:00:00');
-        dFinPrecC.setDate(dFinPrecC.getDate()+1);
-        dateDebutC=dFinPrecC.getFullYear()+'-'+String(dFinPrecC.getMonth()+1).padStart(2,'0')+'-'+String(dFinPrecC.getDate()).padStart(2,'0');
-      } else {
-        dateDebutC=c.dateDeb;
-      }
-      if(dateDebutC>=av.dateAvenant) break;
-      const partsC=dateDebutC.split('-').map(Number);
-      const dRefC=new Date(partsC[0],partsC[1]-1,partsC[2]);
-      const dernierJourC=new Date(dRefC.getFullYear()+1,dRefC.getMonth(),dRefC.getDate()-1);
-      const finStrC=dernierJourC.getFullYear()+'-'+String(dernierJourC.getMonth()+1).padStart(2,'0')+'-'+String(dernierJourC.getDate()).padStart(2,'0');
-      const agC={
-        id:Date.now()+gardeAgC,
-        dateDebut:dateDebutC,
-        dateFin:finStrC,
-        _semDebut:{sem:getSemISO(dRefC),annee:getSemAnnee(dRefC)},
-        _semFin:{sem:getSemISO(finStrC),annee:getSemAnnee(finStrC)},
-        semaines:{}
-      };
-      if(dernierAgC){
-        const agKeyDebC=getKeyAgenda(agC._semDebut.sem,agC._semDebut.annee);
-        const typeLimiteC=dernierAgC.semaines&&dernierAgC.semaines[agKeyDebC];
-        if(typeLimiteC) agC.semaines[agKeyDebC]=typeLimiteC;
-      }
-      c.agendas.push(agC);
+    if(av.dateAvenant&&!avenantGardeAgenda(av)){
+      c.agendas=c.agendas.filter(ag=>{
+        const debAg=ag.dateDebut||ag.dateDeb||'';
+        return debAg<=debutMoisAvent;
+      });
     }
-  }
-
-  const cidx=S.contrats.findIndex(x=>x.id==cid);
-  if(cidx!==-1)S.contrats[cidx]=c;
-  enregistrerContrats([c.id],true);
-  toast('⏳ Signature en cours...');
-  S.enAvenant=null;
-  S.enCours=cid;
-  S.detTab='contrat';
-  setTimeout(()=>{
-    if(!avenantGardeAgenda(av)&&contratNeedAgenda(av)){
-      const agExiste=av.agendas&&av.agendas.some(ag=>ag.semaines&&Object.keys(ag.semaines).length>0);
-      if(!agExiste){
-        if(confirm('Avenant n°'+av.num+' signé ✓\n\nCet avenant nécessite un agenda. Souhaitez-vous le remplir maintenant ?')){
-          S.detTab='contrat';
-          goTo('det');
-          setTimeout(()=>{
-            const agWrapScroll=document.getElementById('agenda-wrap-'+cid);
-            if(agWrapScroll) agWrapScroll.scrollIntoView({behavior:'smooth',block:'start'});
-          },150);
+    // Faire de même pour les agendas des avenants précédents signés
+    if(!avenantGardeAgenda(av)) c.avenants.forEach(avPrec=>{
+      if(avPrec.id===avid||!avPrec.signe||!avPrec.agendas) return;
+      avPrec.agendas=avPrec.agendas.filter(ag=>{
+        const debAg=ag.dateDebut||ag.dateDeb||'';
+        return debAg<=debutMoisAvent;
+      });
+    });
+    // 07/09/2026 (Sophie, note « agenda se poursuit sur la partie plan sem 46 après un avenant plan
+    // fixe 52 ») : les agendas qui COMMENCENT après l'avenant étaient bien supprimés, mais celui qui
+    // commence avant et se termine après gardait sa date de fin, souvent un an plus loin. Il continuait
+    // donc à afficher — et surtout à être interrogé — des semaines appartenant à la nouvelle version du
+    // contrat, y compris quand celle-ci n'a pas besoin d'agenda du tout (fixe 52, min 52). Sa fin est
+    // maintenant ramenée à la veille de l'avenant, et les types pointés sur les semaines entièrement
+    // postérieures sont retirés : sans ça ils restent trouvables par clé et peuvent resservir à tort
+    // (plusieurs calculs cherchent un agenda par simple chevauchement de mois, puis lisent la clé de la
+    // semaine). La semaine qui contient l'avenant lui-même reste partagée entre les deux agendas, comme
+    // deux agendas consécutifs le font déjà partout ailleurs.
+    if(!avenantGardeAgenda(av)){
+      const pAv=av.dateAvenant.split('-').map(Number);
+      const dVeilleAv=new Date(pAv[0],pAv[1]-1,pAv[2]-1);
+      const veilleAvStr=dVeilleAv.getFullYear()+'-'+String(dVeilleAv.getMonth()+1).padStart(2,'0')+'-'+String(dVeilleAv.getDate()).padStart(2,'0');
+      const tronquerAgendas=(liste)=>{
+        (liste||[]).forEach(ag=>{
+          if(!ag||!ag.dateFin||ag.dateFin<=veilleAvStr) return;
+          ag.dateFin=veilleAvStr;
+          ag._semFin={sem:getSemISO(veilleAvStr),annee:getSemAnnee(veilleAvStr)};
+          if(ag.semaines){
+            Object.keys(ag.semaines).forEach(kSem=>{
+              const pk=kSem.split('-S');
+              const semK=parseInt(pk[1]), anK=parseInt(pk[0]);
+              if(!semK||!anK) return;
+              const lundiK=getDateFromSemISO(semK,anK);
+              const lundiKStr=lundiK.getFullYear()+'-'+String(lundiK.getMonth()+1).padStart(2,'0')+'-'+String(lundiK.getDate()).padStart(2,'0');
+              if(lundiKStr>veilleAvStr) delete ag.semaines[kSem];
+            });
+          }
+        });
+      };
+      tronquerAgendas(c.agendas);
+      c.avenants.forEach(avPrec=>{ if(avPrec.id!==avid&&avPrec.signe) tronquerAgendas(avPrec.agendas); });
+    }
+  
+    // Créer l'agenda si nécessaire
+    if(!avenantGardeAgenda(av)&&contratNeedAgenda(av)&&(!av.agendas||!av.agendas.length)){
+      const avParts=av.dateAvenant.split('-').map(Number);
+      const dRef=new Date(avParts[0],avParts[1]-1,avParts[2]);
+      // Fin = exactement la veille de l'anniversaire (12 mois pleins depuis la date de début exacte),
+      // pas la fin du mois précédent
+      const dernierJour=new Date(dRef.getFullYear()+1,dRef.getMonth(),dRef.getDate()-1);
+      const finStr=dernierJour.getFullYear()+'-'+String(dernierJour.getMonth()+1).padStart(2,'0')+'-'+String(dernierJour.getDate()).padStart(2,'0');
+      // Initialiser c.agendas si besoin (contrat occ sans agendas)
+      if(!c.agendas) c.agendas=[];
+      av.agendas=[{
+        id:Date.now(),
+        dateDebut:av.dateAvenant,
+        dateFin:finStr,
+        _semDebut:{sem:getSemISO(dRef),annee:getSemAnnee(dRef)},
+        _semFin:{sem:getSemISO(finStr),annee:getSemAnnee(finStr)},
+        semaines:{}
+      }];
+    }
+  
+    // 17/08/2026 (Sophie) : combler aussi un éventuel trou de couverture sur les agendas du CONTRAT DE
+    // BASE jusqu'à aujourd'hui — sinon un avenant signé avec une date d'effet future, sans que l'agenda
+    // suivant du contrat de base ait été créé manuellement au préalable, laisse un trou entre la fin du
+    // dernier agenda existant et aujourd'hui, avec plus aucun moyen de le créer ensuite (repéré par
+    // Sophie : contrat var 46, avenant 52 sem signé avant la création de l'agenda suivant). Même
+    // logique que `creerAgenda`, en boucle jusqu'à couvrir aujourd'hui, jamais au-delà de l'avenant.
+    if(!avenantGardeAgenda(av)&&contratNeedAgenda(c)){
+      let gardeAgC=0;
+      while(gardeAgC<12){
+        gardeAgC++;
+        const aujourdBoucle=new Date();
+        const dernierAgC=c.agendas&&c.agendas.length?c.agendas[c.agendas.length-1]:null;
+        if(dernierAgC&&new Date(dernierAgC.dateFin)>=aujourdBoucle) break;
+        if(dernierAgC&&new Date(dernierAgC.dateDebut)>aujourdBoucle) break;
+        let dateDebutC;
+        if(dernierAgC){
+          const dFinPrecC=new Date(dernierAgC.dateFin+'T00:00:00');
+          dFinPrecC.setDate(dFinPrecC.getDate()+1);
+          dateDebutC=dFinPrecC.getFullYear()+'-'+String(dFinPrecC.getMonth()+1).padStart(2,'0')+'-'+String(dFinPrecC.getDate()).padStart(2,'0');
+        } else {
+          dateDebutC=c.dateDeb;
+        }
+        if(dateDebutC>=av.dateAvenant) break;
+        const partsC=dateDebutC.split('-').map(Number);
+        const dRefC=new Date(partsC[0],partsC[1]-1,partsC[2]);
+        const dernierJourC=new Date(dRefC.getFullYear()+1,dRefC.getMonth(),dRefC.getDate()-1);
+        const finStrC=dernierJourC.getFullYear()+'-'+String(dernierJourC.getMonth()+1).padStart(2,'0')+'-'+String(dernierJourC.getDate()).padStart(2,'0');
+        const agC={
+          id:Date.now()+gardeAgC,
+          dateDebut:dateDebutC,
+          dateFin:finStrC,
+          _semDebut:{sem:getSemISO(dRefC),annee:getSemAnnee(dRefC)},
+          _semFin:{sem:getSemISO(finStrC),annee:getSemAnnee(finStrC)},
+          semaines:{}
+        };
+        if(dernierAgC){
+          const agKeyDebC=getKeyAgenda(agC._semDebut.sem,agC._semDebut.annee);
+          const typeLimiteC=dernierAgC.semaines&&dernierAgC.semaines[agKeyDebC];
+          if(typeLimiteC) agC.semaines[agKeyDebC]=typeLimiteC;
+        }
+        c.agendas.push(agC);
+      }
+    }
+  
+    const cidx=S.contrats.findIndex(x=>x.id==cid);
+    if(cidx!==-1)S.contrats[cidx]=c;
+    enregistrerContrats([c.id],true);
+    toast('⏳ Signature en cours...');
+    S.enAvenant=null;
+    S.enCours=cid;
+    S.detTab='contrat';
+    setTimeout(()=>{
+      if(!avenantGardeAgenda(av)&&contratNeedAgenda(av)){
+        const agExiste=av.agendas&&av.agendas.some(ag=>ag.semaines&&Object.keys(ag.semaines).length>0);
+        if(!agExiste){
+          // 05/10/2026 (Sophie) : fenetre centree de l'App. La reponse arrivant par rappel, le retour a
+          // la fiche se fait dans les deux branches du rappel, plus apres le bloc.
+          alerteChoix('Avenant n°'+av.num+' signé ✓<br><br>Cet avenant nécessite un agenda. Souhaitez-vous le remplir maintenant ?',
+            'Remplir l'+String.fromCharCode(39)+'agenda',()=>{
+              S.detTab='contrat';
+              goTo('det');
+              setTimeout(()=>{
+                const agWrapScroll=document.getElementById('agenda-wrap-'+cid);
+                if(agWrapScroll) agWrapScroll.scrollIntoView({behavior:'smooth',block:'start'});
+              },150);
+            },'Plus tard',()=>{ goTo('det'); });
           return;
+        } else {
+          toast('Avenant n°'+av.num+' signé ✓');
         }
       } else {
         toast('Avenant n°'+av.num+' signé ✓');
       }
-    } else {
-      toast('Avenant n°'+av.num+' signé ✓');
-    }
-    goTo('det');
-  },300);
+      goTo('det');
+    },300);
+    },'Annuler',null);
      }    
-         
+           
 // ══ CONGÉS ASS'MAT NAV ══
 function goToCgAm(){
+  // 05/10/2026 (Sophie) : fenetre centree de l'App a la place de celle du navigateur.
   if(S.ficheModifiee){
-    if(!confirm('Des modifications non enregistrées seront perdues. Continuer ?')) return;
-    S.ficheModifiee=false;
+    alerteChoix('Des modifications non enregistrées seront perdues.<br><br>Continuer ?',
+      'Continuer',()=>{ S.ficheModifiee=false; goToCgAm(); },'Annuler',null);
+    return;
   }
   PAGES.forEach(p=>{const el=document.getElementById(p);if(el)el.style.display='none';});
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
@@ -27176,6 +27209,51 @@ function toast(msg){
 
 // 03/10/2026 (Sophie) : libelle du bouton personnalisable, 'OK' par defaut — certains messages
 // gagnent a nommer ce qui va se passer plutot qu'a faire acquiescer.
+// 05/10/2026 (Sophie) : les fenetres du navigateur remplacees par les fenetres centrees de l'App.
+// Les deux boutons du formulaire de contrat portaient leur question dans un onclick ecrit a la main ;
+// la reponse arrivant desormais par rappel, le traitement est passe en fonction nommee.
+function confirmerSignatureContrat(){
+  alerteChoix('Avez-vous enregistré les dernières modifications ?<br><br>Le contrat sera verrouillé et ne pourra plus être modifié ensuite.',
+    'Signer le contrat',()=>{ signerContrat(); },'Annuler',null);
+}
+
+function retourFormulaireContrat(){
+  const quitterAvenantRFC=()=>{
+    const {cid,avid}=S.enAvenant;
+    const c=S.contrats.find(x=>x.id==cid);
+    if(c){
+      const av=c.avenants.find(a=>a.id==avid);
+      // Supprimer l'avenant brouillon uniquement s'il n'a pas de dateAvenant (jamais enregistré)
+      if(av&&!av.dateAvenant){
+        c.avenants=c.avenants.filter(a=>a.id!=avid);
+        const cidx=S.contrats.findIndex(x=>x.id==cid);
+        if(cidx!==-1)S.contrats[cidx]=c;
+        enregistrerContrats([c.id],true);
+      }
+    }
+    S.enAvenant=null;
+    S.enEd=null;
+    S.enCours=cid;S.detTab='contrat';goTo('det');
+  };
+  const quitterContratRFC=()=>{
+    // 17/08/2026 (Sophie) : S.enEd n'était JAMAIS remis à zéro ici — goTo('det') ne le fait pas non
+    // plus exprès (pour ne pas casser une navigation de sauvegarde réussie). En annulant (pas en
+    // sauvegardant), l'ancien contrat édité restait donc actif en mémoire et pouvait ressurgir dans
+    // le prochain formulaire ouvert, même pour un contrat sans rapport (repéré par Sophie : édition
+    // annulée sur un contrat, formulaire d'avenant d'un AUTRE contrat pré-rempli avec les données
+    // annulées).
+    S.enEd=null;
+    if(S.dernierContratId){S.enCours=S.dernierContratId;S.detTab='contrat';goTo('det');}
+    else goTo('cont');
+  };
+  if(S.enAvenant){
+    alerteChoix('Les modifications non enregistrées seront perdues.','Quitter',quitterAvenantRFC,'Annuler',null);
+    return;
+  }
+  if(!S.enEd&&!S.dernierContratId){ quitterContratRFC(); return; }
+  alerteChoix('Les modifications non enregistrées seront perdues.','Quitter',quitterContratRFC,'Annuler',null);
+}
+
 function alerte(msg,libelleBouton){
   // Supprime une alerte existante
   const existing=document.getElementById('alerte-overlay');
@@ -27214,6 +27292,41 @@ function alerteRechargement(msg){
     <button class="alerte-btn" onclick="location.reload()">Recharger la page</button>
   </div>`;
   document.body.appendChild(ovR);
+}
+
+// 05/10/2026 (Sophie) : fenetre centree avec un champ de texte, pour remplacer les deux dernieres
+// demandes de saisie du navigateur (nom du contrat, email de l'employeur). Meme habillage que
+// alerteChoix ; toucher le fond revient a annuler. La valeur saisie est passee telle quelle au rappel.
+function alerteSaisie(msg,valeurInitiale,libelleOui,siOui,libelleNon,siNon){
+  const existing=document.getElementById('alerte-overlay');
+  if(existing) existing.remove();
+  const overlay=document.createElement('div');
+  overlay.id='alerte-overlay';
+  overlay.className='alerte-overlay';
+  overlay.innerHTML=`<div class="alerte-box">
+    <div>${msg}</div>
+    <input type="text" id="alerte-saisie-champ" style="width:100%;box-sizing:border-box;margin-top:14px;padding:9px 10px;border:1px solid var(--m);border-radius:8px;font-size:15px;font-family:inherit">
+    <div style="margin-top:18px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+      <button class="alerte-btn" data-choix="non" style="margin-top:0;background:#8C8078">${libelleNon||'Annuler'}</button>
+      <button class="alerte-btn" data-choix="oui" style="margin-top:0">${libelleOui||'Valider'}</button>
+    </div>
+  </div>`;
+  const champAS=overlay.querySelector('#alerte-saisie-champ');
+  champAS.value=valeurInitiale||'';
+  let reponduAS=false;
+  const repondreAS=ok=>{
+    if(reponduAS) return;
+    reponduAS=true;
+    const val=champAS.value;
+    overlay.remove();
+    if(ok){ if(siOui) siOui(val); } else { if(siNon) siNon(); }
+  };
+  overlay.querySelector('[data-choix="oui"]').addEventListener('click',()=>repondreAS(true));
+  overlay.querySelector('[data-choix="non"]').addEventListener('click',()=>repondreAS(false));
+  overlay.addEventListener('click',e=>{if(e.target===overlay) repondreAS(false);});
+  champAS.addEventListener('keydown',e=>{ if(e.key==='Enter') repondreAS(true); if(e.key==='Escape') repondreAS(false); });
+  document.body.appendChild(overlay);
+  setTimeout(()=>{ champAS.focus(); champAS.select(); },30);
 }
 
 function alerteChoix(msg,libelleOui,siOui,libelleNon,siNon){
