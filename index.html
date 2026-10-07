@@ -13177,7 +13177,33 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
           const joursCochesTh=compterJoursCochesPortion(lundiSemTh,finMoisTh);
           const joursCeMoisTh=Math.min(jMaxTh,Math.max(joursCochesTh,plancherTh));
           if(window.DEBUG_CGAM)console.log('[CGAM-chevalDebut]',dateEx,'| jMaxTh:',jMaxTh,'| joursPossiblesSuivantTh:',joursPossiblesSuivantTh,'| plancherTh:',plancherTh,'| joursCochesTh:',joursCochesTh,'| joursCeMoisTh:',joursCeMoisTh,'| ajouté:',joursCeMoisTh*(volTh.h/jMaxTh));
-          hTheoriques+=joursCeMoisTh*(volTh.h/jMaxTh);
+          // 07/10/2026 (Sophie) : meme protection que le plan minimum (27/08/2026), portee ici. Cette portion
+          // porte le DEBUT de la semaine, donc la fin du mois. Si les modifications de planning sont autorisees,
+          // ses heures ont pu etre consommees n'importe ou ailleurs dans le mois : les jours coches de cette
+          // semaine ne suffisent plus a le dire. Toutes les AUTRES semaines du mois comptent leur volume entier,
+          // coche ou non — elles ne voient donc pas arriver les heures deplacees, et le mois en perdait.
+          // Strictement additif : jamais moins que le calcul d'avant, jamais plus que la part structurelle.
+          let contribDebTh=joursCeMoisTh*(volTh.h/jMaxTh);
+          const moisCourantKeyVTh=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0');
+          if(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisCourantKeyVTh]){
+            const possCeMoisVTh=compterJoursPossiblesPortion(lundiSemTh,finMoisTh);
+            const structShareVTh=Math.min(possCeMoisVTh,jMaxTh)*(volTh.h/jMaxTh);
+            let envVTh=null; try{ envVTh=calcEnveloppeMoisVar(c,fiche.annee,fiche.mois+1); }catch(e){}
+            if(envVTh&&envVTh.minutes>0){
+              const finCVTh=(()=>{const _d=getDateFinContrat(c);return _d?dateToStr(_d):null;})();
+              let reelVTh=0;
+              Object.entries(c.planning||{}).forEach(([dsVTh,pdVTh])=>{
+                if(dsVTh.slice(0,7)!==moisCourantKeyVTh) return;
+                if(finCVTh&&dsVTh>finCVTh) return;
+                if(pdVTh&&pdVTh.coche&&pdVTh.d&&pdVTh.f) reelVTh+=(toM(pdVTh.f)-toM(pdVTh.d))/60;
+              });
+              const resteVTh=Math.max(0,(envVTh.minutes/60)-reelVTh);
+              const consommeVTh=Math.max(0,structShareVTh-resteVTh);
+              contribDebTh=Math.min(structShareVTh,Math.max(contribDebTh,consommeVTh));
+            }
+          }
+          if(window.DEBUG_CGAM)console.log('[CGAM-chevalDebutVar-env]',dateEx,'| contribution finale:',contribDebTh);
+          hTheoriques+=contribDebTh;
         } else {
           const finMoisPrecTh=new Date(debutMoisTh); finMoisPrecTh.setDate(finMoisPrecTh.getDate()-1);
           const joursPossiblesSuivantTh=compterJoursPossiblesPortion(debutMoisTh,dimancheSemTh);
