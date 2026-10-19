@@ -9648,7 +9648,30 @@ function calcRegul52Annee(c, anneeRef, moisAttendu){
   // Sophie) : coefficient du mois de la dernière prise, pas celui d'aujourd'hui
   const dixiemeBrut=parseFloat((brutAnnuel/10).toFixed(2));
   const dixiemeNet=parseFloat((brutAnnuel/10*coefNet).toFixed(2));
-  const diff=parseFloat(Math.max(0,dixiemeNet-maintienVerse).toFixed(2));
+  // 19/10/2026 (Sophie, confirme par le tableur de son syndicat) : la comparaison maintien / 10eme se
+  // fait PRISE PAR PRISE, plus une seule fois sur l'annee entiere. Le versement reste unique, sur cette
+  // feuille-ci, une fois tous les jours pris. Le 10eme d'une prise vaut le 10eme annuel divise par les
+  // jours ACQUIS, multiplie par les jours decomptes de la prise.
+  // Chaque jour est valorise exactement comme maintienVerse le fait au-dessus — meme fonction, meme
+  // date de reference — pour que seule la METHODE de comparaison change, jamais la valeur d'un jour.
+  // Mesure du 19/10 sur les trois comptes : une seule annee change, Jules 2025/2026, 0 -> 32,95 EUR.
+  // Sa prise du 11 au 16 aout 2025 a ete payee a la mensualisation de l'epoque (73,67 h) : 56,67 EUR
+  // pour cinq jours, quand le 10eme en donne 89,62 EUR. Sur l'annee entiere le maintien l'emportait
+  // (556,63 EUR contre 537,70 EUR) et rien n'etait du. Sophie, prevenue que le montant apparaitrait sur
+  // sa feuille de septembre 2026 deja validee : « fais le quand meme ».
+  const valJourRG=jRG=>{
+    if(!estJourSous52Cg(c,jRG.date)){ const avSRG=avenantsVers52.find(dRG=>dRG>jRG.date); return valeurJourMaintien46Cg(c,avSRG||jRG.date); }
+    return valeurJourMaintien52Cg(c,jRG.date);
+  };
+  const valParDateRG={};
+  jours.forEach(jRG=>{ valParDateRG[jRG.date]=(valParDateRG[jRG.date]||0)+valJourRG(jRG); });
+  const dixJourRG=cg.acquis>0?dixiemeNet/cg.acquis:0;
+  let duRG=0;
+  prisesEpisodesConges(c, Object.keys(valParDateRG)).forEach(gRG=>{
+    const maintienRG=gRG.reduce((nRG,dsRG)=>nRG+valParDateRG[dsRG],0);
+    duRG+=Math.max(maintienRG, gRG.length*dixJourRG);
+  });
+  const diff=parseFloat(Math.max(0,duRG-maintienVerse).toFixed(2));
   return {anneeRef, dernierMois, maintienVerse, dixiemeBrut, dixiemeNet, diff};
 }
 
@@ -19960,15 +19983,6 @@ function calcHeuresSupMensuBrutTotal(c, dateDebut, dateFin){
     return dejaVerse;
   }
 
-// 19/10/2026 (Sophie) : les jours de conges d'une annee, regroupes en PRISES. Une prise est une pose
-// du calendrier des conges — une periode continue posee par l'assistante maternelle — et chaque contrat
-// en decompte les jours qui tombent sur ses jours d'accueil : « le nombre de jours decomptes par prise
-// peut lui aussi differer », dit deja la note de l'onglet Conges. Un jour decompte qui n'appartient a
-// aucune pose forme une prise a lui seul, pour qu'aucun jour ne soit perdu — sans quoi le total par
-// prise pourrait tomber SOUS le total annuel, ce qui est impossible par construction (mesure du 19/10 :
-// Mayronn 2023 perdait 21,26 EUR tant que les jours hors pose n'etaient pas rattrapes).
-// Le maintien de chaque jour n'est pas recalcule : il vient de calcDejaVerseMaintien, celle-la meme qui
-// a paye les feuilles (Sophie : « sur les feuilles de presence il y a deja le calcul en maintien »).
 // 19/10/2026 (Sophie) : les jours de conges d'une annee, regroupes en PRISES — une prise est un
 // EPISODE de conges, au sens de la regle que Sophie a deja fait ecrire le 09/09/2026 un peu plus
 // haut (poseContinueDepuisMoisPrecedent) : « la pose se poursuit jusqu'a la premiere journee
@@ -19979,33 +19993,39 @@ function calcHeuresSupMensuBrutTotal(c, dateDebut, dateFin){
 // l'avait pas le lundi avant l'avenant — formait une prise d'un seul jour, compare tout seul.
 // Le maintien de chaque jour n'est pas recalcule : il vient de calcDejaVerseMaintien, celle-la meme
 // qui a paye les feuilles (Sophie : « sur les feuilles de presence il y a deja le calcul en maintien »).
+// Le decoupage lui-meme sert aussi a la regularisation versee sur la feuille (calcRegul52Annee) :
+// une seule regle, un seul endroit.
+function prisesEpisodesConges(c, dates){
+  const statutEffEP=dsEP=>{
+    const fEP=c.fiches&&c.fiches[dsEP.slice(0,7)];
+    const jEP=fEP&&(fEP.jours||[]).find(xEP=>xEP.date===dsEP);
+    return jEP?(jEP.statut||getStatutPrevu(c,jEP)||''):'';
+  };
+  const coupeEP=(aEP,bEP)=>{
+    const d1EP=parseDateLoc(aEP), d2EP=parseDateLoc(bEP);
+    for(let xEP=new Date(d1EP.getTime()+86400000); xEP<d2EP; xEP=new Date(xEP.getTime()+86400000)){
+      if(['prevu','travaille','reprise'].includes(statutEffEP(dateToStr(xEP)))) return true;
+    }
+    return false;
+  };
+  const outEP=[];
+  dates.slice().sort().forEach(dsEP=>{
+    const derEP=outEP.length?outEP[outEP.length-1]:null;
+    if(derEP&&!coupeEP(derEP[derEP.length-1],dsEP)){ derEP.push(dsEP); return; }
+    outEP.push([dsEP]);
+  });
+  return outEP;
+}
+
 function prisesCongesMaintien(c, anneeRef, bornerDate){
   const detailPC=[];
   calcDejaVerseMaintien(c, anneeRef, bornerDate, detailPC);
   if(!detailPC.length) return [];
-  detailPC.sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
-  const statutEffPC=ds=>{
-    const fPC=c.fiches&&c.fiches[ds.slice(0,7)];
-    const jPC=fPC&&(fPC.jours||[]).find(x=>x.date===ds);
-    if(!jPC) return '';
-    return jPC.statut||getStatutPrevu(c,jPC)||'';
-  };
-  const coupePC=(aPC,bPC)=>{
-    const d1PC=parseDateLoc(aPC), d2PC=parseDateLoc(bPC);
-    for(let xPC=new Date(d1PC.getTime()+86400000); xPC<d2PC; xPC=new Date(xPC.getTime()+86400000)){
-      if(['prevu','travaille','reprise'].includes(statutEffPC(dateToStr(xPC)))) return true;
-    }
-    return false;
-  };
-  const prisesPC=[];
-  detailPC.forEach(xPC=>{
-    const derPC=prisesPC.length?prisesPC[prisesPC.length-1]:null;
-    if(derPC&&!coupePC(derPC.jours[derPC.jours.length-1],xPC.date)){
-      derPC.jours.push(xPC.date); derPC.maintien+=xPC.montant; return;
-    }
-    prisesPC.push({jours:[xPC.date],maintien:xPC.montant});
-  });
-  return prisesPC;
+  const montantPC={};
+  detailPC.forEach(xPC=>{ montantPC[xPC.date]=(montantPC[xPC.date]||0)+xPC.montant; });
+  return prisesEpisodesConges(c, Object.keys(montantPC)).map(gPC=>({
+    jours:gPC, maintien:gPC.reduce((nPC,dsPC)=>nPC+montantPC[dsPC],0)
+  }));
 }
 
 function calcSoldeConges52(c, dateRupture){
@@ -22396,7 +22416,7 @@ function buildCgAcquisEncarts(c, anneeAcq){
       <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:6px">Régularisation congés payés (net)</div>
       <div style="${ls}"><span>Maintien de salaire versé</span><span style="${vs}">${regulAnCg.maintienVerse.toFixed(2)} € net</span></div>
       <div style="${ls}"><span>Méthode du 10ème (${regulAnCg.dixiemeBrut.toFixed(2)} € brut)</span><span style="${vs}">${regulAnCg.dixiemeNet.toFixed(2)} € net</span></div>
-      <div style="${ls};border-bottom:none;font-weight:700"><span>${regulAnCg.diff>0?'Complément à verser':'Aucun complément dû (maintien ≥ 10ème)'}</span><span style="color:${couleurTitreCgOnglet}">${regulAnCg.diff>0?regulAnCg.diff.toFixed(2)+' €':'—'}</span></div>
+      <div style="${ls};border-bottom:none;font-weight:700"><span>${regulAnCg.diff>0?'Complément à verser — comparaison prise par prise':'Aucun complément dû (le maintien l&rsquo;emporte sur chaque prise)'}</span><span style="color:${couleurTitreCgOnglet}">${regulAnCg.diff>0?regulAnCg.diff.toFixed(2)+' €':'—'}</span></div>
     </div>`;
   }
   // 13/09/2026 (Sophie) : année close sous le 46 dont l'indemnité entière a été versée avant un avenant
@@ -22985,14 +23005,23 @@ function genCumul(c){
       const coefNet=getParamAt('coefficients',dateToStr(finAppart)).valeur||0.7811975; // 27/07/2026 (correctif Sophie)
       const dixiemeBrut=parseFloat((brutAnnuel/10).toFixed(2));
       const dixiemeNet=parseFloat((dixiemeBrut*coefNet).toFixed(2));
-      const diff=parseFloat(Math.max(0,dixiemeNet-maintienVerse).toFixed(2));
+      // 19/10/2026 (Sophie) : le complement affiche vient desormais du calcul qui le VERSE
+      // (calcRegul52Annee, comparaison prise par prise), et n'est plus recalcule ici sur l'annee entiere.
+      // L'onglet Conges lit deja calcRegul52Annee depuis le 13/09 ; cette vue-ci, restee sur son propre
+      // calcul annuel, aurait annonce un autre montant pour le meme argent : chez Jules 2025/2026, 0 ici
+      // et 32,95 EUR sur la feuille de septembre 2026. Les deux lignes au-dessus (maintien verse, 10eme)
+      // restent celles de cette vue : elles renseignent, elles ne decident plus.
+      // Repli sur l'ancien calcul si calcRegul52Annee ne repond pas — annee close sous le 46, ou garantie
+      // du 46, qui ne sont pas la comparaison du 52.
+      const regulPayeeCg=(()=>{ try{ const rCg=calcRegul52Annee(c,anneeRef,null); return (rCg&&!rCg.motif)?rCg:null; }catch(eCg){ return null; } })();
+      const diff=regulPayeeCg?regulPayeeCg.diff:parseFloat(Math.max(0,dixiemeNet-maintienVerse).toFixed(2));
       const couleurRegul=diff>0?'#fff8e1':'#f0f8f0';
       const couleurTitre=diff>0?'#854F0B':'#2e7d32';
       html2+=`<div style="background:${couleurRegul};border-radius:8px;padding:10px 12px;margin-bottom:10px;margin-top:-4px">
         <div style="font-weight:700;font-size:13px;color:${couleurTitre};margin-bottom:6px">Régularisation congés ${anneeRef}/${anneeRef+1}</div>
         <div style="${ls}"><span>Maintien de salaire versé</span><span style="${vs}">${maintienVerse.toFixed(2)} € net</span></div>
         <div style="${ls}"><span>Méthode du 10ème (${dixiemeBrut.toFixed(2)} € brut)</span><span style="${vs}">${dixiemeNet.toFixed(2)} € net</span></div>
-        <div style="${ls};border-bottom:none;font-weight:700"><span>${diff>0?'Complément à verser':'Aucun complément dû (maintien ≥ 10ème)'}</span><span style="color:${couleurTitre}">${diff>0?diff.toFixed(2)+' €':'—'}</span></div>
+        <div style="${ls};border-bottom:none;font-weight:700"><span>${diff>0?'Complément à verser — comparaison prise par prise':'Aucun complément dû (le maintien l&rsquo;emporte sur chaque prise)'}</span><span style="color:${couleurTitre}">${diff>0?diff.toFixed(2)+' €':'—'}</span></div>
         ${diff===0?'':'<div style="font-size:11px;color:var(--tx2);margin-top:4px">Ce montant sera ajouté au salaire du mois suivant la dernière prise.</div>'}
       </div>`;
     }
