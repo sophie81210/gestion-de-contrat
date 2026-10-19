@@ -9678,8 +9678,17 @@ function calcRegul52Annee(c, anneeRef, moisAttendu){
   maintienVerse=parseFloat(maintienVerse.toFixed(2));
   const coefNet=getParamAt('coefficients',dernierMois+'-01').valeur||0.7811975; // 27/07/2026 (correctif
   // Sophie) : coefficient du mois de la dernière prise, pas celui d'aujourd'hui
-  const dixiemeBrut=parseFloat((brutAnnuel/10).toFixed(2));
-  const dixiemeNet=parseFloat((brutAnnuel/10*coefNet).toFixed(2));
+  // 19/10/2026 (Sophie) : les jours pour enfants a charge sont compris dans les jours acquis et payes
+  // par la mensualisation comme les autres, mais le 10eme auquel on les compare ne les portait pas.
+  // Le contrat sur 46 semaines les met a l'echelle depuis longtemps (calcIndemniteConges : indemnite x
+  // acquis / acquis sans bonus, la regle ecrite dans aide/paiement-conges.html — « 500 / 20 x (20+2) =
+  // 550 EUR »). Le 52 ne le faisait pas : les deux types ne traitaient pas ces jours pareil.
+  // Sophie l'a constate sur le contrat d'une collegue, puis sur un plan sem 46 de son compte de test.
+  const bonusB52=(cg&&cg.bonusEnfants)||0;
+  const sansB52=((cg&&cg.acquis)||0)-bonusB52;
+  const echB52=(bonusB52>0&&sansB52>0)?(cg.acquis/sansB52):1;
+  const dixiemeBrut=parseFloat((brutAnnuel/10*echB52).toFixed(2));
+  const dixiemeNet=parseFloat((brutAnnuel/10*coefNet*echB52).toFixed(2));
   // 19/10/2026 (Sophie, confirme par le tableur de son syndicat) : la comparaison maintien / 10eme se
   // fait PRISE PAR PRISE, plus une seule fois sur l'annee entiere. Le versement reste unique, sur cette
   // feuille-ci, une fois tous les jours pris. Le 10eme d'une prise vaut le 10eme annuel divise par les
@@ -20221,7 +20230,13 @@ function calcSoldeConges52(c, dateRupture){
     const bornerDixieme=a.estTerminee?null:dateRefIccpStr; // fenêtre complète si terminée, sinon jusqu'à la rupture
     const finFenetreDixieme=a.estTerminee?new Date(a.anneeRef+1,4,31):dateRefIccp;
     const brutAnnuelA=calcBrutTotal(c,new Date(a.anneeRef,5,1),finFenetreDixieme);
-    const dixiemeTotalA=brutAnnuelA*0.1;
+    // 19/10/2026 (Sophie) : meme mise a l'echelle des jours pour enfants a charge que dans
+    // calcRegul52Annee ci-dessus. La part de 10eme d'une prise se calcule ensuite en divisant par les
+    // jours acquis BONUS COMPRIS, ce qui reste coherent : le 10eme mis a l'echelle les couvre.
+    const cgBA=(c.conges||{})[a.anneeRef]||{};
+    const bonusBA=cgBA.bonusEnfants||0;
+    const sansBA=(cgBA.acquis||0)-bonusBA;
+    const dixiemeTotalA=brutAnnuelA*0.1*((bonusBA>0&&sansBA>0)?(cgBA.acquis/sansBA):1);
     const dejaVerseA=calcDejaVerseMaintien(c,a.anneeRef,dateRefIccpStr);
     // 01/09/2026 (Sophie) : arrondi supérieur appliqué ici aussi (comme dans la carte de l'onglet
     // Congés) — sans ça, cette fonction utilisait les jours restants EXACTS (ex. 11,625) au lieu de
