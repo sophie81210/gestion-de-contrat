@@ -9434,6 +9434,12 @@ function calcFicheSolde(c){
   const salaireNetDernierMois=parseFloat(recapDernierMois.salaireNet||0)+parseFloat(recapDernierMois.indemCongeMois||0);
 
   // Régularisation 52 sem sur congés déjà pris (toutes années de référence)
+  // 19/10/2026 (Sophie) : une seule source pour les deux lignes de conges de cette feuille — le meme
+  // solde que l'onglet Rupture. Les deux calculs independants qu'elle faisait ici donnaient des
+  // montants differents du meme argent.
+  let soldeCg52SC=null;
+  try{ if(c.tc==='52') soldeCg52SC=calcSoldeConges52(c,dateFinContrat); }catch(eSC){ soldeCg52SC=null; }
+  const detAnneeSC=anSC=>((soldeCg52SC&&soldeCg52SC.detailAnnees)||[]).find(x=>x.anneeRef===anSC)||null;
   let regulDejaPayes=[];
   if(c.tc==='52'&&c.conges){
     calcCongesContrat(c);
@@ -9444,9 +9450,13 @@ function calcFicheSolde(c){
       const debutAppart=new Date(anneeRef,4,1);
       const finAppart=new Date(anneeRef+2,3,30);
       let maintienVerse=0;
-      const brutAnnuel=calcBrutTotal(c, debutRef, finRef);
+      // 19/10/2026 (Sophie) : les deux bornes etaient declarees APRES l'appel qui les utilise. Toute
+      // feuille de solde de tout compte d'un contrat en 52 ayant des jours de conges acquis s'arretait
+      // donc la — mesure du 19/10 : les douze contrats en 52 des deux comptes, sur la version publiee
+      // avant ce jour. Le defaut ne se declenche qu'a la rupture, d'ou son age.
       const debutRef=new Date(anneeRef,5,1);
       const finRef=new Date(anneeRef+1,4,31);
+      const brutAnnuel=calcBrutTotal(c, debutRef, finRef);
       const tousAcq=[];
       Object.entries(c.fiches||{}).forEach(([k,fiche])=>{
         if(!fiche.valide) return;
@@ -9478,7 +9488,11 @@ function calcFicheSolde(c){
       });
       maintienVerse=parseFloat(maintienVerse.toFixed(2));
       const dixiemeNet=parseFloat((brutAnnuel/10*coefNet).toFixed(2));
-      const diff=parseFloat(Math.max(0,dixiemeNet-maintienVerse).toFixed(2));
+      // 19/10/2026 (Sophie) : meme regularisation que la feuille du mois et que l'onglet Conges, donc meme
+      // source — calcRegul52Annee, qui compare prise par prise. Recalculee ici sur l'annee entiere, elle
+      // aurait annonce un autre montant pour le meme argent. Repli sur l'ancien calcul si elle ne repond
+      // pas (annee close sous le 46, ou garantie du 46, qui ne sont pas la comparaison du 52).
+      const diff=detAnneeSC(anneeRef)?detAnneeSC(anneeRef).regulPrisesNet:0; // part des jours DEJA PRIS
       if(diff>0||joursPris>0){
         regulDejaPayes.push({anneeRef,joursPris,maintienVerse,dixiemeNet,diff});
       }
@@ -9505,7 +9519,10 @@ function calcFicheSolde(c){
       const montantJour=dixiemeNet>0?dixiemeNet/cg.acquis:montantMaintien/restants;
       const montantRestantsNet=parseFloat((restants*montantJour).toFixed(2));
       const meilleur=Math.max(montantMaintien,montantRestantsNet);
-      congesRestants52.push({anneeRef,restants,montantNet:meilleur,dixiemeNet,montantMaintien});
+      // 19/10/2026 (Sophie) : part des jours NON PRIS, prise sur le meme solde. Le maintien et le 10eme
+      // restent affiches en dessous, pour information.
+      const detRSC=detAnneeSC(anneeRef);
+      congesRestants52.push({anneeRef,restants,montantNet:detRSC?detRSC.compensatriceNet:meilleur,dixiemeNet,montantMaintien});
     });
   }
 
@@ -9641,7 +9658,7 @@ function calcRegul52Annee(c, anneeRef, moisAttendu){
       maintienVerse+=valeurJourMaintien46Cg(c,avSuivant||j.date);
       return;
     }
-    maintienVerse+=valeurJourMaintien52Cg(c,j.date);
+    maintienVerse+=valeurJourCongesPose52(c,j.date,j.jourSemaine);
   });
   maintienVerse=parseFloat(maintienVerse.toFixed(2));
   const coefNet=getParamAt('coefficients',dernierMois+'-01').valeur||0.7811975; // 27/07/2026 (correctif
@@ -9661,7 +9678,7 @@ function calcRegul52Annee(c, anneeRef, moisAttendu){
   // sa feuille de septembre 2026 deja validee : « fais le quand meme ».
   const valJourRG=jRG=>{
     if(!estJourSous52Cg(c,jRG.date)){ const avSRG=avenantsVers52.find(dRG=>dRG>jRG.date); return valeurJourMaintien46Cg(c,avSRG||jRG.date); }
-    return valeurJourMaintien52Cg(c,jRG.date);
+    return valeurJourCongesPose52(c,jRG.date,jRG.jourSemaine);
   };
   const valParDateRG={};
   jours.forEach(jRG=>{ valParDateRG[jRG.date]=(valParDateRG[jRG.date]||0)+valJourRG(jRG); });
@@ -9677,6 +9694,70 @@ function calcRegul52Annee(c, anneeRef, moisAttendu){
 
 // Valeur d'un jour de congé payé par la mensualisation d'un contrat 52 : moyenne hebdomadaire de la version du
 // mois ÷ 6, au taux net de la veille (part normale et part majorée) — la formule de la comparaison du 52.
+// 19/10/2026 (Sophie, arret du 2 juin 1988 n° 85-41.200 cite dans aide/paiement-conges.html) : ce que
+// vaut un jour de conges POSE sous un contrat sur 52 semaines — les HEURES PREVUES de ce jour-la,
+// celles-la meme que la deduction retire pour un jour de conges non acquis (getHJourCongesNonDeduit).
+// Un jour decompte sur lequel rien n'etait prevu vaut donc zero.
+// La formule « heures de la semaine / 6 » qu'appliquait l'App avant se trompait deux fois, mesure a
+// l'appui sur le contrat Jules, semaine du 26 au 31 mai 2025, 17 h prevues, jeudi 29 ferie :
+//  - quatre jours decomptes a 17/6 = 11,33 h, plus le ferie 8,50 h, faisaient 19,83 h pour une
+//    semaine qui ne valait que 17 h ;
+//  - un jour post-pose tombant dans la semaine de reprise prenait le volume de CETTE semaine (chez
+//    52var-46sem-52fixe, lundi 8 janvier 2024 : 6,6667 h) alors qu'elle n'y aurait rien travaille.
+// Aux heures prevues, la semaine de Jules fait 8,50 h de conges + 8,50 h de ferie = ses 17 h, au centime.
+// Les jours acquis NON ENCORE PRIS gardent la moyenne hebdomadaire / 6 (valeurJourMaintien52Cg
+// ci-dessous) : aucun jour n'est pose, il n'y a aucune heure prevue a lire.
+// 19/10/2026 (Sophie, arret du 24 juin 1992 n° 89-41.387, que Lamy lit comme la CCN) : ce que vaut
+// UNE heure de conges du mois — mensualisation / heures theoriques du mois, au taux du mois. C'est
+// le taux reel du mois, celui-la meme que la deduction d'un jour de conges non acquis emploie ; il
+// change d'un mois a l'autre, et c'est voulu. La majoration des heures supplementaires mensualisees
+// y est comprise, comme l'exige aide/majorations.html pour un jour de conges au maintien.
+// GARDE-FOU : calcRecapFiche appelle la regularisation, qui appelle cette fonction. Une demande
+// portant sur le mois dont le recapitulatif est justement en cours de calcul bouclerait ; la
+// sentinelle l'arrete et renvoie null, l'appelant retombant alors sur heures x taux horaire.
+let _moisCgEnCours=null;
+function valeurHeureCongesMois(c, key){
+  const fVH=c.fiches&&c.fiches[key];
+  if(!fVH) return null;
+  const lireVH=rVH=>{
+    const hThVH=parseFloat((rVH&&rVH.hTheoriques)||0)||0;
+    const hMeVH=parseFloat((rVH&&rVH.hMensu)||0)||0;
+    const txVH=parseFloat((rVH&&rVH.txNetExact)||0)||0;
+    const coVH=parseFloat((rVH&&rVH.coefNetR)||0)||0;
+    if(!(hThVH>0&&hMeVH>0&&txVH>0&&coVH>0)) return null;
+    const majVH=parseFloat((rVH&&rVH.hMensuMaj)||0)||0;
+    const partVH=hMeVH>0?majVH/hMeVH:0;
+    const tauxVH=(1-partVH)*txVH+partVH*txVH*(1+(parseFloat((rVH&&rVH.majSup)||0)||0)/100);
+    const netVH=hMeVH*tauxVH/hThVH;
+    return {net:netVH, brut:netVH/coVH};
+  };
+  if(fVH._recapCache) return lireVH(fVH._recapCache);
+  const cleVH=(c.id!==undefined?c.id:'?')+'|'+key;
+  if(_moisCgEnCours===cleVH){ if(window.DEBUG_CGAM)console.log('[CGAM-valeurHeureCg-repli]',cleVH); return null; }
+  const precVH=_moisCgEnCours;
+  _moisCgEnCours=cleVH;
+  let vVH=null;
+  try{ vVH=lireVH(calcRecapFiche(c,fVH)); }catch(eVH){ vVH=null; }
+  _moisCgEnCours=precVH;
+  return vVH;
+}
+
+function valeurJourCongesPose52(c, dateStr, jourSemaine){
+  const hJourVC=getHJourCongesNonDeduit(c,dateStr,jourSemaine);
+  if(!(hJourVC>0)) return 0;
+  const vHVC=valeurHeureCongesMois(c,dateStr.slice(0,7));
+  if(vHVC) return hJourVC*vHVC.net;
+  // repli du garde-fou : heures x taux horaire
+  const [jyVC,jmVC,jdVC]=dateStr.split('-').map(Number);
+  const vVC=new Date(jyVC,jmVC-1,jdVC); vVC.setDate(vVC.getDate()-1);
+  const srcVC=getVersionActive(c,vVC);
+  const coefVC=getParamAt('coefficients',dateToStr(vVC)).valeur||0.7811975;
+  const hMensuTotVC=parseFloat(srcVC.hMensu||c.hMensu||0);
+  const partMajVC=hMensuTotVC>0?parseFloat(srcVC.hMensuMaj||0)/hMensuTotVC:0;
+  const txVC=parseFloat(srcVC.txBrut||0)*coefVC;
+  return hJourVC*((1-partMajVC)*txVC+partMajVC*txVC*(1+((srcVC.majSup||0)/100)));
+}
+
 function valeurJourMaintien52Cg(c, dateStr){
   const [jy,jm,jd]=dateStr.split('-').map(Number);
   const src=getVersionActive(c,new Date(jy,jm-1,1));
@@ -9717,7 +9798,7 @@ function calcGarantie46Annee(c, anneeRef, moisAttendu){
   const ind=calcIndemniteConges(c,anneeRef);
   if(!ind) return null;
   const jours52=jours.filter(j=>estJourSous52Cg(c,j.date));
-  const maintien52=parseFloat(jours52.reduce((t,j)=>t+valeurJourMaintien52Cg(c,j.date),0).toFixed(2));
+  const maintien52=parseFloat(jours52.reduce((t,j)=>t+valeurJourCongesPose52(c,j.date,j.jourSemaine),0).toFixed(2));
   // tout ce que les feuilles ont versé au titre du 46 jusqu'au mois de la dernière prise, validées ou non
   const verse46=montantVerse46Annee(c,anneeRef,{jusqua:dernierMois,memeNonValidees:true});
   const maintienVerse=parseFloat((verse46+maintien52).toFixed(2));
@@ -16706,26 +16787,6 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // acquis et anticipé, jamais l'anticipé (qui appartient à une autre année d'acquisition).
   let montantCongesPayesAcqSeul=0;
   if(sourceActif.tc==='52'){
-    const hSemMoy52=hMensu*12/nbSemActif;
-    const estPSV52=(sourceActif.th==='sem')||(sourceActif.th==='plan'&&sourceActif.planType==='var');
-    // Heures de la semaine pour un jour donné (plan sem / plan var), sinon moyenne
-    const getHSemPourJour=(dateStr)=>{
-      if(!estPSV52) return hSemMoy52;
-      if(!agendaMois||!agendaMois.semaines) return hSemMoy52;
-      const sk=getSemISO(dateStr);
-      const ak=getKeyAgenda(sk,getSemAnnee(dateStr));
-      const typeSem=agendaMois.semaines[ak];
-      if(!typeSem) return hSemMoy52;
-      if(sourceActif.th==='sem'&&sourceActif.semTypes){
-        const st=sourceActif.semTypes.find(t=>t.nom===typeSem);
-        if(st&&st.h) return parseFloat(st.h);
-      }
-      if(sourceActif.planType==='var'&&sourceActif.planVar){
-        const vol=sourceActif.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);
-        if(vol&&vol.h) return parseFloat(vol.h);
-      }
-      return hSemMoy52;
-    };
     fiche.jours.forEach(j=>{
       // 25/08/2026 (Sophie) : decompte-conges rejoint ce groupe (payé, heures hebdo/6) — ce sont des
       // jours post-pose qui continuent normalement à être payés ainsi, pas une vraie déduction
@@ -16745,8 +16806,14 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         dateVeille.setDate(dateVeille.getDate()-1);
         const srcVeille=getVersionActive(c,dateVeille);
         const txNetVeille=srcVeille.txBrut*(getParamAt('coefficients',dateToStr(dateVeille)).valeur||0.7811975); // 01/09/2026 (Sophie) : ne plus jamais utiliser srcVeille.txNet stocké (arrondi à 2 décimales à la création du contrat/avenant, jamais recalculé depuis) — toujours recalculer frais, pleine précision, comme txNetPrecis
-        const hSemJ=getHSemPourJour(j.date);
-        const montantJourCg=(hSemJ/6)*txNetVeille;
+        // 19/10/2026 (Sophie) : heures PREVUES du jour, meme regle que la regularisation et que la deduction
+        // des jours non acquis. Le nombre de jours decomptes, lui, ne change pas.
+        // la valeur du mois est ici sur place : on la calcule sans passer par valeurHeureCongesMois,
+        // qui rappellerait cette meme fonction (voir son garde-fou).
+        const hJCg=getHJourCongesNonDeduit(c,j.date,j.jourSemaine);
+        const partMajCgJ=hMensu>0?parseFloat(sourceActif.hMensuMaj||0)/hMensu:0;
+        const tauxCgJ=(1-partMajCgJ)*txNetPrecis+partMajCgJ*txNetPrecis*(1+((sourceActif.majSup||0)/100));
+        const montantJourCg=hTheoriques>0?(hMensu*tauxCgJ/hTheoriques)*hJCg:hJCg*txNetVeille;
         if(window.DEBUG_CGAM)console.log('[CGAM-montantJourCg]',j.date,'| statut:',j.statut,'| hSemJ:',hSemJ,'| txNetVeille:',txNetVeille,'| dateVeille:',dateToStr(dateVeille),'| montantJourCg:',montantJourCg);
         montantCongesPayesMois+=montantJourCg;
         nbCongesPayesMois++;
@@ -19965,7 +20032,8 @@ function calcHeuresSupMensuBrutTotal(c, dateDebut, dateFin){
         const dateVeille=new Date(jy,jm-1,jd); dateVeille.setDate(dateVeille.getDate()-1);
         const srcV=getVersionActive(c,dateVeille);
         const hMensuV=parseFloat(srcV.hMensu||0);
-        const hJourCgV=(hMensuV*12/(parseFloat(srcV.nbSem||52)))/6;
+        // 19/10/2026 (Sophie) : heures PREVUES du jour, comme valeurJourCongesPose52 (meme regle, ici en brut).
+        const hJourCgV=getHJourCongesNonDeduit(c,j.date,j.jourSemaine);
         const hMensuMajV=parseFloat(srcV.hMensuMaj||0);
         const majSupV=(srcV.majSup||0)/100;
         const partMajV=hMensuV>0?hMensuMajV/hMensuV:0;
@@ -19974,7 +20042,9 @@ function calcHeuresSupMensuBrutTotal(c, dateDebut, dateFin){
         // calcul en cascade (bug confirmé Sophie, exemple chiffré : 403,36 au lieu de 268,81 attendu).
         const txBrutNormV=parseFloat(srcV.txBrut||0);
         const txBrutMajV=parseFloat(srcV.txBrut||0)*(1+majSupV);
-        const montantJourCgV=hJourCgV*((1-partMajV)*txBrutNormV+partMajV*txBrutMajV);
+        const vHCgV=valeurHeureCongesMois(c,j.date.slice(0,7));
+        // repli du garde-fou : heures x taux horaire brut
+        const montantJourCgV=vHCgV?hJourCgV*vHCgV.brut:hJourCgV*((1-partMajV)*txBrutNormV+partMajV*txBrutMajV);
         dejaVerse+=montantJourCgV;
         if(detailCg) detailCg.push({date:j.date,montant:montantJourCgV});
         if(window.DEBUG_CGAM)console.log('[CGAM-dejaVerseMaintien-jour]',anneeRef,'|',j.date,'| statut:',j.statut,'| origine:',origineCg,'| hJourCgV:',hJourCgV,'| txBrutNormV:',txBrutNormV,'| montant:',hJourCgV*((1-partMajV)*txBrutNormV+partMajV*txBrutMajV));
@@ -20173,6 +20243,15 @@ function calcSoldeConges52(c, dateRupture){
       dixiemeNet:parseFloat((dixiemeTotalA*coefNet).toFixed(2)),
       dejaVerseNet:parseFloat((dejaVerseA*coefNet).toFixed(2)),
       resteNet:parseFloat((Math.max(0,montantA)*coefNet).toFixed(2)),
+      // 19/10/2026 (Sophie) : les deux parts du resultat, exposees separement pour la feuille de solde de
+      // tout compte, qui les affiche sur deux lignes — « Regularisation conges » pour les jours DEJA PRIS,
+      // « Indemnite compensatrice » pour les jours NON PRIS. Leur somme vaut resteNet au centime : la part
+      // des jours non pris est DEDUITE de l'autre, jamais recalculee a part, pour qu'aucun euro ne soit
+      // compte deux fois ni perdu. La feuille refaisait avant ses propres calculs sur l'annee entiere et
+      // reclamait, pour les jours pris, la part du 10eme des jours non pris que sa seconde ligne payait deja
+      // (mesure du 19/10 : Mayronn 2024/2025, 75,70 EUR annonces deux fois).
+      regulPrisesNet:parseFloat(Math.max(0,(duPrisesA-dejaVerseA)*coefNet).toFixed(2)),
+      compensatriceNet:parseFloat(Math.max(0,parseFloat((Math.max(0,montantA)*coefNet).toFixed(2))-parseFloat(Math.max(0,(duPrisesA-dejaVerseA)*coefNet).toFixed(2))).toFixed(2)),
         dueNet:parseFloat((parseFloat((dejaVerseA*coefNet).toFixed(2))+parseFloat((Math.max(0,montantA)*coefNet).toFixed(2))).toFixed(2))});
     if(a.estTerminee) montantAcquisBrut+=montantA;
     else {
