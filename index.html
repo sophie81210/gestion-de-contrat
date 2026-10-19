@@ -9708,12 +9708,19 @@ function calcRegul52Annee(c, anneeRef, moisAttendu){
   jours.forEach(jRG=>{ valParDateRG[jRG.date]=(valParDateRG[jRG.date]||0)+valJourRG(jRG); });
   const dixJourRG=cg.acquis>0?dixiemeNet/cg.acquis:0;
   let duRG=0;
+  // 19/10/2026 (Sophie) : le detail de chaque prise est conserve pour l'encart de l'onglet Conges.
+  // Sans lui l'utilisatrice voyait « maintien 106,41 / 10eme 94,37 » et un complement de 14,44 EUR
+  // sans pouvoir comprendre d'ou il sort — le maintien total est pourtant le plus eleve des deux.
+  const detPrisesRG=[];
   prisesEpisodesConges(c, Object.keys(valParDateRG)).forEach(gRG=>{
     const maintienRG=gRG.reduce((nRG,dsRG)=>nRG+valParDateRG[dsRG],0);
-    duRG+=Math.max(maintienRG, gRG.length*dixJourRG);
+    const dixPriseRG=gRG.length*dixJourRG;
+    detPrisesRG.push({deb:gRG[0], fin:gRG[gRG.length-1], jours:gRG.length,
+      maintien:parseFloat(maintienRG.toFixed(2)), dixieme:parseFloat(dixPriseRG.toFixed(2))});
+    duRG+=Math.max(maintienRG, dixPriseRG);
   });
   const diff=parseFloat(Math.max(0,duRG-maintienVerse).toFixed(2));
-  return {anneeRef, dernierMois, maintienVerse, dixiemeBrut, dixiemeNet, diff};
+  return {anneeRef, dernierMois, maintienVerse, dixiemeBrut, dixiemeNet, diff, prises:detPrisesRG, du:parseFloat(duRG.toFixed(2))};
 }
 
 // Valeur d'un jour de congé payé par la mensualisation d'un contrat 52 : moyenne hebdomadaire de la version du
@@ -22539,12 +22546,30 @@ function buildCgAcquisEncarts(c, anneeAcq){
   // « Complément congés payés (net) » qui la répétait quand un complément est dû a été retiré plus bas.
   const regulAnCg=calcRegul52Annee(c,anneeAcq);
   if(regulAnCg&&regulAnCg.motif!=='garantie46'){ // la garantie du 46 s'affiche dans l'encart du 46
+    // 19/10/2026 (Sophie) : les deux lignes de synthese sont remplacees par le detail PRISE PAR PRISE,
+    // puisque c'est ainsi que la comparaison se fait. La methode retenue est en gras sur chaque ligne.
     const couleurTitreCgOnglet=regulAnCg.diff>0?'#854F0B':'#2e7d32';
+    const moisCgT=['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+    const jolieCgT=dsT=>(+dsT.slice(8))+' '+moisCgT[(+dsT.slice(5,7))-1]+' '+dsT.slice(0,4);
+    const tdT='padding:3px 4px;font-size:12px';
+    const lignesCgT=(regulAnCg.prises||[]).map(pT=>{
+      const dixGagneT=pT.dixieme>pT.maintien;
+      const perT=pT.deb===pT.fin?jolieCgT(pT.deb):(jolieCgT(pT.deb)+' au '+jolieCgT(pT.fin));
+      return `<tr><td style="${tdT}">${perT}</td><td style="${tdT};text-align:center">${pT.jours} j</td>`
+        +`<td style="${tdT};text-align:right${dixGagneT?'':';font-weight:700'}">${pT.maintien.toFixed(2)} &euro;</td>`
+        +`<td style="${tdT};text-align:right${dixGagneT?';font-weight:700':''}">${pT.dixieme.toFixed(2)} &euro;</td></tr>`;
+    }).join('');
+    const totJT=(regulAnCg.prises||[]).reduce((nT,pT)=>nT+pT.jours,0);
     html52+=`<div style="background:#f2eef1;border-radius:8px;padding:10px 12px;margin-bottom:8px">
-      <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:6px">Régularisation congés payés (net)</div>
-      <div style="${ls}"><span>Maintien de salaire versé</span><span style="${vs}">${regulAnCg.maintienVerse.toFixed(2)} € net</span></div>
-      <div style="${ls}"><span>Méthode du 10ème (${regulAnCg.dixiemeBrut.toFixed(2)} € brut)</span><span style="${vs}">${regulAnCg.dixiemeNet.toFixed(2)} € net</span></div>
-      <div style="${ls};border-bottom:none;font-weight:700"><span>${regulAnCg.diff>0?'Complément à verser':'Aucun complément dû (le maintien l&rsquo;emporte sur chaque prise)'}</span><span style="color:${couleurTitreCgOnglet}">${regulAnCg.diff>0?regulAnCg.diff.toFixed(2)+' €':'—'}</span></div>
+      <div style="font-weight:700;font-size:13px;color:var(--m);margin-bottom:6px">R&eacute;gularisation cong&eacute;s pay&eacute;s (net)</div>
+      <table style="width:100%;border-collapse:collapse">
+        <tr style="color:var(--tx2);font-size:11px"><td style="${tdT}">Prise</td><td style="${tdT};text-align:center">Jours</td><td style="${tdT};text-align:right">Maintien</td><td style="${tdT};text-align:right">10&egrave;me</td></tr>
+        ${lignesCgT}
+        <tr style="border-top:1px solid rgba(0,0,0,0.15)"><td style="${tdT};font-weight:700">Montant d&ucirc;</td><td style="${tdT};text-align:center;font-weight:700">${totJT} j</td><td colspan="2" style="${tdT};text-align:right;font-weight:700;color:var(--m)">${(regulAnCg.du||0).toFixed(2)} &euro;</td></tr>
+        <tr><td colspan="3" style="${tdT}">D&eacute;j&agrave; vers&eacute; par la mensualisation</td><td style="${tdT};text-align:right">${regulAnCg.maintienVerse.toFixed(2)} &euro;</td></tr>
+        <tr style="border-top:1px solid rgba(0,0,0,0.15)"><td colspan="3" style="${tdT};font-weight:700">${regulAnCg.diff>0?'Compl&eacute;ment &agrave; verser':'Aucun compl&eacute;ment d&ucirc;'}</td><td style="${tdT};text-align:right;font-weight:700;color:${couleurTitreCgOnglet}">${regulAnCg.diff>0?regulAnCg.diff.toFixed(2)+' &euro;':'&mdash;'}</td></tr>
+      </table>
+        <div style="font-size:11px;color:var(--tx2);margin-top:6px">Le plus favorable est retenu sur chaque prise, en gras. Le 10&egrave;me d&rsquo;une prise vaut le 10&egrave;me de l&rsquo;ann&eacute;e divis&eacute; par les jours acquis, soit ${(cg.acquis>0?(regulAnCg.dixiemeNet/cg.acquis):0).toFixed(2)} &euro; la journ&eacute;e, multipli&eacute; par ses jours d&eacute;compt&eacute;s.</div>
     </div>`;
   }
   // 13/09/2026 (Sophie) : année close sous le 46 dont l'indemnité entière a été versée avant un avenant
