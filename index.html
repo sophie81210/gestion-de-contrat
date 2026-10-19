@@ -9437,6 +9437,14 @@ function calcFicheSolde(c){
   // 19/10/2026 (Sophie) : une seule source pour les deux lignes de conges de cette feuille — le meme
   // solde que l'onglet Rupture. Les deux calculs independants qu'elle faisait ici donnaient des
   // montants differents du meme argent.
+  // 19/10/2026 (Sophie) : les jours de fractionnement NON POSES, payes a la rupture. Ils s'affichaient
+  // dans l'onglet Rupture mais manquaient sur cette feuille — le document remis a l'employeur.
+  let fracSoldeSC=null;
+  try{
+    const srcFinSC=getVersionActive(c,dateFinContrat)||c;
+    const sFrSC=(((srcFinSC.tc)||c.tc)==='52')?calcSoldeConges52(c,dateFinContrat):calcSoldeConges46(c,dateFinContrat);
+    if(sFrSC&&sFrSC.montantFracRupture>0) fracSoldeSC={jours:sFrSC.joursFracRestants,montantNet:sFrSC.montantFracRupture};
+  }catch(eFrSC){ fracSoldeSC=null; }
   let soldeCg52SC=null;
   try{ if(c.tc==='52') soldeCg52SC=calcSoldeConges52(c,dateFinContrat); }catch(eSC){ soldeCg52SC=null; }
   const detAnneeSC=anSC=>((soldeCg52SC&&soldeCg52SC.detailAnnees)||[]).find(x=>x.anneeRef===anSC)||null;
@@ -9530,6 +9538,7 @@ function calcFicheSolde(c){
     salaireNetDernierMois,
     recapDernierMois,
     regulDejaPayes,
+    fracSolde:fracSoldeSC,
     congesRestants52,
     solde,
     dernierKey,
@@ -9541,7 +9550,7 @@ function renderFicheSolde(c){
   const data=calcFicheSolde(c);
   if(!data) return '<p style="color:var(--al);padding:16px">Feuille solde non disponible.</p>';
 
-  const {salaireNetDernierMois,recapDernierMois,regulDejaPayes,congesRestants52,solde,dernierKey,dateFinContrat}=data;
+  const {salaireNetDernierMois,recapDernierMois,regulDejaPayes,congesRestants52,fracSolde,solde,dernierKey,dateFinContrat}=data;
   const params=S.params||{};
   const coefNet=getParamAt('coefficients',dateToStr(dateFinContrat)).valeur||0.7811975; // 27/07/2026
   // (correctif Sophie) : coefficient en vigueur à la date de fin de contrat, pas celui d'aujourd'hui
@@ -9593,6 +9602,11 @@ function renderFicheSolde(c){
     html+=`<div style="${ls}"><span>${label}</span><span style="${vs};color:${solde.indemPreavis.sens==='remboursement'?'var(--al)':'var(--m)'}">${prefixe}${solde.indemPreavis.montantNet.toFixed(2)} €</span></div>`;
   }
 
+  // Jours de fractionnement non pris
+  if(fracSolde){
+    html+=`<div style="${ls}"><span>Jours de fractionnement non pris (${fracSolde.jours} j)${pastilleAide('fractionnement-conges')}</span><span style="${vs}">${fracSolde.montantNet.toFixed(2)} € net</span></div>`;
+  }
+  
   // Indemnité de rupture
   if(solde.indemRupture){
     html+=`<div style="${ls}"><span>Indemnité de retrait d'enfant</span><span style="${vs}">${solde.indemRupture.montantBrut.toFixed(2)} € brut</span></div>`;
@@ -9600,6 +9614,7 @@ function renderFicheSolde(c){
 
   // Total solde
   const totalSolde=(congesRestants52.reduce((s,cr)=>s+cr.montantNet,0))
+    +(fracSolde?fracSolde.montantNet:0)
     +(solde.indemConges?.montantNet||0)
     +(solde.regul?.montantNet||0)
     +(solde.indemPreavis?.montantNet??(0))*(solde.indemPreavis?.sens==='remboursement'?-1:1)
@@ -9970,10 +9985,6 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
   // 03/09/2026 (Sophie) : ligne à part pour les jours de fractionnement pris ce mois — jamais fusionnée
   // avec l'indemnité de congés normale ci-dessus, puisque ce sont deux droits distincts (l'indemnité
   // normale peut déjà être réglée depuis juin, le fractionnement ne se détermine qu'au 31 octobre).
-  if(parseFloat(recap.indemFractionnementMois||0)>0){
-    html+=ligneG('Jours de fractionnement', recap.indemFractionnementMois.toFixed(2)+' €', true, 'var(--m)', true);
-    html+='<tr><td colspan="2" style="padding:2px 4px 6px;font-size:11px;font-style:italic;color:var(--tx2)">soit '+recap.indemFractionnementNbJours+' jour'+(recap.indemFractionnementNbJours>1?'s':'')+'</td></tr>';
-  }
   // Régularisation congés 52 sem si applicable
   if(regul52&&regul52.diff>0){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:2px solid var(--mb)"></td></tr>';
@@ -10034,7 +10045,7 @@ function buildRecapPajemploi(recap,c,regulExterne){
   const _joursRegul=_hasRegul52?((_hMoyJourRegul>0)?parseFloat((_hRegul46/_hMoyJourRegul).toFixed(1)):0):(_hasRegulExt?regulExterne.joursRegul:0);
   // Jours de congés payés (contrat 46 uniquement, congés payés en cours de contrat ce mois-ci) —
   // fractionnement inclus dans le même total déclaré (03/09/2026, Sophie)
-  const _joursCgPajemploi=(recap.indemCongeNbJours||0)+(recap.indemFractionnementNbJours||0);
+  const _joursCgPajemploi=(recap.indemCongeNbJours||0);
   if(_joursCgPajemploi>0) html+=ligneG('Jours de congés payés', _joursCgPajemploi+' j', true);
   // Jours d'activité
   // 18/09/2026 (Sophie) : accueil occasionnel — aucune mensualisation, donc aucun « jour moyen » à
@@ -10065,14 +10076,14 @@ function buildRecapPajemploi(recap,c,regulExterne){
   if(_hSupDecl>0) html+=ligneG('Heures supplémentaires', _hSupDecl.toFixed(2)+' h', true, '', _hCongesSupDecl>0);
   if(_hCongesSupDecl>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--tx2)">dont '+_hCongesSupDecl.toFixed(2)+' h de congés payés</td></tr>';
   const _regul52Diff=recap.regul52Fiche?parseFloat(recap.regul52Fiche.diff||0):0;
-  html+=ligneG('Salaire net', (parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)+parseFloat(recap.indemFractionnementMois||0)+_diffEuros+_regul52Diff).toFixed(2)+' €', true, 'var(--m)', _hasRegul&&_diffEuros>0);
+  html+=ligneG('Salaire net', (parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)+_diffEuros+_regul52Diff).toFixed(2)+' €', true, 'var(--m)', _hasRegul&&_diffEuros>0);
   if(_hasRegul&&_diffEuros>0) html+='<tr><td colspan="2" style="padding:2px 4px;font-size:11px;color:var(--tx2)">dont '+_diffEuros.toFixed(2)+' € de régularisation de salaire</td></tr>';
   if(parseFloat(recap.indemCgOcc||0)>0) html+=ligneG('Indemnité congés contrat occasionnel', recap.indemCgOcc.toFixed(2)+' € (10%)', true, 'var(--m)');
   if(parseFloat(recap.indemEntretienTotal)>0) html+=ligneG('Indemnité d\'entretien', recap.indemEntretienTotal+' €', true);
   if(parseFloat(recap.indemRepasTotal)>0) html+=ligneG('Indem. repas', recap.indemRepasTotal+' €');
   if(parseFloat(recap.indemKmTotal||0)>0) html+=ligneG('Indem. km', recap.indemKmTotal+' €');
   // Total payé (avec exonération intégrée en sous-ligne, plus de ligne exonération séparée)
-  const sNet=parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)+parseFloat(recap.indemFractionnementMois||0)+(recap.regul52Fiche?recap.regul52Fiche.diff:0)+(_hasRegul?_diffEuros:0);
+  const sNet=parseFloat(recap.salaireNet||0)+parseFloat(recap.indemCongeMois||0)+(recap.regul52Fiche?recap.regul52Fiche.diff:0)+(_hasRegul?_diffEuros:0);
   const indemE=parseFloat(recap.indemEntretienTotal||0);
   const indemR=parseFloat(recap.indemRepasTotal||0);
   const indemK=parseFloat(recap.indemKmTotal||0);
@@ -10143,7 +10154,7 @@ function buildRecapCumul(r1,r2,solde,c){
   const _regul52DiffC=(r1.regul52Fiche?parseFloat(r1.regul52Fiche.diff||0):0)+(r2.regul52Fiche?parseFloat(r2.regul52Fiche.diff||0):0);
   const salaireNet=parseFloat(r1.salaireNet||0)+parseFloat(r2.salaireNet||0)+_cumulDiffEuros+_regul52DiffC
     +parseFloat(r1.indemCongeMois||0)+parseFloat(r2.indemCongeMois||0)
-    +parseFloat(r1.indemFractionnementMois||0)+parseFloat(r2.indemFractionnementMois||0);
+    ;
   const indemE=parseFloat(r1.indemEntretienTotal||0)+parseFloat(r2.indemEntretienTotal||0);
   const indemR=parseFloat(r1.indemRepasTotal||0)+parseFloat(r2.indemRepasTotal||0);
   const indemK=parseFloat(r1.indemKmTotal||0)+parseFloat(r2.indemKmTotal||0);
@@ -16494,8 +16505,6 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // montant de l'indemnité — qui ne se déclare pas avec elle — et rejoint la ligne « dont … € d'exonération de
   // charges » du bas de la feuille, au prorata des jours payés dans le mois.
   let _indCgPourExo=null;
-  let indemFractionnementMois=0;
-  let indemFractionnementNbJours=0;
   // 11/09/2026 (Sophie) : nombre de jours de congés posés en mai dont le paiement est reporté sur la
   // fiche de juin — sert uniquement à afficher la phrase d'explication sur la fiche de mai.
   let indemCongeReportMai=0;
@@ -16639,8 +16648,11 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             }
           }
         }
-        // 04/09/2026 (Sophie) : indemnité de fractionnement retirée — jours de repos posés sans
-        // déduction ni paiement séparé (indemFractionnementMois/NbJours restent à 0 ci-dessus).
+        // 04/09/2026 (Sophie) : indemnite de fractionnement retiree — jours de repos poses sans deduction
+        // ni paiement separe. 19/10/2026 : les deux variables et la ligne « Jours de fractionnement » de la
+        // feuille, restees en place et jamais remplies, ont ete retirees. Les jours de fractionnement NON
+        // POSES sont, eux, payes a la rupture (calcSoldeFractionnementRupture) et desormais portes par la
+        // feuille de solde de tout compte.
         if(fiche.mois===5){
           // 17/08/2026 (Sophie) : bornée depuis le 1er juin de l'ANNÉE PRÉCÉDENTE — sans cette borne
           // basse, des jours anticipés bien plus anciens (déjà payés lors d'un juin précédent) étaient
@@ -16922,7 +16934,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     indemEntretienTotal:indemEntretienTotal.toFixed(2),
     indemRepasTotal:indemRepasTotal.toFixed(2),
     indemKmTotal:indemKmTotal.toFixed(2),
-    indemCongeMois, indemCongeNbJours, indemCongeParAnnee, indemCongeAvenant, indemCongeReportMai, indemFractionnementMois, indemFractionnementNbJours,
+    indemCongeMois, indemCongeNbJours, indemCongeParAnnee, indemCongeAvenant, indemCongeReportMai, 
     montantCongesPayesMois, nbCongesPayesMois, montantCongesPayesAcqSeul,
     montantCongesNonAcquis, nbCongesNonAcquis,
     regul52Fiche,
