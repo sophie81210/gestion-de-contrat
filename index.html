@@ -2813,6 +2813,28 @@ function modifierKmDirect(contratId, val, cibleId){
                     // travaillé) parmi les jours possibles de cette semaine — à déduire du "dû", au même
                     // taux journalier que le reste, pour que la comparaison avec le mensualisé (déjà net
                     // d'absence) reste cohérente
+                    // 20/10/2026 (Sophie) : un jour de conge pose sur un jour COCHE au planning retire une part du volume
+                    // de la semaine (volume / jours max), ou ses heures saisies s'il en porte. Avant, il etait valorise aux
+                    // heures PREVUES de la fiche — toujours nulles sur un jour de conge, donc il ne retirait rien : Silene,
+                    // semaine du 22 aout 2022, 18,33 h dues alors que le lundi 22 etait un conge pose sur un jour prevu
+                    // (13,75 h attendues). Un jour NON coche ne retire rien, ses heures ont pu etre posees ailleurs dans le
+                    // mois : Gertrude, 29 et 30 decembre 2025, planning jamais enregistre ; Silene, 19 mai 2023, conge chez
+                    // l'autre employeur sans aucun decompte ici.
+                    const jMaxHP=source.planType==='min'
+                      ?(source.jMaxMin||nbJoursPossiblesVol)
+                      :(()=>{const vJHP=source.planVar&&source.planVar.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem);return (vJHP&&vJHP.j)||nbJoursPossiblesVol;})();
+                    const partJourHP=volH/(jMaxHP||1);
+                    const statutFicheHP=jdStr=>{const fHP=c.fiches&&c.fiches[jdStr.slice(0,7)];const jHP=fHP&&(fHP.jours||[]).find(x=>x.date===jdStr);return jHP?jHP.statut:null;};
+                    const estCongeCocheHP=jdStr=>{if(!isJourCongeAM(jdStr))return false;if(statutFicheHP(jdStr)==='ferie')return false;const pdHP=c.planning&&c.planning[jdStr];return !!(pdHP&&pdHP.coche);};
+                    const hUnJourCongeHP=jdStr=>{const fHP=c.fiches&&c.fiches[jdStr.slice(0,7)];const jHP=fHP&&(fHP.jours||[]).find(x=>x.date===jdStr);if(jHP&&jHP.heureDebPrev&&jHP.heureFinPrev){const vHP=Math.max(0,(toMins(jHP.heureFinPrev)-toMins(jHP.heureDebPrev))/60);if(vHP>0)return vHP;}return partJourHP;};
+                    const hCongesBorneHP=(limA,limZ)=>{if(clause52)return 0;let hHP=0;for(let dCB=0;dCB<7;dCB++){const jdCB=new Date(lundiSem);jdCB.setDate(lundiSem.getDate()+dCB);const jdStrCB=fmtSem(jdCB);if(!joursPattern[dCB])continue;if(limA&&jdStrCB<limA)continue;if(limZ&&jdStrCB>limZ)continue;if(!estCongeCocheHP(jdStrCB))continue;hHP+=hUnJourCongeHP(jdStrCB);}return hHP;};
+                    // 20/10/2026 (Sophie) : un FERIE PAYE tombant dans une semaine de conges n'a consomme aucun jour de conge
+                    // et la mensualisation le paie : il est donc du. Sa valeur est celle d'un jour de conge, par
+                    // getHJourCongesNonDeduit (deja utilisee pour les feries en fixe/sem) — heures du jour en fixe,
+                    // volume/jours possibles en plan min, volume moyen/jours union en plan var sans type de semaine. Elle rend
+                    // 0 hors des jours prevus/possibles/union : les feries du 25 decembre et du 1er janvier tombes un samedi
+                    // ou un dimanche n'apportent rien (Silene 2022/2023, Enael 2021/2022).
+                    const hFeriesPayesHP=(limA,limZ)=>{let hFHP=0;for(let dFH=0;dFH<7;dFH++){const jdFH=new Date(lundiSem);jdFH.setDate(lundiSem.getDate()+dFH);const jdStrFH=fmtSem(jdFH);if(!joursPattern[dFH])continue;if(limA&&jdStrFH<limA)continue;if(limZ&&jdStrFH>limZ)continue;if(statutFicheHP(jdStrFH)!=='ferie')continue;hFHP+=Math.max(0,getHJourCongesNonDeduit(c,jdStrFH,jdFH.getDay())||0);}return hFHP;};
                     const statutsAbsenceVol=['abs-non','abs-enfant','arret','abs-am','ferie-non'];
                     const estJourAbsenceVol=(jdStr)=>{
                       const moisKeyAbs=jdStr.slice(0,7);
@@ -2831,6 +2853,7 @@ function modifierKmDirect(contratId, val, cibleId){
                       if(joursPattern[d]&&estJourAbsenceVol(jdStr)) joursAbsenceVol++;
                     }
                     if(joursCongesVol>=nbJoursPossiblesVol){
+                      hPrevu+=hFeriesPayesHP(dateDebStr,dateFinStr); // le ferie paye de la semaine reste du
                       // Semaine entièrement en congés : rien à compter (comme une semaine off)
                     } else {
                     // 27/08/2026 (Sophie) : remplace le taux générique volume/joursPossibles (22/5=4,4h,
@@ -2853,8 +2876,28 @@ function modifierKmDirect(contratId, val, cibleId){
                       }
                       return somme;
                     };
-                    const hCongesVol=clause52?0:sommeHeuresJoursVol(jdStr=>isJourCongeAM(jdStr));
+                    const hCongesVol=hCongesBorneHP(null,null);
                     const hAbsVol=sommeHeuresJoursVol(jdStr=>estJourAbsenceVol(jdStr));
+                    // 20/10/2026 (Sophie) : meme somme, bornee a une portion — une semaine coupee par une fin de mois ou par
+                    // un avenant ne retranche que les conges et absences de SES jours. Silene, semaine du 29 aout 2022 : la
+                    // part d'aout se voyait retirer l'absence non remuneree du 1er septembre (9,25 h) et tombait a 4,50 h au
+                    // lieu de 13,75 h, alors que septembre la deduit deja de son propre cote.
+                    const sommeHeuresJoursVolBorne=(predicateFn,limA,limZ)=>{
+                      let somme=0;
+                      for(let dSB=0;dSB<7;dSB++){
+                        const jdSB=new Date(lundiSem); jdSB.setDate(lundiSem.getDate()+dSB);
+                        const jdStrSB=fmtSem(jdSB);
+                        if(!joursPattern[dSB]||!predicateFn(jdStrSB)) continue;
+                        if(limA&&jdStrSB<limA) continue;
+                        if(limZ&&jdStrSB>limZ) continue;
+                        const ficheSB=c.fiches&&c.fiches[jdStrSB.slice(0,7)];
+                        const jourSB=ficheSB&&ficheSB.jours.find(jj=>jj.date===jdStrSB);
+                        if(jourSB&&jourSB.heureDebPrev&&jourSB.heureFinPrev){
+                          somme+=Math.max(0,(toMins(jourSB.heureFinPrev)-toMins(jourSB.heureDebPrev))/60);
+                        }
+                      }
+                      return somme;
+                    };
                     // 26/09/2026 (Sophie, Enaël mars 2022) : sur une semaine à cheval sur deux mois, chaque mois
                     // ne doit déduire que les absences de SES PROPRES jours — le calcul de mars s'arrêtant au 31.
                     // Avant, mars se voyait aussi retirer l'arrêt du 1er avril (8,78 h), ce qui ramenait sa part
@@ -2961,7 +3004,7 @@ function modifierKmDirect(contratId, val, cibleId){
                         // du a 149,44 h avant comme apres ; le defaut que le commit du 19/09 corrigeait ne revient pas).
                       }
                       const volDispoSemHP=joursRetenusHP*(volH/(diviseurSemHP||1));
-                      hPrevu+=Math.max(0,volDispoSemHP-hCongesVol-hAbsVol);
+                      hPrevu+=Math.max(0,volDispoSemHP-hCongesBorneHP(dateDebStr,dateFinStr)-sommeHeuresJoursVolBorne(estJourAbsenceVol,dateDebStr,dateFinStr));
                     } else {
                       // Semaine à cheval sur deux mois calendaires (sans lien avec le contrat) ?
                       const moisLundiSem=lundiSem.getMonth(), moisDimSem=dimSem.getMonth();
@@ -3123,6 +3166,31 @@ function modifierKmDirect(contratId, val, cibleId){
                     }
                     }
                   }
+                }
+                else if(!(dateRuptureC&&lundiSemStr>dateRuptureC)&&!clause52){
+                  // 20/10/2026 (Sophie) : ferie paye tombant dans une SEMAINE DE CONGES que l'agenda ne compte pas (type
+                  // absent ou 'off' — en 46 semaines, les semaines de conges n'y sont pas pointees). Il n'a consomme aucun
+                  // jour de conge et la mensualisation le paie : il est du, a la valeur d'un jour de conge. Silene, 15 aout
+                  // 2022 : 3,67 h (18,33 / 5 jours possibles). Enael, 15 aout 2023 : 6,53 h (volume moyen / jours union, en
+                  // plan var sans type de semaine). Une semaine simplement non travaillee, sans aucun conge pose, n'apporte
+                  // rien : Silene et Enael les 11 novembre, 1er mai et 14 juillet.
+                  const motifFP=source.planType==='min'
+                    ?(source.joursMin||[])
+                    :Array.from({length:7},(_,iFP)=>(source.planVar||[]).some(vFP=>vFP.jours&&vFP.jours[iFP]));
+                  let nbCgFP=0, hFerFP=0;
+                  for(let dFP=0;dFP<7;dFP++){
+                    const jdFP=new Date(lundiSem); jdFP.setDate(lundiSem.getDate()+dFP);
+                    const jdStrFP=fmtSem(jdFP);
+                    if(!motifFP[dFP]) continue;
+                    if(c.dateDeb&&jdStrFP<c.dateDeb) continue;
+                    if(dateRuptureC&&jdStrFP>dateRuptureC) continue;
+                    if(isJourCongeAM(jdStrFP)) nbCgFP++;
+                    if(jdStrFP<dateDebStr||jdStrFP>dateFinStr) continue;
+                    const fFP=c.fiches&&c.fiches[jdStrFP.slice(0,7)];
+                    const jFP=fFP&&(fFP.jours||[]).find(xFP=>xFP.date===jdStrFP);
+                    if(jFP&&jFP.statut==='ferie') hFerFP+=Math.max(0,getHJourCongesNonDeduit(c,jdStrFP,jdFP.getDay())||0);
+                  }
+                  if(nbCgFP>0&&hFerFP>0) hPrevu+=hFerFP;
                 }
                 // typeSem absent ou 'off' : semaine hors contrat entière, ou off — 0, pas de volume garanti
               }
