@@ -6805,8 +6805,12 @@ function jourComptePlanning(c, dateStr, infos){
 }
 
 // 14/09/2026 (Sophie) : semaine ENTIÈREMENT en congés de l'Ass'Mat pour un plan var/min — tous les jours
-// possibles du motif (hors repos hebdomadaire) sont posés en congés ou fériés. null hors var/min (fixe/sem
-// n'ont pas cette notion). Critère unique de l'affichage du planning (« Congés de l'Ass'Mat » au lieu de la
+// possibles du motif (hors repos hebdomadaire) sont posés en congés ou fériés. null hors var/min — non pas
+// parce que fixe/sem « n'auraient pas cette notion » (justification inventée par ma session du 14/09 et
+// corrigée avec Sophie le 30/10/2026 : en 46, les semaines de congés SONT les semaines non travaillées),
+// mais parce que cette fonction ne sait pas lister les jours possibles d'un fixe/sem. Les jours déplacés
+// hors d'une telle semaine sont traités par la seconde passe d'effacerCochesSemainesCongesAM. Critère
+// unique de l'affichage du planning (« Congés de l'Ass'Mat » au lieu de la
 // case « Congé (sur jour prévu) » d'une semaine partielle) et de l'effacement des cases restées cochées
 // dessous (effacerCochesSemainesCongesAM).
 function semaineCongesAMComplete(c, dateStr){
@@ -19456,7 +19460,25 @@ function supprimerAgenda(cid,agid){
     if(!c)return;
     const res=trouverAgenda(c,agid);
     if(!res)return;
-    const {source}=res;
+    const {ag,source}=res;
+    // 30/10/2026 (Sophie) : supprimer un agenda fait disparaitre toutes ses semaines, mais le planning
+    // gardait les jours DEPLACES hors de ces semaines — pointes et validables alors que leur semaine
+    // d'origine n'existait plus (meme defaut que la peinture d'une semaine en absence, corrigee le meme
+    // jour). La provenance inscrite par l'echange permet de les retirer ici. Feuilles validees intactes.
+    const debutAgSup=ag.dateDebut||'';
+    const finAgSup=ag.dateFin||'9999-12-31';
+    if(debutAgSup){
+      [c.planning,c._planningSauvegarde].forEach(tblSup=>{
+        if(!tblSup) return;
+        Object.keys(tblSup).forEach(dsSup=>{
+          const eSup=tblSup[dsSup];
+          if(!eSup||!eSup.src||eSup.src<debutAgSup||eSup.src>finAgSup) return;
+          const fSup=c.fiches&&c.fiches[dsSup.slice(0,7)];
+          if(fSup&&fSup.valide) return;
+          delete tblSup[dsSup];
+        });
+      });
+    }
     source.agendas=source.agendas.filter(a=>a.id!=agid);
     const cidx=S.contrats.findIndex(x=>x.id==cid);
     if(cidx!==-1)S.contrats[cidx]=c;
@@ -25445,7 +25467,9 @@ function calcSeuilAcquis(c, anneeDebut, premierJourPose){
 // case pour le décocher) mais toujours compté partout — total de la semaine, plafonds, volume de la portion
 // d'avenant (10 h fantômes refusant l'enregistrement du planning), feuille de présence. La case est effacée,
 // ainsi que les heures prévues et réelles du jour sur la feuille (statut de congé conservé). Plan var/min
-// uniquement, 46 comme 52 : fixe/sem affichent normalement leurs heures prévues pendant les congés. Mois
+// uniquement, 46 comme 52. 30/10/2026 (Sophie) : correction de cette note — en fixe/sem une semaine de congés
+// ne garde ses heures QU'EN 52 ; en 46 ce sont justement les semaines non travaillées. Les jours déplacés de
+// ces semaines sont traités par la seconde passe, plus bas dans cette fonction. Mois
 // validés jamais touchés. Un congé retiré ensuite fait revenir le jour vide, à recocher (décision Sophie).
 function effacerCochesSemainesCongesAM(){
   (S.contrats||[]).forEach(c=>{
@@ -25462,6 +25486,52 @@ function effacerCochesSemainesCongesAM(){
       const j=fiche&&(fiche.jours||[]).find(x=>x.date===ds);
       if(j&&j.statut!=='travaille'&&j.statut!=='reprise'){
         j.heureDebPrev=null; j.heureFinPrev=null; j.heureDebReel=null; j.heureFinReel=null;
+      }
+    });
+  });
+  // 30/10/2026 (Sophie) : meme defaut pour un jour DEPLACE en fixe/sem 46. Le test ci-dessus ne sait
+  // repondre que pour les plans var/min (null en fixe/sem), donc il passait toujours son tour : une
+  // semaine de 4 jours dont 1 etait deplace ailleurs dans le mois, puis mise entierement en conges,
+  // gardait ce jour-la pointe et paye alors que sa semaine ne valait plus rien — les 3 autres, eux,
+  // disparaissaient derriere « Conges de l'Ass'Mat ». En 52 il n'y a rien a nettoyer : la semaine de
+  // conges garde ses heures et reste payee, un jour sorti de la peut garder les siennes ailleurs. La
+  // marque « decoche » laissee sur le jour d'origine est effacee aussi, pour qu'un conge retire plus
+  // tard rende la journee a sa place normale au lieu d'amputer la semaine d'un jour. Les heures
+  // REELLES deja pointees sur le jour retire ne sont jamais effacees : la journee redevient un jour
+  // non prevu, travaille s'il l'a ete. Mois valides jamais touches.
+  (S.contrats||[]).forEach(c=>{
+    if(!c.planning||estContratCloture(c)) return;
+    const semToutEnCongesFS=srcStr=>{
+      const dtSC=parseDateLoc(srcStr);
+      const lundiSC=new Date(dtSC); lundiSC.setDate(dtSC.getDate()-(dtSC.getDay()||7)+1);
+      let unPossibleSC=false;
+      for(let iSC=0;iSC<7;iSC++){
+        const xSC=new Date(lundiSC); xSC.setDate(lundiSC.getDate()+iSC);
+        const dsSC=dateToStr(xSC);
+        if(!getInfosJourPlanning(c,dsSC).jourPossible) continue;
+        unPossibleSC=true;
+        if(!isJourCongeAM(dsSC)&&!isFerie(dsSC,c)) return false;
+      }
+      return unPossibleSC;
+    };
+    Object.keys(c.planning).forEach(dsD=>{
+      const pdD=c.planning[dsD];
+      if(!pdD||!pdD.coche||!pdD.src) return;
+      const vSrcD=getVersionActive(c,parseDateLoc(pdD.src));
+      if(!((vSrcD.th==='fixe'||vSrcD.th==='sem')&&String(vSrcD.tc)==='46')) return;
+      const ficheD=c.fiches&&c.fiches[dsD.slice(0,7)];
+      if(ficheD&&ficheD.valide) return;
+      if(!semToutEnCongesFS(pdD.src)) return;
+      delete c.planning[dsD];
+      if(c._planningSauvegarde) delete c._planningSauvegarde[dsD];
+      const jD=ficheD&&(ficheD.jours||[]).find(x=>x.date===dsD);
+      if(jD&&jD.statut!=='travaille'&&jD.statut!=='reprise'){
+        jD.heureDebPrev=null; jD.heureFinPrev=null; jD.statut='non-prevu';
+      }
+      const pOrigD=c.planning[pdD.src];
+      if(pOrigD&&pOrigD.coche===false&&!pOrigD.src){
+        delete c.planning[pdD.src];
+        if(c._planningSauvegarde) delete c._planningSauvegarde[pdD.src];
       }
     });
   });
