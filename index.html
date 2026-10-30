@@ -5981,6 +5981,11 @@ function ouvrirFiche(contratId,key){
           const srcActifJ=getVersionActive(c,new Date(j.date));
           const estCongesNon46=statutActuel==='conges-non'&&srcActifJ.tc!=='52';
           if(estCongesNon46) return '—';
+          if(hComp&&hDeduit){
+            const stDedB=['abs-non','abs-am','ferie-non','arret','abs-enfant','abs-partielle','hors-contrat','conges-non','decompte-conges'];
+            const coulDedB=stDedB.includes(statutActuel)?'var(--al)':'var(--tx3)';
+            return '<span style="color:var(--vt)">'+hComp+'</span> / <span style="color:'+coulDedB+'">'+hDeduit+'</span>';
+          }
           if(hComp) return '<span style="color:var(--vt)">'+hComp+'</span>';
           if(hSup) return '<span style="color:var(--vt)">'+hSup+'</span>';
           if(statutActuel==='abs-rem') return '—';
@@ -5994,6 +5999,11 @@ function ouvrirFiche(contratId,key){
       </td>`
       :isPlanVar?`<td id="hpm-${contratId}-${key}-${idx}" style="padding:3px 4px;font-size:11px;font-weight:600;text-align:center">${(()=>{
         // H± par jour pour plan min/var
+        if(hComp&&hDeduit){
+          const stDedC=['abs-non','abs-am','ferie-non','arret','abs-enfant','abs-partielle','hors-contrat','conges-non','decompte-conges'];
+          const coulDedC=stDedC.includes(statutActuel)?'var(--al)':'var(--tx3)';
+          return '<span style="color:var(--vt)">'+hComp+'</span> / <span style="color:'+coulDedC+'">'+hDeduit+'</span>';
+        }
         if(hComp) return '<span style="color:var(--vt)">'+hComp+'</span>';
         if(hSup) return '<span style="color:var(--vt)">'+hSup+'</span>';
         if(statutActuel==='abs-rem') return '—';
@@ -10725,13 +10735,14 @@ function majFiche(contratId,key,idx,champ,val){
       else if(debReel2>debPrev2) deduitAff2+=debReel2-debPrev2;
       if(finReel2>finPrev2) compAff2+=finReel2-finPrev2;
       else if(finReel2<finPrev2) deduitAff2+=finPrev2-finReel2;
+      // 30/10/2026 (Sophie) : les DEUX parts, le « sinon » masquait la deduction des qu'il y avait du complementaire
       if(compAff2>0) hComp2='+'+fmtH(compAff2);
-      else if(deduitAff2>0) hDeduit2='−'+fmtH(deduitAff2);
+      if(deduitAff2>0) hDeduit2='−'+fmtH(deduitAff2);
     }
     const cellHpm=document.getElementById('hpm-'+contratId+'-'+key+'-'+idx);
     if(cellHpm){
       cellHpm.style.color=hComp2?'var(--vt)':(hDeduit2?'#555':'var(--tx3)');
-      cellHpm.innerHTML=hComp2||hDeduit2||'—';
+      cellHpm.innerHTML=(hComp2&&hDeduit2)?('<span style="color:var(--vt)">'+hComp2+'</span> / <span style="color:#555">'+hDeduit2+'</span>'):(hComp2||hDeduit2||'—');
     }
     return;
   }
@@ -10764,7 +10775,8 @@ function majFiche(contratId,key,idx,champ,val){
         else if(debReel2>debPrev2) deduitAff2+=debReel2-debPrev2;
         if(finReel2>finPrev2) compAff2+=finReel2-finPrev2;
         else if(finReel2<finPrev2) deduitAff2+=finPrev2-finReel2;
-        if(compAff2>0)hComp2='+'+fmtH(compAff2); else if(deduitAff2>0)hDeduit2='−'+fmtH(deduitAff2);
+        if(compAff2>0)hComp2='+'+fmtH(compAff2);
+        if(deduitAff2>0)hDeduit2='−'+fmtH(deduitAff2); // 30/10/2026 (Sophie) : les deux parts, jamais l'une a la place de l'autre
       } else if(reel2>0)hComp2='+'+fmtH(reel2);
     } else if(['abs-non','abs-am','arret','conges-non','abs-enfant','abs-partielle'].includes(statut2)&&j2.heureDebPrev&&j2.heureFinPrev){
       const prev2=toM(j2.heureFinPrev)-toM(j2.heureDebPrev);
@@ -10779,7 +10791,7 @@ function majFiche(contratId,key,idx,champ,val){
       const estVraieDeduction2=statutsDeduits2.includes(statut2);
       const couleurDeduit2=estVraieDeduction2?'var(--al)':'var(--tx3)'; // 28/09/2026 (Sophie) : même gris clair qu'à l'ouverture de la feuille
       cellHpm.style.color=hComp2?'var(--vt)':hDeduitAffiche2?couleurDeduit2:'var(--tx3)';
-      cellHpm.innerHTML=hComp2||(hDeduitAffiche2?'<span style="color:'+couleurDeduit2+'">'+hDeduitAffiche2+'</span>':'—');
+      cellHpm.innerHTML=(hComp2&&hDeduitAffiche2)?(hComp2+' / <span style="color:'+couleurDeduit2+'">'+hDeduitAffiche2+'</span>'):(hComp2||(hDeduitAffiche2?'<span style="color:'+couleurDeduit2+'">'+hDeduitAffiche2+'</span>':'—'));
     }
     const now=new Date();
     const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
@@ -16063,8 +16075,17 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       if((statut==='hors-contrat'&&j._horsContratAvenant)||['conges-acq','conges-anticipe','conges-am','fractionnement'].includes(statut)||(statut==='conges-non'&&!estCongesNon52Regr)){
         hAbsJour=0; // jour hors-contrat fabriqué pour un avenant (déjà compté par hAbsHorsPeriode) OU congés acquis/anticipé/AM (couverts par la mensualisation, jamais via cette déduction) OU fractionnement (jour de repos posé, jamais déduit — 04/09/2026) OU congés non-acquis pour un contrat 46 (géré séparément) — jamais recompter ici. congés non-acquis en 52 reste déduit normalement (ci-dessous), la mensualisation ne couvre que l'acquis.
       } else if(j.heureDebReel&&j.heureFinReel){
-        const hReel2=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
-        hAbsJour=Math.max(0,hPrev-hReel2);
+        // 30/10/2026 (Sophie) : seules les heures PREVUES non couvertes par la plage reelle sont deduites.
+        // La soustraction des deux DUREES laissait une heure travaillee hors de la plage prevue boucher le
+        // trou laisse dans la plage : Albane, prevu 8h-18h15 (10,25 h), reel 7h-12h (5 h) — l'App deduisait
+        // 10,25 - 5 = 5,25 h au lieu de 10,25 - 4 = 6,25 h, et l'heure de 7h a 8h etait payee deux fois, une
+        // fois en heure complementaire et une fois en heure non deduite. On retient donc le chevauchement des
+        // deux plages. Des heures reelles entierement hors du prevu donnent un chevauchement nul, donc la
+        // journee prevue entierement deduite, plus les heures reelles en complementaires.
+        const hCouvert2=(j.heureDebPrev&&j.heureFinPrev)
+          ?Math.max(0,Math.min(toM(j.heureFinPrev),toM(j.heureFinReel))-Math.max(toM(j.heureDebPrev),toM(j.heureDebReel)))/60
+          :(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
+        hAbsJour=Math.max(0,hPrev-hCouvert2);
       } else {
         hAbsJour=hPrev;
       }
@@ -16355,7 +16376,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   if(window.DEBUG_CGAM)console.log('[CGAM-hAbsDeduit-detail]',fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0'),'| hAbs:',hAbs,'| hTheoriques:',hTheoriques,'| hMensu:',hMensu,'| hMensuMaj:',hMensuMaj,'| montantAbsences:',montantAbsences,'| montantAbsMajStored:',montantAbsMajStored,'| txNet:',txNet,'| hAbsDeduit:',hAbsDeduit,'| tauxHAbs (si hMensuMaj=0):',hTheoriques>0?(hMensu*txNet)/hTheoriques:'n/a');
   const hAbsPartielles=fiche.jours.filter(j=>j.statut==='abs-partielle').reduce((t,j)=>{
     if(j.heureDebPrev&&j.heureFinPrev&&j.heureDebReel&&j.heureFinReel){
-      return t+Math.max(0,(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60-(toM(j.heureFinReel)-toM(j.heureDebReel))/60);
+      // 30/10/2026 (Sophie) : chevauchement des deux plages, comme la deduction du salaire ci-dessus.
+      const chevJ=Math.max(0,Math.min(toM(j.heureFinPrev),toM(j.heureFinReel))-Math.max(toM(j.heureDebPrev),toM(j.heureDebReel)))/60;
+      return t+Math.max(0,(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60-chevJ);
     }
     return t+(j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:0);
   },0);
