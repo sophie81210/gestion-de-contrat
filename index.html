@@ -1364,6 +1364,7 @@ async function saveToFirestoreSync(){
 
 let _saveTimer=null;
 let _saveEnCours=false; // écriture Firestore en cours (fetch envoyée, réponse pas encore reçue)
+let _attenteSaveOnglet=null; // changement d'onglet retenu le temps qu'un enregistrement se termine
 // 04/10/2026 (Sophie, ligne 115) : une autre session a ecrit depuis le chargement de cette page. Plus rien
 // n'est envoye depuis elle tant qu'elle n'a pas ete rechargee, et la fenetre ne s'affiche qu'une fois.
 let _ecritureBloquee=false;
@@ -2351,6 +2352,28 @@ function renderDet(id){
 function switchDetTab(tab,id){
   // 05/10/2026 (Sophie) : fenetres centrees de l'App. La reponse arrivant par rappel, chaque garde
   // relance la navigation apres avoir efface son drapeau — la garde suivante est alors evaluee a son tour.
+  // 30/10/2026 (Sophie) : un enregistrement en attente ou en cours retient le changement d'onglet. L'envoi
+  // vers Firestore attend 2 secondes d'inactivite (voir saveToFirestore) : quitter l'onglet pendant ce delai
+  // faisait redessiner l'onglet suivant depuis un etat pas encore stabilise — agenda modifie puis planning
+  // ouvert aussitot, le jour deplace n'apparaissait sur aucune des deux semaines. On force donc l'envoi tout
+  // de suite et on ouvre l'onglet des qu'il est termine, sans rien demander. Un seul attendeur a la fois, le
+  // dernier onglet clique l'emporte, et au bout de dix secondes on passe quand meme pour ne jamais bloquer.
+  if(_saveTimer||_saveEnCours){
+    if(_saveTimer){ clearTimeout(_saveTimer); _saveTimer=null; _flushSaveFirestore(); }
+    const premierAtt=!_attenteSaveOnglet;
+    _attenteSaveOnglet={tab,id,depuis:(_attenteSaveOnglet&&_attenteSaveOnglet.depuis)||Date.now()};
+    if(premierAtt){
+      try{ toast('Enregistrement en cours…'); }catch(e){}
+      const attendreSave=()=>{
+        const att=_attenteSaveOnglet;
+        if(!att) return;
+        if(!_saveEnCours||Date.now()-att.depuis>10000){ _attenteSaveOnglet=null; switchDetTab(att.tab,att.id); return; }
+        setTimeout(attendreSave,100);
+      };
+      setTimeout(attendreSave,100);
+    }
+    return;
+  }
   if(S.ficheModifiee){
     alerteChoix('Des modifications non enregistrées seront perdues.<br><br>Continuer ?',
       'Continuer',()=>{ S.ficheModifiee=false; switchDetTab(tab,id); },'Annuler',null);
