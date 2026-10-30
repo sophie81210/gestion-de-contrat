@@ -8413,7 +8413,13 @@ function executerEchangeJourFS(contratId, dateOrigine, dateDestination, semKeyDo
   if(infosOrig.jourPossible){ c.planning[dateOrigine]={coche:false}; }
   else { delete c.planning[dateOrigine]; }
   // La destination reprend exactement les mêmes heures — jamais réparties, jamais raccourcies.
-  c.planning[dateDestination]={coche:true, d:heureDOrig, f:heureFOrig};
+  // 30/10/2026 (Sophie) : elle memorise aussi sa PROVENANCE. Sans elle, un jour deplace survivait a la
+  // disparition de sa semaine d'origine : peindre cette semaine en absence dans l'agenda remet a zero ses
+  // sept jours, mais pas le jour parti ailleurs dans le mois, qui restait pointe et se laissait valider sur
+  // la feuille alors que sa semaine n'existait plus. Un second deplacement conserve la provenance
+  // d'origine plutot que de la remplacer, pour qu'une chaine reste rattachee a sa vraie semaine de depart.
+  const srcEchangeFS=(planOrig&&planOrig.src)||dateOrigine;
+  c.planning[dateDestination]={coche:true, d:heureDOrig, f:heureFOrig, src:srcEchangeFS};
   // Synchroniser directement la feuille de présence du mois si elle existe déjà, pour que
   // l'échange soit neutre pour les heures complémentaires dès maintenant — sans dépendre d'une
   // réouverture de l'onglet Présence (même principe que la resynchronisation d'ouvrirFiche, mais
@@ -19259,6 +19265,19 @@ function peindreAgenda(key,cid,agid){
         // l'effacer là aussi, sinon les heures d'un jour supprimé réapparaissent sur la feuille.
         if(c._planningSauvegarde) delete c._planningSauvegarde[dsReset];
       }
+      // 30/10/2026 (Sophie) : et les jours DEPLACES depuis cette semaine vers une autre, ou qu'ils soient
+      // dans le mois — la remise a zero ci-dessus ne voit que les sept jours de la semaine peinte, alors que
+      // « modifications autorisees » rend l'enveloppe mensuelle et permet a un jour de vivre ailleurs.
+      const debSemReset=dateToStr(lundiReset);
+      const finSemResetD=new Date(lundiReset); finSemResetD.setDate(lundiReset.getDate()+6);
+      const finSemReset=dateToStr(finSemResetD);
+      [c.planning,c._planningSauvegarde].forEach(tblReset=>{
+        if(!tblReset) return;
+        Object.keys(tblReset).forEach(dsOrph=>{
+          const eOrph=tblReset[dsOrph];
+          if(eOrph&&eOrph.src&&eOrph.src>=debSemReset&&eOrph.src<=finSemReset) delete tblReset[dsOrph];
+        });
+      });
     }
   }
   // Si la semaine peinte est la dernière semaine de cet agenda (celle qui chevauche le suivant),
