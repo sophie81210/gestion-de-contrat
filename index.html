@@ -5982,15 +5982,8 @@ function ouvrirFiche(contratId,key){
             title="Confirmer les heures pr\u00E9vues">\u2713</button>`:'';
       // 11/11/2026 (Sophie) : case « à compenser », à l'emplacement que la coche verte laisse libre (elle n'existe
       // que tant qu'aucune heure réelle n'est saisie). Même gabarit, marron moyen. Voir jourCompensable.
-      let caseComp='';
-      if((hComp||hSup||(hDeduit&&estStatutPrevu(statutActuel)))&&jourCompensable(c,j,sourceActive)){
-        const figeCompJ=fiche.valide||estLectureSeuleEmployeur();
-        const styleCompJ='width:20px;height:36px;border-radius:3px;font-size:12px;margin-left:3px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;padding:0;box-sizing:border-box;border:1px solid var(--m2);'+(j.comp?'background:var(--m2);color:#fff':'background:#fff;color:var(--m2)');
-        caseComp=figeCompJ
-          ?(j.comp?`<span style="${styleCompJ}" title="Jour compens\u00E9">\u21C4</span>`:'')
-          :`<button onclick="basculerCompensation(${contratId},'${key}',${idx})" style="${styleCompJ};cursor:pointer" title="${j.comp?'Jour \u00E0 compenser (toucher pour retirer)':'Compenser ce jour'}">\u21C4</button>`;
-        if(caseComp) aCaseCompFiche=true;
-      }
+      const caseComp=htmlCaseCompensation(c,fiche,j,contratId,key,idx,!!(hComp||hSup||(hDeduit&&estStatutPrevu(statutActuel))));
+      if(caseComp) aCaseCompFiche=true;
       // 11/08/2026 (Sophie) : agendaMois est déterminé UNE FOIS pour tout le mois, au 1er du mois —
       // pour un mois où un avenant change de type en cours de route, ça reste sur l'agenda de
       // l'ANCIEN contrat même pour les jours après l'avenant, d'où une semaine affichée "off" à
@@ -6004,7 +5997,7 @@ function ouvrirFiche(contratId,key){
       prevuCell=`<td style="padding:3px 4px;font-size:12px;color:var(--tx);white-space:nowrap">
         <div style="display:flex;align-items:center">
           <div style="color:${couleurPrev}">${j.heureDebPrev||'\u2014'}<br>${j.heureFinPrev||'\u2014'}</div>
-          ${cocheVerte}${caseComp}
+          ${cocheVerte}<span id="case-comp-${contratId}-${key}-${idx}" style="display:inline-flex">${caseComp}</span>
         </div>
       </td>`;
     }
@@ -6171,7 +6164,7 @@ function ouvrirFiche(contratId,key){
         <tbody>${lignes}</tbody>
       </table>
     </div>
-    ${aCaseCompFiche?`<div style="font-size:11px;color:var(--tx2);margin:6px 4px 0"><span style="display:inline-block;padding:0 4px;border-radius:3px;background:var(--m2);color:#fff">\u21C4</span> coché : les heures non faites et les heures en plus des jours cochés se compensent dans le mois.</div>`:''}
+    <div id="legende-comp-${contratId}-${key}" style="display:${aCaseCompFiche?'block':'none'};font-size:11px;color:var(--tx2);margin:6px 4px 0"><span style="display:inline-block;padding:0 4px;border-radius:3px;background:var(--m2);color:#fff">\u21C4</span> les heures se compensent dans le mois</div>
     ${afficherCaseAnticipe&&!fiche.valide?`
     <div class="card" style="margin-top:10px;background:${anticipeActif?'#fef3eb':'#fff'}">
       <div style="display:flex;align-items:center;gap:10px">
@@ -6429,6 +6422,17 @@ function modifierArretReporteJours(contratId,anneeAcq,val,maxJours){
   if(S.enCours==contratId){ const ouvertsNb=idsEncartsCgOuverts(); renderDetTab(contratId,'conges'); rouvrirEncartsCg(ouvertsNb); }
 }
          
+// 12/11/2026 (Sophie) : dessin de la case « à compenser » d'un jour, commun à l'ouverture de la feuille et à la saisie
+// d'une heure — la case n'apparaissait qu'au réaffichage complet de la feuille, donc seulement en passant à un autre
+// jour. aDiffJ : les heures pointées diffèrent du prévu (heures en plus, ou heures non faites non déduites).
+function htmlCaseCompensation(c,fiche,j,contratId,key,idx,aDiffJ){
+  if(!aDiffJ||!jourCompensable(c,j,getVersionActive(c,parseDateLoc(j.date)))) return '';
+  const figeCompJ=fiche.valide||estLectureSeuleEmployeur();
+  const styleCompJ='width:20px;height:36px;border-radius:3px;font-size:12px;margin-left:3px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;padding:0;box-sizing:border-box;border:1px solid var(--m2);'+(j.comp?'background:var(--m2);color:#fff':'background:#fff;color:var(--m2)');
+  return figeCompJ
+    ?(j.comp?`<span style="${styleCompJ}" title="Jour compens\u00E9">\u21C4</span>`:'')
+    :`<button onclick="basculerCompensation(${contratId},'${key}',${idx})" style="${styleCompJ};cursor:pointer" title="${j.comp?'Jour \u00E0 compenser (toucher pour retirer)':'Compenser ce jour'}">\u21C4</button>`;
+}
 // 11/11/2026 (Sophie) : coche ou décoche la case « à compenser » d'un jour de la feuille (voir jourCompensable).
 function basculerCompensation(contratId,key,idx){
   const c=S.contrats.find(x=>x.id==contratId);
@@ -8759,7 +8763,7 @@ function imprimerFiche(contratId,key){
     </tr></thead>
     <tbody>${lignes}</tbody>
   </table>
-  ${aCompImp?'<div style="font-size:9px;color:#555;margin:-10px 0 12px">\u21C4 : jour compens\u00E9 \u2014 les heures non faites et les heures en plus des jours marqu\u00E9s se compensent dans le mois.</div>':''}
+  ${aCompImp?'<div style="font-size:9px;color:#555;margin:-10px 0 12px">\u21C4 les heures se compensent dans le mois</div>':''}
   </div>
   <div class="col-encarts">
   <h3>Récapitulatif</h3>
@@ -10150,8 +10154,7 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
     const _mOuvrSp=parseFloat((_hOuvrSp*_txBaseSp).toFixed(2));
     if(hasHComp&&_hOuvrSp>0.005) html+=ligneG('Sur jours ouvrables', _hOuvrSp.toFixed(2)+' h — '+_mOuvrSp.toFixed(2)+' €');
     if(hasCompens){
-      html+=ligneG('Heures cochées à compenser', parseFloat(recap.hMoinsCoche||0).toFixed(2)+' h en moins / '+parseFloat(recap.hPlusCoche||0).toFixed(2)+' h en plus');
-      html+=ligneG('Heures compensées', parseFloat(recap.hCompense||0).toFixed(2)+' h');
+      html+=ligneG('Heures compensées', '\u2212'+parseFloat(recap.hMoinsCoche||0).toFixed(2)+' / +'+parseFloat(recap.hPlusCoche||0).toFixed(2));
     }
     const _hFerAff=parseFloat(recap.hMajFerie||0)+_hFerSp, _hRepAff=parseFloat(recap.hMajRepos||0)+_hRepSp, _h1MAff=parseFloat(recap.hMaj1erMai||0)+_h1MSp;
     if(hasHComp&&_hFerAff>0) html+=ligneG('Férié sur jour non prévu', _hFerAff.toFixed(2)+' h — '+(parseFloat(recap.montantBaseFerieNP||0)+_mFerSp).toFixed(2)+' €');
@@ -10892,6 +10895,13 @@ function majFiche(contratId,key,idx,champ,val){
       const couleurDeduit2=estVraieDeduction2?'var(--al)':'var(--tx3)'; // 28/09/2026 (Sophie) : même gris clair qu'à l'ouverture de la feuille
       cellHpm.style.color=hComp2?'var(--vt)':hDeduitAffiche2?couleurDeduit2:'var(--tx3)';
       cellHpm.innerHTML=(hComp2&&hDeduitAffiche2)?(hComp2+'<br><span style="color:'+couleurDeduit2+'">'+hDeduitAffiche2+'</span>'):(hComp2||(hDeduitAffiche2?'<span style="color:'+couleurDeduit2+'">'+hDeduitAffiche2+'</span>':'—'));
+    }
+    // 12/11/2026 (Sophie) : la case « à compenser » apparaît ou disparaît au même moment (voir htmlCaseCompensation).
+    const emplCompJ=document.getElementById('case-comp-'+contratId+'-'+key+'-'+idx);
+    if(emplCompJ){
+      emplCompJ.innerHTML=htmlCaseCompensation(c,c.fiches[key],j2,contratId,key,idx,!!(hComp2||(hDeduit2&&estStatutPrevu(statut2))));
+      const legCompJ=document.getElementById('legende-comp-'+contratId+'-'+key);
+      if(legCompJ&&emplCompJ.innerHTML) legCompJ.style.display='block';
     }
     const now=new Date();
     const todayKey=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
