@@ -4645,6 +4645,23 @@ function samediDansMotifCg(c,d){
 
 // 'reprise' se comporte comme 'travaille' dans les calculs de paie (jour ajouté, pas prévu au planning)
 function estStatutPrevu(s){ return s==='prevu'; }
+// 11/11/2026 (Sophie) : COMPENSATION DES HEURES — un jour pointé dont les horaires diffèrent du prévu peut être
+// coché « à compenser » (champ comp du jour). Dans le mois, les heures non faites des jours cochés (dues, jamais
+// déduites) effacent les heures en plus des jours cochés. Un jour coché compte à ses heures réelles pour la
+// majoration de sa semaine (« au réel », même logique que le planning modifié, ligne 60 du plan de tests). Le
+// salaire de base n'est jamais réduit : seule la majoration peut bouger. Jamais de case sur l'accueil occasionnel
+// (pas de mensualisation), ni sur un férié, un 1er mai ou un jour de repos travaillés (leurs heures ne servent
+// jamais à compenser).
+function jourCompensable(c,j,src){
+  if(!j||!j.heureDebReel||!j.heureFinReel) return false;
+  const sJC=src||c;
+  if((sJC.tc||c.tc)==='occ') return false;
+  const stJC=j.statut||getStatutPrevu(c,j);
+  if(!(estStatutPrevu(stJC)||stJC==='travaille'||stJC==='reprise'||stJC==='abs-partielle')) return false;
+  if(isFerie(j.date,c)||j.date.slice(5)==='05-01') return false;
+  if(parseDateLoc(j.date).getDay()===(sJC.reposHebdo||c.reposHebdo||0)&&(stJC==='travaille'||stJC==='reprise')) return false;
+  return true;
+}
 function estDecompte(s){ return s==='decompte-acq'||s==='decompte-anticipe'||s==='decompte-conges'; }
 function estDecompteAcq(s){ return s==='decompte-acq'; }
 function estDecompteAnticipe(s){ return s==='decompte-anticipe'; }
@@ -5728,6 +5745,7 @@ function ouvrirFiche(contratId,key){
   const dateFinCSPAff=getDateFinContrat(c);
   const dateFinCSPAffStr=dateFinCSPAff?(dateFinCSPAff.getFullYear()+'-'+String(dateFinCSPAff.getMonth()+1).padStart(2,'0')+'-'+String(dateFinCSPAff.getDate()).padStart(2,'0')):null;
 
+    let aCaseCompFiche=false; // 11/11/2026 : au moins une case « à compenser » affichée → légende sous le tableau
     const lignes=joursSemaines.map((j,idx)=>{
     const numJour=parseInt(j.date.split('-')[2]);
     const nomJour=JOURS_ABR[j.jourSemaine===0?6:j.jourSemaine-1];
@@ -5962,6 +5980,17 @@ function ouvrirFiche(contratId,key){
         ?`<button id="coche-prevu-${contratId}-${key}-${idx}" onclick="confirmerHeuresPrevues(${contratId},'${key}',${idx})"
             style="width:20px;height:36px;background:#6B8060;color:#fff;border:none;border-radius:3px;font-size:12px;cursor:pointer;margin-left:3px;flex-shrink:0"
             title="Confirmer les heures pr\u00E9vues">\u2713</button>`:'';
+      // 11/11/2026 (Sophie) : case « à compenser », à l'emplacement que la coche verte laisse libre (elle n'existe
+      // que tant qu'aucune heure réelle n'est saisie). Même gabarit, marron moyen. Voir jourCompensable.
+      let caseComp='';
+      if((hComp||hSup||(hDeduit&&estStatutPrevu(statutActuel)))&&jourCompensable(c,j,sourceActive)){
+        const figeCompJ=fiche.valide||estLectureSeuleEmployeur();
+        const styleCompJ='width:20px;height:36px;border-radius:3px;font-size:12px;margin-left:3px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;padding:0;box-sizing:border-box;border:1px solid var(--m2);'+(j.comp?'background:var(--m2);color:#fff':'background:#fff;color:var(--m2)');
+        caseComp=figeCompJ
+          ?(j.comp?`<span style="${styleCompJ}" title="Jour compens\u00E9">\u21C4</span>`:'')
+          :`<button onclick="basculerCompensation(${contratId},'${key}',${idx})" style="${styleCompJ};cursor:pointer" title="${j.comp?'Jour \u00E0 compenser (toucher pour retirer)':'Compenser ce jour'}">\u21C4</button>`;
+        if(caseComp) aCaseCompFiche=true;
+      }
       // 11/08/2026 (Sophie) : agendaMois est déterminé UNE FOIS pour tout le mois, au 1er du mois —
       // pour un mois où un avenant change de type en cours de route, ça reste sur l'agenda de
       // l'ANCIEN contrat même pour les jours après l'avenant, d'où une semaine affichée "off" à
@@ -5975,7 +6004,7 @@ function ouvrirFiche(contratId,key){
       prevuCell=`<td style="padding:3px 4px;font-size:12px;color:var(--tx);white-space:nowrap">
         <div style="display:flex;align-items:center">
           <div style="color:${couleurPrev}">${j.heureDebPrev||'\u2014'}<br>${j.heureFinPrev||'\u2014'}</div>
-          ${cocheVerte}
+          ${cocheVerte}${caseComp}
         </div>
       </td>`;
     }
@@ -6142,6 +6171,7 @@ function ouvrirFiche(contratId,key){
         <tbody>${lignes}</tbody>
       </table>
     </div>
+    ${aCaseCompFiche?`<div style="font-size:11px;color:var(--tx2);margin:6px 4px 0"><span style="display:inline-block;padding:0 4px;border-radius:3px;background:var(--m2);color:#fff">\u21C4</span> coché : les heures non faites et les heures en plus des jours cochés se compensent dans le mois.</div>`:''}
     ${afficherCaseAnticipe&&!fiche.valide?`
     <div class="card" style="margin-top:10px;background:${anticipeActif?'#fef3eb':'#fff'}">
       <div style="display:flex;align-items:center;gap:10px">
@@ -6399,6 +6429,22 @@ function modifierArretReporteJours(contratId,anneeAcq,val,maxJours){
   if(S.enCours==contratId){ const ouvertsNb=idsEncartsCgOuverts(); renderDetTab(contratId,'conges'); rouvrirEncartsCg(ouvertsNb); }
 }
          
+// 11/11/2026 (Sophie) : coche ou décoche la case « à compenser » d'un jour de la feuille (voir jourCompensable).
+function basculerCompensation(contratId,key,idx){
+  const c=S.contrats.find(x=>x.id==contratId);
+  if(!c||!c.fiches||!c.fiches[key]||c.fiches[key].valide||estLectureSeuleEmployeur())return;
+  const j=c.fiches[key].jours[idx];
+  if(!j)return;
+  if(j.comp) delete j.comp; else j.comp=true;
+  const cidx=S.contrats.findIndex(x=>x.id==contratId);
+  if(cidx!==-1)S.contrats[cidx]=c;
+  localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  S.ficheModifiee=true;
+  if(c?.id) _contratsModifies.add(c.id);
+  const bandeau=document.getElementById('bandeau-non-enregistre');
+  if(bandeau) bandeau.style.display='block';
+  ouvrirFiche(contratId,key);
+}
 function confirmerHeuresPrevues(contratId,key,idx){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c||!c.fiches||!c.fiches[key])return;
@@ -8628,6 +8674,7 @@ function imprimerFiche(contratId,key){
   const REPAS_NOM=['Petit-déj','Déjeuner','Goûter','Dîner'];
 
   let lignes='';
+  let aCompImp=false; // 11/11/2026 : légende de la compensation sous le tableau imprimé
   fiche.jours.forEach((j,idx)=>{
     const numJour=parseInt(j.date.split('-')[2]);
     const nomJour=JOURS_ABR[j.jourSemaine===0?6:j.jourSemaine-1];
@@ -8653,11 +8700,14 @@ function imprimerFiche(contratId,key){
       } else if(reel>0) hComp='+'+fmtH(reel);
     }
     const repasCell=aRepas?(j.repas||[]).map((pris,ri)=>pris&&c.repas&&c.repas[ri]?REPAS_NOM[ri]:'').filter(Boolean).join(', '):'';
+    // 11/11/2026 (Sophie) : marque des jours cochés « à compenser »
+    const compImpJ=!!(j.comp&&(hComp||hDeduit)&&jourCompensable(c,j,getVersionActive(c,new Date(j.date))));
+    if(compImpJ) aCompImp=true;
     lignes+=`<tr>
       <td>${nomJour} ${numJour}</td>
       <td>${j.heureDebPrev||'—'} ${j.heureFinPrev?'→ '+j.heureFinPrev:''}</td>
       <td>${j.heureDebReel||'—'} ${j.heureFinReel?'→ '+j.heureFinReel:''}</td>
-      <td>${hComp||hDeduit||'—'}</td>
+      <td>${hComp||hDeduit||'—'}${compImpJ?' \u21C4':''}</td>
       ${aRepas?'<td>'+repasCell+'</td>':''}
       ${aKm?'<td>'+(j.km||'')+'</td>':''}
       <td>${statutLbl}</td>
@@ -8709,6 +8759,7 @@ function imprimerFiche(contratId,key){
     </tr></thead>
     <tbody>${lignes}</tbody>
   </table>
+  ${aCompImp?'<div style="font-size:9px;color:#555;margin:-10px 0 12px">\u21C4 : jour compens\u00E9 \u2014 les heures non faites et les heures en plus des jours marqu\u00E9s se compensent dans le mois.</div>':''}
   </div>
   <div class="col-encarts">
   <h3>Récapitulatif</h3>
@@ -10081,9 +10132,11 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
   // ou de 1er mai sont déjà dans « Heures normales », elles seraient comptées deux fois à l'écran.
   const hasHComp=!recap.isOcc&&(parseFloat(recap.hBaseComp||0)>0||parseFloat(recap.hMajFerie||0)>0||parseFloat(recap.hMajRepos||0)>0||parseFloat(recap.hMaj1erMai||0)>0);
   const hasMaj=parseFloat(recap.hComp||0)>0||parseFloat(recap.hSup||0)>0||parseFloat(recap.hSupDeplace||0)!==0||parseFloat(recap.montantMajComp||0)>0||parseFloat(recap.montantMajSup||0)>0||parseFloat(recap.montantMajFerieNP||0)>0||parseFloat(recap.montantMajFeriePrevu2||0)>0||parseFloat(recap.montantMajRepos||0)>0||parseFloat(recap.montantMaj1erMai||0)>0;
-  if(hasHComp||hasMaj){
+  // 11/11/2026 (Sophie) : compensation des heures — les totaux cochés restent visibles même quand tout est compensé.
+  const hasCompens=!recap.isOcc&&(parseFloat(recap.hMoinsCoche||0)>0||parseFloat(recap.hPlusCoche||0)>0);
+  if(hasHComp||hasMaj||hasCompens){
     html+='<tr><td colspan="2" style="padding:4px 0"><hr style="border:none;border-top:1px solid var(--mb)"></td></tr>';
-    if(hasHComp) html+='<tr><td colspan="2" style="padding:4px 4px 2px;font-weight:700;color:var(--m);font-size:12px">Heures complémentaires et majorées</td></tr>';
+    if(hasHComp||hasCompens) html+='<tr><td colspan="2" style="padding:4px 4px 2px;font-weight:700;color:var(--m);font-size:12px">Heures complémentaires et majorées</td></tr>';
     // 14/09/2026 (Sophie) : les heures d'un férié, d'un jour de repos ou d'un 1er mai non prévus sont payées en heures
     // complémentaires / sup (comptées dans hBaseComp, montantBaseComp) mais gardent leur propre ligne, pour les
     // repérer ; « Sur jours ouvrables » ne garde que les heures en plus des jours ordinaires. Affichage seul : les
@@ -10096,6 +10149,10 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
     // « Majoration heures supplémentaires » (elle apparaissait deux fois).
     const _mOuvrSp=parseFloat((_hOuvrSp*_txBaseSp).toFixed(2));
     if(hasHComp&&_hOuvrSp>0.005) html+=ligneG('Sur jours ouvrables', _hOuvrSp.toFixed(2)+' h — '+_mOuvrSp.toFixed(2)+' €');
+    if(hasCompens){
+      html+=ligneG('Heures cochées à compenser', parseFloat(recap.hMoinsCoche||0).toFixed(2)+' h en moins / '+parseFloat(recap.hPlusCoche||0).toFixed(2)+' h en plus');
+      html+=ligneG('Heures compensées', parseFloat(recap.hCompense||0).toFixed(2)+' h');
+    }
     const _hFerAff=parseFloat(recap.hMajFerie||0)+_hFerSp, _hRepAff=parseFloat(recap.hMajRepos||0)+_hRepSp, _h1MAff=parseFloat(recap.hMaj1erMai||0)+_h1MSp;
     if(hasHComp&&_hFerAff>0) html+=ligneG('Férié sur jour non prévu', _hFerAff.toFixed(2)+' h — '+(parseFloat(recap.montantBaseFerieNP||0)+_mFerSp).toFixed(2)+' €');
     if(hasHComp&&_hRepAff>0) html+=ligneG('Repos travaillé', _hRepAff.toFixed(2)+' h — '+(parseFloat(recap.montantBaseRepos||0)+_mRepSp).toFixed(2)+' €');
@@ -10106,11 +10163,12 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
     html+='<tr><td colspan="2" style="padding:4px 4px 2px;font-weight:700;color:var(--m);font-size:12px">Majorations'+pastilleAide('majorations')+'</td></tr>';
     if(parseFloat(recap.hComp||0)>0) html+=ligneG('Majoration heures complémentaires', parseFloat(recap.hCompMaj||0).toFixed(2)+' h — '+(parseFloat(recap.montantMajComp||0)>0?'+'+parseFloat(recap.montantMajComp).toFixed(2)+' €':'0.00 €'));
     if(parseFloat(recap.hSup||0)>0) html+=ligneG('Majoration heures supplémentaires', parseFloat(recap.hSup).toFixed(2)+' h — '+(parseFloat(recap.montantMajSup||0)>0?'+'+parseFloat(recap.montantMajSup).toFixed(2)+' €':'0.00 €'));
+    const _lblDeplC=(parseFloat(recap.hSupCompense||0)>0||parseFloat(recap.hSupPerdueComp||0)>0)?'planning modifié ou heures compensées':'planning modifié'; // 11/11/2026
     // 13/09/2026 (Sophie) : heures au-delà de 45 h dues au planning modifié (jour déplacé) — base déjà dans
     // la mensualisation, majoration seule
-    if(parseFloat(recap.hSupDeplace||0)>0) html+=ligneG('Majoration heures sup (planning modifié)', parseFloat(recap.hSupDeplace).toFixed(2)+' h — +'+parseFloat(recap.montantMajSupDeplace||0).toFixed(2)+' €');
+    if(parseFloat(recap.hSupDeplace||0)>0) html+=ligneG('Majoration heures sup ('+_lblDeplC+')', parseFloat(recap.hSupDeplace).toFixed(2)+' h — +'+parseFloat(recap.montantMajSupDeplace||0).toFixed(2)+' €');
     // 21/09/2026 (Sophie, ligne 60) : semaines allégées par le planning — majoration mensualisée non due
-    if(parseFloat(recap.hSupDeplace||0)<0) html+=ligneG('Majoration heures sup non due (planning modifié)', Math.abs(parseFloat(recap.hSupDeplace)).toFixed(2)+' h — −'+Math.abs(parseFloat(recap.montantMajSupDeplace||0)).toFixed(2)+' €');
+    if(parseFloat(recap.hSupDeplace||0)<0) html+=ligneG('Majoration heures sup non due ('+_lblDeplC+')', Math.abs(parseFloat(recap.hSupDeplace)).toFixed(2)+' h — −'+Math.abs(parseFloat(recap.montantMajSupDeplace||0)).toFixed(2)+' €');
     const totalMajFerie=(parseFloat(recap.montantMajFeriePrevu2||0)+parseFloat(recap.montantMajFerieNP||0));
     const totalHMajFerie=(parseFloat(recap.hMajFerie||0)+parseFloat(recap.hMajFeriePrevu||0)+parseFloat(recap.hFerieMajSeule||0));
     if(totalMajFerie>0) html+=ligneG('Majoration férié', totalHMajFerie.toFixed(2)+' h — +'+totalMajFerie.toFixed(2)+' €');
@@ -10258,7 +10316,7 @@ function neutraliserBaseRecapSansPartieAvant(r){
   const n={...r};
   ['salaireNet','hMensu','hMensuNorm','hMensuMaj','hBase','hAbs','hAbsDeduit','hAbsDeduitHS','hAbsHS','hAbsNorm',
    'montantAbsences','montantAbsMaj','nbJoursTrav','nbJoursTravReels','joursEnPlus','joursEnMoins',
-   'hComp','hCompMaj','hSup','hSupDeplace','hBaseComp','hTotalComp','montantBaseComp','montantMajComp','montantMajSup',
+   'hComp','hCompMaj','hSup','hSupDeplace','hMoinsCoche','hPlusCoche','hCompense','hSupCompense','hSupPerdueComp','hBaseComp','hTotalComp','montantBaseComp','montantMajComp','montantMajSup',
    'montantMajSupDeplace','montantTotalComp','montantTotalSup','montantCompNet','montantSupNet','montantExo',
    'hMajFerie','hMajFeriePrevu','hMajRepos','hMaj1erMai','hFerieMajSeule','hReposMajSeule','h1erMaiMajSeule',
    'montantBaseFerieNP','montantBaseRepos','montantBase1erMai','montantMajFerieNP','montantMajFeriePrevu2',
@@ -14194,8 +14252,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const hPrevJ=j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:0;
       // Si le jour est payé sur la base du prévu (réel < prévu, pas de déduction), compter le prévu pour le seuil
       // Si dépassement (réel > prévu), compter le réel
-      hParSemaine[semKey]+=Math.max(hReelJ,hPrevJ);
-      hPlanParSemaine[semKey]=(hPlanParSemaine[semKey]||0)+hPrevJ;
+      // 11/11/2026 (Sophie) : jour coché « à compenser » — il compte à ses heures réelles (voir jourCompensable).
+      const compSeuilJ=!!(j.comp&&jourCompensable(c,j,sourceActif));
+      hParSemaine[semKey]+=compSeuilJ?hReelJ:Math.max(hReelJ,hPrevJ);
+      hPlanParSemaine[semKey]=(hPlanParSemaine[semKey]||0)+(compSeuilJ?Math.min(hPrevJ,hReelJ):hPrevJ);
       // Compteur séparé, purement réel (sans max), pour la répartition proportionnelle du dépassement
       // hebdomadaire entre les jours de la semaine (ratioJour) — sinon un jour payé sur la base du
       // prévu (réel < prévu) fausserait le ratio des autres jours de la même semaine
@@ -15305,6 +15365,29 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     }
   });
   window._hTravailleVersHS={};
+  // 11/11/2026 (Sophie) : heures des jours cochés « à compenser », par semaine — en moins (non faites, dues), en
+  // plus (ordinaires), en plus déjà versées aux heures sup (jour « travaillé » d'une semaine au-delà de 45 h).
+  // La partie du mois précédent d'une semaine à cheval est relue sur sa feuille, avec la règle ordinaire des
+  // bornes : elle sert au seuil de la semaine entière et à la majoration, jamais au total compensé de ce mois.
+  const moinsCocheSem={}, plusCocheSem={}, plusCocheHSSem={}, moinsCochePrecSem={}, plusCochePrecSem={};
+  if(fichePrec){
+    const semMoisCourantCp=new Set(fiche.jours.map(jc=>getSemISO(jc.date)));
+    fichePrec.jours.forEach(jp=>{
+      const skP=getSemISO(jp.date);
+      if(!semMoisCourantCp.has(skP)||!jp.comp||!jourCompensable(c,jp,getVersionActive(c,parseDateLoc(jp.date)))) return;
+      const stP=jp.statut||getStatutPrevu(c,jp);
+      const dRP=toM(jp.heureDebReel), fRP=toM(jp.heureFinReel);
+      if(jp.heureDebPrev&&jp.heureFinPrev&&stP!=='travaille'&&stP!=='reprise'){
+        const dPP=toM(jp.heureDebPrev), fPP=toM(jp.heureFinPrev);
+        const plusP=(Math.max(0,dPP-dRP)+Math.max(0,fRP-fPP))/60;
+        const moinsP=estStatutPrevu(stP)?(Math.max(0,dRP-dPP)+Math.max(0,fPP-fRP))/60:0;
+        if(plusP>0) plusCochePrecSem[skP]=(plusCochePrecSem[skP]||0)+plusP;
+        if(moinsP>0) moinsCochePrecSem[skP]=(moinsCochePrecSem[skP]||0)+moinsP;
+      } else if(fRP>dRP){
+        plusCochePrecSem[skP]=(plusCochePrecSem[skP]||0)+(fRP-dRP)/60;
+      }
+    });
+  }
   fiche.jours.forEach(j=>{
     let statut=j.statut||getStatutPrevu(c,j);
     // 04/09/2026 (Sophie) : jour choisi via le picker de fractionnement — même règle que ouvrirFiche,
@@ -15605,6 +15688,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       _moisArretJourExcluRec=true;
     } // (déduction « semaine sans planning » retirée le 23/09/2026, remplacée le 29/09 par le mois entier)
     if(estPresent&&j.heureDebReel&&j.heureFinReel){
+      const compActifJ=!!(j.comp&&jourCompensable(c,j,sourceActif)); // 11/11/2026 : jour coché « à compenser »
       const debReel=toM(j.heureDebReel);
       const finReel=toM(j.heureFinReel);
       const debPrev=j.heureDebPrev?toM(j.heureDebPrev):null;
@@ -15653,6 +15737,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
             compJour=0;
             if(!window._hTravailleVersHS) window._hTravailleVersHS={};
             window._hTravailleVersHS[semKeyJ]=(window._hTravailleVersHS[semKeyJ]||0)+hJourTrav;
+            if(compActifJ) plusCocheHSSem[semKeyJ]=(plusCocheHSSem[semKeyJ]||0)+hJourTrav;
           } else {
             compJour=hJourTrav*60;
           }
@@ -15748,6 +15833,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       } else if(compJour>0){
         hComp+=compJour/60;
         const skC2=getSemISO(j.date);if(!hCompParSemaine[skC2])hCompParSemaine[skC2]=0;hCompParSemaine[skC2]+=compJour/60;
+        if(compActifJ) plusCocheSem[skC2]=(plusCocheSem[skC2]||0)+compJour/60;
+      }
+      // 11/11/2026 (Sophie) : heures non faites d'un jour coché « à compenser » — dues, jamais déduites. Jour
+      // ordinaire seulement : ni férié, ni 1er mai, ni repos travaillé, ni absence partielle (elle, déduite).
+      if(compActifJ&&!estFeriePrevu&&!estFerieNonPrevu&&!estReposJ&&estStatutPrevu(statut)&&debPrev!==null&&finPrev!==null){
+        const moinsCJ=(Math.max(0,debReel-debPrev)+Math.max(0,finPrev-finReel))/60;
+        if(moinsCJ>0){ const skMC=getSemISO(j.date); moinsCocheSem[skMC]=(moinsCocheSem[skMC]||0)+moinsCJ; }
       }
     }
     if(estAbsDeduite){
@@ -16270,7 +16362,15 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     if(hSem<=0) return;
     const hAbsSem=hAbsParSemaine[semKey]||0;
     const hSeuilComp=Math.max(0,hPrevSem-hAbsSem);
-    const seuilSup=semsAvecAbsNonRem.has(parseInt(semKey))?45:Math.max(45,hPrevSem);
+    // 11/11/2026 (Sophie) : semaine allégée par des jours cochés « à compenser » — son seuil descend d'autant,
+    // jamais sous 45 h. La majoration mensualisée qu'elle ne dépasse plus est retirée plus bas (hSupPerdue) ; ce
+    // qui est fait au-delà du nouveau seuil redevient des heures sup. Net de la semaine = heures non faites
+    // cochées moins heures en plus cochées, les deux mois d'une semaine à cheval réunis ; la partie du mois
+    // précédent garde le seuil qu'elle avait quand elle a été payée (elle ne connaissait que ses propres jours).
+    const netCompSem=Math.max(0,(moinsCocheSem[semKey]||0)+(moinsCochePrecSem[semKey]||0)-(plusCocheSem[semKey]||0)-(plusCocheHSSem[semKey]||0)-(plusCochePrecSem[semKey]||0));
+    const netCompPrec=Math.max(0,(moinsCochePrecSem[semKey]||0)-(plusCochePrecSem[semKey]||0));
+    const seuilSup=semsAvecAbsNonRem.has(parseInt(semKey))?45:Math.max(45,hPrevSem-netCompSem);
+    const seuilSupPrecComp=semsAvecAbsNonRem.has(parseInt(semKey))?45:Math.max(45,hPrevSem-netCompPrec);
     const seuilStructHS=Math.max(45,hPrevSem);
     const hPlanSem=hPlanParSemaine[semKey]||0;
     const hPrecMois=hParSemainePrecMois[semKey]||0;
@@ -16279,7 +16379,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       // → utiliser uniquement les heures de ce mois = hSem - hPrecMois
       const hSemCeMois=Math.max(0,hSem-hPrecMois);
       const hSupSem=Math.max(0,hSemCeMois+hPrecMois-seuilSup);
-      const hSupDejaPayee=Math.max(0,hPrecMois-seuilSup);
+      const hSupDejaPayee=Math.max(0,hPrecMois-seuilSupPrecComp);
       const hSupMaj=Math.max(0,hSupSem-hSupDejaPayee);
       // Maj HC déjà payée le mois précédent pour cette semaine
       const hCompMajPrecMois=Math.max(0,Math.min(hPrecMois,seuilSup)-hSeuilComp);
@@ -16331,9 +16431,13 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // contrat sont comparées (une absence réduit déjà la majoration par la déduction d'absence). Une semaine à cheval
   // sur deux mois est comptée avec le mois de son dimanche, une fois ses deux parties connues.
   let hSupPerdue=0;
+  // 11/11/2026 (Sophie) : même règle pour une semaine allégée par des jours cochés « à compenser », en dehors
+  // même des mois en modifications autorisées. hSupPerdueComp = part de la perte due aux jours cochés.
+  let hSupPerdueComp=0;
+  const aCompHSP=Object.keys(moinsCocheSem).length>0||Object.keys(moinsCochePrecSem).length>0;
   {
     const modifPrecHSP=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisPrecStr]);
-    if((sourceActif.tc||c.tc)!=='occ'&&hMensuMaj>0&&(modifMoisHS||modifPrecHSP)){
+    if((sourceActif.tc||c.tc)!=='occ'&&hMensuMaj>0&&(modifMoisHS||modifPrecHSP||aCompHSP)){
       const fmtHSP=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
       const statutsPayesHSP=['prevu','travaille','reprise','ferie','abs-partielle','abs-rem'];
       const joursHSP=[...(fichePrec?fichePrec.jours:[]),...fiche.jours];
@@ -16347,7 +16451,10 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         if(semainesHSP[lunS]) return;
         if(dimH.getMonth()!==fiche.mois){ semainesHSP[lunS]={ignoree:true}; return; }
         const chevalHSP=lunH.getMonth()!==fiche.mois;
-        if(!(modifMoisHS||(chevalHSP&&modifPrecHSP))||(chevalHSP&&!fichePrec)){ semainesHSP[lunS]={ignoree:true}; return; }
+        const planifHSP=modifMoisHS||(chevalHSP&&modifPrecHSP);
+        const skHSP=getSemISO(j.date);
+        const netHSP=Math.max(0,(moinsCocheSem[skHSP]||0)+(moinsCochePrecSem[skHSP]||0)-(plusCocheSem[skHSP]||0)-(plusCocheHSSem[skHSP]||0)-(plusCochePrecSem[skHSP]||0));
+        if((!planifHSP&&!(netHSP>0))||(chevalHSP&&!fichePrec)){ semainesHSP[lunS]={ignoree:true}; return; }
         let exclueHSP=false, planHSP=0;
         joursHSP.filter(x=>x.date>=lunS&&x.date<=dimS).forEach(x=>{
           const stX=x.statut||getStatutPrevu(c,x);
@@ -16355,13 +16462,18 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           if(!statutsPayesHSP.includes(stX)){ exclueHSP=true; return; }
           if(x.heureDebPrev&&x.heureFinPrev) planHSP+=(toM(x.heureFinPrev)-toM(x.heureDebPrev))/60;
         });
-        semainesHSP[lunS]={ignoree:exclueHSP,plan:planHSP,semISO:getSemISO(j.date)};
+        semainesHSP[lunS]={ignoree:exclueHSP,plan:planHSP,semISO:getSemISO(j.date),planif:planifHSP,net:netHSP};
       });
       Object.values(semainesHSP).forEach(w=>{
         if(w.ignoree) return;
         const structHSP=Math.max(0,(hPrevuParSemaine[w.semISO]||0)-45);
-        const planHSw=Math.max(0,w.plan-45);
-        if(planHSw<structHSP) hSupPerdue+=structHSP-planHSw;
+        // Hors modifications autorisées, le planning de la semaine est celui du contrat ; les jours cochés
+        // « à compenser » retirent leur net de l'un comme de l'autre.
+        const baseHSw=w.planif?w.plan:(hPrevuParSemaine[w.semISO]||0);
+        const perteSansComp=Math.max(0,structHSP-Math.max(0,baseHSw-45));
+        const perteAvecComp=Math.max(0,structHSP-Math.max(0,baseHSw-(w.net||0)-45));
+        hSupPerdue+=perteAvecComp;
+        hSupPerdueComp+=perteAvecComp-perteSansComp;
       });
     }
   }
@@ -16375,6 +16487,32 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // Corriger hComp (variable globale) pour qu'il ne compte pas en double les heures
   // qui ont basculé en hSup à cause du dépassement du seuil hebdomadaire
   hComp=hCompMaj;
+  // 11/11/2026 (Sophie) : COMPENSATION (voir jourCompensable). Les heures non faites cochées effacent d'abord
+  // les heures en plus cochées au tarif normal — elles ne sont plus des heures complémentaires, ni base ni
+  // majoration — puis la base des heures sup cochées, dont la majoration reste due (versées à hSupDeplace :
+  // majoration seule, déclarées en heures sup, heures normales déclarées réduites d'autant). Dans une semaine,
+  // les heures cochées sont d'abord celles au tarif normal. Seules des heures EN PLUS sont retirées : le salaire
+  // mensualisé n'est jamais touché.
+  let hMoinsCoche=0, hPlusCoche=0, hCompense=0, hSupCompense=0;
+  {
+    Object.values(moinsCocheSem).forEach(v=>{ hMoinsCoche+=v; });
+    let plusCompTypeC=0, plusSupTypeC=0;
+    new Set([...Object.keys(plusCocheSem),...Object.keys(plusCocheHSSem)]).forEach(skPC=>{
+      const pOrdC=plusCocheSem[skPC]||0, pHSC=plusCocheHSSem[skPC]||0;
+      const compSemC=Math.max(0,(hCompParSemaine[skPC]||0)-(hSupParSemaine[skPC]||0));
+      const pCompC=Math.min(pOrdC,compSemC);
+      plusCompTypeC+=pCompC; plusSupTypeC+=(pOrdC-pCompC)+pHSC;
+    });
+    hPlusCoche=plusCompTypeC+plusSupTypeC;
+    const aCompenserC=Math.min(hMoinsCoche,hPlusCoche);
+    if(aCompenserC>0){
+      const cCompC=Math.max(0,Math.min(aCompenserC,plusCompTypeC,hComp));
+      const cSupC=Math.max(0,Math.min(aCompenserC-cCompC,plusSupTypeC,hSup));
+      hComp-=cCompC; hCompMaj-=cCompC;
+      hSup-=cSupC; hSupDeplace+=cSupC; hSupCompense=cSupC;
+      hCompense=cCompC+cSupC;
+    }
+  }
   const hMoyParJour=nbJoursMoisContrat>0?hMensu/nbJoursMoisContrat:hMensu/20;
   let hAbsHS=0,hAbsNorm=0,hAbsDeduitHS=0,montantAbsMajStored=0;
   // 29/09/2026 (Sophie, Silene janvier 2022) : mois entièrement en arrêt, rien d'exclu — la déduction doit
@@ -17058,6 +17196,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
 
   const _recapResult={
     donneesManquantes, hMensu, hComp:hComp.toFixed(2), hSup:hSup.toFixed(2), hSupDeplace:hSupDeplace.toFixed(2), montantMajSupDeplace,
+    hMoinsCoche:hMoinsCoche.toFixed(2), hPlusCoche:hPlusCoche.toFixed(2), hCompense:hCompense.toFixed(2), hSupCompense:hSupCompense.toFixed(2), hSupPerdueComp:hSupPerdueComp.toFixed(2), // 11/11/2026 : compensation
     coefNetR, // 27/07/2026 (correctif Sophie) : coefficient daté déjà calculé ci-dessus, exposé pour
     // que l'affichage (buildRecapHtml etc.) le réutilise au lieu d'en recalculer un non daté
     indemNegoJoursBascule, // 27/07/2026 : nombre de jours du mois où le négocié est passé sous le
