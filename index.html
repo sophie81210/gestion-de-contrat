@@ -1492,6 +1492,9 @@ else S.params=JSON.parse(localStorage.getItem('cam_params')||'null')||JSON.parse
      try{ if(!estLectureSeuleEmployeur()&&figerFichesValidees()>0) setTimeout(()=>{ try{ saveToFirestore(); }catch(e){} },0); }catch(e){ console.error('Figer les feuilles validées :',e); }
      // 19/09/2026 (Sophie) : retrait des accès employeurs arrivés à échéance (voir dateFinAccesEmployeur).
      try{ purgerAccesEmployeursPerimes(); }catch(e){ console.error('Purge des accès employeurs :',e); }
+     // 16/11/2026 : agendas du contrat d'origine créés à tort par la signature d'un deuxième avenant (voir
+     // retirerAgendasOrigineEnTrop). Nettoyage provisoire, à retirer dans quelques mois (décision de Sophie, 16/11/2026).
+     try{ if(!estLectureSeuleEmployeur()&&retirerAgendasOrigineEnTrop()>0) setTimeout(()=>{ try{ saveToFirestore(); }catch(e){} },0); }catch(e){ console.error('Agendas du contrat d’origine en trop :',e); }
       localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
       localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM||{}));
       initToutesLesFiches();
@@ -1529,6 +1532,32 @@ function recalculerCongesAuDemarrage(){
     setTimeout(suivante,0);
   };
   setTimeout(suivante,200);
+}
+// 16/11/2026 : du 17/08 au 16/11/2026, la signature d'un avenant complétait l'agenda du contrat d'origine
+// jusqu'à aujourd'hui, en ne vérifiant que le début de chaque nouvel agenda. Au deuxième avenant, elle créait
+// donc un agenda de 12 mois du contrat d'origine commençant à la date du premier avenant, sur une période où
+// le contrat d'origine ne s'applique plus (Silene, Enaël). Sont retirés : les agendas du contrat d'origine
+// qui commencent à la date du premier avenant qui coupe l'agenda, ou après, et qui ne contiennent rien
+// d'autre que la semaine de leur début (copiée de l'agenda précédent à la création). Un agenda où une autre
+// semaine est pointée n'est jamais touché. Provisoire : à retirer dans quelques mois (décision de Sophie, 16/11/2026).
+// Renvoie le nombre d'agendas retirés.
+function retirerAgendasOrigineEnTrop(){
+  let nb=0;
+  (S.contrats||[]).forEach(c=>{
+    if(!c||!Array.isArray(c.agendas)||!c.agendas.length) return;
+    const premierAv=(c.avenants||[]).filter(a=>a&&a.signe&&a.dateAvenant&&!avenantGardeAgenda(a))
+      .sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant))[0];
+    if(!premierAv) return;
+    const avant=c.agendas.length;
+    c.agendas=c.agendas.filter(ag=>{
+      const deb=ag&&(ag.dateDebut||ag.dateDeb);
+      if(!deb||deb<premierAv.dateAvenant) return true;
+      const cleDebut=getKeyAgenda(getSemISO(deb),getSemAnnee(deb));
+      return Object.keys(ag.semaines||{}).some(k=>k!==cleDebut);
+    });
+    nb+=avant-c.agendas.length;
+  });
+  return nb;
 }
 function migrerFiches(){
   // Corriger les dates mal stockées (bug timezone toISOString)
@@ -24869,49 +24898,12 @@ function signerAvenant(){
       }];
     }
   
-    // 17/08/2026 (Sophie) : combler aussi un éventuel trou de couverture sur les agendas du CONTRAT DE
-    // BASE jusqu'à aujourd'hui — sinon un avenant signé avec une date d'effet future, sans que l'agenda
-    // suivant du contrat de base ait été créé manuellement au préalable, laisse un trou entre la fin du
-    // dernier agenda existant et aujourd'hui, avec plus aucun moyen de le créer ensuite (repéré par
-    // Sophie : contrat var 46, avenant 52 sem signé avant la création de l'agenda suivant). Même
-    // logique que `creerAgenda`, en boucle jusqu'à couvrir aujourd'hui, jamais au-delà de l'avenant.
-    if(!avenantGardeAgenda(av)&&contratNeedAgenda(c)){
-      let gardeAgC=0;
-      while(gardeAgC<12){
-        gardeAgC++;
-        const aujourdBoucle=new Date();
-        const dernierAgC=c.agendas&&c.agendas.length?c.agendas[c.agendas.length-1]:null;
-        if(dernierAgC&&new Date(dernierAgC.dateFin)>=aujourdBoucle) break;
-        if(dernierAgC&&new Date(dernierAgC.dateDebut)>aujourdBoucle) break;
-        let dateDebutC;
-        if(dernierAgC){
-          const dFinPrecC=new Date(dernierAgC.dateFin+'T00:00:00');
-          dFinPrecC.setDate(dFinPrecC.getDate()+1);
-          dateDebutC=dFinPrecC.getFullYear()+'-'+String(dFinPrecC.getMonth()+1).padStart(2,'0')+'-'+String(dFinPrecC.getDate()).padStart(2,'0');
-        } else {
-          dateDebutC=c.dateDeb;
-        }
-        if(dateDebutC>=av.dateAvenant) break;
-        const partsC=dateDebutC.split('-').map(Number);
-        const dRefC=new Date(partsC[0],partsC[1]-1,partsC[2]);
-        const dernierJourC=new Date(dRefC.getFullYear()+1,dRefC.getMonth(),dRefC.getDate()-1);
-        const finStrC=dernierJourC.getFullYear()+'-'+String(dernierJourC.getMonth()+1).padStart(2,'0')+'-'+String(dernierJourC.getDate()).padStart(2,'0');
-        const agC={
-          id:Date.now()+gardeAgC,
-          dateDebut:dateDebutC,
-          dateFin:finStrC,
-          _semDebut:{sem:getSemISO(dRefC),annee:getSemAnnee(dRefC)},
-          _semFin:{sem:getSemISO(finStrC),annee:getSemAnnee(finStrC)},
-          semaines:{}
-        };
-        if(dernierAgC){
-          const agKeyDebC=getKeyAgenda(agC._semDebut.sem,agC._semDebut.annee);
-          const typeLimiteC=dernierAgC.semaines&&dernierAgC.semaines[agKeyDebC];
-          if(typeLimiteC) agC.semaines[agKeyDebC]=typeLimiteC;
-        }
-        c.agendas.push(agC);
-      }
-    }
+    // 16/11/2026 : le remplissage automatique de l'agenda du contrat d'origine à la signature (ajouté le 17/08,
+    // quand le bouton « nouvel agenda » de l'ancienne version disparaissait après la signature et laissait un trou
+    // impossible à combler) est retiré. Depuis le 24/09, la signature est refusée tant que l'agenda n'est pas
+    // rempli jusqu'à la date d'effet (agendaManquantAvantAvenant) : ce trou ne peut plus exister. Au deuxième
+    // avenant, ce remplissage créait au contraire un agenda de 12 mois du contrat d'origine sur la période du
+    // premier avenant. Les agendas déjà créés ainsi sont retirés au chargement (retirerAgendasOrigineEnTrop).
   
     const cidx=S.contrats.findIndex(x=>x.id==cid);
     if(cidx!==-1)S.contrats[cidx]=c;
