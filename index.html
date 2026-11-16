@@ -14272,19 +14272,26 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     fichePrec.jours.forEach(j=>{
       const semKey=getSemISO(j.date);
       if(!semMoisCourant.has(semKey)) return;
-      if(j.heureDebReel&&j.heureFinReel&&(j.statut==='prevu'||j.statut==='travaille'||j.statut==='ferie'||!j.statut)){
+      // 16/11/2026 : les jours du mois précédent suivent la même règle que ceux du mois (confirmé par Sophie le
+      // 16/11/2026) — un jour sans case « à compenser » compte pour le plus grand du réel et du prévu, un jour
+      // coché à ses heures réelles, et un jour « reprise » est compté. Avant, ils ne comptaient que leur réel :
+      // un enfant parti plus tôt un jour du mois précédent abaissait le total de la semaine pour le seuil de 45 h.
+      if(j.heureDebReel&&j.heureFinReel&&(estStatutPrevu(j.statut)||j.statut==='travaille'||j.statut==='reprise'||j.statut==='ferie'||!j.statut)){
         if(!hParSemaine[semKey]) hParSemaine[semKey]=0;
         const hJourPrec=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
-        hParSemaine[semKey]+=hJourPrec;
+        const hPrevJourPrecP=j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:0;
+        const compSeuilJP=!!(j.comp&&jourCompensable(c,j,getVersionActive(c,parseDateLoc(j.date))));
+        const hSeuilJourPrec=compSeuilJP?hJourPrec:Math.max(hJourPrec,hPrevJourPrecP);
+        hParSemaine[semKey]+=hSeuilJourPrec;
         if(!hParSemainePrecMois[semKey]) hParSemainePrecMois[semKey]=0;
-        hParSemainePrecMois[semKey]+=hJourPrec;
+        hParSemainePrecMois[semKey]+=hSeuilJourPrec;
         if(!hReelParSemaine[semKey]) hReelParSemaine[semKey]=0;
         hReelParSemaine[semKey]+=hJourPrec;
         if(!hReelParSemainePrecMois[semKey]) hReelParSemainePrecMois[semKey]=0;
         hReelParSemainePrecMois[semKey]+=hJourPrec;
-        const hPrevJourPrecP=j.heureDebPrev&&j.heureFinPrev?(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60:0;
-        hPlanParSemaine[semKey]=(hPlanParSemaine[semKey]||0)+Math.min(hPrevJourPrecP,hJourPrec);
-        hPlanParSemainePrecMois[semKey]=(hPlanParSemainePrecMois[semKey]||0)+Math.min(hPrevJourPrecP,hJourPrec);
+        const hPlanJourPrec=compSeuilJP?Math.min(hPrevJourPrecP,hJourPrec):hPrevJourPrecP;
+        hPlanParSemaine[semKey]=(hPlanParSemaine[semKey]||0)+hPlanJourPrec;
+        hPlanParSemainePrecMois[semKey]=(hPlanParSemainePrecMois[semKey]||0)+hPlanJourPrec;
       }
       // Report du prévu saisi le mois précédent pour cette même semaine à cheval (pour ne pas fausser
       // le ratio de répartition du dépassement hebdo entre les jours des deux mois)
