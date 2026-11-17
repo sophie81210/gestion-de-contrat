@@ -17676,19 +17676,47 @@ function dateFinEssaiCdiEffective(c){
     nomE=new Date(yC,mC-1,dC+c.periodeEssaiCdd-1);
   } else nomE=dateFinEssaiNominaleCdi(c);
   if(!nomE) return null;
-  const [yF,mF,dF]=c.dateDeb.split('-').map(Number);
+  // 17/11/2026 : début de l'essai — date d'effet de l'avenant pour un contrat sorti de l'occasionnel (voir essaiCdi).
+  const debEssaiF=c.typeDuree==='cdd'?c.dateDeb:(essaiCdi(c)||{}).debut;
+  const [yF,mF,dF]=debEssaiF.split('-').map(Number);
   return calcFinEssaiAvecProlongation(c,new Date(yF,mF-1,dF),nomE);
+}
+// 17/11/2026 : premier avenant signé qui fait sortir un contrat de l'accueil occasionnel (null s'il n'y en a pas).
+function avenantSortieOcc(c){
+  if(!c||c.tc!=='occ') return null;
+  return (c.avenants||[]).filter(a=>a&&a.signe&&a.dateAvenant&&a.tc&&a.tc!=='occ')
+    .sort((a,b)=>a.dateAvenant.localeCompare(b.dateAvenant))[0]||null;
+}
+// 17/11/2026 : période d'essai CDI applicable au contrat — {debut, mois, jours}, ou null. Pour un contrat occasionnel
+// passé en 46/52 par avenant, c'est celle saisie dans cet avenant, comptée à partir de sa date d'effet : quelques heures
+// d'occasionnel ne doivent pas consommer l'essai (confirmé par Sophie le 17/11/2026 ; seule l'ancienneté de l'indemnité
+// de rupture part du début du contrat occasionnel). Un contrat resté occasionnel n'a pas de période d'essai.
+function essaiCdi(c){
+  if(!c) return null;
+  if(c.tc!=='occ') return {debut:c.dateDeb,mois:c.periodeEssai,jours:c.periodeEssaiJours};
+  const avS=avenantSortieOcc(c);
+  return avS?{debut:avS.dateAvenant,mois:avS.periodeEssai,jours:avS.periodeEssaiJours}:null;
+}
+// 17/11/2026 : l'avenant ouvert dans le formulaire est-il celui qui fait sortir le contrat de l'accueil occasionnel ?
+// (Le seul où la période d'essai se saisit ; les avenants suivants la gardent bloquée.)
+function avenantOuvertSortOcc(){
+  if(!S.enAvenant) return false;
+  const cO=S.contrats.find(x=>x.id==S.enAvenant.cid);
+  if(!cO||cO.tc!=='occ') return false;
+  const premS=avenantSortieOcc(cO);
+  return !premS||premS.id==S.enAvenant.avid;
 }
 // Date de fin nominale de la période d'essai d'un CDI (sans prolongation) : en jours calendaires si fratrie, sinon en mois.
 function dateFinEssaiNominaleCdi(c){
-  if(!c.dateDeb) return null;
-  const [yE,mE,dE]=c.dateDeb.split('-').map(Number);
+  const es=essaiCdi(c);
+  if(!es||!es.debut) return null;
+  const [yE,mE,dE]=es.debut.split('-').map(Number);
   // 21/09/2026 (Sophie) : dernier jour inclus — 15 jours à partir du 21/09 finissent le 05/10 (le jour de début compte).
-  if(c.periodeEssaiJours>0) return new Date(yE,mE-1,dE+c.periodeEssaiJours-1);
+  if(es.jours>0) return new Date(yE,mE-1,dE+es.jours-1);
   // 21/09/2026 (Sophie) : en mois aussi, dernier jour = veille du même quantième (1 mois à partir du 21/09 finit le
   // 20/10) ; si ce quantième n'existe pas dans le mois d'arrivée (31/01 + 1 mois), fin au dernier jour de ce mois.
-  if(c.periodeEssai>0){
-    const idxM=mE-1+c.periodeEssai;
+  if(es.mois>0){
+    const idxM=mE-1+es.mois;
     const dernierJourM=new Date(yE,idxM+1,0).getDate();
     return dE>dernierJourM?new Date(yE,idxM,dernierJourM):new Date(yE,idxM,dE-1);
   }
@@ -17946,6 +17974,8 @@ function resetForm(){
   // restait grisee sur un contrat neuf. Elle est rendue a la saisie ici ; remplirFormulaireAvenant la
   // reverrouille juste apres pour un avenant.
   {const dD=document.getElementById('f-datedeb');if(dD){dD.disabled=false;dD.style.opacity='';}}
+  // 17/11/2026 : la période d'essai, bloquée dans un avenant, restait grisée sur un contrat neuf jusqu'au choix du type.
+  ['f-periode-essai','f-periode-essai-jours'].forEach(idPE=>{const ePE=document.getElementById(idPE);if(ePE){ePE.disabled=false;ePE.title='';}});
   ['fg-dateavenant','note-prolong-effet','fg-cdd-prolongation','fg-cdi-info'].forEach(idRF=>{
     const elRF=document.getElementById(idRF);
     if(elRF) elRF.remove();
@@ -18190,32 +18220,19 @@ function selTC(el,v){
   });
   const sdcg=document.getElementById('section-date-cg');
   if(sdcg)sdcg.style.display=v==='46'?'block':'none';
-  // Période d'essai : masquée pour occasionnel, désactivée pour avenant
+  // Période d'essai : masquée pour occasionnel, bloquée dans un avenant — sauf dans celui qui fait sortir le contrat de
+  // l'occasionnel, où elle se saisit comme pour un nouveau contrat, à compter de sa date d'effet (17/11/2026, confirmé
+  // par Sophie le 17/11/2026). Le pré-remplissage d'avant (mois restants depuis l'embauche) ne s'exécutait jamais :
+  // il cherchait le contrat avec S.enAvenant, qui n'est pas un numéro de contrat.
   const fpe=document.getElementById('f-periode-essai');
   if(fpe){
     fpe.closest('.fg').style.display=v==='occ'?'none':'block';
-    // Avenant occ→46/52 : activer la période d'essai avec déduction des mois déjà écoulés
-    const isAvenantOccVersClassique=S.enAvenant&&(S.contrats.find(x=>x.id==S.enAvenant)||{}).tc==='occ';
-    // Point d'essai : toujours désactivé dans un avenant
-    if(S.enAvenant){
-      fpe.disabled=true;
-      fpe.title="La période d\'essai ne peut pas être modifiée dans un avenant";
-      // Avenant occ→classique : pré-remplir avec les mois restants depuis la date d'embauche
-      if(isAvenantOccVersClassique){
-        const cOcc=S.contrats.find(x=>x.id==S.enAvenant);
-        if(cOcc&&cOcc.dateDeb){
-          const deb=new Date(cOcc.dateDeb.split('-')[0],parseInt(cOcc.dateDeb.split('-')[1])-1,parseInt(cOcc.dateDeb.split('-')[2]));
-          const now=new Date();
-          const moisEcoules=Math.floor((now-deb)/(1000*60*60*24*30.5));
-          let joursParSemOcc=getMaxJoursSemaineForm();
-          if(joursParSemOcc===0) joursParSemOcc=5;
-          const periodeEssaiMax=joursParSemOcc>=4?2:3;
-          const essaiRestant=Math.max(0,periodeEssaiMax-moisEcoules);
-          fpe.value=essaiRestant;
-          fpe.title='Période d\'essai calculée depuis l\'embauche : '+periodeEssaiMax+' mois max − '+moisEcoules+' mois écoulés = '+essaiRestant+' mois restants (non modifiable)';
-        }
-      }
-    }
+    const fpj=document.getElementById('f-periode-essai-jours');
+    const bloqueEssai=!!S.enAvenant&&!avenantOuvertSortOcc();
+    fpe.disabled=bloqueEssai; if(fpj) fpj.disabled=bloqueEssai;
+    const titreEssai=bloqueEssai?"La période d\'essai ne peut pas être modifiée dans un avenant"
+      :(S.enAvenant?"Période d\'essai à compter de la date d\'effet de l\'avenant":'');
+    fpe.title=titreEssai; if(fpj) fpj.title=titreEssai;
   }
   // Horaires : masqués pour occasionnel
   const cardH=document.querySelector('.card:has(#cond-fixe)');
@@ -20231,7 +20248,31 @@ function validerAvenant(){
            jours,nom:nomEl?nomEl.value:('Volume '+n)};
   }):null;
 
+  // 17/11/2026 : période d'essai de l'avenant qui fait sortir le contrat de l'occasionnel (confirmé par Sophie le
+  // 17/11/2026) — mêmes plafonds qu'à la création : 30 jours si fratrie, sinon 2 mois à partir de 4 jours par semaine
+  // (planning de l'avenant) et 3 mois en dessous. Vide = non renseignée, refusée à la signature.
+  let essaiAvMois, essaiAvJours, essaiAvSaisi=false;
+  if(avenantOuvertSortOcc()){
+    essaiAvSaisi=true;
+    if(c.fratrieAccueilli){
+      const vjA=document.getElementById('f-periode-essai-jours')?.value;
+      essaiAvJours=(vjA===''||vjA==null)?null:(parseInt(vjA)||0);
+      essaiAvMois=essaiAvJours===null?null:0;
+      if(essaiAvJours>30){alerte('Un enfant de la même famille est déjà accueilli : période d’essai limitée à 30 jours calendaires.');return;}
+    } else {
+      const vmA=document.getElementById('f-periode-essai')?.value;
+      essaiAvMois=(vmA===''||vmA==null)?null:(parseFloat(vmA)||0);
+      essaiAvJours=null;
+      if(essaiAvMois>0){
+        const joursA=getMaxJoursSemaineForm();
+        const maxA=joursA>=4?2:3;
+        if(essaiAvMois>maxA){alerte('Période d\'essai trop longue : maximum '+maxA+' mois ('+(joursA>=4?'4 jours ou plus par semaine':'moins de 4 jours par semaine')+').');return;}
+      }
+    }
+  }
+
   // Mettre à jour l'avenant
+  if(essaiAvSaisi){ av.periodeEssai=essaiAvMois; av.periodeEssaiJours=essaiAvJours; }
   av.dateAvenant=dateAvenant;
   av.tc=S.tc;av.th=S.th;av.planType=S.th==='plan'?S.planType:null;
   av.nbSem=parseFloat(document.getElementById('f-nbsem')?.value)||null;
@@ -21841,6 +21882,9 @@ function renderRuptureCDD(c, cont){
         <select id="rp-motif-${cid}" onchange="rafraichirRupture(${cid})" style="width:100%;margin-top:4px;padding:6px;border:1px solid var(--mb);border-radius:6px;font-size:13px">
           <option value="">— Choisir —</option>
           ${motifsList.map(m=>{
+            // 17/11/2026 : CDD sans période d'essai (0 jour) — option retirée, elle était proposée sans limite
+            // (accord de Sophie le 17/11/2026).
+            if((m.v==='fin-essai'||m.v==='fin-essai-am')&&!(c.periodeEssaiCdd>0)) return '';
             // Désactiver fin-essai si la période d'essai est dépassée
             if((m.v==='fin-essai'||m.v==='fin-essai-am')&&c.periodeEssaiCdd>0){
               const dateFinEssai=dateFinEssaiCdiEffective(c);
@@ -22123,8 +22167,10 @@ function renderRupture(c, cont){
     const delai=parseInt(rp.delaiPrev)||0;
     let dateFinEssai=dateNotif?new Date(dateNotif.getTime()+delai*24*60*60*1000):null;
     // Calculer la date max de fin de période d'essai
-    const [ddy2,ddm2,ddd2]=(c.dateDeb||'').split('-').map(Number);
-    const dateDebContratEssai=c.dateDeb?new Date(ddy2,ddm2-1,ddd2):null;
+    // 17/11/2026 : à partir de la date d'effet de l'avenant pour un contrat sorti de l'occasionnel (voir essaiCdi).
+    const debEssaiH=(essaiCdi(c)||{}).debut||'';
+    const [ddy2,ddm2,ddd2]=debEssaiH.split('-').map(Number);
+    const dateDebContratEssai=debEssaiH?new Date(ddy2,ddm2-1,ddd2):null;
     const dateFinPeriodeEssaiNominale=dateFinEssaiNominaleCdi(c);
     const dateFinPeriodeEssai=calcFinEssaiAvecProlongation(c,dateDebContratEssai,dateFinPeriodeEssaiNominale);
     // 21/09/2026 (Sophie) : le délai de prévenance ne prolonge pas la période d'essai — fin de contrat au plus tard
@@ -22335,9 +22381,13 @@ function renderRupture(c, cont){
           <option value="demission" ${motif==='demission'?'selected':''}>Démission</option>
           <option value="retrait-force" ${motif==='retrait-force'?'selected':''}>Retrait forcé</option>
           ${(()=>{
-            if(c.periodeEssai>0||c.periodeEssaiJours>0){
-              const [ddyE,ddmE,dddE]=(c.dateDeb||'').split('-').map(Number);
-              const dateDebEssaiCdi=c.dateDeb?new Date(ddyE,ddmE-1,dddE):null;
+            // 17/11/2026 : sans période d'essai (0, non renseignée, ou contrat resté occasionnel), l'option n'est plus
+            // proposée — elle l'était sans aucune limite de date (accord de Sophie le 17/11/2026).
+            const esR=essaiCdi(c);
+            if(!esR||!(esR.mois>0||esR.jours>0)) return '';
+            {
+              const [ddyE,ddmE,dddE]=(esR.debut||'').split('-').map(Number);
+              const dateDebEssaiCdi=esR.debut?new Date(ddyE,ddmE-1,dddE):null;
               const finNominaleEssaiCdiR=dateFinEssaiNominaleCdi(c);
               const dateFinEssai=calcFinEssaiAvecProlongation(c,dateDebEssaiCdi,finNominaleEssaiCdiR);
               if(dateFinEssai&&(dateSit||new Date())>dateFinEssai){
@@ -24252,6 +24302,14 @@ function remplirFormulaireAvenant(c,av,d){
     sv('f-maj-comp',d.majComp);sv('f-maj-sup',d.majSup);
     sv('f-nbsem',d.nbSem);sv('f-hmin',d.hMin);
     if(d.tc&&d.tc!=='occ'){const el=document.getElementById('ro-'+d.tc);if(el)selTC(el,d.tc);}
+    // 17/11/2026 : avenant qui fait sortir le contrat de l'occasionnel — la période d'essai se saisit (en jours si la
+    // case fratrie du contrat est cochée, en mois sinon, comme à la création ; confirmé par Sophie le 17/11/2026).
+    // Elle est reprise de l'avenant lui-même, même au « Report » : la version en vigueur, occasionnelle, n'en a pas.
+    if(avenantOuvertSortOcc()){
+      const cbFA=document.getElementById('f-fratrie'); if(cbFA) cbFA.checked=!!c.fratrieAccueilli;
+      majFratrie();
+      sv('f-periode-essai',av.periodeEssai); sv('f-periode-essai-jours',av.periodeEssaiJours);
+    }
     // 16/11/2026 : un avenant n'est jamais en accueil occasionnel (confirmé par Sophie le 16/11/2026) —
     // un contrat occasionnel ne peut que passer en 46/52 par avenant. L'option est toujours masquée ici.
     {
@@ -24675,6 +24733,11 @@ function signerAvenant(){
   if(av.tc!=='52'&&av.tc!=='occ'&&!av.dateCg) manquantsAv.push("mode de paiement des congés");
   if(!av.tc) manquantsAv.push("type de contrat");
   if(av.tc!=='occ'&&!av.th) manquantsAv.push("type d'horaires");
+  // 17/11/2026 : l'avenant qui fait sortir de l'occasionnel porte la période d'essai, comme un nouveau contrat.
+  if(avenantOuvertSortOcc()){
+    const peAv=c.fratrieAccueilli?av.periodeEssaiJours:av.periodeEssai;
+    if(peAv===null||peAv===undefined) manquantsAv.push("durée de la période d'essai (mettre 0 si aucune)");
+  }
   if(!av.txBrut) manquantsAv.push("taux horaire brut");
   if(!av.cgAnticipe) av.cgAnticipe='non';
   if(av.cgAnticipe!=='oui'&&av.dateAvenant&&cgAnticipeFige(c,av.dateAvenant)){
