@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-<!-- CAM build 20260517 -->
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
@@ -266,8 +265,8 @@ body{font-family:Calibri,'Segoe UI',sans-serif;color:var(--tx);min-height:100vh;
 .tabs{display:flex;gap:2px;overflow-x:auto}
 .tab{padding:8px 9px;font-size:13px;font-weight:500;color:rgba(60,30,15,.6);border-bottom:3px solid transparent;cursor:pointer;white-space:nowrap;font-family:Calibri,sans-serif;background:none;border-top:none;border-left:none;border-right:none;transition:all .2s}
 .tab.on,.tab:hover{color:var(--m);border-bottom-color:var(--m)}
-/* 25/09/2026 (Sophie) : cinq onglets depuis l'ajout des Archives — marges resserrées pour éviter
-   la barre de défilement horizontale sur les écrans étroits. */
+/* 25/09/2026 : barre de cinq onglets — marges resserrées pour éviter la barre de défilement horizontale
+   sur les écrans étroits. */
 @media(max-width:430px){.tab{padding:8px 5px;font-size:12px}}
 .content{flex:1;overflow-y:auto;padding:14px}
 .content::-webkit-scrollbar{width:4px}
@@ -904,11 +903,9 @@ function eclaircir(hex,pct){
   const mix=(c2)=>Math.round(c2+(255-c2)*pct);
   return '#'+[mix(r),mix(g),mix(b)].map(v=>v.toString(16).padStart(2,'0')).join('');
 }
-// Parse une date "AAAA-MM-JJ" en heure locale (jamais new Date(chaîne), qui s'interprète en UTC et peut
-// décaler d'un jour selon le fuseau horaire de l'utilisateur)
-// Nombre réel de semaines actives d'un contrat/avenant, dérivé des types saisis (semTypes ou planVar) —
-// jamais un nombre par défaut (46/52...) : "contrat 46" est un type de contrat, pas un nombre de
-// semaines fixe. Ne retombe sur nbSem/tc que si aucun type n'est encore saisi (contrat en cours d'édition).
+// Nombre réel de semaines d'un contrat/avenant : somme des semaines types (horaires selon la semaine) ou des
+// volumes (planning variable) ; sinon le nombre de semaines saisi (nbSem) ; à défaut seulement, 52 ou 46 selon
+// le type de contrat ("contrat 46" est un type de contrat, pas un nombre de semaines fixe).
 function getNbSemReel(source, c){
   if(source.th==='sem'&&source.semTypes&&source.semTypes.length){
     const tot=source.semTypes.reduce((t,st)=>t+parseFloat(st.nb||0),0);
@@ -920,6 +917,8 @@ function getNbSemReel(source, c){
   }
   return source.nbSem||(c&&c.nbSem)||((source.tc==='52'||(c&&c.tc==='52'))?52:46);
 }
+// Parse une date "AAAA-MM-JJ" en heure locale (jamais new Date(chaîne), qui s'interprète en UTC et peut
+// décaler d'un jour selon le fuseau horaire de l'utilisateur)
 function parseDateLoc(str){
   const [py,pm,pd]=str.split('-').map(Number);
   return new Date(py,pm-1,pd);
@@ -992,7 +991,7 @@ S.agendaMasques = JSON.parse(localStorage.getItem("cam_agendaMasques") || "{}");
           const agendas=(c.agendas||[]);
           const agendaJour=agendas.find(ag=>j.date>=ag.dateDebut&&j.date<=ag.dateFin);
           const typeSem=agendaJour&&agendaJour.semaines&&agendaJour.semaines[agKey];
-          if(typeSem==='off') return; // semaine off → garder non-prevu
+          if(typeSem==='off') return; // semaine off → le statut reste vide (null)
           // Jour férié sur jour possible → statut ferie
           if(isFerie(j.date,c)&&c.th==='plan'&&(c.planType==='min'||c.planType==='var')){
             j.statut='ferie';
@@ -1199,9 +1198,8 @@ function choisirProfil(profil){
     document.getElementById('email-mode-toggle').innerHTML='Pas encore de compte&nbsp;? <a href="#" onclick="basculerModeEmail();return false;" style="color:var(--m);font-weight:600">S\'inscrire</a>';
   } else {
     label.innerHTML='<span style="font-weight:600;color:var(--m);font-size:17px">🧑‍🍼 Employeur</span> — <a href="#" onclick="revenirChoixProfil();return false;" style="color:var(--tx2);font-size:12px">Changer</a>';
-    // Pas d'inscription pour les employeurs : le compte est le leur (Google ou email existant),
-    // l'accès est accordé par l'Ass'Mat via son email — connexion uniquement, avec récupération de
-    // mot de passe si besoin (décision de session précédente, jamais appliquée jusqu'ici)
+    // Employeur : pas de lien « S'inscrire » mais un bouton « Créer un compte », avec l'email que l'assistante
+    // maternelle a renseigné ; l'accès au contrat découle de cet email.
     document.getElementById('email-mode-toggle').innerHTML='<button type="button" class="bg-btn" style="background:#fff;color:var(--m);border-color:var(--m);margin-top:8px" onclick="creerCompteEmail()">Créer un compte</button><br><span style="font-size:11px;color:var(--tx2)">Utilisez l\'email renseigné par votre assistante maternelle, et choisissez un mot de passe</span>';
     // Remettre le bouton en mode "Se connecter" si on était en mode inscription
     if(modeInscription) basculerModeEmail();
@@ -1296,7 +1294,7 @@ function getContratsCompresses(){
   // perdu. Mais une saisie y disparaissait en silence, l App annoncant « enregistre » parce que le reste
   // l etait — une absence partielle posee sur novembre revenait vierge apres actualisation.
   // On conserve donc une feuille future des qu elle porte quelque chose de SAISI : heures reelles, statut
-  // pose a la main (la table des transitions de statutsPossibles), note, kilometres, repas, ou volume var
+  // pose a la main (statutsSaisisFut ci-dessous), note, kilometres, repas, ou volume var
   // prevu. Les feuilles qui ne contiennent que le prevu genere automatiquement restent ecartees.
   const statutsSaisisFut=['abs-partielle','abs-rem','abs-enfant','abs-non','abs-am','arret','arret-pro','travaille','reprise'];
   const porteUneSaisieFut=f=>(f.jours||[]).some(j=>j&&(j.heureDebReel||j.heureFinReel||j.note||j.km||(j.repas&&j.repas.some(r=>r))||j.planVarPrevu||statutsSaisisFut.includes(j.statut)));
@@ -1394,7 +1392,7 @@ async function _flushSaveFirestore(){
     idsEnvoyesSave=contratsClean.map(c=>c.id);
     _contratsModifies.clear();
     const dataClean=JSON.parse(JSON.stringify({
-      contrats:contratsClean, // seulement les modifiés
+      contrats:contratsClean, // les modifiés, ou tous si la file est vide
       params:S.params||{},
       congesAM:S.congesAM||{}
     }));
@@ -1656,7 +1654,7 @@ function goTo(p){
   if(p!=='form'&&p!=='det') S.enEd=null;
   PAGES.forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
-  // Remettre btn-val visible sauf si on reste sur rupture
+  // Remettre le bouton Enregistrer visible
   const btnValG=document.getElementById('btn-val');
   if(btnValG) btnValG.style.display='';
   const titres={auj:"Aujourd\u2019hui",cont:'Contrats',form:'Nouveau contrat',det:'Fiche contrat',arch:'Archives',agenda:'Semaine',aide:'Aide'};
@@ -1807,7 +1805,8 @@ function pointer(id,type){
   if(cidx!==-1) S.contrats[cidx]=c;
   enregistrerContrats([c.id]);
 
-  // Si jour non prévu ou repos et qu'on pointe → passer à "travaillé"
+  // Pointer un jour dont le statut n'est ni « prévu » ni « travaillé » (non prévu, repos, férié, absence, congé…)
+  // le passe en « travaillé » (seuls les congés Ass'Mat sont protégés, plus haut).
   // Bug confirmé Sophie (test du 14/07/2026, jour férié) : cette 2e condition vérifiait
   // jour.statut (la valeur BRUTE enregistrée) au lieu de statutActuelPtr (la valeur EFFECTIVE,
   // déjà calculée juste au-dessus) — pour un férié jamais explicitement modifié, jour.statut
@@ -2246,7 +2245,8 @@ function archiverContrat(c){
   // Le nettoyage des fiches/agendas a déjà eu lieu dès la clôture (validation de la dernière fiche)
   nettoyerFichesPostCloture(c);
   // 19/09/2026 (Sophie) : l'accès employeur n'est PLUS retiré ici. Il survit à l'archivage et tombe
-  // sept mois après la clôture du contrat, quoi qu'il arrive — l'employeur dispose de six mois pour
+  // sept mois après la fin du dernier mois validé, une fois la feuille du mois de fin validée (voir
+  // dateFinAccesEmployeur) — l'employeur dispose de six mois pour
   // contester le solde de tout compte, ranger le contrat dans les archives ne doit pas le priver de
   // cette possibilité. Retrait automatique par purgerAccesEmployeursPerimes, à chaque ouverture de
   // l'app. (Remplace la règle du 28/07/2026, qui coupait l'accès dès l'archivage ; son motif —
@@ -2606,9 +2606,9 @@ function buildFicheContenu(source, c){
     })()],
     ['Indem. repas',(()=>{
       // 27/08/2026 (Sophie) : lit et modifie désormais TOUJOURS le contrat de base (c.repas), plus
-      // "la version active aujourd'hui" (cibleActuelle) — cohérent avec le principe du 11/08 (repas
-      // identique quel que soit le contrat initial ou l'avenant affiché, hérité via getVersionActive)
-      // : dès qu'un avenant devenait effectif, cibleActuelle pointait dessus, et modifier ici n'écrivait
+      // "la version active aujourd'hui" (cibleActuelle). Le repas a une valeur unique, lue sur le contrat de
+      // base (c.repas) par l'affichage et par calcRecapFiche, jamais via getVersionActive, qui renverrait la
+      // copie portée par l'avenant : dès qu'un avenant devenait effectif, cibleActuelle pointait dessus, et modifier ici n'écrivait
       // plus jamais sur le contrat de base — plus aucun moyen de le modifier une fois un avenant signé.
       return repasLbl.map((l,i)=>{
         const idR='repas-'+i+'-'+c.id;
@@ -2703,10 +2703,8 @@ function getCibleEditionDirecte(c){
   return avsEffectifs[avsEffectifs.length-1];
 }
 function getCibleEdition(c,cibleId){
-  // 11/08/2026 (Sophie) : remplace getCibleEditionDirecte — celle-ci devinait "la version active
-  // aujourd'hui", ce qui modifiait à tort un avenant déjà signé même en éditant depuis la section
-  // "contrat initial" de la récap. Cible maintenant explicitement l'objet réellement affiché à
-  // l'endroit où le bouton a été cliqué (passé depuis le rendu), jamais une devinette.
+  // Retrouve l'objet (contrat ou avenant) dont l'identifiant a été passé au bouton ; pour l'indemnité
+  // d'entretien, cet identifiant est celui de la version en vigueur aujourd'hui (getCibleEditionDirecte).
   if(!cibleId||cibleId==='origine') return c;
   return (c.avenants||[]).find(a=>a.id==cibleId)||c;
 }
@@ -2767,11 +2765,9 @@ function modifierKmDirect(contratId, val, cibleId){
   saveToFirestore();
   if(S.enCours==contratId) renderDetTab(contratId, S.detTab||'contrat');
 }
-// 01/09/2026 (Sophie) : extraite de renderDetTab (était imbriquée, calcul dupliqué de facto
-// avec calcRegularisationDefinitive qui utilisait hTheoriques a la place - source du
-// desaccord 681,05 vs 7,31 confirme par Sophie sur un cas chiffre) - autonome, les deux
-// seules dependances de fermeture (c, cycle.clause52) sont maintenant des parametres
-// explicites, pour que les deux appelants ne puissent plus jamais diverger.
+// Heures dues de la régularisation sur une période : fonction unique, utilisée par l'onglet Régularisation
+// (donc aussi par la rupture), par hDuMorceauReg et par le message des heures garanties non utilisées.
+// (01/09/2026 : extraite de renderDetTab ; c et la clause 52 sont des paramètres explicites.)
         function calcHPrevuReg(c, clause52In, dateDebStr, dateFinStr){
           // 14/09/2026 (Sophie, point 25) : une période qui contient un avenant se calcule en deux morceaux, un de
           // chaque côté — la semaine de l'avenant est ainsi valorisée par chaque côté pour ses propres jours.
@@ -2872,9 +2868,9 @@ function modifierKmDirect(contratId, val, cibleId){
                       }
                     }
                     // Jours d'absence (non rémunérée, maladie enfant, arrêt, absence AM, férié non
-                    // travaillé) parmi les jours possibles de cette semaine — à déduire du "dû", au même
-                    // taux journalier que le reste, pour que la comparaison avec le mensualisé (déjà net
-                    // d'absence) reste cohérente
+                    // travaillé) parmi les jours possibles de cette semaine — déduits du "dû" à leurs heures
+                    // prévues de la fiche (sommeHeuresJoursVol, plus bas), pour que la comparaison avec le
+                    // mensualisé (déjà net d'absence) reste cohérente. Les congés suivent la règle du 20/10 ci-dessous.
                     // 20/10/2026 (Sophie) : un jour de conge pose sur un jour COCHE au planning retire une part du volume
                     // de la semaine (volume / jours max), ou ses heures saisies s'il en porte. Avant, il etait valorise aux
                     // heures PREVUES de la fiche — toujours nulles sur un jour de conge, donc il ne retirait rien : Silene,
@@ -2922,7 +2918,8 @@ function modifierKmDirect(contratId, val, cibleId){
                     // qui sous-comptait la déduction — confirmé sur un cas chiffré début de contrat où
                     // l'app donnait 98,51€ au lieu de 43,98€) par la somme des heures RÉELLEMENT prévues
                     // au planning de chaque jour de congé/absence précis (potentiellement différentes
-                    // d'un jour à l'autre), comme Sophie l'a elle-même calculé à la main.
+                    // d'un jour à l'autre), comme Sophie l'a elle-même calculé à la main. Ne vaut plus que pour
+                    // les absences : les congés passent par hCongesBorneHP depuis le 20/10.
                     const sommeHeuresJoursVol=(predicateFn)=>{
                       let somme=0;
                       for(let d=0;d<7;d++){
@@ -3006,15 +3003,6 @@ function modifierKmDirect(contratId, val, cibleId){
                         if(limiteFin&&jdStr>limiteFin) continue;
                         joursSousContratHP++;
                       }
-                      // 07/09/2026 (correction Sophie, le jour même) : l'AVENANT est l'exception, il ne
-                      // suit pas "au plus favorable". Sa semaine se valorise en JOURS POSSIBLES
-                      // (volume ÷ jours possibles du motif × jours possibles de la portion), sinon
-                      // chaque côté de l'avenant réclamerait jusqu'à ses jours MAXIMUM — la portion
-                      // d'avant les plaçant en début de semaine, celle d'après en fin de semaine — et
-                      // la semaine porterait un nombre d'heures considérable qui ne sera jamais
-                      // travaillé. Ainsi valorisées, les deux portions se partagent exactement le
-                      // volume de la semaine. Début de contrat et rupture gardent, eux, "au plus
-                      // favorable" : une seule portion existe, aucun double emploi possible.
                       // 19/09/2026 (Sophie) : une seule regle pour tous les calculs, avenant compris —
                       // jours GARANTIS, plafonnes aux jours de la portion. L'exception du 07/09 (semaine
                       // d'avenant valorisee en jours possibles) faisait diverger le salaire du de ce que le
@@ -3023,11 +3011,9 @@ function modifierKmDirect(contratId, val, cibleId){
                       // contrat ; ce que l'une prend ne retire rien a l'autre (meme principe que la
                       // coordination entre mois, sautee elle aussi sur une semaine d'avenant).
                       const diviseurSemHP=jMaxSemHP;
-                      // 19/09/2026 (Sophie) : partie AVANT l'avenant — elle n'a droit qu'aux jours
-                      // qu'elle a réellement cochés, ce qu'elle laisse pouvant être placé après ; plancher
-                      // égal à ce que la partie d'après ne peut pas absorber. Même règle que l'enveloppe du
-                      // planning et que le contrôle à l'enregistrement (note détaillée dans
-                      // calcEnveloppeMoisVar). La partie d'après, elle, garde sa part structurelle.
+                      // 19/09/2026 : la partie AVANT l'avenant n'avait droit qu'aux jours qu'elle avait cochés (avec un
+                      // plancher) ; limite retirée le 20/10 (note en fin de bloc). Les valeurs calculées dans ce bloc
+                      // (joursPossiblesApresHP, joursCochesAvHP, plancherAvHP) ne sont plus utilisées.
                       const estPortionAvantHP=limiteEstAvenant&&dateFinStr<limiteDebut;
                       let joursRetenusHP=Math.min(jMaxSemHP,joursSousContratHP);
                       if(estPortionAvantHP){
@@ -3296,10 +3282,6 @@ function modifierKmDirect(contratId, val, cibleId){
           return hPrevu;
         }
 
-// 07/09/2026 (Sophie) : extrait tel quel de l'onglet Régularisation, sans modifier une seule ligne du
-// calcul — seules les écritures dans la page deviennent des valeurs de retour. But : pouvoir demander
-// ce même calcul depuis ailleurs (projection du simulateur de rupture au-delà du mois en cours) sans
-// en écrire une quatrième version. Renvoie {html, cache, mensuValide, prevuValide}.
 // 07/09/2026 (Sophie) : un mois en plan min ou var dont l'agenda n'est pas pointé compte pour zéro dans
 // le salaire dû — le calcul tire le volume du type de semaine posé sur l'agenda, rien d'autre. Sert à
 // avertir dans le simulateur de rupture, où la projection porte justement sur des mois à venir dont
@@ -3328,11 +3310,7 @@ function moisSansAgendaRegul(c, moisKey){
     // automatiquement d'après le calendrier Ass'Mat (un seul calendrier, commun à tous les contrats
     // 46) et ne portent AUCUN type dans l'agenda — elles y sont même grisées, impossibles à pointer.
     // Sans cette exception elles étaient signalées comme "agenda non pointé" alors qu'elles sont
-    // parfaitement renseignées. Un premier essai avec isJourCongeAM (jour par jour) ne suffisait pas :
-    // une semaine de congés n'a pas forcément TOUS ses jours posés, elle est retenue au score. On
-    // réutilise donc getSemsCongesGlobal, la même source que l'agenda, avec sa règle d'année Ass'Mat
-    // (semaine >= 18 : même année, sinon année précédente). Les contrats 52 en sont exclus : ils
-    // n'ont jamais de semaine auto-exemptée, tout doit y être pointé.
+    // parfaitement renseignées (règle appliquée : note suivante).
     const semNumA=getSemISO(dsA), semAnA=getSemAnnee(dsA);
     // 07/09/2026 (Sophie, « pour qu'elle soit violette il faudra que pour plan sem et var aucun jour
     // de tous les motifs ne le couvre ») : une semaine entièrement en congés est exemptée de pointage.
@@ -3401,7 +3379,7 @@ function hDuJourRegFS(c, clause52In, j){
 // 13/09/2026 (Sophie) : heures dues d'un morceau de semaine [a, b] (même mois, même version du contrat) :
 // fixe/sem jour par jour (hDuJourRegFS) ; var/min comme calcHPrevuReg — sauf dans une semaine coupée par un
 // avenant, valorisée en jours possibles (volume ÷ jours possibles du motif, par jour possible du morceau,
-// hors absences et congés), la règle de l'avenant rappelée dans calcHPrevuReg : appelée sur un morceau
+// hors absences et congés) — ancienne règle du 07/09, abandonnée dans calcHPrevuReg le 19/09 : appelée sur un morceau
 // d'une semaine d'avenant, calcHPrevuReg y compte aussi les jours de l'autre côté de l'avenant
 // (52var-46sem-52fixe, semaine du 11 mars 2024 : 7,50 h au-delà de 45 h qui n'existaient pas).
 function hDuMorceauReg(c, clause52, a, b, semaineAvenant, fichesExtra){
@@ -3484,6 +3462,11 @@ function estPassageRegulSoldeRecap(r){
   if(!r) return false;
   return r.estPassageRegulSolde!==undefined?!!r.estPassageRegulSolde:!!r.estPassage46vers52;
 }
+// 07/09/2026 (Sophie) : extrait tel quel de l'onglet Régularisation, sans modifier une seule ligne du
+// calcul — seules les écritures dans la page deviennent des valeurs de retour. But : pouvoir demander
+// ce même calcul depuis ailleurs (projection du simulateur de rupture au-delà du mois en cours) sans
+// en écrire une quatrième version. Renvoie notamment {html, cache, mensuValide, prevuValide, annees,
+// mensuTotal, prevuTotal, diffTotal, diffEnCours, borne, jusquA, moisProjetes, moisCycleCourant, horsPlafond}.
 function calcRegulOnglet(c, opts){
   // 07/09/2026 (Sophie) : opts.jusquA (mois AAAA-MM) prolonge le calcul au-delà du mois en cours,
   // pour le simulateur de rupture qui doit projeter jusqu'à une date de fin future. Sans lui, tout se
@@ -3575,9 +3558,6 @@ function calcRegulOnglet(c, opts){
         // Collecter toutes les dates d'avenant signés
         const datesAvenants=(c.avenants||[]).filter(a=>avenantCoupant(a)).map(a=>a.dateAvenant).sort();
 
-        // Fonction : calcul heures prévues régularisation pour une période (dateDebStr→dateFinStr inclus)
-        // Exclut semaines 'off' et jours de congés
-
         // Fonction : calcul hThéoriques mensuel pour une période (pour prorata mensualisation)
         function calcHTheoReg(dateDebStr, dateFinStr){
           let hTheo=0;
@@ -3636,8 +3616,9 @@ function calcRegulOnglet(c, opts){
                 // entière : au mois anniversaire, celle à cheval sur les deux parties comptait des deux côtés
                 // (Méline, août 2026 : 500,86 € de mensualisé pour un mois à 420,72 €).
               } else if(estPlanMinVarTh){
-                // Plan var/min : agenda uniquement, volume complet de la semaine, une fois — jamais
-                // le planning (trop variable, ne représente pas la mensualisation)
+                // Plan var/min : agenda uniquement — jamais le planning (trop variable, ne représente pas la
+                // mensualisation) ; volume de la semaine compté une fois, partagé si la semaine est coupée par la
+                // plage ou, en plan min, par un changement de mois.
                 const semUnique=semAnnee+'-'+semKey;
                 if(!semainesCompteesVMTh.has(semUnique)){
                   semainesCompteesVMTh.add(semUnique);
@@ -3737,7 +3718,7 @@ function calcRegulOnglet(c, opts){
         // Déterminer le tIdx du cycle contenant la dernière fiche validée (pour le déplier par défaut)
         const moisValides=Object.keys(c.fiches||{}).filter(k=>c.fiches[k].valide).sort();
         const derniereFicheValideeKey=moisValides.length?moisValides[moisValides.length-1]:null;
-        let tIdxAOuvrir=0; // par défaut, le cycle le plus récent (tIdx le plus grand)
+        let tIdxAOuvrir=0; // par défaut, la première année (indice 0)
         if(derniereFicheValideeKey){
           tranches.forEach((moisListT,tIdxT)=>{
             if(!moisListT) return;
@@ -3832,14 +3813,15 @@ function calcRegulOnglet(c, opts){
                 }
                 const hPrevuPartie=calcHPrevuReg(c, cycle.clause52, debPartie, finPartie);
                 hPrevu+=hPrevuPartie;
-                // Pour le mois de l'avenant 46→52 : limiter hTheoMois à la partie avant avenant
+                // Mois d'avenant : hTheoMois de la première partie limité à la veille de l'avenant
                 const dateFinLimitePartie=(avenantDuMoisReg&&i===0&&veilleAvenantReg)?veilleAvenantReg:null;
                 hMensuReg+=calcHMensuReg(debPartie, finPartie, hPrevuPartie, true, dateFinLimitePartie);
               }
             }
 
-            // Col 1 : salaire mensualisé - montant absences
-            // Col 2 : heures réellement "payables" × txNet
+            // Col 1 : salaire mensualisé - montant absences (+ majoration des heures sup mensualisées)
+            // Col 2 : heures réellement "payables" × txNet (+ majoration des heures au-delà de 45 h ;
+            //   sous la clause 52, les congés y comptent)
             //   = jours prévus travaillés (hors congés, abs non rem, abs enfant, arrêt)
             //   + heures réelles abs partielles (pas les heures prévues ce jour)
             //   + abs rémunérées (heures prévues)
@@ -3855,6 +3837,8 @@ function calcRegulOnglet(c, opts){
             const partieAvantRegul=!!(avenantDuMoisReg&&!avenantAu1erReg&&versionRegularisable(getVersionActive(c,parseDateLoc(veilleAvenantReg))));
             const partieApresRegul=!!(avenantDuMoisReg&&versionRegularisable(getVersionActive(c,parseDateLoc(avenantDuMoisReg.dateAvenant))));
             const estPassageVers46Reg=!partieAvantRegul&&partieApresRegul; // partie d'après seulement
+            // Les deux parties du mois d'avenant sont cumulées si chacune est régularisable (versionRegularisable) ;
+            // une partie non régularisable est perdue. Historique :
             // 07/09/2026 (Sophie, contrat 52 fixe → 46 var, avenant du 15/10/2025) : ce test
             // n'excluait que le contrat occasionnel. Un passage 52 → 46 y répondait donc « oui, c'est
             // un 46 → 46 » et prenait la branche qui CUMULE les deux moitiés du mois sur le mois
@@ -4089,8 +4073,8 @@ function calcRegulOnglet(c, opts){
       } // fin else moisTries
       }); // fin forEach cycles
         const diffGen=totGlobalPrevu-totGlobalMensu;
-        // 25/08/2026 (Sophie) : diff affiché en haut, limité aux mois validés uniquement — distinct de
-        // diffGen (qui reste la base de c._regulDiffEuros ci-dessous, usage différent, ailleurs).
+        // 25/08/2026 (Sophie) : écart affiché en haut, limité aux mois validés. diffGen (toutes périodes, tous
+        // mois) est seulement renvoyé en diffTotal, que rien ne lit aujourd'hui.
         const diffGenValide=totGlobalPrevuValide-totGlobalMensuValide;
         const dernierCycleEnCours=cycles.find(cy=>!cy.solde);
         // 14/09/2026 (Sophie) : l'onglet n'écrit plus c._regulDiffEuros (il y mettait l'écart de TOUTES les
@@ -4322,7 +4306,7 @@ function voirAvenant(cid,avid){
   `;
 }
 
-  // 25/08/2026 (Sophie) : cache temporaire pour getVersionActive.
+  // 25/08/2026 (Sophie) : cache de courte durée (vidé au tour suivant) pour getVersionActive.
   // Indexé sur l'OBJET contrat lui-même (WeakMap), pas sur son id — si le contrat est remplacé en
   // bloc (rechargement Firestore différé, par exemple), le nouvel objet est automatiquement absent
   // du cache : aucune dépendance à un minutage précis pour ce cas, contrairement à une 1ère version
@@ -4392,8 +4376,9 @@ function creerFiche(c,annee,mois){
     const estPlanMinVar=(c.th==='plan'&&(c.planType==='min'||c.planType==='var'));
     const avantDateDeb=!!(c.dateDeb&&dateStr<c.dateDeb);
     const estJourPossible=estPlanMinVar&&!avantDateDeb&&!!(prevus.planVar);
-    // Pour plan min/var : détecter les fériés sur jours possibles — statut 'ferie' seulement si coché
-    // comme travaillé au contrat (feriesTravailles) OU coché sur le planning pour cette semaine précise
+    // Plan minimum ou variable : un férié sur un jour possible ne prend le statut 'ferie' que s'il est coché au
+    // planning pour cette semaine (les fériés « travaillés » du contrat ne sont qu'indicatifs, voir ci-dessous).
+    // À l'ouverture, la feuille requalifie de toute façon en férié un jour férié non prévu (ouvrirFiche).
     const mmddCF=dateStr.slice(5);
     // 21/09/2026 (Sophie, plan de tests ligne 57) : les fériés notés « travaillés » au contrat ne sont qu'indicatifs —
     // seul le planning décide qu'un férié est prévu.
@@ -4427,6 +4412,8 @@ function creerFiche(c,annee,mois){
 }
 
 
+// Fonction plus appelée depuis le 23/09/2026 : la déduction décrite ci-dessous a été remplacée (calcRecapFiche,
+// déduction des arrêts : mois entier / semaine entière en arrêt). Note d'origine conservée pour mémoire :
 // 21/09/2026 (Sophie, plan de tests ligne 55, Enaël janvier 2022) : arrêt de travail en plan minimum ou variable.
 //  - Au moins un jour coché au planning dans la semaine : seul un arrêt posé sur un jour coché compte (déduit du
 //    salaire, 0,8 jour pour les congés) ; un arrêt sur un jour non coché ne compte pas, le jour n'aurait pas été
@@ -4550,11 +4537,9 @@ function semaineToutArretPlanning(c,dateStr){
   }
   return possibles>0&&enArret===possibles;
 }
-// 29/09/2026 (Sophie) : semaine entièrement en arrêt — elle est déduite de sa valeur théorique même si le
-// planning est vide, comme un mois entier. L'objection du 23/09 (des heures déplacées ailleurs par le planning
-// modifié) est écartée par le seul cas où ce déplacement est possible : les modifications de planning
-// autorisées. Les deux mois touchés par la semaine sont regardés, puisqu'une semaine à cheval peut voir ses
-// heures partir de part et d'autre.
+// Semaine entièrement en arrêt : déduite de sa valeur théorique même si le planning est vide, que les
+// modifications de planning soient autorisées ou non (depuis le 01/10/2026 : l'enveloppe du planning est réduite
+// de ces semaines et leurs jours ne sont plus cochables). Les deux mois touchés par la semaine sont regardés.
 function arretSemaineEntiereDeduite(c,dateStr){
   // 01/10/2026 (Sophie) : la case « modifications de planning autorisées » n'empêche plus la déduction.
   // L'objection du 29/09 — des heures déplacées ailleurs dans le mois, l'App ne sachant pas lesquelles
@@ -4571,7 +4556,7 @@ const MSG_MOIS_ARRET_SEMAINE_OFF='Le mois est entièrement en arrêt de travail,
 // Le plan VARIABLE sait produire cette fraction — c'est ce qu'il donne à un jour possible non coché ; il suffit
 // de l'interroger sur une copie du planning privée de la coche de ce jour. Le plan MINIMUM, lui, ne calcule
 // aucune fraction (il répond « prévu » sans heures pour tous ses jours possibles) : sa part est le volume
-// minimum divisé par les jours cochés, comme partout ailleurs pour lui.
+// minimum divisé par le nombre de jours possibles du contrat (jours cochés AU CONTRAT, pas au planning).
 // Renvoie 0 si le jour ne relève pas du rythme du contrat : rien n'était dû, rien n'est retiré.
 function partVolumeFerieNonCg(c,dateStr,source){
   if(!c||!dateStr||!source||source.th!=='plan') return 0;
@@ -4704,7 +4689,8 @@ function isAbsenceEmployeur(agenda, semKey){
   return agenda&&agenda.semaines&&agenda.semaines[semKey]==='off';
 }
 // 06/09/2026 (Sophie) : ignorerPlanning (optionnel) — renvoie l'horaire STRUCTUREL du contrat pour ce
-// jour, sans jamais consulter le planning saisi. Nécessaire pour déduire les jours situés de l'AUTRE
+// jour, sans consulter le planning saisi — en fixe et semaines types seulement ; le plan variable ne connaît pas
+// ce paramètre (ses appelants l'évitent). Nécessaire pour déduire les jours situés de l'AUTRE
 // côté d'un avenant : ces jours-là sont régis par l'autre version du contrat, leur ligne de planning
 // appartient à cette autre version et ne doit pas servir à valoriser la déduction de celle-ci. Sans
 // ce garde-fou, la partie avant avenant d'un mois en "modifications autorisées" allait chercher les
@@ -4793,9 +4779,10 @@ function getHeuresPrevues(c, date, sourceForce, ignorerPlanning){
       // 28/07/2026 (spec Sophie, affinée) : un jour au-delà de ce qui sera réellement travaillé
       // cette semaine ne doit jamais être traité comme un jour de congé à décompter. Référence =
       // ce qui est réellement coché sur le planning, pas un ordre supposé des jours de la semaine
-      // (un jour explicitement coché compte quoi qu'il arrive ; un jour explicitement décoché ne
-      // compte jamais ; un jour jamais touché reste "possible"). Hors modifications autorisées
-      // uniquement — ce cas est laissé de côté pour l'instant, traité comme avant en attendant.
+      // (voir le correctif ci-dessous : un jour coché garde son statut prévu ; tant que le maximum de jours
+      // n'est pas atteint, chaque jour possible non coché — jamais touché ou décoché, c'est pareil — reçoit une
+      // part égale du volume restant ; au-delà, il n'est plus prévu). Ne s'applique pas quand les modifications
+      // de planning sont autorisées pour le mois, sauf semaine à cheval.
       const planningRefHP=(c._planningSauvegarde||c.planning)||{};
       const modifActiveHP=!!(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[dateStr.slice(0,7)])&&!estSemaineChevalPourModif(c,dateStr);
       if(vol.j&&!modifActiveHP){
@@ -4854,7 +4841,7 @@ function getStatutOptions(statutPrevu, isPlanMinVar, c, sourceActive){
   const opts={
     // Jours prévus : changer le statut en absence
     'prevu':['abs-partielle','abs-rem','abs-enfant','abs-non','arret','init'],
-    // Jours non prévus : seule option = travaillé (payé intégralement en HC), jamais 'prevu' directement
+    // Jours non prévus : travaillé (payé intégralement en HC) ou arrêt, jamais 'prevu' directement
     // (sinon les heures ne seraient pas comptées en HC mais comparées au prorata hebdo)
     'non-prevu':['travaille','arret','init'],
     // Statuts simples : juste réinitialiser
@@ -5051,7 +5038,7 @@ function renderPresence(c,cont){
     </div>`;
   }).join('');
   const warn='';
-  // Toujours afficher un mois d'avance (sauf contrat clôturé)
+  // Toujours afficher un mois d'avance, sauf contrat clôturé ou mois postérieur à la fin du contrat
   const moisSuiv=new Date(now.getFullYear(),now.getMonth()+1,1);
   const moisSuivKey=moisSuiv.getFullYear()+'-'+String(moisSuiv.getMonth()+1).padStart(2,'0');
   // 08/09/2026 (Sophie) : la feuille d'avance échappait à l'arrêt au mois de fin de contrat — elle est
@@ -5111,7 +5098,8 @@ function getStatutPrevu(c,j){
   const srcRepos=getVersionActive(c,new Date(j.date));
   const reposHebdo=srcRepos.reposHebdo||0;
   if(j.jourSemaine===reposHebdo) return 'repos';
-  // Semaine off → non-prevu (sauf contrats 52 sem)
+  // Semaine off hors 52 semaines : non prévu avant même le test des fériés (un férié de semaine off n'est donc pas
+  // un férié chômé payé). En 52, la semaine off est traitée plus bas, après fériés et congés.
   if(c.tc!=='52'){
     const srcGSP=getVersionActive(c,new Date(j.date));
     if(srcGSP.tc!=='52'){
@@ -5135,8 +5123,8 @@ function getStatutPrevu(c,j){
   if(isFerie(j.date,c)){
     const parts=j.date.split('-');
     const mmdd=parts[1]+'-'+parts[2];
-    // 21/09/2026 (Sophie, plan de tests ligne 57) : les fériés notés « travaillés » au contrat ne sont qu'indicatifs : un
-    // férié y figurant devenait un jour prévu ordinaire (ni férié chômé payé, ni majoration s'il était travaillé).
+    // 21/09/2026 (Sophie, plan de tests ligne 57) : les fériés notés « travaillés » au contrat ne sont qu'indicatifs : ils
+    // suivent la règle générale des fériés. (Avant, un férié y figurant devenait un jour prévu ordinaire.)
     {
       // Vérifier si le jour est habituellement travaillé
       const dateJF=new Date(j.date);
@@ -5183,6 +5171,8 @@ function getStatutPrevu(c,j){
             if(!jourPossibleContratCg(c,ds2)) continue;
             const sv=getStatutJourVoisin(ds2);
             if(sv&&['repos','hors-contrat','non-prevu','ferie','ferie-non'].includes(sv)) continue;
+            // Jour possible sans statut : lu comme prévu, il arrête la recherche (règle du 30/09/2026 : un jour non
+            // coché ne fait pas perdre de droits).
             if(!sv) return 'prevu';
             if(['prevu','travaille','abs-partielle','abs-rem','abs-enfant'].includes(sv)) return sv;
             return sv;
@@ -5298,9 +5288,8 @@ function quitterFicheSansEnregistrer(contratId,key){
 function ouvrirFiche(contratId,key){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c)return;
-  // 17/08/2026 (Sophie) : _regulDiffEuros n'est LU, à l'affichage, QUE si le contrat a un avenant 46→52
-  // en cours (`recap.estPassage46vers52`, vérifié aux 4 seuls endroits qui le consomment) — jamais
-  // ailleurs. L'ancienne condition ("c.tc!=='52'" OU avenant 52) se déclenchait pour la quasi-totalité
+  // _regulDiffEuros n'est lu qu'au mois d'un passage vers un 52 sans clause (estPassageRegulSoldeRecap, 4 lecteurs) ;
+  // le calcul, lourd, n'est donc lancé que pour un contrat qui a un avenant signé en 52. Historique (17/08/2026) : L'ancienne condition ("c.tc!=='52'" OU avenant 52) se déclenchait pour la quasi-totalité
   // des contrats 46, avenant 52 ou pas, faisant tourner ce calcul lourd (parcourt tout l'historique,
   // rappelle calcRecapFiche/calcIndemniteConges en boucle) sans que son résultat soit jamais affiché.
   // Repéré via un profil de performance (un contrat réel : aucun avenant en 52, plusieurs secondes à chaque
@@ -5611,8 +5600,8 @@ function ouvrirFiche(contratId,key){
       }
     }
   });
-  // Marquer les jours après la date de fin de contrat comme hors-contrat
-  // (si rupture confirmée et mois précédent validé)
+  // Rupture confirmée : sur le mois de fin de contrat (feuille non validée), les jours postérieurs passent hors
+  // contrat ; si la rupture est annulée ou déplacée, ils retrouvent leur état.
   if(c.rupture?.confirmee){
     const dateFinCloture=getDateFinContrat(c);
     if(dateFinCloture){
@@ -5791,7 +5780,8 @@ function ouvrirFiche(contratId,key){
     // test Sophie) : statutActuel=(j.statut||statutPrevu) fait TOUJOURS gagner j.statut dès qu'il est
     // renseigné (creerFiche/planning-sync l'écrivent systématiquement en 'prevu'/'non-prevu' — voir
     // commentaires plus haut) — modifier seulement statutPrevu n'avait donc jamais d'effet visible.
-    // Priorité : rupture > repos (correction d'affichage ci-dessus) > fractionnement > normal.
+    // Priorité : rupture > repos (correction d'affichage ci-dessus) > fractionnement > absence non rémunérée liée
+    // au fractionnement > normal.
     let statutActuel;
     if(apresRuptureAff) statutActuel='hors-contrat';
     else if(estVraiReposAff3837&&j.statut==='non-prevu') statutActuel='repos';
@@ -6644,7 +6634,7 @@ function imprimerRegulTotal(cid){
   const w=window.open('','_blank');w.document.write(html);w.document.close();
 }
 
-// ══ PLANNING (plan min/var) — coquille visuelle, pas encore branchée au calcul de paie ══
+// ══ PLANNING ══ (tous types sauf occasionnel sans agenda ; lu par la feuille de présence et le calcul)
 // 04/10/2026 (Sophie) : reste-t-il des heures a placer au planning ? La question se pose par SEMAINE quand
 // les modifications de planning ne sont pas autorisees (les heures ne circulent pas d'une semaine a l'autre),
 // et par MOIS quand elles le sont. Sert a prevenir quand un jour est passe en « travaille » alors que le
@@ -6708,10 +6698,9 @@ function getInfosJourPlanning(c, dateStr){
   const agendas=src.agendas||c.agendas||[];
   const agenda=agendas.find(a=>new Date(a.dateDebut)<=d&&new Date(a.dateFin)>=d);
   const typeSem=agenda&&agenda.semaines&&agenda.semaines[agKey];
-  // Plan fixe : aucun agenda/type de semaine n'a de sens, un seul motif hebdomadaire fixe pour
-  // toute la durée du contrat — jamais "agenda non renseigné" pour ce type. Plan min 52 sem :
-  // même principe (23/07/2026, précision Sophie) — un seul motif toute l'année, pas d'agenda du
-  // tout (contrairement à min 46, qui pointe les semaines non travaillées comme sem/var).
+  // Fixe en 52 semaines et minimum en 52 semaines : un seul motif toute l'année, pas d'agenda (23/07/2026). Les
+  // autres (fixe 46, minimum 46, semaines types, variable) pointent leurs semaines sur l'agenda et peuvent afficher
+  // « Agenda non renseigné ».
   const estFixePlanning=src.th==='fixe';
   const estFixe52Planning=estFixePlanning&&(src.tc||c.tc)==='52';
   const estMin52Planning=src.planType==='min'&&(src.tc||c.tc)==='52';
@@ -6728,8 +6717,8 @@ function getInfosJourPlanning(c, dateStr){
   // début/fin du contrat — ce sont deux notions différentes (bug confirmé Sophie 23/07/2026 : le
   // planning fixe 52 partait du 1er du mois au lieu de la date de début réelle du contrat, un
   // vestige du contournement d'agenda mal posé au départ).
-  // 30/08/2026 (Sophie) : ajout de la date de rupture confirmée (getDateFinContrat), en plus de
-  // c.dateFin déjà géré (terme CDD) — deux notions de fin différentes, toutes deux à respecter ici.
+  // 30/08/2026 (Sophie) : ajout de la date de rupture confirmée (getDateFinContrat). Seule elle borne la fin : le
+  // terme d'un CDD ne borne rien (voir messageTermeCDD) et c.dateFin, testé plus bas, n'est écrit nulle part.
   // C'est cette variable horsContrat, via tousHorsContrat plus bas, qui décide si une semaine entière
   // se réduit à la barre "Hors contrat" (comme le fait déjà le début de contrat) — absente jusqu'ici
   // pour la rupture, les semaines après restaient affichées normalement, remplissables.
@@ -6827,8 +6816,9 @@ function getInfosJourPlanning(c, dateStr){
   return {jourPossible, jMax, volIdx, volH, typeSem, aucunType, horsContrat, agendaManquant, agendaNonPointe, semaineOff, semaineCongesAM, jamaisPossible, couleur, estFerie, ferieChome, jPrevueDeb, jPrevueFin, estReposHebdo:d.getDay()===(src.reposHebdo||c.reposHebdo||0)};
 }
 
-// 03/08/2026 (option 1 retenue par Sophie) : une semaine à cheval sur deux mois calendaires, ou sur
-// un changement de version du contrat (avenant), est exclue des "modifications autorisées" — ses
+// 03/08/2026 (option 1 retenue par Sophie) : une semaine à cheval sur deux mois calendaires, sur le début du
+// contrat ou sur la rupture est exclue des "modifications autorisées" (une semaine coupée par un avenant ne l'est
+// plus depuis le 07/09/2026, voir plus bas) — ses
 // jours/heures ne sont utilisables qu'au sein de cette semaine même, comme si la case n'était pas
 // cochée pour elle. Évite qu'un jour ou une heure de cette semaine soit utilisé ailleurs dans le
 // mois sans qu'on sache ensuite à quelle semaine il appartenait réellement.
@@ -6876,8 +6866,8 @@ function jourComptePlanning(c, dateStr, infos){
   // « Modifications autorisées » du mois DU JOUR est cochée, tout jour coché d'une semaine
   // TRAVAILLÉE (type correspondant à un volume) compte dans les totaux et plafonds, prévu au
   // motif ou non (dimanches inclus) — c'est le but de la modification autorisée. Semaines
-  // employeur/off, congés, types orphelins et jours hors contrat restent exclus. Var
-  // uniquement pour l'instant ; case décochée = comportement historique (supplément hors
+  // employeur/off, congés, types orphelins et jours hors contrat restent exclus. Plan variable,
+  // minimum, fixe et semaines types ; case décochée = comportement historique (supplément hors
   // totaux, à ajouter sur la feuille de présence).
   if(infos.jourPossible) return true;
   const srcJC=getVersionActive(c, parseDateLoc(dateStr));
@@ -7507,8 +7497,8 @@ function toggleModifPlanningAutorisees(contratId, moisKey, checked){
   // décocher la case et de laisser une semaine en dépassement sans aucun avertissement ni blocage.
   marquerPlanningNonEnregistre(contratId, moisKey);
   // Rafraîchissement CIBLÉ de cette seule tuile (pas un redessin complet, qui refermerait tous
-  // les mois — même bug déjà corrigé une fois sur le cadenas par jour). Nécessaire maintenant
-  // que l'étape 3 fait dépendre l'affichage du formulaire de cet état — bug confirmé Sophie
+  // les mois — même bug déjà corrigé une fois sur le cadenas par jour). Nécessaire parce que
+  // l'affichage de la tuile dépend de cette case — bug confirmé Sophie
   // 18/07/2026 : la case n'avait aucun effet visible avant de changer d'onglet et revenir.
   refreshPlanningTile(contratId, moisKey);
   if(S.enCours==contratId&&S.detTab==='presence') ouvrirFicheAvecRestauration(contratId, moisKey);
@@ -7795,11 +7785,8 @@ function enregistrerPlanningMois(contratId, moisKey){
     const agKey=getKeyAgenda(getSemISO(dateStr),getSemAnnee(dateStr));
     const typeSem=ag&&ag.semaines&&ag.semaines[agKey];
     let volH=0, joursPattern=null, jMaxVol=1;
-    // 05/08/2026 (restauré — écrasé par erreur lors d'une modification suivante, même schéma que la
-    // régression déjà rencontrée sur premierJourTravaille) : plan min n'a qu'un seul rythme possible
-    // et n'a jamais besoin qu'un type soit pointé dans l'agenda (contrairement à var) — exiger typeSem
-    // ici empêchait toute cette validation de se déclencher pour min dès que l'agenda n'avait rien
-    // pointé, ce qui est le cas normal pour min, pas l'exception.
+    // Plan minimum : un seul rythme, le volume ne dépend pas du type pointé (seule une semaine off l'exclut). En 46
+    // semaines l'agenda doit quand même être pointé (contrôlé plus haut).
     if(source.planType==='min'&&typeSem!=='off'){
       volH=source.hMin||0;
       joursPattern=source.joursMin;
@@ -7824,7 +7811,8 @@ function enregistrerPlanningMois(contratId, moisKey){
     if(dateAvenantC){
       // 25/08/2026 (Sophie) : même principe que calcEnveloppeMoisVar (avenant en cours de semaine,
       // décision Sophie 06/08) — chaque portion (avant/après l'avenant) valorisée avec SA PROPRE
-      // version du contrat, divisée par SES PROPRES jours possibles (jamais jMax) — pas un plafond
+      // version du contrat : jours du motif présents dans la portion, plafonnés aux jours maximum, × (volume ÷ jours
+      // maximum) (règle du 18/09, ci-dessous) — pas un plafond
       // partagé sur toute la semaine. L'ancien mécanisme ("bon côté" unique, jMax partagé) ne gérait
       // que le cas où le jour traité tombe APRÈS l'avenant ; un jour AVANT l'avenant se retrouvait
       // sans aucun prorata, parfois masqué par coïncidence si les jours du motif d'origine tombaient
@@ -7846,8 +7834,8 @@ function enregistrerPlanningMois(contratId, moisKey){
       // part). Toujours vérifié, même "modifications autorisées" coché : ce n'est pas une
       // redistribution normale entre semaines du mois, mais un dépassement d'une frontière
       // contractuelle (avant/après avenant).
-      // Ce que la partie d'APRÈS peut absorber : ses propres jours possibles. Sert de plancher à la
-      // partie d'avant (voir la note dans calcEnveloppeMoisVar).
+      // Ce que la partie d'APRÈS peut absorber : ses propres jours possibles. Servait de plancher à la
+      // partie d'avant jusqu'au 20/10/2026 ; plus lu depuis (voir plus bas).
       const joursPossiblesApresEnr=(()=>{
         const srcApE=getVersionActive(c,dAvenantObj);
         const agApE=(srcApE.agendas||c.agendas||[]).find(a=>parseDateLoc(a.dateDebut)<=dAvenantObj&&parseDateLoc(a.dateFin)>=dAvenantObj);
@@ -7882,10 +7870,9 @@ function enregistrerPlanningMois(contratId, moisKey){
         // motif présents dans la partie — même mécanisme qu'une semaine à cheval sur deux mois, et
         // même valeur du jour (volume ÷ jours max) que le total affiché sur la tuile, le volume
         // disponible et le plafond mensuel. Voir la note jumelle dans calcEnveloppeMoisVar.
-        // 19/09/2026 (Sophie) : même règle asymétrique que l'enveloppe — la partie d'AVANT l'avenant
-        // n'a droit qu'à ce qu'elle a réellement coché (ce qu'elle laisse pouvait être placé après),
-        // avec pour plancher ce que la partie d'après ne peut pas absorber. Voir la note détaillée
-        // dans calcEnveloppeMoisVar.
+        // 19/09/2026 : la partie d'AVANT l'avenant n'avait droit qu'à ce qu'elle avait coché (avec un plancher) ;
+        // règle abandonnée le 20/10 (les deux portions reçoivent leurs jours structurels, voir calcHPrevuReg).
+        // joursPossiblesApresEnr et joursCochesPortP, encore calculés, ne sont plus lus.
         const jMaxP=volP.j||1;
         const partJourP=volP.h/jMaxP;
         let joursPresentsP=0, joursCochesPortP=0, actuelPortionP=0;
@@ -8011,8 +7998,8 @@ function enregistrerPlanningMois(contratId, moisKey){
             // n'importe où ailleurs dans SON PROPRE mois. Même principe que partMoisPrecedentReg
             // (calcHPrevuReg, onglet Régularisation) : enveloppe pleine → part structurelle due en
             // entier, sinon part réduite d'autant que ce qu'il reste de disponible dans l'enveloppe.
-            // Réservé à ce contrôle de sécurité — "Volume disponible" reste volontairement non
-            // coordonné entre mois (décision Sophie du jour), plus réactif mais moins précis.
+            // « Volume disponible » est désormais coordonné lui aussi (getPortionsEnveloppeMois →
+            // calcEnveloppeMoisVarCoordonnee), comme ce contrôle.
             const envCeMoisEnr=calcEnveloppeMoisVar(c,ay,am,null,null,true);
             let reelCeMoisEnr=0;
             // 30/08/2026 (Sophie) : même limite de rupture que les autres endroits corrigés le même jour.
@@ -8152,9 +8139,8 @@ function enregistrerPlanningMois(contratId, moisKey){
   }
   // Étape 2 (18/07/2026) : plafond mensuel jours ET heures pour fixe/sem — une vraie
   // compensation (déplacer des heures) doit rester dans l'enveloppe du mois ; un excédent NET
-  // non compensé doit être refusé ici, pas payé silencieusement. Comparaison : total RÉEL
-  // (planning modifié) vs total BASELINE (motif du contrat seul, sans aucune modification —
-  // `getInfosJourPlanning` ignore toujours `c.planning`, donc calcule ce baseline naturellement).
+  // non compensé doit être refusé ici, pas payé silencieusement. Comparaison : total réel (planning
+  // modifié) contre l'enveloppe du contrat seule, calculée par calcEnveloppeMoisFixeSem.
   const srcMoisFS=getVersionActive(c,new Date(ay,am-1,1));
   const dateAvenantRefMoisFS=dateCoupureVersion(srcMoisFS);
   let joursBaseline=0, minBaseline=0, joursReel=0, minReel=0;
@@ -8386,6 +8372,7 @@ function enregistrerPlanningMois(contratId, moisKey){
   toast('Planning enregistré');
 }
 
+// Plus appelée depuis le passage à l'échange de jour pour fixe/sem (27/07/2026, ouvrirEchangeJourFS).
 function toggleJourFixeSem(contratId, dateStr, checked, semKeyDom){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c) return;
@@ -8495,8 +8482,8 @@ function executerEchangeJourFS(contratId, dateOrigine, dateDestination, semKeyDo
   const planOrig=c.planning[dateOrigine]||{};
   const heureDOrig=planOrig.d?planOrig.d:(infosOrig.jourPossible?(infosOrig.jPrevueDeb||''):'');
   const heureFOrig=planOrig.f?planOrig.f:(infosOrig.jourPossible?(infosOrig.jPrevueFin||''):'');
-  // Vider l'origine — même logique que la décoche normale (toggleJourFixeSem) : un jour
-  // normalement prévu garde une marque explicite décochée, un jour ajouté en plus est retiré.
+  // Vider l'origine : un jour normalement prévu garde une marque explicite décochée {coche:false}, un jour
+  // ajouté en plus est retiré.
   if(infosOrig.jourPossible){ c.planning[dateOrigine]={coche:false}; }
   else { delete c.planning[dateOrigine]; }
   // La destination reprend exactement les mêmes heures — jamais réparties, jamais raccourcies.
@@ -8532,6 +8519,7 @@ function executerEchangeJourFS(contratId, dateOrigine, dateDestination, semKeyDo
   if(S.enCours==contratId&&S.detTab==='presence') ouvrirFicheAvecRestauration(contratId, moisKeyE);
 }
 
+// Plus appelée (le lien qui y menait a été retiré le 27/07/2026, il créait des doublons).
 function reintegrerJourFS(contratId, dateStr, semKeyDom){
   const c=S.contrats.find(x=>x.id==contratId);
   if(!c) return;
@@ -8913,8 +8901,8 @@ function enregistrerFiche(contratId,key){
 }
 
 
-// Enveloppe mensuelle d'un mois var (jours + heures « possibles », pot commun des semaines à
-// cheval compris) — extraite d'enregistrerPlanningMois le 22/07/2026 pour être PARTAGÉE entre le
+// Enveloppe mensuelle d'un mois var/min (jours et heures possibles, semaines à cheval comprises, sans
+// coordination avec le mois voisin) — extraite d'enregistrerPlanningMois le 22/07/2026 pour être PARTAGÉE entre le
 // contrôle d'enregistrement et la paie (calcRecapFiche, modèle libre) : une seule source de vérité,
 // le contrôle ne peut plus diverger de ce que la paie reconnaît (point clé Sophie 21/07/2026).
 // 06/09/2026 (Sophie) : limDebV/limFinV (optionnels, format AAAA-MM-JJ) restreignent le calcul à une
@@ -8951,23 +8939,16 @@ function calcEnveloppeMoisVar(c,ay,am,limDebV,limFinV,pourSaisiePlanningV){
         semainesVuesV.add(semKeyISO3);
         const vol3=estMinPlan3?{h:srcJ3.hMin||0,j:srcJ3.jMaxMin||1,jours:srcJ3.joursMin||[]}:(srcJ3.planVar||[]).find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem3);
         if(vol3){
-          // Semaine à cheval sur le mois : prorater comme les heures théoriques, même principe
-          // que le contrôle dédié plus haut — sinon une semaine partiellement dans ce mois
+          // Semaine à cheval sur le mois : seule la part de la semaine tombant dans ce mois est comptée
+          // (plafond en jours, voir plus bas) — sinon une semaine partiellement dans ce mois
           // compte son jMax/volume COMPLET au lieu de sa seule portion (bug confirmé Sophie
           // 18/07/2026 par un test chiffré précis).
           const lundiSem3=new Date(dCur3); lundiSem3.setDate(dCur3.getDate()-(dCur3.getDay()||7)+1);
           const dimancheSem3=new Date(lundiSem3); dimancheSem3.setDate(lundiSem3.getDate()+6);
           const fmtSem3=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
-          // 06/08/2026 (Sophie) : un avenant qui tombe EN COURS de semaine (pas le lundi) coupe la
-          // semaine en deux motifs différents — "au plus favorable" appliqué séparément à chacune des
-          // deux portions paierait deux fois trop de jours (jusqu'à jMax de CHAQUE côté pour une seule
-          // semaine). Dans ce cas précis, et seulement celui-là, chaque portion est valorisée en jours
-          // possibles (comme avant "au plus favorable"), jamais en jours max — les deux portions
-          // s'additionnent simplement, chacune ne comptant que ses propres jours tombant dans LE MOIS
-          // demandé. Gère aussi une semaine à cheval sur un mois calendaire ET un avenant en même
-          // temps sans mécanisme séparé : chaque jour n'est compté qu'une fois, par la portion à
-          // laquelle il appartient, pour le mois auquel il appartient — pas de plafond partagé à
-          // négocier avec l'autre mois, contrairement au cas "jours max" ci-dessous.
+          // Un avenant en cours de semaine coupe la semaine en deux portions, chacune valorisée séparément
+          // avec sa propre version du contrat (règle du 18/09 et du 20/10, ci-dessous) ; chaque jour n'est
+          // compté qu'une fois, par sa portion, pour le mois auquel il appartient.
           const avenantSemaine3=(c.avenants||[]).find(av=>{
             if(!avenantCoupePlanning(av)) return false;
             const dAv3=parseDateLoc(av.dateAvenant);
@@ -9015,19 +8996,10 @@ function calcEnveloppeMoisVar(c,ay,am,limDebV,limFinV,pourSaisiePlanningV){
               // posés) tombait pile dans cet écart et pouvait, à lui seul, faire refuser
               // l'enregistrement. Au passage, un jour retiré du motif (congés posés) ne rabote plus la
               // capacité tant qu'il reste au moins autant de jours possibles que de jours garantis.
-              // 19/09/2026 (Sophie) : règle asymétrique des deux parties d'une semaine coupée par un
-              // avenant, la même partout (enveloppe, contrôle d'enregistrement, salaire dû).
-              //  • partie APRÈS (fin de semaine) : sa part structurelle, autant de jours garantis qu'il
-              //    en tient dans la portion.
-              //  • partie AVANT (début de semaine) : seulement ce qu'elle a réellement coché, car ce
-              //    qu'elle n'a pas pris pouvait être placé après l'avenant — avec un plancher, puisque la
-              //    partie d'après ne peut absorber que ses propres jours possibles.
-              // jours donnés (avant) = min(part structurelle, max(plancher, jours cochés)),
-              // plancher = jours garantis − jours possibles de la partie d'après.
-              // Exemple Sophie : 3 jours garantis, avenant le mercredi, lundi et mardi non cochés —
-              // plancher 3−3 = 0, rien de dû à la partie avant. Enaël octobre 2021 : 4 jours garantis,
-              // avenant le vendredi, plancher 4−1 = 3 — avec ses 4 jours cochés elle garde ses 22 h,
-              // avec 3 cochés elle tombe à 3 jours, jamais en dessous de 3.
+              // Depuis le 20/10/2026, les deux parties d'une semaine coupée par un avenant reçoivent leurs jours
+              // structurels : min(jours max, jours du motif présents dans la partie) × volume ÷ jours max. La règle
+              // asymétrique du 19/09 (partie avant limitée aux jours cochés, avec un plancher) est abandonnée ;
+              // joursPossiblesApresAv, joursCochesP et plancherPortionP, encore calculés, ne sont plus lus.
               const jMaxP=volP.j||1;
               let joursPortionV=0, joursCochesP=0;
               for(let cur=new Date(portion.depuis); cur<=portion.jusqua; cur.setDate(cur.getDate()+1)){
@@ -9055,9 +9027,9 @@ function calcEnveloppeMoisVar(c,ay,am,limDebV,limFinV,pourSaisiePlanningV){
               if(window.DEBUG_CGAM)console.log('[CGAM-envMoisVar-portionAvenant]',semKeyISO3,'| portion',portion.depuis.toISOString().slice(0,10),'->',portion.jusqua.toISOString().slice(0,10),'| plan:',estMinPlanP?'min':'var','| volH:',volP.h,'| jMax:',jMaxP,'| joursPrésents:',joursPortionV,'| joursRetenus:',joursRetenusP,'| heures:',hPortionV);
             });
           } else {
-          // Conscience de dateDeb/dateFin (correctif 21/07/2026) : jMax réduit sur le motif PROPRE à cette
-          // semaine, le volume d'heures réduit au taux MOYEN (motif union / moyenne annuelle) — même
-          // formule que calcHTheoriquesPlanVar pour ce même cas, pour rester aligné avec la paie.
+          // Conscience de dateDeb/dateFin (correctif 21/07/2026) : début/fin de contrat dans la semaine — jours
+          // possibles comptés seulement côté contrat, heures = volume de la semaine × jours retenus ÷ jours max.
+          // (Les valeurs « moyennes » calculées ci-dessous — hSemMoy3, joursPossiblesUnion3… — ne sont plus lues.)
           // Min : un seul motif constant, pas de moyenne pondérée entre plusieurs volumes nommés.
           const dateDebC3=c.dateDeb;
           const dateFinC3=getDateFinContrat(c);
@@ -9099,10 +9071,10 @@ function calcEnveloppeMoisVar(c,ay,am,limDebV,limFinV,pourSaisiePlanningV){
               if((vol3.jours&&vol3.jours[dd4])||modifActiveEnvV) joursQualifiantsFinDeMoisV++;
             }
           }
-          // 27/08/2026 (Sophie) : ne plus tenir compte de l'autre mois du tout, ni ses jours cochés
-          // littéraux ni son enveloppe globale (retire le mécanisme du 25/08 ci-dessus) — décision
-          // Sophie : en cas de dépassement induit par l'autre mois, le planning du mois suivant est à
-          // revalider (avertissement déjà en place ailleurs), plutôt que d'essayer de le prévenir ici.
+          // 27/08/2026 (Sophie) : l'autre mois n'est pas pris en compte ici (ni ses jours cochés ni son
+          // enveloppe ; le mécanisme du 25/08 vit dans enregistrerPlanningMois) : si sa combinaison avec ce
+          // mois dépasse le volume, enregistrerPlanningMois retire la confirmation du mois suivant, qui doit
+          // être réenregistré (sans message depuis le 21/09).
           const jMaxSemaine3=Math.min(vol3.j||1, joursPossiblesSemaine3);
           const volHSemaine3=(vol3.h||0)*jMaxSemaine3/(vol3.j||1);
           // 01/10/2026 (Sophie) : l'arrêt de travail retire ses heures de l'enveloppe, comme les congés posés
@@ -9335,8 +9307,8 @@ function calcEnveloppeMoisFixeSem(c,ay,am,ficheRef){
   // ficheRef (27/07/2026, correctif Sophie — congés/absences non comptés dans l'enveloppe) :
   // optionnel. Sans lui (appel depuis le planning), comportement inchangé. Fourni (appel depuis
   // calcRecapFiche, la paie), un jour normalement prévu mais posé en congés/absence sur la
-  // feuille de présence de ce mois est exclu de l'enveloppe — même liste de statuts que celle qui
-  // exclut déjà ce jour du RÉEL juste plus bas (prévu/travaillé/reprise/férié seuls comptent) —
+  // feuille de présence de ce mois est exclu de l'enveloppe — même liste de statuts que celle qu'utilise
+  // calcRecapFiche pour le réel (prévu/travaillé/reprise/férié seuls comptent) —
   // pour comparer des heures réellement disponibles ce mois-ci, pas l'horaire théorique complet.
   const finMois4=new Date(ay,am,0);
   let jours4=0, minutes4=0;
@@ -9478,7 +9450,7 @@ function getDateFinContrat(c){
   // Une simulation de rupture ENREGISTRÉE MAIS PAS CONFIRMÉE ne doit jamais être traitée comme
   // une vraie date de fin de contrat — bug confirmé Sophie 18/07/2026 (une simulation coupait
   // à tort l'affichage des mois futurs du planning). Toutes les autres fonctions du code qui
-  // lisent c.rupture vérifient déjà `confirmee` en premier (ex. L4960 juste plus bas) ; cette
+  // lisent c.rupture vérifient déjà `confirmee` en premier ; cette
   // fonction-ci était la seule à ne pas le faire.
   if(!c.rupture||!c.rupture.confirmee) return null;
   // 30/08/2026 (Sophie) : mise en cache — getInfosJourPlanning appelle désormais cette fonction pour
@@ -9521,7 +9493,7 @@ function calcSoldeToutCompte(c, key){
   const aIndemnitePreavis=aPreavis&&(rp.statutPreavis==='non-effectue'||(rp.statutPreavis==='partiel'&&(rp.initiativePreavis==='employeur'||rp.initiativePreavis==='assmat')));
   const srcActifSolde=getVersionActive(c,dateFinContrat);
   
-  // Régularisation définitive (46 sem)
+  // Régularisation définitive (contrat régularisable : 46, ou 52 avec clause)
   let regul=null;
   if(aCycleRegulRupture(c)){
     const reg=calcRegularisationDefinitive(c);
@@ -9676,7 +9648,8 @@ function calcFicheSolde(c){
     Object.entries(c.conges).forEach(([ar,cg])=>{
       const anneeRef=parseInt(ar);
       if(cg.acquis===0) return;
-      // Calculer maintien versé sur les jours effectivement pris (hors restants)
+      // Calculer maintien versé sur les jours effectivement pris (hors restants) — valeurs indicatives, non
+      // affichées (seuls diff, anneeRef et joursPris sont lus ; le montant vient de calcSoldeConges52)
       const debutAppart=new Date(anneeRef,4,1);
       const finAppart=new Date(anneeRef+2,3,30);
       let maintienVerse=0;
@@ -9692,7 +9665,6 @@ function calcFicheSolde(c){
         if(!fiche.valide) return;
         const [ay,am]=k.split('-').map(Number);
         const dateF=new Date(ay,am-1,1);
-        // brutAnnuel calculé via calcBrutTotal
         (fiche.jours||[]).forEach(j=>{
           if(j.statut==='conges-acq'||estDecompteAcq(j.statut)) tousAcq.push({j,dateF});
           else if(j.statut==='conges-anticipe'){
@@ -9812,7 +9784,7 @@ function renderFicheSolde(c){
     html+=`<div style="${ls}"><span>${solde.indemConges.label}${pastilleAide('ICCP')}</span><span style="${vs}">${solde.indemConges.montantNet.toFixed(2)} € net (${solde.indemConges.montantBrut.toFixed(2)} € brut)</span></div>`;
   }
 
-  // Régularisation définitive (46 sem)
+  // Régularisation définitive (contrat régularisable : 46, ou 52 avec clause)
   if(solde.regul){
     html+=`<div style="${ls}"><span>Régularisation définitive</span><span style="${vs}">${solde.regul.montantNet.toFixed(2)} € net</span></div>`;
   }
@@ -9912,8 +9884,8 @@ function calcRegul52Annee(c, anneeRef, moisAttendu){
   const dixiemeBrut=parseFloat((brutAnnuel/10*echB52).toFixed(2));
   const dixiemeNet=parseFloat((brutAnnuel/10*coefNet*echB52).toFixed(2));
   // 19/10/2026 (Sophie, confirme par le tableur de son syndicat) : la comparaison maintien / 10eme se
-  // fait PRISE PAR PRISE, plus une seule fois sur l'annee entiere. Le versement reste unique, sur cette
-  // feuille-ci, une fois tous les jours pris. Le 10eme d'une prise vaut le 10eme annuel divise par les
+  // fait PRISE PAR PRISE, plus une seule fois sur l'annee entiere. Le versement reste unique, sur la
+  // feuille qui suit la derniere prise, une fois tous les jours pris. Le 10eme d'une prise vaut le 10eme annuel divise par les
   // jours ACQUIS, multiplie par les jours decomptes de la prise.
   // Chaque jour est valorise exactement comme maintienVerse le fait au-dessus — meme fonction, meme
   // date de reference — pour que seule la METHODE de comparaison change, jamais la valeur d'un jour.
@@ -9945,8 +9917,8 @@ function calcRegul52Annee(c, anneeRef, moisAttendu){
   return {anneeRef, dernierMois, maintienVerse, dixiemeBrut, dixiemeNet, diff, prises:detPrisesRG, du:parseFloat(duRG.toFixed(2))};
 }
 
-// Valeur d'un jour de congé payé par la mensualisation d'un contrat 52 : moyenne hebdomadaire de la version du
-// mois ÷ 6, au taux net de la veille (part normale et part majorée) — la formule de la comparaison du 52.
+// valeurJourMaintien52Cg (plus bas) : moyenne hebdomadaire ÷ 6, réservée aux jours non posés (fractionnement
+// restant à la rupture). Pour un jour POSÉ, c'est valeurJourCongesPose52 :
 // 19/10/2026 (Sophie, arret du 2 juin 1988 n° 85-41.200 cite dans aide/paiement-conges.html) : ce que
 // vaut un jour de conges POSE sous un contrat sur 52 semaines — les HEURES PREVUES de ce jour-la,
 // celles-la meme que la deduction retire pour un jour de conges non acquis (getHJourCongesNonDeduit).
@@ -10225,9 +10197,6 @@ function buildRecapHtml(recap, solde, regul52, c, masquerBase){
       _nbRepMai+(_nbRepMai>1?' jours de congés pris':' jour de congés pris')+" en mai : la convention collective arrête le calcul de "+
       "l'indemnité au 31 mai, elle ne peut donc pas être versée ce mois-ci. Elle est réglée sur le versement suivant.</td></tr>";
   }
-  // 03/09/2026 (Sophie) : ligne à part pour les jours de fractionnement pris ce mois — jamais fusionnée
-  // avec l'indemnité de congés normale ci-dessus, puisque ce sont deux droits distincts (l'indemnité
-  // normale peut déjà être réglée depuis juin, le fractionnement ne se détermine qu'au 31 octobre).
   // 18/11/2026 : plus d'annonce « Régularisation congés (10ème) » sur la feuille du dernier mois de prise, hors du
   // total — le complément ne s'affiche qu'une fois, sur la feuille du mois de paiement (regul52Fiche, ligne
   // « Régularisation congés AAAA/AAAA »), confirmé par Sophie le 18/11/2026. Le paramètre regul52 n'est plus lu.
@@ -10672,13 +10641,10 @@ function majFicheStatut(contratId,key,idx,val){
     }catch(e){}
   }
 
-  // 01/10/2026 (Sophie) : une semaine ENTIÈREMENT en arrêt n'offre plus ses heures à la saisie du planning
-  // (publié le même jour). Ce qui y était déjà saisi doit donc partir, sinon il subsiste des heures que
-  // l'enveloppe ne couvre plus — des valeurs fantômes, du genre de celles qui avaient faussé une déduction
-  // après une rupture. Les coches du planning sont retirées, les heures prévues des jours concernés effacées,
-  // et le planning du mois redemande confirmation, exactement comme après une rupture ou un avenant qui change
-  // rétroactivement ce qui était disponible. Vaut dans les deux sens : la semaine qui cesse d'être entièrement
-  // en arrêt rend ses heures, donc le planning est à revoir là aussi. Plan minimum et variable seulement.
+  // 01/10/2026 (Sophie) : une semaine qui devient, ou cesse d'être, ENTIÈREMENT en arrêt change ce qui est
+  // disponible au planning : le planning des mois touchés (non validés) redemande confirmation, exactement comme
+  // après une rupture ou un avenant qui change rétroactivement ce qui était disponible. Rien n'est effacé (voir
+  // la note du 02/10 plus bas). Plan minimum et variable seulement.
   // 02/10/2026 (Sophie) : le type lu ici doit etre celui de la VERSION EN VIGUEUR a la date du jour, pas celui
   // du contrat d'origine. Sur 52var-46sem-52fixe, parti en plan variable et devenu fixe 52, le message de la
   // semaine entierement en arret s'affichait en aout 2026 — un plan fixe, qui n'a pas de planning a reenregistrer.
@@ -11370,11 +11336,6 @@ function _validerFicheSuite(contratId,key,c){
     }
   });
   if(manquant){alerte('Heures manquantes — jours : '+manquantJours.join(', ')+'.');return;}
-  // 08/09/2026 (Sophie) : l'avertissement sur l'indemnité d'entretien passait AVANT ce contrôle. Or
-  // il est purement informatif et n'empêche rien, tandis que celui-ci bloque réellement la
-  // validation. Vu en premier, l'avertissement laissait croire qu'il était la cause du refus, et le
-  // message expliquant la vraie raison n'apparaissait qu'ensuite. L'ordre est inversé : d'abord ce
-  // qui bloque, ensuite ce qui informe.
   // Vérifier que la fiche précédente est validée
   const keysTries=Object.keys(c.fiches).sort();
   const idxKey=keysTries.indexOf(key);
@@ -11704,8 +11665,8 @@ function calcCongesContrat(c, dateRefOverride){
     let totalSemainesArret=0;
 
     // 20/08/2026 (Sophie) : pour une semaine à cheval sur 2 mois calendaires (pas un avenant, déjà
-    // géré à part plus bas), le nombre de jours qui comptent suit le même principe que
-    // calcEnveloppeMoisVar (paie) — jours réellement utilisés comptés d'abord des deux côtés, le
+    // géré à part plus bas), le nombre de jours qui comptent (calcJoursGarantieCheval) — jours réellement
+    // utilisés comptés d'abord des deux côtés, le
     // reste jusqu'au max réparti en priorité au mois le PLUS TARDIF — plutôt que de regarder le
     // motif possible combiné des deux mois, qui gonflait la garantie même sans usage réel côté du
     // mois qui se termine (confirmé Sophie sur un cas réel : 4 possibles/2 cochés en mars + 1
@@ -11969,7 +11930,7 @@ function calcCongesContrat(c, dateRefOverride){
               jMaxSemAjustePV=Math.min(jMaxSem,joursPossiblesEnContratPV);
             }
             // 27/08/2026 (Sophie) : neutralisé pendant une semaine off (typeSemPV==='off') — même
-            // raison que pour min (joursMaxSemAjusteMin plus haut) : sans ce garde-fou, ce plancher
+            // raison que pour min (joursMaxSemAjusteMin, plus bas) : sans ce garde-fou, ce plancher
             // redonnerait crédit pour le motif hebdomadaire complet dès qu'un jour est travaillé cette
             // semaine-là, au lieu du seul jour travaillé (via joursTravaillePV, compté séparément).
             // 21/09/2026 (Sophie, ligne 55) : un arrêt ne supprime plus le plancher. Les jours d'arrêt qui comptent
@@ -12004,18 +11965,16 @@ function calcCongesContrat(c, dateRefOverride){
             const moyenneJourSemPV=nbSemAnnuelPV>0?totalJAnnuelPV/nbSemAnnuelPV:jMaxSem;
             // 20/08/2026 (Sophie) : même principe que calcContribSemaineFSMPV — normaux et congés
             // partagent la même garantie hebdo (jMaxSemAjustePV), plafonnés ENSEMBLE plutôt que
-            // séparément puis additionnés. compteEffectifPV vaut déjà joursNormauxPV tel quel dès
-            // que joursConges16PV>0 (garde-fou plus haut non appliqué dans ce cas), donc l'addition
-            // reste correcte sans double-compter le plancher garanti.
+            // séparément puis additionnés : le plafonnement final par jMaxSemAjustePV (Math.min ci-dessous)
+            // évite de double-compter le plancher garanti.
             const baseComptePV=compteEffectifPV+joursConges16PV;
             const jourExtraPV=Math.max(0,baseComptePV-jMaxSemAjustePV)+joursTravaillePV;
             let contribNormPV=(Math.min(baseComptePV,jMaxSemAjustePV)/jMaxSem)+(moyenneJourSemPV>0?jourExtraPV/moyenneJourSemPV:0);
             // 12/09/2026 (Sophie) : penaliteSemaineModifieeCg n'est pas appliquée au plan var : la règle
             // « 1 − absence » (compteEffectifPV, plus haut) retire déjà chaque absence de la garantie de la
             // semaine, sans qu'un jour reçu par déplacement puisse la compenser. La pénalité la compterait deux fois.
-            // 20/08/2026 (Sophie) : même principe que calcContribSemaineFSMPV — plafonner au max de
-            // la semaine (jMaxSem) avant division, par cohérence, même si joursActifs limite déjà
-            // normalement le compte aux jours du volume actif.
+            // contribCgPV : reste d'un ancien calcul des congés à part, toujours nul (congés et normaux sont
+            // plafonnés ensemble plus haut, baseComptePV).
             const contribCgPV=0;
             const contribArretPV=arretCptPV*(0.8)/jMaxSem;
             const prorata=Math.max(0,contribNormPV+contribCgPV);
@@ -12046,9 +12005,9 @@ function calcCongesContrat(c, dateRefOverride){
             // voir estMin52Planning ailleurs dans le fichier) doit exclure une semaine marquée "off"
             // sur l'agenda, comme le fait déjà var (typeSemPV==='off') — absent jusqu'ici, une semaine
             // off comptait à tort comme une semaine normale pour l'acquisition.
-            // 27/08/2026 (Sophie) : mais un jour réellement travaillé malgré tout au sein d'une semaine
-            // off doit compter (même principe que fixe/sem, protégés jour par jour plus bas, étendu à
-            // min ici) — le retour à 0 ne s'applique donc plus si un tel jour existe cette semaine-là.
+            // 27/08/2026 : exception pour un jour réellement travaillé dans une semaine off — sans effet
+            // depuis le 12/09, les jours travaillés en plus du contrat ne comptant plus pour l'acquisition :
+            // une semaine off en plan minimum hors 52 n'acquiert rien.
             let estSemaineOffMin=false;
             if(sourceSem.th==='plan'&&sourceSem.planType==='min'&&(sourceSem.tc||c.tc)!=='52'){
               const agendasMinOff=sourceSem.agendas||c.agendas||[];
@@ -12139,10 +12098,8 @@ function calcCongesContrat(c, dateRefOverride){
               // habituel du contrat, qui ignore que cette semaine précise est "off", et comptait le
               // jour comme normal/travaillé à tort. Var/min a déjà cette protection plus haut
               // (`typeSemPV==='off'`) ; fixe/sem ne l'avait pas.
-              // 27/08/2026 (Sophie) : étendu à plan min (hors 52) — son propre retour à 0 plus haut
-              // (estSemaineOffMin) ne s'applique plus quand un jour travaillé existe cette semaine-là ;
-              // ce garde-fou jour par jour reste nécessaire pour ignorer les AUTRES jours de cette même
-              // semaine (non travaillés), qui doivent rester à 0 malgré l'exception.
+              // 27/08/2026 (Sophie) : étendu à plan min (hors 52) — les jours de la semaine off ne comptent
+              // pas ; un jour réellement travaillé n'y compte pas non plus (règle du 12/09).
               const estSemaineOffCg=(sourceCgProt.th==='fixe'||sourceCgProt.th==='sem'||(sourceCgProt.th==='plan'&&sourceCgProt.planType==='min'&&(sourceCgProt.tc||c.tc)!=='52'))&&(()=>{
                 const agendasCgProt=sourceCgProt.agendas||c.agendas||[];
                 const dateJCgProt=new Date(jpy,jpm-1,jpd);
@@ -12169,8 +12126,8 @@ function calcCongesContrat(c, dateRefOverride){
               // semaine d'absence de l'employeur, où aucun jour n'est prévu.
               if(statutJ==='travaille'&&isFerie(j.date,c)&&!estSemaineOffCg) statutJ='ferie';
               if(estSemaineOffCg&&!j.heureDebReel&&statutJ!=='travaille'&&statutJ!=='reprise'){
-                // rien à compter cette semaine-là (sauf un jour réellement travaillé malgré tout,
-                // qui garde son heureDebReel et passe par les branches normales ci-dessous)
+                // rien à compter cette semaine-là. Un jour avec des heures réelles passe par les branches
+                // ci-dessous, mais un jour travaillé n'y compte plus (12/09).
               } else if(['travaille','reprise'].includes(statutJ)){
                 // 12/09/2026 (Sophie) : un jour travaillé en plus du contrat ne compte plus pour
                 // l'acquisition (Code du travail L3141-3 et L3141-4, CCN 48-1-1-2 : 2,5 jours par mois de
@@ -12209,10 +12166,9 @@ function calcCongesContrat(c, dateRefOverride){
                 const sourceJF=getVersionActive(c,new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2])));
                 // 17/08/2026 (Sophie) : utiliser le type ACTIF à cette date (sourceJF.th/tc/planType),
                 // pas le type D'ORIGINE du contrat (c.th/c.tc/c.planType) — un contrat ayant changé de
-                // type via avenant (ex. un contrat réel, fixe→sem) ne rentrait jamais dans la bonne branche,
-                // donc un férié tombant dans une semaine de congés (non pointée, sans type assigné,
-                // repli sur l'union des types) ne comptait ni comme normal ni comme congé. Même bug
-                // systémique que celui déjà corrigé ailleurs cette nuit.
+                // type via avenant ne rentrait jamais dans la bonne branche, donc un férié tombant dans une
+                // semaine de congés (non pointée, sans type assigné, repli sur l'union des types) ne comptait
+                // ni comme normal ni comme congé.
                 let estTravaille=false;
                 if(sourceJF.th==='fixe'&&sourceJF.joursFixe) estTravaille=!!(sourceJF.joursFixe[jourIdxISO]);
                 else if(sourceJF.th==='sem'&&sourceJF.semTypes){
@@ -12234,11 +12190,8 @@ function calcCongesContrat(c, dateRefOverride){
               }
             });
 
-            // 27/08/2026 (Sophie) : neutralisé pendant une semaine off (estSemaineOffMin) — sinon ce
-            // plancher remonte joursNormaux au motif hebdomadaire complet dès qu'un jour travaillé
-            // existe cette semaine-là (via le retour à 0 devenu conditionnel plus haut), au lieu de ne
-            // compter QUE ce jour travaillé via joursTravailleFSM. Aucune garantie à appliquer sur une
-            // semaine que la famille a explicitement déclarée "off".
+            // 27/08/2026 (Sophie) : plancher neutralisé en semaine off (estSemaineOffMin) : aucune garantie
+            // sur une semaine que la famille a déclarée en absence.
             if(window.DEBUG_CGAM)console.log('[CGAM-gateAjusteMin]',c.nom||c.prenom||c.id,'|',joursSub[0]?.date,'-',joursSub[joursSub.length-1]?.date,'| c.th:',c.th,'| c.planType:',c.planType,'| joursConges16:',joursConges16,'| absArretSub:',absArretSub,'| estSemaineOffMin:',estSemaineOffMin);
             // 27/08/2026 (Sophie) : joursMaxSemAjusteMinLog en portée extérieure — le log
             // [CGAM-contribSemaine] plus bas affichait toujours "(n/a)" même quand ce bloc s'exécutait
@@ -12252,16 +12205,16 @@ function calcCongesContrat(c, dateRefOverride){
               const moisTouchesMinG=[...new Set(joursSub.map(j=>j.date.slice(0,7)))];
               // 20/08/2026 (Sophie) : la semaine calendaire COMPLÈTE (lundi-dimanche) peut traverser
               // un mois même quand `joursSub` ne montre qu'une portion (l'autre mois pas encore
-              // validé, donc absent des fiches déjà validées qui alimentent ce calcul). Dans ce cas,
-              // ce n'est PAS une semaine complète : aucune garantie à appliquer, seul le réel compte
-              // — la garantie n'a de sens qu'une fois les deux mois visibles ensemble (cas suivant).
+              // validé, donc absent des fiches déjà validées qui alimentent ce calcul). Voir les trois cas
+              // ci-dessous (mois manquant non validé : part minimale garantie dès maintenant, règle du 02/10 ;
+              // mois manquant validé : partage ; aucun jour possible dans le mois manquant : ce mois seul).
               const premJourMin=new Date(joursSub[0].date.split('-')[0],parseInt(joursSub[0].date.split('-')[1])-1,parseInt(joursSub[0].date.split('-')[2]));
               const dowMin=premJourMin.getDay();
               const lundiMin=new Date(premJourMin); lundiMin.setDate(premJourMin.getDate()+(dowMin===0?-6:1-dowMin));
               const dimancheMin=new Date(lundiMin); dimancheMin.setDate(lundiMin.getDate()+6);
               const semaineTraverseMoisMin=lundiMin.getMonth()!==dimancheMin.getMonth();
               // 27/08/2026 (Sophie) : distinguer "l'autre mois manque parce qu'il n'est pas encore
-              // validé" (cas d'origine, ci-dessous, mise à 0 correcte) de "l'autre mois manque parce
+              // validé" (cas d'origine, ci-dessous : part minimale garantie) de "l'autre mois manque parce
               // qu'il est filtré par la frontière d'année de référence (debutRef/finRef)" — ce dernier
               // est validé et connu, juste hors de la période de CE calcul-ci (ex. semaine à cheval sur
               // le 31 mai/1er juin : mai est déjà compté dans l'année qui se termine). Dans ce cas,
@@ -12375,8 +12328,8 @@ function calcCongesContrat(c, dateRefOverride){
               // 20/08/2026 (Sophie) : jours normaux et jours de congés partagent la MÊME garantie
               // hebdo (jours max) — ce n'est pas chaque catégorie plafonnée séparément puis
               // additionnée, c'est le TOTAL des deux qui vaut 1 semaine pleine une fois la semaine
-              // terminée, sauf absence non rémunérée (réduit) ou jour travaillé en plus du motif
-              // (augmente, jourExtraFM). Pertinent surtout pour le plan min, où le motif "possible"
+              // terminée, réduit par les absences non rémunérées ; la semaine ne dépasse jamais 1 (plafond
+              // plus bas) et les jours travaillés en plus du contrat ne comptent pas. Pertinent surtout pour le plan min, où le motif "possible"
               // peut dépasser le max garanti (5 possibles pour 3 max) ; fixe n'a qu'un seul motif,
               // jamais concerné en pratique (normaux+congés ne peuvent déjà pas dépasser le max).
               const baseCompte=joursNormaux+joursConges16;
@@ -12386,7 +12339,8 @@ function calcCongesContrat(c, dateRefOverride){
             }
             const penaliteModifFSM=penaliteSemaineModifieeCg(c,joursSub,joursMaxSem);
             const estMinArretFSM=sourceSem.th==='plan'&&sourceSem.planType==='min';
-            // 21/09/2026 (Sophie) : fixe et semaines types — une semaine en arrêt ne compte jamais plus de 0,8 semaine.
+            // 21/09/2026 (Sophie) : fixe et semaines types — une semaine en arrêt maladie ordinaire ne compte jamais plus
+            // de 0,8 semaine (1 pour un accident du travail, voir ci-dessous).
             // Seuls les jours d'arrêt tombant sur un jour du contrat comptent (un arrêt saisi du lundi au dimanche
             // comptait 7 × 0,8), dans la limite des jours de la semaine restés sans présence ni congé.
             const arretsContratFSM=joursSub.filter(jj=>jj.statut==='arret'&&jourPossibleContratCg(c,jj.date)).length;
@@ -12485,10 +12439,9 @@ function calcCongesContrat(c, dateRefOverride){
     let cgTotal=isNaN(cgBrut)?0:Math.min(30,cgBrut);
     if(window.DEBUG_CGAM)console.log('[CGAM-baseAvantBonus]','anneeRef:',anneeRef,'| totalSemaines:',totalSemaines,'| totalSemainesArret:',totalSemainesArret,'| cgNormaux:',cgNormaux,'| cgArret:',cgArret,'| cgBrut/cgTotal initial:',cgTotal,'| c.conges[anneeRef] stocké AVANT ce calcul:',JSON.stringify(c.conges?.[anneeRef]));
 
-    // Arrondir au supérieur seulement si toutes les fiches de l'année sont validées
+    // Bonus enfants à charge : seulement si l'année de référence est finie et que toutes ses feuilles sont
+    // validées. (L'arrondi supérieur des jours acquis est décidé plus bas : année terminée ou rupture confirmée.)
    const dernierMoisRef=new Date(anneeRef+1,5,1); // 1er juin = après mai
-    // Arrondi supérieur seulement si on est après la fin de l'année de référence
-    // ET toutes les fiches existantes de l'année sont validées
     const apresFinRef=nowRef>=finRef;
     // 24/08/2026 (Sophie) : une année SANS AUCUNE fiche dans sa période ne doit jamais être
     // considérée "toutes validées" — sinon le .every() ci-dessous est vrai par défaut (aucune fiche
@@ -12530,7 +12483,7 @@ function calcCongesContrat(c, dateRefOverride){
     // posés sans déduction de salaire, plus aucun ajout à l'acquis ni paiement séparé ici (ancien
     // mécanisme retiré ; voir le nouveau statut dédié "Congé fractionnement" sur la feuille de
     // présence). calcJoursFractionnement reste utilisé ailleurs (sélecteur du picker).
-    const acquis=(estTerminee||c.rupture?.confirmee)?Math.ceil(cgTotal):Math.floor(cgTotal); // 03/09/2026 (Sophie) : arrondi supérieur si année terminée ou rupture confirmée — un jour entamé n'est dû qu'à ce moment-là, pas en cours d'année normale (correctif réappliqué, perdu lors de la reconstruction depuis le fichier "avant")
+    const acquis=(estTerminee||c.rupture?.confirmee)?Math.ceil(cgTotal):Math.floor(cgTotal); // 03/09/2026 (Sophie) : arrondi supérieur si année terminée ou rupture confirmée — un jour entamé n'est dû qu'à ce moment-là, pas en cours d'année normale ; sinon arrondi inférieur
 
     // Jours pris
     let prisDansRef=0;
@@ -12744,7 +12697,7 @@ function estSemainePartielleConge(c, dateStr, joursPossiblesIdx){
 
 function getHJourFerie(c, sourceActif, dateStr, agendaMois, estSemConges){
   // Retourne la valeur en heures d'un férié dans les hTheoriques
-  // estSemConges = true si la semaine est une semaine de congés (type inconnu)
+  // estSemConges : paramètre inutilisé (conservé pour l'appel existant)
   const tc=sourceActif.tc||c.tc||'52';
   const th=sourceActif.th||c.th||'fixe';
   const planType=sourceActif.planType||c.planType||'';
@@ -12863,9 +12816,9 @@ function getHJourFerie(c, sourceActif, dateStr, agendaMois, estSemConges){
     return joursPossiblesUnionSem[jourIdx]?hSemMoyFerieSem/nbJoursPossiblesUnionSem:0;
   }
 
-  // 46 sem min : semaine partielle (motif réel connu, cochable) → jours max ; semaine complète (rien
-  // de cochable) → jours possibles — corrigé 03/08/2026 (confirmé Sophie), même distinction que sem/var
-  // juste au-dessus, qui l'appliquaient déjà (cette branche min ne le faisait pas).
+  // 46 sem min : semaine partielle (au moins un jour possible ni congé de l'assistante maternelle ni férié) →
+  // volume ÷ jours max ; sinon → volume ÷ jours possibles — corrigé 03/08/2026 (confirmé Sophie). Même
+  // distinction que min/var en 52, plus haut.
   if(planType==='min'){
     if(sourceActif.joursMin&&sourceActif.joursMin[jourIdx]){
       const joursPossiblesIdxMin46=Array.from({length:7},(_,i)=>i).filter(i=>sourceActif.joursMin[i]);
@@ -12876,9 +12829,6 @@ function getHJourFerie(c, sourceActif, dateStr, agendaMois, estSemConges){
     return 0;
   }
 
-  // 46 sem var : semaine de congés (type inconnu) → moyenne pondérée / jours possibles union (comme un
-  // jour de congé, aucun volume précis ne peut légalement s'appliquer) ; semaine travaillée (type
-  // connu, via la case à cocher du planning) → volume spécifique de cette semaine / jMax de ce volume
   // 46 sem var : essaie toujours le volume précis de la semaine en premier (volume ÷ jMax) ; repli
   // sur la moyenne pondérée / jours union seulement si aucun volume ne correspond (semaine
   // entièrement en congés) — corrigé 03/08/2026, même raison que sem 46 juste au-dessus : ne dépend
@@ -12919,7 +12869,8 @@ function jourContratDeplaceModifTh(c, jourStr){
 
 function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriquesVues, joursHCExclus){
   // Calcule les heures théoriques pour un contrat plan sem
-  // Logique : par semaine selon le type dans l'agenda. Semaines off = hSemMoy. Décompte = hSemMoy/6.
+  // Par semaine, selon le type pointé sur l'agenda. Semaine off : moyenne hebdomadaire au prorata des jours possibles
+  // du mois. Semaine sans type ou de congés : moyenne hebdomadaire ÷ jours possibles (union des types) par jour de congé.
   const semTypes=sourceActif.semTypes||[];
   const hMensuTh=sourceActif.hMensu||c.hMensu||0;
 
@@ -13014,7 +12965,8 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
     if(window.DEBUG_CGAM)console.log('[CGAM-semBranche]',dateEx,'| typeSemTh:',typeSemTh,'| matchSemType:',!!stThCheck,'| noms semTypes dispo:',semTypes.map(st=>st.nom),'| hSemMoyPS:',hSemMoyPS);
     const estSemCongesPlanSem=typeSemTh&&!stThCheck; // type dans agenda mais pas dans semTypes = semaine violette
     if(!typeSemTh||estSemCongesPlanSem){
-      // Semaine sans type ou semaine violette (congés) : jours décomptés → hSemMoy/6 par jour
+      // Semaine sans type ou semaine violette (congés) : jours de congé (et fériés) → moyenne hebdomadaire ÷ jours
+      // possibles (union des types) par jour
       const reposHPS=sourceActif.reposHebdo||c.reposHebdo||0;
       const statsCongés=['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe','reprise','ferie'];
       const nbJoursDecompteNoType=joursDesSem.filter(jj=>{
@@ -13081,10 +13033,9 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
             hTheoriques+=hSemType;
             return;
           }
-          // Jours présents dans le mois : travaillés → heures du semType, congés → hSemMoy/6, hors
-          // contrat → moyenne pondérée / jours possibles (comme pour une semaine sans type connu —
-          // avant l'embauche, aucun horaire précis ne peut légalement s'appliquer, même si le type de
-          // la semaine est par ailleurs connu pour sa portion dans le contrat)
+          // Jours présents dans le mois : travaillés, congés et hors contrat → heures du jour dans le type de la
+          // semaine (notes du 03/08 et du 07/10 ci-dessous) ; congé de l'assistante maternelle et décomptes → 0 ;
+          // en 52, non prévu → 0 sauf jour du contrat déplacé (modifications autorisées).
           const statsCongésCheval=['decompte-acq','decompte-anticipe','decompte-conges','conges-acq','conges-non','conges-anticipe','reprise'];
           let hCheval=0;
           for(let i=0;i<7;i++){
@@ -13203,7 +13154,7 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
                 continue;
               }
               if(statsCongésPS52.includes(stJour)){
-                // Congé/decompte : heures réelles que ce jour aurait eu selon le type de semaine réel (agenda)
+                // Congé : heures que ce jour aurait eues selon le type de la semaine (agenda)
                 hSem52+=hJourReel;
               } else if(['conges-am','conges-6j','conges-6j-fin','non-prevu','decompte-acq','decompte-anticipe','decompte-conges'].includes(stJour)){
                 // 0h
@@ -13222,7 +13173,7 @@ function calcHTheoriquesPlanSem(c, sourceActif, fiche, agendaMois, semTheoriques
         // le volume complet du type ajouté sans condition (hSemType ci-dessus), rien ne doit plus venir
         // le retoucher pour un jour de congé en particulier.
       } else {
-        // Type inconnu → hSemMoy
+        // Type inconnu → hSemMoy (branche inatteignable : on n'arrive ici qu'avec un type trouvé)
         hTheoriques+=hSemMoyPS;
       }
     }
@@ -13285,10 +13236,8 @@ function partSemaineChevalMoisMinTh(c,fiche,joursDesSem,joursHCExclus,joursMinTh
   // contrat est rompu avant que l'autre portion ait pu absorber la différence. Vérifier son
   // enveloppe globale à la place (même principe que le correctif du même jour sur
   // enregistrerPlanningMois) : enveloppe pleine → sa part structurelle de cette semaine est due en
-  // entier. Plancher de sécurité en plus (jamais appliqué à la validation du planning, seulement
-  // ici, sur la régularisation) : l'autre portion ne peut de toute façon jamais absorber plus que
-  // sa propre capacité en jours possibles — si elle ne peut pas tout prendre, CE mois garde au
-  // minimum la différence, quoi que dise l'enveloppe (protection contre une perte d'heures).
+  // entier. Plancher : ce mois garde au minimum ce que l'autre portion ne peut pas prendre (voir la
+  // règle du 02/10 ci-dessous). Fonction appelée pour la feuille mensuelle comme pour la régularisation.
   const moisCourantKeyTh=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0');
   const modifActiveMoisCourantTh=c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisCourantKeyTh];
   if(modifActiveMoisCourantTh){
@@ -13367,7 +13316,7 @@ function partSemaineChevalMoisMinTh(c,fiche,joursDesSem,joursHCExclus,joursMinTh
   return hTheoriques;
 }
 function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, semTheoriquesVues, joursHCExclus){
-  // Calcule les heures théoriques pour un contrat plan min 46 sem
+  // Calcule les heures théoriques pour un contrat plan minimum (46 ou 52 semaines)
   const joursMinTh=sourceActif.joursMin||c.joursMin||[];
   const jMaxMinTh=sourceActif.jMaxMin||c.jMaxMin||4;
   const hMinTh=sourceActif.hMin||c.hMin||0;
@@ -13400,7 +13349,7 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
     const typeSemTh=agPourSem&&agPourSem.semaines&&agPourSem.semaines[agKeyTh];
 
     if(typeSemTh==='off'){
-      // Semaine off : hSemMoy × prorata jours cochés dans le mois
+      // Semaine off : volume minimum × (jours possibles du motif dans le mois ÷ jours possibles du motif)
       if(!semTheoriquesVues.has(semKey)){
         semTheoriquesVues.add(semKey);
         const joursCoches=joursMinTh.filter(Boolean).length||jMaxMinTh;
@@ -13475,7 +13424,8 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
         // mois, où les jours fabriqués hors-contrat sont exclus du décompte au lieu d'être crédités.
         hTheoriques+=hMinTh;
       } else if(estCheval){
-        // Coupure de MOIS (jamais de contrat ici) : reste le plancher jours max + jours cochés,
+        // Coupure de mois (éventuellement doublée d'un début ou d'une fin de contrat) : partage de la semaine
+        // entre les deux mois — reste le plancher jours max + jours cochés,
         // cohérent avec le même principe que var pour cette situation précise (04/08, confirmé Sophie).
         hTheoriques+=partSemaineChevalMoisMinTh(c,fiche,joursDesSem,joursHCExclus,joursMinTh,jMaxMinTh,hMinTh,lundiSem,semKey);
       } else {
@@ -13513,8 +13463,9 @@ function calcHTheoriquesPlanMin(c, sourceActif, fiche, agendaMois, semJoursCpt, 
 
 function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, semTheoriquesVues, joursHCExclus){
   if(window.DEBUG_CGAM)console.log('[CGAM-planVarEntree]','fiche.jours: du',fiche.jours[0]?.date,'au',fiche.jours[fiche.jours.length-1]?.date,'| nb:',fiche.jours.length,'| joursHCExclus taille:',joursHCExclus?joursHCExclus.size:null);
-  // Calcule les heures théoriques pour un contrat plan var 46 sem
-  // Logique : par semaine, selon le volume de l'agenda. Semaines off = moyenne. Décompte congés = hSemMoy/6
+  // Heures théoriques d'un plan variable (46 ou 52). Par semaine, selon le volume pointé sur l'agenda ; semaine off :
+  // moyenne au prorata des jours possibles ; semaine sans volume : moyenne hebdomadaire ÷ jours possibles (union)
+  // par jour de congé.
   const planVarTh=sourceActif.planVar||c.planVar||[];
   const nbSemActif=planVarTh.reduce((t,v)=>t+(v.s||0),0)||getNbSemReel(sourceActif,c);
 
@@ -13590,9 +13541,9 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
     // vraiment deux mois. Règle : le mois du DÉBUT de semaine reçoit le plus grand de (a) le
     // nombre de jours du motif réellement cochés dans sa portion, et (b) un plancher garanti =
     // jours max moins le nombre de jours du motif possibles dans la portion du mois SUIVANT — ce
-    // partage reste TOUJOURS purement structurel (jours possibles du contrat), jamais conscient
-    // d'une rupture ni des modifications autorisées : la rupture ne change PAS ce partage entre
-    // les deux mois (précision Sophie). Le mois de FIN de semaine reçoit le reste du volume EN
+    // partage reste structurel (jours possibles du contrat), jamais conscient d'une rupture : la
+    // rupture ne change PAS ce partage entre les deux mois (précision Sophie). Quand les modifications
+    // de planning sont autorisées, voir la règle du 07/10 plus bas. Le mois de FIN de semaine reçoit le reste du volume EN
     // HEURES (jours max moins ce que le mois précédent reçoit, valorisés à volume/jours max),
     // moins la part des jours hors contrat de sa propre portion — ceux-ci restent calculés avec
     // la même formule que partout ailleurs pour un jour hors contrat (moyenne hebdo/jours union),
@@ -13656,7 +13607,8 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
           // ses heures ont pu etre consommees n'importe ou ailleurs dans le mois : les jours coches de cette
           // semaine ne suffisent plus a le dire. Toutes les AUTRES semaines du mois comptent leur volume entier,
           // coche ou non — elles ne voient donc pas arriver les heures deplacees, et le mois en perdait.
-          // Strictement additif : jamais moins que le calcul d'avant, jamais plus que la part structurelle.
+          // Jamais plus que la part structurelle, jamais moins que le plancher ; peut être inférieur aux jours cochés
+          // si l'enveloppe montre que des heures restent à placer.
           let contribDebTh=joursCeMoisTh*(volTh.h/jMaxTh);
           const moisCourantKeyVTh=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0');
           if(c.modifPlanningAutoriseesMois&&c.modifPlanningAutoriseesMois[moisCourantKeyVTh]){
@@ -13705,11 +13657,9 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
       }
     }
 
-    // Semaine à cheval sur le début de contrat/avenant, SANS chevauchement de mois calendaires
-    // (déjà traité ci-dessus) — plan var ne connaît pas le planning précis de la portion hors
-    // contrat (contrairement à plan sem), donc on donne directement le quota disponible (volume
-    // moins la moyenne pondérée des jours hors contrat), jamais le prévu exact du ou des jours
-    // restants — sinon double comptage avec la moyenne hors contrat calculée séparément plus bas
+    // Semaine avec jours hors contrat, sans coupure de mois (déjà traitée ci-dessus) : semaine de début ou
+    // de fin de contrat → volume complet (05/08) ; autre cas (ex. agenda manquant) → volume moins la moyenne
+    // des jours hors contrat.
     const joursHCDeCetteSem=volTh?joursDesSem.filter(jj=>joursHCExclus&&joursHCExclus.has(jj.date)&&joursPossiblesSem[jj.jourSemaine===0?6:jj.jourSemaine-1]).length:0;
     if(window.DEBUG_CGAM)console.log('[CGAM-chevalVarEntree]',dateEx,'| volTh trouvé:',!!volTh,'| joursHCDeCetteSem:',joursHCDeCetteSem,'| joursHCExclus contenu:',joursHCExclus?[...joursHCExclus]:null,'| joursDesSem:',joursDesSem.map(jj=>jj.date+':'+jj.statut));
     if(volTh&&joursHCDeCetteSem>0){
@@ -13717,7 +13667,7 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
       // cette fonction pour la semaine à cheval de fin de mois) : new Date(texte) décalait légèrement
       // les dates comparées, pouvant faire manquer la détection "le contrat débute bien dans cette
       // semaine" et faire retomber à tort sur l'ancienne branche ci-dessous (qui déduit encore la
-      // moyenne pour le jour hors contrat au lieu du nouveau calcul en jours max).
+      // moyenne pour le jour hors contrat, branche "autre cas").
       const [dexA2,dexM2,dexJ2]=dateEx.split('-').map(Number);
       const dateExSafeHC=new Date(dexA2,dexM2-1,dexJ2);
       const jourSemDateHC=dateExSafeHC.getDay();
@@ -13730,13 +13680,10 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
       const estFinContratDansSem=finContratHC&&finContratHC>=lundiSemHC&&finContratHC<=dimancheSemHC;
       if(estDebutContratDansSem||estFinContratDansSem){
         if(window.DEBUG_CGAM)console.log('[CGAM-chevalVarBranche]',dateEx,'| branche: début/fin contrat détecté | estDebutContratDansSem:',estDebutContratDansSem,'| estFinContratDansSem:',estFinContratDansSem,'| volTh.h (ajouté intégralement):',volTh.h);
-        // 04/08/2026 (confirmé Sophie, aligné sur le même principe que la semaine à cheval de fin de
-        // mois) : la partie SOUS CONTRAT de la semaine reçoit le plus grand de (a) ses jours
-        // structurellement possibles (le plancher garanti, décision du 23/07/2026 — au plus favorable
-        // pour l'ass mat même si rien n'est coché) et (b) ses jours RÉELLEMENT cochés si plus nombreux
-        // — jamais moins que le plancher, mais plus si le planning montre plus de jours réels. Plafonné
-        // à jours max. Marquer la semaine comme traitée pour éviter le double comptage avec la boucle
-        // "hors contrat jour par jour" plus bas (qui reste utile pour les autres cas).
+        // La règle du 04/08 (plus grand des jours possibles et des jours cochés) a été remplacée le 05/08 par
+        // le volume complet (ci-dessous) : compterJoursPossiblesHC et compterJoursCochesHC ne sont plus appelées.
+        // La semaine est marquée traitée pour éviter le double comptage avec la boucle "hors contrat jour par
+        // jour" plus bas (qui reste utile pour les autres cas).
         const jMaxHC=volTh.j||1;
         const compterJoursPossiblesHC=(d1,d2)=>{
           let n=0; const cur=new Date(d1);
@@ -13824,8 +13771,8 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
         }
         return;
       }
-      // Jour férié : valeur selon getHJourFerie
-      // Seulement si la semaine n'est pas une semaine de congés (sinon déjà inclus dans hSemMoy/6)
+      // Jour férié : hors semaine de congés, valeur de getHJourFerie ; en semaine entièrement de congés, comme un
+      // jour de congé (moyenne ÷ jours union, plus bas)
       if(statutJourTh==='ferie'){
         const semaineCongésPV=joursDesSem.every(jk=>{
           const stk=jk.statut||getStatutPrevu(sourceActif||c,jk);
@@ -13883,12 +13830,12 @@ function calcHTheoriquesPlanVar(c, sourceActif, fiche, agendaMois, semJoursCpt, 
   return hTheoriques; // en heures
 }
 
-// Valeur horaire d'un jour déduit « congé non acquis » ou « décompte au-delà du quota ».
-// UNIQUE source de vérité : utilisée par le moteur de déduction (calcRecapFiche) et par la
-// ligne « dont congés non acquis » du récap — règle Sophie 14/07/2026 : déduction uniquement
-// sur les jours prévus (type/volume pointé connu : heures réelles du jour, 0 s'il n'est pas
-// prévu ; type inconnu : jours de l'union seulement, moyenne hebdo ÷ jours union ; plan var
-// sans horaires saisis : volume ÷ jours possibles ; plan min : volume ÷ jours max si cochable).
+// Valeur horaire d'un jour prévu absent (congé, férié, décompte). Source commune de la déduction, de la ligne
+// « dont congés non acquis », des fériés payés, de la régularisation et du maintien de salaire en 52 — règle
+// Sophie 14/07/2026 : déduction uniquement sur les jours prévus. Fixe / sem avec type connu : heures du jour
+// (0 s'il n'est pas prévu). Sem sans type : moyenne hebdo ÷ jours union. Plan var / min, semaine partielle :
+// jour coché → volume ÷ jours max (plafonné à ce qui reste), jour non coché → 0 ; semaine entière : volume ÷
+// jours possibles.
 function getHJourCongesNonDeduit(c, dateStr, jourSemaine){
   const dCND=new Date(dateStr);
   const jsCND=jourSemaine!==undefined?jourSemaine:dCND.getDay();
@@ -13978,8 +13925,6 @@ function getHJourCongesNonDeduit(c, dateStr, jourSemaine){
     if(semainePartielleMinC){
       const jourEstCocheMinC=!!(c.planning&&c.planning[dateStr]&&c.planning[dateStr].coche===true);
       if(!jourEstCocheMinC) return 0;
-      // 03/08/2026 (même correctif que var) : volume restant après les heures réelles des autres
-      // jours cochés de la semaine, partagé entre les jours cochés sans heures réelles.
       // 04/08/2026 (re-corrigé, même règle que var) : taux plein volume/jours max par jour,
       // individuellement — pas un partage entre les jours de congé/férié entre eux. Seules les heures
       // RÉELLES des autres jours cochés plafonnent ce qui reste disponible.
@@ -14035,8 +13980,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     if(isPlanMinVar&&(periodeAv==='apres'||periodeAv==='avant')){
       // 11/08/2026 (Sophie) : étendu au côté "avant" — la logique interne (jours hors période,
       // quel que soit le côté) est déjà symétrique, seule cette garde limitait à "après" jusqu'ici.
-      // Pour l'encart après avenant : inclure les jours avant avenant comme hors-contrat
-      // pour que le calcul d'absence les déduise
+      // Pour les encarts avant et après avenant : inclure les jours de l'autre côté de l'avenant comme
+      // hors-contrat pour que le calcul d'absence les déduise
       joursHorsPeriode=fiche.jours.filter(j=>{
         const dansPeriode=(!dateDebPeriode||j.date>=dateDebPeriode)&&(!dateFinPeriode||j.date<=dateFinPeriode);
         if(dansPeriode) return false;
@@ -14346,7 +14291,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       // prévu (réel < prévu) fausserait le ratio des autres jours de la même semaine
       hReelParSemaine[semKey]+=hReelJ;
     } else if(!j.heureDebReel&&j.statut==='ferie'&&j.heureDebPrev&&j.heureFinPrev){
-      // Férié prévu non travaillé : heures prévues pour calcul HS uniquement
+      // Férié prévu non travaillé : hParSemaineFerie est rempli mais jamais lu (un férié non travaillé ne compte
+      // pas pour le seuil des heures sup, voulu — Sophie, 17/11/2026)
       if(!hParSemaineFerie[semKey]) hParSemaineFerie[semKey]=0;
       hParSemaineFerie[semKey]+=(toM(j.heureFinPrev)-toM(j.heureDebPrev))/60;
     }
@@ -14356,10 +14302,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const planVarRef=sourceActif.planVar||c.planVar;
       const vol=typeSem?planVarRef.find((v,i)=>(v.nom||'Volume '+(i+1))===typeSem):null;
       if(vol){
-        // Semaine à cheval sur le début du contrat/avenant : le volume de référence de la semaine est
-        // réduit exactement de l'absence hors contrat déjà déduite pour cette semaine (à la moyenne) —
-        // pas d'un ratio séparé, pour éviter de compter deux fois le même hors contrat (une fois ici,
-        // une fois via hAbsS dans le calcul de dépassement)
+        // Semaine à cheval sur le début du contrat ou un avenant : le volume de référence de la semaine (seuil
+        // des heures sup) est ramené aux jours max que la partie sous contrat peut prendre (06/08, ci-dessous).
         const lundiV2=new Date(j.date); lundiV2.setDate(lundiV2.getDate()-(lundiV2.getDay()||7)+1);
         const dimV2=new Date(lundiV2); dimV2.setDate(lundiV2.getDate()+6);
         const fmtV2=dd=>dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
@@ -14393,6 +14337,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // voisine du plan variable lit la version. Un contrat devenu plan minimum par avenant n'y entrait donc
     // jamais. Mesure avant alignement : aucun changement sur 90 cas construits — le volume hebdomadaire
     // calcule ici ne sert qu'a une regle, le jour marque « travaille » dans une semaine deja au-dela de 45 h.
+    // NB : le test accepte encore le type d'origine en alternative (||c.th, ||c.planType), comme les branches
+    // voisines ; sans effet mesuré sur les données le 18/11/2026.
     if((sourceActif.th==='plan'||c.th==='plan')&&(sourceActif.planType==='min'||c.planType==='min')&&!hPrevuParSemaine[semKey]){
       const hMinRef=sourceActif.hMin||c.hMin||0;
       const joursMinRef=sourceActif.joursMin||c.joursMin||[];
@@ -14517,7 +14463,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     });
   }
   const semJoursCptAv={}; // compteur séparé pour jours _horsContratAvenant
-  // Pour plan min/var : précalculer les jours hors-contrat à exclure de hTheoriques
+  // Jours hors contrat à exclure des heures théoriques : semaines types (bloc suivant, test sur le type du contrat
+  // d'origine), puis plan minimum / variable (version en vigueur).
   const joursHCExclus=new Set();
   if(c.th==='sem'){
     fiche.jours.forEach(j=>{
@@ -14642,6 +14589,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   };
   let hTheoriquesPrevJ=hTheoriques;
   let dateThPrevJ=null;
+  // Boucle utile pour les horaires fixes seulement : pour les plans minimum / variable et les semaines types, le
+  // résultat est remplacé plus bas (calcHTheoriquesPlanVar / PlanMin / PlanSem).
   fiche.jours.forEach(j=>{
     if(window.DEBUG_CGAM&&sourceActif.th==='fixe'&&hTheoriques!==hTheoriquesPrevJ){
       console.log('[CGAM-fixeThDelta]',dateThPrevJ,'| delta ajouté:',hTheoriques-hTheoriquesPrevJ,'| hTheoriques maintenant:',hTheoriques);
@@ -14783,7 +14732,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     hTheoriques=hTheoriques/60;
   }
   // Calculer hTheoriquesMaj : pour chaque semaine visible dans la fiche, max(0, hSemaineTh - 45)
-  // On utilise les heures théoriques par semaine calculées ci-dessus
+  // (heures théoriques par semaine reconstruites dans ce bloc)
   let hTheoriquesMaj=0;
   let hThParSemLocal={};
   let hSeuilParSemLocal={};
@@ -14863,7 +14812,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         }
       });
     }
-    // Construction du seuil hebdo pour le décompte des HS ponctuelles :
+    // (hSeuilParSem et hThParSem ne sont plus lus : le seuil réellement utilisé est construit plus loin, à partir
+    // de hPrevuParSemaine.) Construction du seuil hebdo pour le décompte des HS ponctuelles :
     // Pour plan var/min : le volume est payé (garanti) même si rien n'est pointé au planning, donc il
     // compte dans le seuil des 45h dès le départ — seul un jour "travaillé" (non prévu, en plus du
     // volume) s'ajoute par-dessus. Un férié acquis mais non travaillé ne s'ajoute jamais (déjà couvert
@@ -14922,7 +14872,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     hThParSemLocal=hThParSem;
     hSeuilParSemLocal=hSeuilParSem;
 
-    // Pour les semaines sans heures prévues (off, sem, etc.) utiliser hMoyHebdo
+    // (hMoyHebdo et majParSemaine ne sont pas lus.) Pour les semaines sans heures prévues (off, sem, etc.) utiliser hMoyHebdo
     // hMoyHebdo = hMensu*12/nbSem
     const hMoyHebdo=(hMensu*12/nbSemActif);
     const majParSemaine=Math.max(0,hMoyHebdo-45);
@@ -15222,15 +15172,17 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // var/min) — hAbsHorsPeriode représente exactement ces heures manquantes, déjà calculées
     // correctement pour la déduction ; on les réutilise ici pour les théoriques. Ne dépend que du
     // côté chronologique du jour par rapport à l'avenant, jamais d'une absence réelle saisie dans la
-    // période — aucune interaction avec les absences normales. Scope fixe uniquement : var/min a déjà
-    // sa propre gestion (calcHTheoriquesPlanVar/Min via joursHCExclus), ne pas dupliquer ici.
+    // période — aucune interaction avec les absences normales. Horaires fixes et semaines types (hors semaine
+    // de l'avenant pour les semaines types) ; plan min/var ont leur propre gestion (calcHTheoriquesPlanVar/Min
+    // via joursHCExclus), ne pas dupliquer ici.
     if(window.DEBUG_CGAM&&sourceActif.th==='sem')console.log('[CGAM-theoSemDetail]','hTheoriques AVANT ajout:',hTheoriques,'| hAbsHorsPeriode (complet, pour hAbs):',hAbsHorsPeriode,'| hAbsHorsPeriodeTheoSem (sans semaine avenant, pour théoriques):',hAbsHorsPeriodeTheoSem,'| periodeAv:',periodeAv,'| dateAvenantStr:',dateAvenantStr);
     if(window.DEBUG_CGAM&&sourceActif.th==='fixe')console.log('[CGAM-fixeThFinal]','hTheoriques base (avant addition):',hTheoriques,'| hAbsHorsPeriode:',hAbsHorsPeriode,'| periodeAv:',periodeAv,'| dateAvenantStr:',dateAvenantStr);
     if(sourceActif.th==='fixe') hTheoriques+=hAbsHorsPeriode;
     if(sourceActif.th==='sem') hTheoriques+=hAbsHorsPeriodeTheoSem;
     if(window.DEBUG_CGAM&&sourceActif.th==='sem')console.log('[CGAM-theoSemDetail]','hTheoriques APRÈS:',hTheoriques);
   }
-  // Pour th='sem' ou th='plan' non-var : utiliser la méthode alternative (moyenne par jour)
+  // Calcul de secours (moyenne par jour) : ne devrait servir que si les heures théoriques d'un contrat à horaires
+  // fixes sont nulles (anomalie signalée dans la console) — la condition exclut semaines types, plan variable et minimum.
   // hTheoriques = totalHeuresAnnuelles / totalJoursAnnuels × nbJoursMois
   const isPlanVar=sourceActif.th==='plan'&&sourceActif.planType==='var';
   const isPlanSem=sourceActif.th==='sem';
@@ -15699,7 +15651,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         if(estJourTravaille) absDeduites.push('ferie');
       }
     }
-    // Arrêt de travail : déduire si le jour est prévu OU si le jour est possible au contrat (semaine off)
+    // Arrêt de travail : déduit s'il tombe sur un jour prévu, ou en mois / semaine entièrement en arrêt ; jamais en
+    // semaine d'absence de l'employeur (estArretEnSemaineOff n'entre pas dans estAbsDeduite, voir la note du 29/09)
     const statutPrevuPourArret=getStatutPrevu(c,j);
     const estArretSurJourPrevu=statut==='arret'&&(estStatutPrevu(statutPrevuPourArret)||statutPrevuPourArret==='travaille'||statutPrevuPourArret==='reprise');
     // Pour semaine off : arrêt déduit si le jour est possible au contrat
@@ -15813,9 +15766,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         // (non prévu au contrat, ou quota jours max déjà atteint cette semaine-là). Pour plan var/min :
         // le volume est payé même si rien n'est pointé au planning (cf. tous les autres calculs du
         // jour) — si le volume de la semaine dépasse déjà 45h, ce jour ajouté par-dessus ne doit pas
-        // compter en heures complémentaires (compJour=0) ; le mécanisme hebdomadaire plus loin
-        // (seuilSup, qui passe à 45h fixe dès qu'une semaine contient un jour "travaillé") se charge
-        // de le comptabiliser en heures sup ponctuelles à sa place, sans double comptage.
+        // compter en heures complémentaires (compJour=0) : ses heures passent en heures sup ponctuelles
+        // plus bas (_hTravailleVersHS), pour la part que le dépassement hebdomadaire ne capte pas déjà.
         if(j.statut==='travaille'||j.statut==='reprise'){
           const hJourTrav=(toM(j.heureFinReel)-toM(j.heureDebReel))/60;
           if(hVolContrat>45){
@@ -16073,7 +16025,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           // 05/08/2026 (Sophie, var 46 — après plusieurs tentatives infructueuses sur le MAUVAIS
           // emplacement du code) : ceci est le VRAI calcul de la valeur déduite pour un jour hors
           // contrat en plan var — jamais localisé ni corrigé jusqu'ici (le bloc "horsContratDeduit"
-          // plus haut dans la fonction n'alimente qu'un statut d'affichage, pas cette valeur). Même
+          // plus haut décide SI le jour est déduit ; ici on calcule COMBIEN). Même
           // défaut que celui déjà corrigé pour sem : utilisait systématiquement la moyenne pondérée
           // jours union, même quand un type précis est pointé pour cette semaine. Cherche maintenant
           // le type précis en priorité (même principe que calcHTheoriquesPlanVar et le compteur jours
@@ -16193,7 +16145,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       } else if(sourceActif.th==='fixe'||sourceActif.th==='sem'){
         const semKeyHCF=getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date));
         if(isAbsenceEmployeur(agendaMois,semKeyHCF)){
-          // Semaine off : toutes les heures réelles comptent en HC, pas de seuil
+          // Semaine d'absence de l'employeur : rien n'est déduit
           hPrev=0;
         } else if(statut==='hors-contrat'&&sourceActif.th==='sem'){
           // 05/08/2026 (Sophie, exemple chiffré précis) : cette section déduisait TOUJOURS selon les
@@ -16283,8 +16235,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
           // jour de leur motif — jamais besoin d'une moyenne mensuelle. Une moyenne traite à tort un
           // jour court et un jour long comme valant la même chose, ce qui explique les décimales
           // inattendues sur un contrat aux horaires irréguliers. Utilise maintenant les heures
-          // propres du jour quand elles sont connues ; la moyenne ne sert plus qu'en dernier recours
-          // si un motif est identifié comme "prévu" sans heures de fin renseignées (cas limite).
+          // propres du jour quand elles sont connues ; la moyenne ne sert qu'en dernier recours : jour
+          // prévu sans heure de fin, ou (horaires selon la semaine) semaine dont le type n'est pas pointé.
           hPrev=jourEstPrevuFS?(hJourPropreFS!==null?hJourPropreFS:hMensu/(nbJoursMoisContrat||20)):0;
         }
       } else {
@@ -16434,7 +16386,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   window._hCompVersHS={};
   // Détecter les semaines contenant une absence non rémunérée :
   // pour ces semaines, le seuil reste fixé à 45h (pas le structurel hPrevSem),
-  // car la mensu HS a potentiellement été réduite par l'absence (cf. point 7 plus bas)
+  // car la mensu HS a potentiellement été réduite par l'absence
   const absDsSeuilGlobal=['abs-non','abs-am','arret','abs-enfant','conges-non','decompte-conges','hors-contrat'];
   const semsAvecAbsNonRem=new Set();
   fiche.jours.forEach(j=>{
@@ -16460,8 +16412,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     const hPlanSem=hPlanParSemaine[semKey]||0;
     const hPrecMois=hParSemainePrecMois[semKey]||0;
     if(hPrecMois>0){
-      // Fin de semaine à cheval : hSem inclut les heures du mois précédent via fichePrec
-      // → utiliser uniquement les heures de ce mois = hSem - hPrecMois
+      // Fin de semaine à cheval : heures sup de la semaine entière, moins celles déjà payées sur la feuille
+      // du mois précédent
       const hSemCeMois=Math.max(0,hSem-hPrecMois);
       const hSupSem=Math.max(0,hSemCeMois+hPrecMois-seuilSup);
       const hSupDejaPayee=Math.max(0,hPrecMois-seuilSupPrecComp);
@@ -16480,7 +16432,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       hSupDeplace+=hSupPlanMois;
       hSupCheval+=hSupMaj-hSupPlanMois;
       hSupParSemaine[semKey]=(hSupParSemaine[semKey]||0)+hSupMaj;
-      // HS à cheval ne réduisent pas hCompMaj de ce mois
+      // Les heures sup de la semaine à cheval sont retirées des complémentaires de la semaine (hCompMaj, via
+      // hSupParSemaine) ; la majoration complémentaire déjà payée le mois précédent est reprise via _hCompVersHS
       if(!window._hCompVersHS) window._hCompVersHS={};
       window._hCompVersHS[semKey]=(window._hCompVersHS[semKey]||0)+hCompVersHS;
     } else {
@@ -16512,8 +16465,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // mensualisées suit la semaine réellement organisée. Une semaine allégée par le planning (un jour déplacé vers une
   // autre semaine) perd la part de majoration qu'elle ne dépasse plus : heures sup du contrat pour cette semaine
   // (volume du contrat − 45 h) moins heures sup du planning (heures prévues − 45 h). La semaine qui reçoit le jour
-  // gagne déjà sa majoration en plus (hSupDeplace ci-dessus). Seules les semaines sans absence, congé ni jour hors
-  // contrat sont comparées (une absence réduit déjà la majoration par la déduction d'absence). Une semaine à cheval
+  // gagne déjà sa majoration en plus (hSupDeplace ci-dessus). Seules les semaines sans absence déduite, congé ni jour
+  // hors contrat sont comparées — absence rémunérée et absence partielle admises (une absence déduite réduit déjà la
+  // majoration par la déduction d'absence). Une semaine à cheval
   // sur deux mois est comptée avec le mois de son dimanche, une fois ses deux parties connues.
   let hSupPerdue=0;
   // 11/11/2026 (Sophie) : même règle pour une semaine allégée par des jours cochés « à compenser », en dehors
@@ -16653,8 +16607,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   nbJoursTrav=parseFloat((nbJoursMoisContrat+joursEnPlus-joursEnMoins).toFixed(1));
 
   // ── Heures complémentaires et supplémentaires normales ──
-  // MODÈLE LIBRE (décision Sophie 22/07/2026) : var + « Modifications autorisées » du mois → les
-  // complémentaires naissent de l'ENVELOPPE MENSUELLE (excédent du mois entier), plus de la semaine ;
+  // MODÈLE LIBRE (décision Sophie 22/07/2026), ABANDONNÉ (27/07 pour fixe/sem, 25/08 pour var/min, voir plus bas) :
+  // excedentEnv est encore calculé mais n'est plus lu. Principe d'origine : var + « Modifications autorisées » du
+  // mois → les complémentaires naissaient de l'ENVELOPPE MENSUELLE (excédent du mois entier), plus de la semaine ;
   // transferts neutres dans l'enveloppe ; hSup (>45h/sem) reste hebdomadaire et, dans l'enveloppe,
   // ne porte que sa majoration (base couverte par la mensualisation). Pas appliqué sur les encarts
   // avant/après avenant (période partielle : l'enveloppe est mensuelle par nature).
@@ -16709,7 +16664,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // d'avoir replanifié.
   }
   const hBaseComp=hComp+hSup; // heures en plus ("sur jours ouvrables")
-  // Montants base (heures × txNet, sans majoration)
+  // Montants : montantBaseComp = heures complémentaires au taux normal + heures sup avec leur majoration
   if(avSansCoupureMois){
     if(pondMaj.ferie[1]>0) majFeriePct=pondMaj.ferie[0]/pondMaj.ferie[1];
     if(pondMaj.repos[1]>0) majReposPct=pondMaj.repos[0]/pondMaj.repos[1];
@@ -16756,7 +16711,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   // ── Totaux comp/sup ──
   const hTotalComp=hComp+hMajFerie+hMajRepos+hMaj1erMai;
   const montantTotalComp=parseFloat((montantBaseComp+montantBaseFerieNP+montantBaseRepos+montantBase1erMai+montantMajComp+montantMajFerieNP+montantMajRepos+montantMaj1erMai).toFixed(2));
-  // Note : montantBaseComp inclut déjà hSup en base
+  // Note : montantBaseComp inclut déjà hSup avec sa majoration (montantTotalComp + montantTotalSup compteraient la
+  // majoration des heures sup deux fois ; seuls les encarts d'avenant les lisent, salaireNet ne les additionne pas)
   const montantTotalSup=parseFloat((montantMajSup+montantMajSupDeplace).toFixed(2)); // sup = majoration uniquement
 
   // ── Rétrocompat retour (pour calcBrutTotal et régularisation) ──
@@ -16822,7 +16778,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       +(hMajRepos+hReposMajSeule)*majReposPct*txNetPrecis
       +(hMaj1erMai+h1erMaiMajSeule)*maj1erMaiPct*txNetPrecis;
   } else {
-    // hComp = base jours ouvrables (hors HS), hSup = base + majoration (payées entièrement ici)
+    // hComp = heures complémentaires avec leur majoration, hSup = base + majoration des heures sup, hSupDeplace =
+    // majoration seule
     salaireNetBrut=hMensuNorm*txNetPrecis+hMensuMaj*txNetMajR
       +hComp*(1+majComp)*txNetPrecis+hSup*(1+majSup)*txNetPrecis+hSupDeplace*majSup*txNetPrecis - montantAbsences
       +hMajFerie*(1+majFeriePct)*txNetPrecis+hMajFeriePrevu*majFeriePct*txNetPrecis+hMajRepos*(1+majReposPct)*txNetPrecis+hReposMajSeule*majReposPct*txNetPrecis+hFerieMajSeule*majFeriePct*txNetPrecis+h1erMaiMajSeule*maj1erMaiPct*txNetPrecis+hMaj1erMai*(1+maj1erMaiPct)*txNetPrecis;
@@ -17078,9 +17035,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         indemCongeNbJours=Math.max(0,ind.acquis-dejaSous52J.jours);
         indemCongeMois=parseFloat(Math.max(0,ind.meilleurNet-dejaSous52J.montant).toFixed(2));
       } else if(sourceActif.dateCg==='principale'){
-        // Prise principale = première prise avec ≥12 jours consécutifs entre mai et octobre
-        // Indemnité versée sur le mois de début de la prise principale
-        // Si début en mai → reporter en juin
+        // Prise principale : voir la note du 13/09 ci-dessous (moisVersementPrincipaleCg)
         const moisKeyP=fiche.annee+'-'+String(fiche.mois+1).padStart(2,'0');
         // 13/09/2026 (Sophie) : la détection de la prise principale (≥12 jours consécutifs entre mai et
         // octobre sur le calendrier des congés, versement au mois du 1er jour réellement décompté, juin
@@ -17210,11 +17165,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
   let montantCongesPayesAcqSeul=0;
   if(sourceActif.tc==='52'){
     fiche.jours.forEach(j=>{
-      // 25/08/2026 (Sophie) : decompte-conges rejoint ce groupe (payé, heures hebdo/6) — ce sont des
-      // jours post-pose qui continuent normalement à être payés ainsi, pas une vraie déduction
-      // (contrairement à conges-non, qui reste seul dans l'autre branche ci-dessous).
-      // 09/09/2026 (Sophie) : decompte-conges RETIRÉ de ce groupe. La note du 25/08 qui l'y avait mis
-      // vient d'une session précédente, pas d'elle. Ce statut désigne les journées post-pose sur
+      // 09/09/2026 : decompte-conges n'est pas valorisé ici. Ce statut désigne les journées post-pose sur
       // lesquelles il ne reste plus rien à décompter — le compteur est à zéro, aucun droit n'est
       // consommé, donc rien n'est dû. Or ce bloc ne consulte jamais le compteur : il valorisait ces
       // journées comme payées, gonflant la ligne « dont congés payés » d'un montant sans contrepartie.
@@ -17223,7 +17174,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
         // une pose déjà commencée (le premier jour seul porte le statut conges-acq/anticipe,
         // les suivants portent decompte-acq/anticipe) — mêmes jours payés, même calcul, sinon
         // seul le premier jour de chaque pose était compté ici.
-        // Taux du mois précédant la pose
+        // Taux de la veille de la pose : seulement en secours si les heures théoriques du mois sont nulles
         const dateVeille=new Date(j.date.split('-')[0],parseInt(j.date.split('-')[1])-1,parseInt(j.date.split('-')[2]));
         dateVeille.setDate(dateVeille.getDate()-1);
         const srcVeille=getVersionActive(c,dateVeille);
@@ -17427,7 +17378,8 @@ async function supprCompteVerifier(user){
     const md=user.metadata||{};
     const creation=md.creationTime?new Date(md.creationTime).getTime():0;
     const derniere=md.lastSignInTime?new Date(md.lastSignInTime).getTime():0;
-    // Créé PAR cette connexion : création et connexion à la même seconde. Un compte créé il y a quelques minutes, puis
+    // Créé PAR cette connexion : création et connexion à moins de 10 s d'écart, création il y a moins de 2 minutes. Un
+    // compte créé il y a quelques minutes, puis
     // reconnecté maintenant, a deux heures différentes — il suit le parcours normal.
     if(creation&&derniere&&Math.abs(derniere-creation)<10000&&Math.abs(Date.now()-creation)<120000){
       if(window.fbDeleteUser) await window.fbDeleteUser();
@@ -17667,7 +17619,7 @@ function modif(id){
 }
 function sv(id,v){const el=document.getElementById(id);if(el&&v!=null&&v!=='')el.value=v;}
 
-// ══ RESET FORM ══
+// ══ FORMULAIRE : fratrie, date de début, simulation d'agenda (resetForm plus bas) ══
 // 21/09/2026 (Sophie, plan de tests ligne 50) : fratrie — deux enfants d'une même famille accueillis sans interruption
 // entre les deux contrats : le droit à l'indemnité de rupture s'apprécie à partir du début du contrat du premier enfant.
 function majFratrie(){
@@ -18589,6 +18541,7 @@ function isFicheValidee(c, lundi){
   return !!(c.fiches&&c.fiches[key]&&c.fiches[key].valide);
 }
          
+// Plus appelée : l'agenda commence à la semaine qui contient la date de début exacte (creerAgenda).
 function premiereSemaineAgenda(dateDeb, jourReposHebdo){
   // Semaine ISO du 1er du mois de début
   // Exception : si le 1er est dimanche ET c'est le jour de repos → semaine suivante
@@ -18875,10 +18828,8 @@ function renderAgendas(c){
     })();
     const est52TjrsPointe=agSource2.tc==='52';
     if(window.DEBUG_CGAM)console.log('[CGAM-agendaViolet]',ag.id,'| agSource2.tc:',agSource2.tc,'| agSource2.th:',agSource2.th,'| agSource2.planType:',agSource2.planType,'| est52TjrsPointe:',est52TjrsPointe);
-    // Semaines congés : calcul global depuis le calendrier AM (identique pour tous les agendas)
-    // Utiliser la période du calendrier AM (mai N → avril N+1) qui couvre l'agenda
-    // Utiliser la date du mois affiché (agendaMois si disponible, sinon date actuelle)
-    // Calculer le Top 5 pour chaque année AM qui intersecte l'agenda
+    // Semaines entièrement en congés, calculées par année Ass'Mat (1er mai → 30 avril) couverte par l'agenda
+    // (calendrier de l'assistante maternelle, identique pour tous les agendas)
     const agDebut=new Date(ag.dateDebut);
     const agFin=new Date(ag.dateFin);
     const anneeAmDebut=agDebut.getMonth()>=4?agDebut.getFullYear():agDebut.getFullYear()-1;
@@ -19232,7 +19183,7 @@ function getAgendaWarnings(c,ag,semaines,semsCongesSet){
       }
       if(!aJourDansPeriode) return false;
     }
-    // Exclure les semaines violettes pour tous sauf plan sem/var 52
+    // Exclure les semaines violettes, sauf contrat 52 semaines (toutes ses semaines se pointent)
     if(!estPSV52Warn){
       if(estSemViolette(semsCongesSet, s.sem, s.lundi)) return false;
       if(S.congesAM){
@@ -19284,7 +19235,8 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
 
   // Pour plan sem 52 et plan var 52 : pas de semaines congés bloquées (pointage libre)
   const estPlanSemOuVar2=(source.tc==='52')&&((source.th==='plan'&&(source.planType==='var'||source.planType==='sem'))||(source.th==='sem'));
-  // Semaines congés : calcul global depuis le calendrier AM
+  // Semaines congés : calcul global depuis le calendrier AM (semsCongesSet n'est pas lu dans cette fonction, qui
+  // recalcule la couleur violette elle-même plus bas)
   const agDebut2=new Date(ag.dateDebut);
   const agFin2=new Date(ag.dateFin);
   const anneeAmDebut2=agDebut2.getMonth()>=4?agDebut2.getFullYear():agDebut2.getFullYear()-1;
@@ -19323,7 +19275,7 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
   // Légende
   let legendeHtml='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;font-size:11px;color:var(--tx2)">';
   if(c.tc!=='52'){
-    // Légende "Travaillée" seulement pour contrats fixe (pas pour plan var/sem qui ont leurs propres légendes)
+    // Légende "Travaillée" pour les horaires fixes et le plan minimum (pas pour plan var/sem qui ont leurs propres légendes)
     if(source.th!=='sem'&&!(source.th==='plan'&&source.planType==='var')){
       legendeHtml+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;background:${eclaircir('#6B8060',0.45)};border:1px solid #4E5F46;border-radius:2px;display:inline-block"></span>Travaillée</span>`;
     }
@@ -19367,7 +19319,7 @@ function renderCalAgenda(c,ag,semaines,modeModif,contratId,source){
         const ds=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
         if(S.congesAM&&Object.values(S.congesAM).some(am=>am.jours&&am.jours[ds]==='pose')) nbJoursCochesAM++;
       }
-      // Jours possibles au contrat (union des semTypes ou joursFixe)
+      // Jours possibles au contrat (union des semTypes, joursFixe, jours du plan minimum ou des volumes du plan variable)
       const joursPossiblesIdx=Array.from({length:7},(_,i)=>i).filter(i=>{
         if(i===(source.reposHebdo||c.reposHebdo||0)) return false;
         const idxLun=i===0?6:i-1;
@@ -19572,7 +19524,8 @@ function peindreAgenda(key,cid,agid){
       }
     }
   }
-  // Le type de la semaine a changé : réinitialiser le planning de cette semaine (les jours possibles
+  // (Sans effet : la clé comparée ci-dessous ne correspond jamais à celle de l'agenda ; la remise à zéro est faite
+  // plus haut pour tous les types.) Le type de la semaine a changé : réinitialiser le planning de cette semaine (les jours possibles
   // ont pu changer, les heures déjà saisies ne correspondent plus forcément au nouveau type)
   const estPlanMinVarPeint=source.th==='plan'&&(source.planType==='min'||source.planType==='var');
   if(estPlanMinVarPeint&&c.planning){
@@ -19611,7 +19564,7 @@ function validerModifAgenda(cid,agid){
     }
   }
   const warnings=getAgendaWarnings(source,ag,semaines,semsCongesSet);
-  // Vérifier s'il y a des semaines non pointées (bloquant) vs autres warnings (non bloquant)
+  // Semaines non pointées et minimums non atteints : avertissement avec choix de valider quand même
   const nonPointeesWarning=warnings.filter(w=>w.includes('non pointée'));
   const autresWarnings=warnings.filter(w=>!w.includes('non pointée'));
   // 05/10/2026 (Sophie) : fenetres centrees de l'App. La reponse arrivant par rappel, la suite de
@@ -19881,7 +19834,7 @@ function calc(){
     const sdcg=document.getElementById('section-date-cg');
     if(sdcg)sdcg.style.display=S.tc==='46'?'block':'none';
   }
-  // Mettre à jour S.enEd avec hMensuMaj/hMensuNorm pour la récap brouillon
+  // Mettre à jour S.enEd avec hMensuMaj/hMensuNorm pour la récap brouillon (sans effet : S.enEd est un identifiant)
   if(S.enEd){
     S.enEd.hMensuMaj=parseFloat(hMMaj.toFixed(4));
     S.enEd.hMensuNorm=parseFloat(hMNorm.toFixed(4));
@@ -19905,8 +19858,7 @@ function calcSal(){
   const coefSal=getParamAt('coefficients',dateDebSal).valeur||0.7811975;
   // 27/07/2026 (correctif Sophie, suite) : les petits indices "× 0,7811975" à côté de ces champs
   // étaient un texte figé dans le HTML, jamais mis à jour — ils affichaient toujours l'ancien
-  // coefficient même une fois le calcul lui-même corrigé. Mis à jour ici avec le vrai coefficient
-  // utilisé, pour cette date précise.
+  // coefficient même une fois le calcul lui-même corrigé. Remplacés par un texte fixe (ci-dessous).
   const coefSalTxt='à la date de signature'; // 27/07/2026 (décision Sophie) : texte fixe plutôt que
   // le chiffre du coefficient, pour ne plus jamais avoir à le tenir synchronisé avec l'affichage
   ['r-txnet-coef','r-mn-coef','r-txnet-occ-coef'].forEach(idC=>{const elC=document.getElementById(idC);if(elC)elC.textContent=coefSalTxt;});
@@ -19928,7 +19880,7 @@ function calcSal(){
     st('r-mb-f',tx.toFixed(2)+' € × '+hNorm.toFixed(2)+'h + '+tx.toFixed(2)+' € × '+hMaj.toFixed(2)+'h × '+(1+tauxMajS).toFixed(2));
     if(!hMaj) st('r-mb-f',tx.toFixed(2)+' € × '+hm.toFixed(2)+'h');
     st('r-mn',mn.toFixed(2)+' €');
-    // Mettre à jour S.enEd avec mensBrute et mensNette
+    // Mettre à jour S.enEd avec mensBrute et mensNette (sans effet : S.enEd est un identifiant)
     if(S.enEd){S.enEd.mensBrute=mb;S.enEd.mensNette=mn;}
   }
 }
@@ -20360,8 +20312,7 @@ function validerAvenant(){
   if(cidx!==-1)S.contrats[cidx]=c;
   enregistrerContrats([c.id],true);
   toast('Avenant n°'+av.num+' enregistré ✓');
-  // Rester sur le formulaire, mettre à jour S.enAvenant avec les données fraîches
-  // Rafraîchir le bouton signer
+  // On reste sur le formulaire ; seul le bouton Signer est réaffiché
   const bs=document.getElementById('btn-signe');
   if(bs){
     bs.style.display='inline-flex';
@@ -20371,8 +20322,6 @@ function validerAvenant(){
   }
 }
          
-// ══ CONGÉS ══
-
 // ─── ONGLET RUPTURE ───────────────────────────────────────────────────────────
 
 function getDernieresFicheValidee(c){
@@ -20560,8 +20509,9 @@ function calcHeuresSupMensuBrutTotal(c, dateDebut, dateFin){
 // Le regroupement par pose du calendrier de l'assistante maternelle, essaye d'abord, coupait a tort :
 // chez Jules la pose s'arrete au samedi 31 mai, et le jour de decompte du lundi 2 juin — Sophie ne
 // l'avait pas le lundi avant l'avenant — formait une prise d'un seul jour, compare tout seul.
-// Le maintien de chaque jour n'est pas recalcule : il vient de calcDejaVerseMaintien, celle-la meme
-// qui a paye les feuilles (Sophie : « sur les feuilles de presence il y a deja le calcul en maintien »).
+// Le maintien de chaque jour est reconstitue par calcDejaVerseMaintien (heures prevues du jour x valeur de
+// l'heure de conge du mois, en brut). Attention : la regularisation des feuilles (calcRegul52Annee) fait le
+// meme calcul par un autre chemin (Sophie : « sur les feuilles de presence il y a deja le calcul en maintien »).
 // Le decoupage lui-meme sert aussi a la regularisation versee sur la feuille (calcRegul52Annee) :
 // une seule regle, un seul endroit.
 function prisesEpisodesConges(c, dates){
@@ -20634,12 +20584,11 @@ function calcSoldeConges52(c, dateRupture){
     }
   });
   let joursAcquisRestants=anneesSC52.filter(a=>a.estTerminee).reduce((t,a)=>t+a.restants,0);
-  // 06/08/2026 (Sophie) : reformulé complètement — ce n'est pas seulement le dernier mois pas encore
-  // validé qui compte, ni seulement les jours "acquis" : TOUS les jours de congé posés ce mois (acquis
-  // ET anticipé/en cours, peu importe la validation) sont de toute façon déjà payés via le salaire
-  // normal du mois (voir "dont congés payés" sur la fiche, même logique/mêmes statuts réutilisés ici)
-  // — ils ne doivent donc plus compter comme "encore dus". Priorité de déduction : d'abord le solde le
-  // plus ancien (années déjà terminées), puis l'année en cours pour le reste si besoin.
+  // 06/08/2026 (Sophie) : les jours de congés posés dans le mois de rupture (acquis ET anticipés), tant que
+  // sa feuille n'est pas validée, sont déjà payés par la mensualisation du mois (mêmes statuts que "dont
+  // congés payés" sur la fiche) : on les retire des jours encore dus, d'abord sur les années terminées (la
+  // plus ancienne en premier), puis sur l'année en cours. Une fois la feuille validée, ils sont déjà dans
+  // "pris" : rien à retirer (correctif du 08/09 ci-dessous).
   const keyRuptSC52=dateRefIccp.getFullYear()+'-'+String(dateRefIccp.getMonth()+1).padStart(2,'0');
   const ficheRuptSC52=c.fiches?.[keyRuptSC52];
   if(ficheRuptSC52){
@@ -20770,7 +20719,7 @@ function calcSoldeConges52(c, dateRupture){
   // brut cumulé reconverti en net — deux chemins d'arrondi donnaient un centime d'écart entre le total
   // et le détail (Louna : 61,23 sur la ligne, 61,22 en total ; fratrie : 13,33 contre 13,34).
   const montantAcquisNet=parseFloat(detailAnneesSC52.filter(a=>a.estTerminee).reduce((n,a)=>n+(a.resteNet||0),0).toFixed(2));
-  joursEnCoursRestants=parseFloat(Math.ceil(joursEnCoursRestants).toFixed(2)); // arrondi supérieur, affichage seul — les montants ci-dessus utilisent déjà les jours réels, non arrondis
+  joursEnCoursRestants=parseFloat(Math.ceil(joursEnCoursRestants).toFixed(2)); // arrondi supérieur du nombre de jours affiché ; les montants ci-dessus sont déjà calculés sur les jours arrondis au supérieur, année par année
   const montantEnCoursBrut=parseFloat(Math.max(0,montantEnCoursBrutTotal).toFixed(2));
   const montantEnCoursNet=parseFloat(detailAnneesSC52.filter(a=>!a.estTerminee).reduce((n,a)=>n+(a.resteNet||0),0).toFixed(2));
   // 01/09/2026 (Sophie) : exposés séparément pour l'encart de l'onglet Congés lors d'une rupture
@@ -20872,8 +20821,8 @@ function calcSoldeConges46(c, dateRupture){
 // 07/09/2026 (Sophie) : un contrat de 52 semaines AVEC la clause de régularisation est dans un cycle,
 // exactement comme un 46 — sa régularisation est due à la rupture, et versée dès que le contrat bascule
 // sur un plan qui n'en nécessite plus. L'onglet Régularisation le savait depuis le 11/08 ; les trois
-// endroits de l'onglet Rupture, eux, écartaient tout contrat en 52, clause ou pas. La clause peut être
-// portée par le contrat de base OU par n'importe quel avenant signé.
+// endroits de l'onglet Rupture, eux, écartaient tout contrat en 52, clause ou pas. Depuis le 14/09, seule
+// compte la version en vigueur à la fin du contrat (voir ci-dessous).
 function aCycleRegulRupture(c){
   if(!c) return false;
   const srcRup=getVersionActive(c,getDateFinContrat(c)||new Date());
@@ -21589,12 +21538,11 @@ async function confirmerRuptureSuite(cid){
   delete c._dateFinContratCache;
   c._regulDirty=true;
   // 30/08/2026 (Sophie) : marquer immédiatement hors-contrat les jours après la rupture — fiche ET
-  // planning (modifications autorisées var/min) — plutôt que de dépendre du déclenchement étroit déjà
-  // en place (fiche pas encore ouverte + mois précédent validé, lignes ~4115+), qui ne se déclenchait
-  // pas de façon fiable. Sans ce nettoyage immédiat, tout calcul lisant c.planning directement
-  // (régularisation, enveloppe...) continuait de voir un mois complet au lieu de s'arrêter à la
-  // rupture. Décoche (coche=false) plutôt que supprime, pour rester réversible si la rupture est
-  // ensuite annulée (annulerRupture ne restaure pas le planning, seulement la fiche).
+  // planning (modifications autorisées var/min) — plutôt que de dépendre du seul marquage fait à
+  // l'ouverture de la feuille (ouvrirFiche). Sans ce nettoyage immédiat, tout calcul lisant c.planning
+  // directement (régularisation, enveloppe...) continuait de voir un mois complet au lieu de s'arrêter
+  // à la rupture. Décoche (coche=false) plutôt que supprime, pour rester réversible : annulerRupture
+  // rétablit la feuille et le planning.
   // 30/08/2026 (Sophie) : retour à getDateFinContrat — même raison que getInfosJourPlanning ci-dessus.
   const dateFinRuptureConf=getDateFinContrat(c);
   if(dateFinRuptureConf){
@@ -21713,7 +21661,7 @@ function renderRuptureCDD(c, cont){
     const dFin=new Date(dateFin);
     const dRup=new Date(dateRupture);
     if(dFin<=dRup) return 0;
-    // Nombre de mois complets restants × mensualisation
+    // Mois restants (en fraction, jours ÷ 30,44) × heures mensualisées × taux horaire net
     const source=getVersionActive(c,dRup);
     const hMensu=source.hMensu||0;
     const txNet=source.txBrut*(getParamAt('coefficients',dateToStr(dRup)).valeur||0.7811975)||0; // 27/07/2026 (correctif Sophie) — 01/09/2026 : source.txNet stocké (arrondi 2 décimales) retiré de la priorité, toujours recalculé frais
@@ -21785,8 +21733,8 @@ function renderRuptureCDD(c, cont){
   // 03/09/2026 (Sophie) : motifs qui ont besoin d'une date de rupture simple (rp.dateSignif), sans
   // délai de préavis à calculer par-dessus — jusqu'ici, seuls les motifs dans aPreavis affichaient un
   // champ de date, laissant faute-grave/force-majeure/leurs variantes/refus-cdi/autre-motif sans
-  // aucun moyen de saisir une date (bug confirmé Sophie). fin-essai/fin-essai-am exclus ici : ils
-  // suivent une logique à part (date de notification + délai), pas encore traitée.
+  // aucun moyen de saisir une date (bug confirmé Sophie). fin-essai/fin-essai-am exclus ici : ils ont
+  // leur propre saisie (date de notification + délai de prévenance), plus bas.
   const motifsDateSimple=['faute-grave','force-majeure','faute-grave-am','force-majeure-am','fin-terme-imprecis','refus-cdi-emp','refus-cdi','autre-motif-emp','autre-motif-am'];
   const aPrecarite=!['faute-grave','force-majeure','faute-grave-am','force-majeure-am','refus-cdi','autre-motif-am','embauche-cdi','refus-cdi-emp'].includes(motif)&&motif!=='';
   const aSalairesRestants=motif==='autre-motif-emp';
@@ -22007,9 +21955,14 @@ function renderRupture(c, cont){
   // reste légitime — c'est la situation à la dernière feuille validée — mais elle devient une section
   // de la carte "Situation au", plus une carte à elle seule.
   let soldeCongesHtml='';
+  // 18/11/2026 : congés et régularisation retenus pour la base de l'indemnité de rupture de l'encart, comme dans le
+  // solde de tout compte et le simulateur (demandé par Sophie le 18/11/2026).
+  let cgBaseIrSitBrut=0;
+  const regulSitNet=aCycleRegulRupture(c)?(calcRegularisationDefinitive(c).diffNet||0):0;
   // 14/09/2026 (Sophie, point 26) : type du contrat en vigueur à la date de situation, pas celui de départ
   if(((getVersionActive(c,dateSit||new Date())||{}).tc||c.tc)==='52'){
     const s=calcSoldeConges52(c,dateSit||new Date());
+    cgBaseIrSitBrut=(s.montantAcquisBrut||0)+(s.montantEnCoursBrut||0);
     soldeCongesHtml=`<div style="margin-bottom:14px">
       <div style="font-size:13px;font-weight:600;color:var(--tx2);margin-bottom:4px;display:flex;align-items:center;justify-content:space-between">Solde des congés${pastilleAide('ICCP')}</div>
       <div style="display:grid;gap:6px">
@@ -22024,6 +21977,7 @@ function renderRupture(c, cont){
       </div></div>`;
   } else {
     const s=calcSoldeConges46(c);
+    cgBaseIrSitBrut=(s.montantNonVersesBrut||0)+(s.montantEnCoursBrut||0);
     soldeCongesHtml=`<div style="margin-bottom:14px">
       <div style="font-size:13px;font-weight:600;color:var(--tx2);margin-bottom:4px;display:flex;align-items:center;justify-content:space-between">Solde des congés${pastilleAide('ICCP')}</div>
       <div style="display:grid;gap:6px">
@@ -22041,12 +21995,14 @@ function renderRupture(c, cont){
   // ─── Indemnité de rupture (encart situation) ───
   let indemRuptureEncartHtml='';
   if(dateSit){
-    const ir=calcIndemniteRupture(c,dateSit);
+    const coefSitIr=getParamAt('coefficients',dateToStr(dateSit)).valeur||0.7811975;
+    const regulBaseIrSitBrut=(regulSitNet>0&&coefSitIr>0)?parseFloat((regulSitNet/coefSitIr).toFixed(2)):0;
+    const ir=calcIndemniteRupture(c,dateSit,cgBaseIrSitBrut,regulBaseIrSitBrut);
     if(ir){
       indemRuptureEncartHtml=`<div style="margin-bottom:14px">
         <div style="font-size:13px;font-weight:600;color:var(--tx2);margin-bottom:4px;">Indemnité de rupture (1/80ème)</div>
         <div style="display:flex;justify-content:space-between;font-size:13px">
-          <span>Total bruts versés</span><span>${ir.totalBrut.toFixed(2)} €</span>
+          <span>Total brut (salaires versés, congés et régularisation)</span><span>${ir.totalBrut.toFixed(2)} €</span>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:4px">
           <span>Indemnité</span><span>${ir.montantBrut.toFixed(2)} € brut</span>
@@ -22065,7 +22021,7 @@ function renderRupture(c, cont){
   // régularisation de rupture qu'elle reprend (calcRegularisationDefinitive : lignes validées de l'onglet Régularisation).
   let regHtml='';
   if(aCycleRegulRupture(c)){
-    const regulEuros=calcRegularisationDefinitive(c).diffNet||0;
+    const regulEuros=regulSitNet;
     regHtml=`<div style="margin-bottom:14px">
       <div style="font-size:13px;font-weight:600;color:var(--tx2);margin-bottom:4px;">Régularisation de salaire</div>
       ${regulEuros>0
@@ -22255,13 +22211,18 @@ function renderRupture(c, cont){
     }
 
     // Solde congés
+    // 18/11/2026 : congés et régularisation retenus pour la base de l'indemnité de rupture, comme dans le vrai
+    // solde de tout compte (calcSoldeToutCompte) — demandé par Sophie le 18/11/2026.
+    let cgBaseIrSimBrut=0, regulBaseIrSimBrut=0;
     if(srcActifSim.tc==='52'){
       const s=calcSoldeConges52(c,dateFinContrat||dateSit);
+      cgBaseIrSimBrut=(s.montantAcquisBrut||0)+(s.montantEnCoursBrut||0);
       if(s.montantAcquisBrut>0){lignes.push({label:'Solde congés acquis',net:s.montantAcquisNet,brut:s.montantAcquisBrut});totalNet+=s.montantAcquisNet;totalBrut+=s.montantAcquisBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
       if(s.montantFracRupture>0){lignes.push({label:'Jours de fractionnement non pris ('+s.joursFracRestants+' j)',net:s.montantFracRupture,brut:s.montantFracRuptureBrut});totalNet+=s.montantFracRupture;totalBrut+=s.montantFracRuptureBrut;}
     } else {
       const s=calcSoldeConges46(c,dateFinContrat||dateSit);
+      cgBaseIrSimBrut=(s.montantNonVersesBrut||0)+(s.montantEnCoursBrut||0);
       if(s.montantNonVersesBrut>0){lignes.push({label:'Congés acquis non versés',net:s.montantNonVersesNet,brut:s.montantNonVersesBrut});totalNet+=s.montantNonVersesNet;totalBrut+=s.montantNonVersesBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
       if(s.montantFracRupture>0){lignes.push({label:'Jours de fractionnement non pris ('+s.joursFracRestants+' j)',net:s.montantFracRupture,brut:s.montantFracRuptureBrut});totalNet+=s.montantFracRupture;totalBrut+=s.montantFracRuptureBrut;}
@@ -22285,11 +22246,11 @@ function renderRupture(c, cont){
         // 14/09/2026 (Sophie) : période en cours seulement — diffTotal additionnait aussi les périodes soldées, déjà payées.
         const regNetBrut=regProj&&regProj.borne?regProj.diffEnCours:reg.diffNet;
         if(regNetBrut>0){
-        // 29/07/2026 (correctif Sophie) : coefNet n'existe pas dans cette portée — coefficient en
-        // vigueur à la rupture (dateSit), même référence que le reste de l'onglet.
+        // 29/07/2026 (correctif Sophie) : coefNet n'existe pas dans cette portée. 18/11/2026 : coefficient en
+        // vigueur à la date de fin simulée (dernière feuille validée à défaut), comme le solde de tout compte.
         // 27/08/2026 (Sophie) : reg.diffNet déjà en euros nets, mois par mois au bon taux — regBrut
         // n'est plus qu'une valeur d'affichage dérivée (net/coefficient), pas un recalcul depuis des heures.
-        const coefNetRegul=getParamAt('coefficients',dateToStr(dateSit)).valeur||0.7811975;
+        const coefNetRegul=getParamAt('coefficients',dateToStr(dateFinContrat||dateSit)).valeur||0.7811975;
         const regNet=parseFloat(regNetBrut.toFixed(2));
         const regBrut=coefNetRegul>0?parseFloat((regNet/coefNetRegul).toFixed(2)):0;
         const libRegulSim=(regProj&&regProj.borne)
@@ -22297,6 +22258,7 @@ function renderRupture(c, cont){
           :'Régularisation définitive';
         lignes.push({label:libRegulSim,net:regNet,brut:regBrut});
         totalNet+=regNet;totalBrut+=regBrut;
+        regulBaseIrSimBrut=regBrut;
       }
       // Avertissement agenda : un mois projeté sans type posé sur l'agenda compte pour zéro, ce qui
       // sous-évalue silencieusement l'estimation. Ne concerne que min/var, seuls à tirer leur volume
@@ -22357,10 +22319,10 @@ function renderRupture(c, cont){
 
     // Indemnité de rupture
     if(aIndemniteRupture&&dateFinContrat){
-      // 27/08/2026 (Sophie) : régularisation récupérée via lignes (calculée plus haut dans un bloc à
-      // portée limitée) pour l'inclure dans la base du 1/80ème, comme pour congés en cours ci-dessus.
-      const ligneRegul=lignes.find(l=>l.label==='Régularisation définitive');
-      const ir=calcIndemniteRupture(c,dateFinContrat,0,ligneRegul?.brut||0);
+      // 18/11/2026 : base du 1/80ème = salaires bruts versés + congés (acquis non versés et en cours) + régularisation,
+      // comme le solde de tout compte. Avant, les congés n'y entraient pas, et la régularisation seulement sous le
+      // libellé « Régularisation définitive » — jamais quand elle était projetée (« Régularisation estimée au … »).
+      const ir=calcIndemniteRupture(c,dateFinContrat,cgBaseIrSimBrut,regulBaseIrSimBrut);
       if(ir){
         // Indemnité de rupture : brut uniquement (non soumise à cotisations)
         lignes.push({label:'Indemnité de rupture (1/80ème)',brut:ir.montantBrut,brutSeulement:true});
@@ -22442,7 +22404,7 @@ function renderRupture(c, cont){
 // N+1) et les acquis pris pendant la période de prise (mai N+1 → avril N+2) — mêmes fenêtres que
 // l'agenda des congés du contrat. opts.avant : date (exclue) avant laquelle le jour doit tomber ;
 // opts.sansDecompte : sans les jours de décompte post-pose (comme les paiements « à chaque prise »).
-// Les « décomptes congés » qui suivent des congés NON acquis n'en font jamais partie.
+// Les jours "decompte-conges" (fin de pose, compteur à zéro) n'en font jamais partie.
 function joursCongesAnneeCg(c, anneeRef, opts){
   const o=opts||{};
   const debA=anneeRef+'-06-01', finA=(anneeRef+1)+'-04-30';
@@ -22659,8 +22621,8 @@ function calcIndemniteConges(c, anneeRef, opts){
   // régime d'aujourd'hui. Une année close en 46 reste due même après un avenant vers 52 plus tard
   // (cas 1) ; une année close en 52 n'est normalement pas due (cas 2 "année en cours", se règle
   // naturellement une fois close sous 46 si l'avenant est déjà actif à dateMai). Le cas 2 "année déjà
-  // terminée sous 52 + avenant vers 46 après coup" (reliquat) est géré séparément dans calcRecapFiche,
-  // pas ici.
+  // terminée sous 52 + avenant vers 46 après coup" (reliquat) est traité ICI, par opts.ignorerRegime (voir
+  // avenantVers46ApresClotureCg).
   if(sourceM.tc==='occ'||(sourceM.tc==='52'&&!(opts&&opts.ignorerRegime))) return null;
   const txBrutM=sourceM.txBrut||c.txBrut||0;
 
@@ -22692,7 +22654,7 @@ function calcIndemniteConges(c, anneeRef, opts){
   const majSupM=(sourceM.majSup||c.majSup||0)/100;
   const hHebdoSup=hMensuMajM>0?parseFloat((hMensuMajM*12/getNbSemReel(sourceM,c)).toFixed(2)):0;
   // Méthode du maintien
-  // 13/09/2026 (Sophie) : majoration des heures sup mensualisées comprise (hMensuValoriseeCg) — elle
+  // 13/09/2026 (Sophie) : majoration des heures sup mensualisées comprise (même principe que hMensuValoriseeCg) — elle
   // manquait, le 46 payait ces heures au taux de base alors que le 52 les maintient majorées.
   const maintien=parseFloat(((hHebdo+hHebdoSup*majSupM)/6*cg.acquis*txBrutM).toFixed(2));
   const maintienSupBrut=parseFloat((hHebdoSup/6*cg.acquis*txBrutM*(1+majSupM)).toFixed(2));
@@ -22789,7 +22751,7 @@ function genOngletCongesContrat(c){
     // après validation de juin, jours partis s'afficher à tort sur l'année précédente)
     const cgAcq=c.conges&&c.conges[anneeAcq];
     if(!cgAcq) return;
-    // Période d'acquisition : juin N → mai N+1
+    // (debutAcqStr / finAcqStr ne sont pas utilisées ; finAcqStr est d'ailleurs la fin de la période de PRISE)
     const debutAcqStr=anneeAcq+'-06-01';
     const finAcqStr=(anneeAcq+2)+'-04-30';
     const id='cg-contrat-'+c.id+'-'+anneeAcq;
@@ -23215,8 +23177,10 @@ function buildCgAcquisEncarts(c, anneeAcq){
       // que si TOUS les jours de l'année ont été pris, jamais un solde encore dû (rupture avec année
       // terminée mais pas soldée, ou année en cours). Calcul direct pour CETTE année précise (pas
       // l'agrégat de calcSoldeConges52, qui somme plusieurs années) — même principe partout : 10ème
-      // total de la période vs déjà versé + reste, au taux en vigueur à la rupture.
-      // Arrondi supérieur appliqué ICI SEULEMENT, localement — jamais dans calcCongesContrat (cg.acquis
+      // total de la période vs déjà versé + reste, au taux en vigueur à la rupture. Estimation simplifiée sur
+      // l'année entière : elle peut différer du calcul de la rupture (calcSoldeConges52, prise par prise, avec la
+      // mise à l'échelle des jours pour enfants à charge).
+      // Arrondi supérieur appliqué localement (calcSoldeConges52 arrondit aussi) — jamais dans calcCongesContrat (cg.acquis
       // reste intact, utilisé tel quel par calcRegul52 et le reste de l'app sans aucun risque de
       // régression ailleurs).
       const dateRefCg52=getDateFinContrat(c)||new Date();
@@ -23319,7 +23283,7 @@ function buildCgContratCalendrierAcq(c, anneeAcq){
     }
   }
 
-  // Parcourir juin N → avril N+2 (22 mois)
+  // Parcourir juin N → avril N+2 (23 mois)
   for(let m=0;m<23;m++){
     if(premierMoisAff===-1||m<premierMoisAff||m>dernierMoisAff) continue;
     const totalMois=(5+m);
@@ -23389,6 +23353,7 @@ function buildCgContratCalendrierAcq(c, anneeAcq){
   return html||'<div style="color:var(--tx2);font-size:13px;padding:8px">Aucun jour posé dans cette période.</div>';
 }
 
+// Fonction inutilisée (le calendrier affiché est buildCgContratCalendrierAcq), conservée pour mémoire.
 function buildCgContratCalendrier(c, anneeAm){
   const statsCgAcq=['conges-acq','decompte-acq'];
   const statsCgAnticipe=['conges-anticipe','decompte-anticipe'];
@@ -23495,6 +23460,8 @@ function buildCgContratCalendrier(c, anneeAm){
   return html||'<div style="color:var(--tx2);font-size:13px;padding:8px">Aucun jour de congé dans cette période.</div>';
 }
 
+// Fonction inutilisée, conservée pour mémoire ; ses calculs ne sont plus à jour (maintien du 52 à « heures ÷ 6 »,
+// règle remplacée le 19/10/2026).
 function genCumul(c){
   // Détecter l'ancien format {acquis:0,pris:0,...} vs nouveau {2024:{...},2025:{...}}
   const estNouveauFormat=c.conges&&Object.keys(c.conges).some(k=>!isNaN(Number(k))&&Number(k)>2000);
@@ -23900,7 +23867,7 @@ if(joursReposIncoherent(c)) manquants.push("des heures ou jours possibles sont i
   },800);
 }
 
-// ══ AVENANT ══
+// ══ CONTRAT : renommer, email de l'employeur — puis AVENANT ══
 function renommerContrat(cid){
   const c=S.contrats.find(x=>x.id==cid);
   if(!c) return;
@@ -24100,6 +24067,7 @@ function creerAvenant(id){
   ouvrirFormulaireAvenant(id,newAv.id);
 }
 
+// Fonction plus appelée (le pré-remplissage qui l'utilisait a été retiré).
 function getDonneesActives(c){
   // Retourne les données du dernier avenant signé, ou du contrat initial
   const dernierAv=c.avenants&&[...c.avenants].reverse().find(a=>a.signe);
@@ -24293,7 +24261,8 @@ function remplirFormulaireAvenant(c,av,d){
     // pour que le menage soit le meme en revenant a un contrat neuf. Ils sont refabriques ci-dessous et par
     // ouvrirProlongationCDD / ouvrirPassageCDI.
     // 30/09/2026 (Sophie) : date d'effet rendue à la saisie libre — seule une prolongation de CDD la verrouille,
-    // juste après cette ouverture, et le verrou ne doit pas rester sur l'avenant ordinaire suivant.
+    // juste après cette ouverture, et le verrou ne doit pas rester sur l'avenant ordinaire suivant. (Bloc devenu
+    // sans effet : resetForm, appelé juste au-dessus, supprime déjà le champ et sa note.)
     {
       const dAvR=document.getElementById('f-dateavenant');
       if(dAvR){ dAvR.readOnly=false; dAvR.style.background=''; dAvR.style.color=''; }
@@ -24442,8 +24411,8 @@ function remplirFormulaireAvenant(c,av,d){
     br.style.display='block';
 }
 
-// Bouton « Report » : la version en vigueur la veille de la date d'effet saisie, ou à défaut la dernière version signée,
-// uniquement celle de CE contrat. Le formulaire est remis à zéro puis rempli comme à l'ouverture d'un avenant.
+// Bouton « Report » : remplit l'avenant avec la version en vigueur la veille de la date d'effet saisie (date
+// obligatoire), uniquement celle de CE contrat. Le formulaire est remis à zéro puis rempli comme à l'ouverture d'un avenant.
 function reporterVersionDansAvenant(){
   if(!S.enAvenant) return;
   const c=S.contrats.find(x=>x.id==S.enAvenant.cid); if(!c) return;
@@ -24474,16 +24443,6 @@ function reporterVersionDansAvenant(){
   procederRep();
 }    
          
-// 11/09/2026 (Sophie) : un avenant ne doit pas prendre effet au milieu d'une période de congés — la pose
-// serait coupée entre deux versions du contrat, alors que le décompte, les statuts et le paiement des
-// congés raisonnent tous sur une pose entière. Le garde-fou existant (plus bas dans signerAvenant) ne
-// refusait qu'une date tombant exactement sur un jour posé : un dimanche au milieu de la pose, un férié
-// inclus dans la pose, ou un jour entre la fin de la pose et le jour de reprise passaient.
-// Règle : on remonte depuis la veille de la date d'effet, et on avance depuis la date d'effet, en sautant
-// les jours neutres (repos, férié, non prévu, hors contrat). Si l'on tombe des deux côtés sur un jour de
-// congés — posé au calendrier de l'assistante maternelle, ou marqué congés / décompte sur la fiche — la
-// date coupe une pose. Renvoie alors le premier et le dernier jour de congés de la pose, et la première
-// date d'effet possible après elle, pour que le message donne les vraies bornes.
 // 18/09/2026 (Sophie) : vrai si ce contrat a besoin d'un agenda et que celui-ci ne renseigne pas cette date — aucun
 // agenda ne la couvre, ou la semaine n'est pas pointée. L'app ne connaît alors aucune semaine travaillée et marque
 // tous les jours « congés Ass'Mat », ce qui n'est pas une pose.
@@ -24516,6 +24475,16 @@ function agendaManquantAvantAvenant(c,dateEffetStr){
   }
   return false;
 }
+// 11/09/2026 (Sophie) : un avenant ne doit pas prendre effet au milieu d'une période de congés — la pose
+// serait coupée entre deux versions du contrat, alors que le décompte, les statuts et le paiement des
+// congés raisonnent tous sur une pose entière. Le garde-fou existant (plus bas dans signerAvenant) ne
+// refusait qu'une date tombant exactement sur un jour posé : un dimanche au milieu de la pose, un férié
+// inclus dans la pose, ou un jour entre la fin de la pose et le jour de reprise passaient.
+// Règle : on remonte depuis la veille de la date d'effet, et on avance depuis la date d'effet, en sautant
+// les jours neutres (repos, férié, non prévu, hors contrat). Si l'on tombe des deux côtés sur un jour de
+// congés — posé au calendrier de l'assistante maternelle, ou marqué congés / décompte sur la fiche — la
+// date coupe une pose. Renvoie alors le premier et le dernier jour de congés de la pose, et la première
+// date d'effet possible après elle, pour que le message donne les vraies bornes.
 function avenantCoupeUnePoseCg(c,dateEffetStr){
   const posesAmAv={};
   Object.values(S.congesAM||{}).forEach(am=>Object.entries(am.jours||{}).forEach(([ds,st])=>{ if(st==='pose') posesAmAv[ds]=true; }));
@@ -24606,11 +24575,6 @@ function avenantChangeStructure(avant, av, organisationSeule){
   }
   return false;
 }
-// 16/09/2026 (Sophie) : clause de régularisation 52 figée — si la version précédente était déjà un 52 sem ou var, un
-// avenant qui reste en 52 sem ou var garde le choix fait (avec ou sans clause) : ni retrait ni ajout quand le calcul
-// arrange. Un passage en 46, 52 fixe ou 52 min reste possible, et l'arrivée en 52 sem/var depuis un autre type laisse le
-// choix libre. Renvoie la valeur imposée (true/false), ou null si le choix est libre. Version de référence : la veille de
-// la date d'effet, ou à défaut la dernière version signée.
 // 17/09/2026 (Sophie) : prise par anticipation acceptée au contrat ou par un avenant = pas de retour en arrière.
 // Version de référence : la veille de la date d'effet, ou à défaut la dernière version signée.
 function cgAnticipeFige(c, dateAvStr){
@@ -24631,6 +24595,11 @@ function choisirCgAnticipe(el,val){
   selR(el,'cg-anticipe',val);
 }
 function clauseRegul52EligibleVersion(v){ return !!v&&v.tc==='52'&&(v.th==='sem'||(v.th==='plan'&&v.planType==='var')); }
+// 16/09/2026 (Sophie) : clause de régularisation 52 figée — si la version précédente était déjà un 52 sem ou var, un
+// avenant qui reste en 52 sem ou var garde le choix fait (avec ou sans clause) : ni retrait ni ajout quand le calcul
+// arrange. Un passage en 46, 52 fixe ou 52 min reste possible, et l'arrivée en 52 sem/var depuis un autre type laisse le
+// choix libre. Renvoie la valeur imposée (true/false), ou null si le choix est libre. Version de référence : la veille de
+// la date d'effet, ou à défaut la dernière version signée.
 function clauseRegul52Figee(c, dateAvStr){
   let avt=c;
   if(dateAvStr){ const v=parseDateLoc(dateAvStr); v.setDate(v.getDate()-1); avt=getVersionActive(c,v)||c; }
@@ -24734,7 +24703,8 @@ function signerAvenant(){
     alerte('La date d’effet du '+dateISOversTexte(av.dateAvenant)+' tombe sur le jour de repos hebdomadaire.<br><br>Choisissez le premier jour d’accueil, par exemple le '+dateISOversTexte(dateToStr(lendemainAv))+'.');
     return;
   }
-  // 18/09/2026 (Sophie) : sans agenda couvrant la date d'effet, l'app ne connaît aucune semaine travaillée —
+  // 18/09/2026 (Sophie) : sans agenda pointé sur les jours qui précèdent la date d'effet (24/09), l'app ne connaît
+  // pas les semaines travaillées de la version sortante —
   // tous les jours passent en « congés Ass'Mat » et les calculs du mois seraient faux.
   if(agendaManquantAvantAvenant(c,av.dateAvenant)){
     alerte('Veuillez remplir l’agenda jusqu’à la date d’effet de l’avenant.');
@@ -25355,6 +25325,8 @@ function buildCgAmDetail(anneeDebut,data){
     moisCur=new Date(annee,moisIdx+1,1);
   }
 
+  // joursFragMax n'est plus lu depuis le 21/09/2026 (le fractionnement ne s'ajoute plus au compteur de ce calendrier,
+  // voir plus bas) ; calcul et notes conservés pour mémoire.
   // Calculer les jours de fractionnement (max sur tous les contrats)
   // 03/09/2026 (Sophie) : le drapeau "case cochée" est maintenant par contrat (c.fractionnement),
   // donc vérifié pour chaque contrat individuellement dans la boucle, plus un seul drapeau global.
@@ -25422,8 +25394,7 @@ function buildCgAmDetail(anneeDebut,data){
 
 
 
-// Calcule si un ferié est couvert par les conges acquis du meilleur contrat
-// Retourne true si le ferié doit rester jaune/non cochable
+// Fonction plus appelée. (Elle ne regarde aucun acquis : elle dit seulement si la veille ou le lendemain est coché.)
 function ferieCouvretParAcquis(dateStr, anneeDebut, dataAM) {
   const joursAM = dataAM.jours || {};
   if(!Object.keys(joursAM).some(d=>joursAM[d]==='pose')) return false;
@@ -25491,6 +25462,7 @@ function getStatutJourFiche(c, dateStr){
   return jour?.statut||null;
 }
 
+// getPrevJourOuvrable, getNextJourOuvrable et trouverDebutPeriode : plus appelées.
 function getPrevJourOuvrable(dateStr, reposHebdo) {
   const p = dateStr.split('-').map(Number);
   const d = new Date(p[0], p[1]-1, p[2]);
@@ -25548,8 +25520,6 @@ function feriePeutEtreCocheCommePremierJour(anneeDebut,dateStr,reposHebdo,joursD
   return donneesVeille[veilleRefStr]==='pose';
 }
 
-// 21/09/2026 (Sophie) : nombre de jours à poser sur le calendrier d'une année de pose — 30, plus le plus grand report
-// pour arrêt maladie reçu par un contrat en cours (année d'acquisition anneeDebut−1).
 // 22/09/2026 (Sophie) : jours encore à poser par contrat pour cette année de pose — même calcul que le résumé affiché
 // sur le calendrier (acquis de l'année de référence, moins les jours pris sur feuilles validées et ceux déjà programmés).
 function contratsAvecJoursRestantsCgAm(anneeDebut){
@@ -25568,6 +25538,8 @@ function contratsAvecJoursRestantsCgAm(anneeDebut){
     return {nom:c.nom,restants:Math.max(0,(cgAcq?.restants||0)-prog)};
   }).filter(x=>x.restants>0);
 }
+// 21/09/2026 (Sophie) : nombre de jours à poser sur le calendrier d'une année de pose — 30, plus le plus grand report
+// pour arrêt maladie reçu par un contrat en cours (année d'acquisition anneeDebut−1).
 function limiteJoursCgAm(anneeDebut){
   let reportMax=0;
   (S.contrats||[]).filter(c=>c.signe&&!estContratCloture(c)&&!c.rupture?.confirmee).forEach(c=>{
@@ -25691,6 +25663,7 @@ function toggleCgAm(anneeDebut,dateStr){
   ouvrirCgAm(anneeDebut);
 }
 
+// Plus appelée : la règle décrite ci-dessous ne s'applique pas.
 function calcSeuilAcquis(c, anneeDebut, premierJourPose){
   // Jours acquis : chercher année ref terminée (anneeDebut-1) OU année en cours
   const anneeRefTerminee = anneeDebut - 1;
@@ -25716,14 +25689,6 @@ function calcSeuilAcquis(c, anneeDebut, premierJourPose){
   return Math.min(30, seuil);
 }
 
-// Point d'entrée public : exécute deux passes internes, comme le faisaient manuellement
-// 6 des 13 sites d'appel historiques (les 7 autres n'appelaient qu'une fois et étaient donc
-// probablement sous-convergés). Cause racine trouvée le 15/07/2026 : calcCongesContrat (tout
-// début de passe) LIT les statuts conges-acq/anticipe/decompte-acq/anticipe que cette même
-// fonction ÉCRIT plus loin — le quota dépend des statuts, qui dépendent du quota. Une passe
-// calcule le quota depuis des statuts d'avant ce calcul ; la deuxième relit les statuts frais
-// que la première vient d'écrire et converge. Centralisé ici pour que tous les appelants
-// n'aient plus qu'à appeler une seule fois.
 // 14/09/2026 (Sophie, 52minfract-52min, 21/12/2022) : un jour coché dans le planning d'une semaine qui passe
 // ENSUITE entièrement en congés de l'Ass'Mat restait coché, caché sous « Congés de l'Ass'Mat » (plus aucune
 // case pour le décocher) mais toujours compté partout — total de la semaine, plafonds, volume de la portion
@@ -25798,6 +25763,14 @@ function effacerCochesSemainesCongesAM(){
     });
   });
 }
+// Point d'entrée public : exécute deux passes internes, comme le faisaient manuellement
+// 6 des 13 sites d'appel historiques (les 7 autres n'appelaient qu'une fois et étaient donc
+// probablement sous-convergés). Cause racine trouvée le 15/07/2026 : calcCongesContrat (tout
+// début de passe) LIT les statuts conges-acq/anticipe/decompte-acq/anticipe que cette même
+// fonction ÉCRIT plus loin — le quota dépend des statuts, qui dépendent du quota. Une passe
+// calcule le quota depuis des statuts d'avant ce calcul ; la deuxième relit les statuts frais
+// que la première vient d'écrire et converge. Centralisé ici pour que tous les appelants
+// n'aient plus qu'à appeler une seule fois.
 function majFichesCgAm(anneeDebut, sauvegarder=true){
   // 14/09/2026 (Sophie, point 18) : seuls les contrats réellement modifiés par le recalcul sont marqués à
   // enregistrer, et l'enregistrement passe par la sauvegarde groupée habituelle. Avant, chaque passe avec
@@ -26201,7 +26174,7 @@ function majFichesCgAmPasse(anneeDebut, sauvegarder=true){
         const reposH=c.reposHebdo||0;
         if(jourSem!==reposH&&!isFerie(ds,c)){
           const srcTmp=getVersionActive(c,tmp);
-          // Vérifier si la semaine est travaillée (pas off) dans l'agenda (tous contrats 46 sem)
+          // Vérifier si la semaine est travaillée (horaires par semaine : type pointé dans l'agenda ; autres : heures prévues)
           if(srcTmp.th==='sem'){
             const semNumTmp=getSemISO(ds);
             const semAnTmp=getSemAnnee(ds);
@@ -26414,7 +26387,7 @@ if(tousNonPrevus){
             // Anticipé déjà consommé sur CE cg (validé ET provisoire), pendant SA PROPRE
             // fenêtre d'acquisition (juin anneeRef→avril anneeRef+1) — jamais la consommation
             // en ACQUIS normal (mai anneeRef+1→avril anneeRef+2), qui est déjà comptée par le
-            // scan des fiches validées un peu plus bas (compteurTotal, lignes ~15074-15084).
+            // scan des fiches validées un peu plus bas (compteurTotal).
             // Bug confirmé Sophie 15/07/2026, en 2 temps : (1) un contrat réel, 6 jours comptés 3
             // fois — 1er correctif via cg.restants ; (2) régression sur un contrat réel (plan fixe 52) —
             // cg.restants nette TOUTE consommation validée, y compris l'acquis normal de
@@ -26492,8 +26465,6 @@ if(tousNonPrevus){
           }
         });
       }
-      // Calculer compteurTotal = jours posés pour cette année d'acquisition
-      // (anticipés posés pendant l'acquisition + acquis posés pendant la pose)
       // anneeAcqPose défini plus haut dans le bloc quotaAcquis
       // compteurTotal = jours posés pour cette année d'acquisition :
       // - acquis posés pendant la pose (mai N+1 → avril N+2)
@@ -26662,7 +26633,6 @@ if(tousNonPrevus){
         if(window.DEBUG_CGAM)console.log('[CGAM-decompteIndep]',dateStr,'| motif trouvé:',motifDCsem,'| jour possible ce jour:',motifDCsem&&motifDCsem[jourIdxDCsem],'| decompteCommence après ce bloc:',decompteCommence);
         }
       }
-      // reprise = même effet que travaille pour les hTheoriques
         // Suspendre le décompte pendant les semaines absence employeur
         // (sauf si c'est après finPeriode = la semaine off est après la pose)
         if(dateStr>fin){
@@ -26707,9 +26677,8 @@ if(tousNonPrevus){
           }
         }
        if(fiche.valide){
-          // Incrémenter compteurTotal pour les fiches validées
-          // Exclure mai (déjà compté dans le bloc mai ci-dessus)
-          // Ne compter que les jours de la période de CETTE année d'acquisition (éviter de compter les acquis d'une autre année)
+          // Fiches validées : leurs jours de congés sont déjà comptés par le scan d'avant la boucle (conges-acq /
+          // decompte-acq) ; seuls les fériés validés sont comptés ici.
           // NE PLUS recompter ici les jours de congé/décompte des fiches validées : ils sont
           // déjà comptés une fois dans le scan complet de l'année juste avant la boucle
           // (Object.values(c.fiches).forEach ... estAnticipe/estAcquis, un peu plus haut).
@@ -26815,7 +26784,7 @@ if(tousNonPrevus){
               }
             }
           } else {
-            compteurTotal++; // fiche validée : incrément conservé tel quel (cf. bug #5, 14/07)
+            compteurTotal++; // branche inatteignable : une fiche validée sort de la boucle plus haut
           }
           if(window.DEBUG_CGAM)console.log('[CGAM]',dateStr,'| post-pose | compteur',compteurTotal,'/ quota',quotaAcquis,'→',jour.statut,fiche.valide?'(fiche validée, statut conservé)':'');
           cur.setDate(cur.getDate()+1);continue;
@@ -27312,7 +27281,8 @@ if(tousNonPrevus){
   // estFerie — décocher un férié correctement classé recréerait le trou qui coupait une pose
   // en plusieurs périodes séparées (cause racine de plusieurs bugs de reprise).
 
-  // Sauvegarder chaque contrat modifié individuellement
+  // Sauvegarder chaque contrat modifié individuellement (jamais exécuté : majFichesCgAmPasse est appelée avec
+  // sauvegarder=false ; l'enregistrement est fait par majFichesCgAm, pour les seuls contrats modifiés)
  if(sauvegarder&&window.FB_USER&&window.fbSaveData){
     enregistrerContrats(S.contrats.filter(c=>c.fiches&&c.signe&&!estContratCloture(c)).map(c=>c.id));
   }
@@ -27461,7 +27431,7 @@ function calcSoldeFractionnementRupture(c,dateRupture){
   // (même fenêtre que le picker : nov 1er anneeAcq+1 → avril 30 anneeAcq+2), les jours pas encore
   // posés sont payés — au même taux journalier que l'indemnité compensatrice de congés payés
   // (calcIndemniteConges, montantJournalierNet de CETTE MÊME année d'acquisition), jamais un calcul
-  // séparé. Calcul isolé de calcSoldeConges52/46 (10ème/maintien) : le fractionnement n'a jamais fait
+  // séparé (en 52 semaines, faute d'indemnité annuelle : un jour au maintien de salaire, voir plus bas). Calcul isolé de calcSoldeConges52/46 (10ème/maintien) : le fractionnement n'a jamais fait
   // partie de ce système, et une comparaison 10ème n'a pas de sens pour 1-2 jours.
   if(!dateRupture) return {joursFracRestants:0,montantFracRupture:0,montantFracRuptureBrut:0};
   const dateRuptureStr=dateRupture.getFullYear()+'-'+String(dateRupture.getMonth()+1).padStart(2,'0')+'-'+String(dateRupture.getDate()).padStart(2,'0');
@@ -27497,9 +27467,9 @@ function calcSoldeFractionnementRupture(c,dateRupture){
 
 function estJourPrevuFrac(c,dateStr){
   // 04/09/2026 (Sophie) : détermine si dateStr est "prévu" pour le contrat c, pour le picker de
-  // fractionnement. Fixe/sem : motif structurel direct (déterministe, jamais d'ambiguïté). Min/var :
-  // si le mois est déjà confirmé au moins une fois via le bouton Enregistrer (planningConfirmeMois),
-  // coché/non coché réel (getStatutPrevu) ; sinon repli sur les jours possibles du contrat (mêmes
+  // fractionnement. Fixe/sem : statut de la feuille, motif du contrat si la feuille n'a pas encore ce jour
+  // (05/10, plus bas). Min/var : si le mois est déjà confirmé au moins une fois via le bouton Enregistrer
+  // (planningConfirmeMois), jour coché au planning ET statut prévu ; sinon repli sur les jours possibles du contrat (mêmes
   // champs que jourEligibleBordure) — sans ce repli, un contrat dont personne n'a encore rempli le
   // planning sur la période n'aurait aucun jour cliquable.
   const d=parseDateLoc(dateStr);
@@ -27633,9 +27603,8 @@ function ouvrirPickerFractionnement(contratId,anneeAcq){
   const quotaFrac=calcJoursFractionnement(c,anneeAcq);
   const datesFracC=(c.fractionnementDates&&c.fractionnementDates[anneeAcq])||[];
   // 04/09/2026 (Sophie, confirmé) : fenêtre nov→avril dérivée de anneeAcq comme calcJoursFractionnement
-  // (limiteOct=(anneeAcq+1)+'-10-31') : nov 1er (anneeAcq+1) → avril 30 (anneeAcq+2). L'écart avec
-  // jourEligibleBordure (qui va un an plus loin) s'explique par l'anticipé, propre aux congés normaux
-  // — le fractionnement n'a pas cet équivalent (rien avant le 31/10, rien après le 30 avril).
+  // (limiteOct=(anneeAcq+1)+'-10-31') : nov 1er (anneeAcq+1) → avril 30 (anneeAcq+2) — rien avant le 31/10,
+  // rien après le 30 avril.
   const anneeDebutFen=anneeAcq+1;
   const moisListeFrac=[];
   for(let mIdx=10;mIdx<16;mIdx++){
@@ -27653,8 +27622,8 @@ function ouvrirPickerFractionnement(contratId,anneeAcq){
   const BLEU_FRAC={bg:'#7C93A8',brd:'#5F7688',txt:'#26333F'}; // même bleu que PLAN_COULEURS[2] (sélecteur type de semaine)
   // 28/09/2026 (Sophie) : un jour de fractionnement posé sur un jour PRÉVU d'un autre contrat lui vaut une
   // absence non rémunérée (règle du 04/09, estJourAbsNonFractionnement). Le sélecteur le signale au lieu de
-  // laisser croire que tous les jours se valent : bordure orange et nom du contrat concerné, sans jamais
-  // empêcher le choix — quand les contrats partagent les mêmes jours, il n'existe parfois aucune date neutre.
+  // laisser croire que tous les jours se valent : bordure orange et nom du contrat concerné, sans empêcher le
+  // choix, sauf si la feuille de ce mois est déjà validée sur l'autre contrat (05/10) — quand les contrats partagent les mêmes jours, il n'existe parfois aucune date neutre.
   const contratsDeduitsFrac=dateStr=>contratsDeduitsParFractionnement(contratId,dateStr);
 
   let grilleMoisFrac='';
@@ -27768,7 +27737,7 @@ function verifier12JoursConsecutifs(anneeAm){
   const data=S.congesAM&&S.congesAM[anneeAm];
   if(!data) return false;
   const debutMai=anneeAm+'-05-01';
-  const finOct=(anneeAm+1)+'-04-30'; // on inclut aussi nov-avril pour couvrir toute l'AM
+  const finOct=(anneeAm+1)+'-04-30'; // non lue (le filtre s'arrête au 31 octobre)
   // Filtrer les jours posés entre mai et octobre
   const jours=Object.keys(data.jours||{})
     .filter(d=>d>=(anneeAm+'-05-01')&&d<=(anneeAm+'-10-31')&&data.jours[d]==='pose')
@@ -27899,7 +27868,6 @@ function retourCgAmList(){
   renderCgAm();
 }
 
-// ══ TOAST ══
 // ── PASTILLES INFO / AIDE ────────────────────────────────────────────────────
 function ouvrirPastille(titre, corps){
   // Fermer si déjà ouvert
@@ -28186,12 +28154,6 @@ function alerte(msg,libelleBouton){
   document.body.appendChild(overlay);
 }
 
-// Même chose que alerte(), avec en plus un bouton "Méthodologie" sous le calcul,
-// qui ouvre directement le bon fichier d'aide si le type d'horaire est connu (th/planType),
-// sinon propose les 4 choix.
-// 28/09/2026 (Sophie) : fenêtre centrée à deux boutons, pour les messages qui posent une question au lieu
-// d'informer — les dernières fenêtres natives du navigateur en dépendaient. Fermer la fenêtre en touchant le
-// fond revient à refuser.
 // 04/10/2026 (Sophie) : fenetre du conflit de sessions. Un seul bouton, et il recharge — « plus tard est
 // inutile, il faut que l'utilisateur voie les donnees a jour ». Elle ne se ferme pas en touchant le fond :
 // tant que la page n'est pas rechargee, plus rien ne peut etre enregistre depuis elle.
@@ -28244,6 +28206,9 @@ function alerteSaisie(msg,valeurInitiale,libelleOui,siOui,libelleNon,siNon){
   setTimeout(()=>{ champAS.focus(); champAS.select(); },30);
 }
 
+// 28/09/2026 (Sophie) : fenêtre centrée à deux boutons, pour les messages qui posent une question au lieu
+// d'informer — les dernières fenêtres natives du navigateur en dépendaient. Fermer la fenêtre en touchant le
+// fond revient à refuser.
 function alerteChoix(msg,libelleOui,siOui,libelleNon,siNon){
   const existing=document.getElementById('alerte-overlay');
   if(existing) existing.remove();
@@ -28270,6 +28235,9 @@ function alerteChoix(msg,libelleOui,siOui,libelleNon,siNon){
   document.body.appendChild(overlay);
 }
 
+// Même chose que alerte(), avec en plus un bouton "Méthodologie" sous le calcul,
+// qui ouvre directement le bon fichier d'aide si le type d'horaire est connu (th/planType),
+// sinon propose les 4 choix.
 function alerteAvecMethodologie(msg,th,planType){
   const existing=document.getElementById('alerte-overlay');
   if(existing) existing.remove();
