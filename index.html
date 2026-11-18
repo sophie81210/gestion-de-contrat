@@ -10641,13 +10641,18 @@ function majFicheStatut(contratId,key,idx,val){
   if(_arretProDemande===true) ficheSource.fiches[key].jours[idx].arretPro=true;
   else if(_arretProDemande===false) delete ficheSource.fiches[key].jours[idx].arretPro;
   else if(val==='init') delete ficheSource.fiches[key].jours[idx].arretPro;
+  // 18/11/2026 : type d'horaires de la version en vigueur le jour modifié (contrat ou avenant), et non plus celui du
+  // contrat d'origine — un contrat passé par avenant de fixe/semaines types à planning min/var, ou l'inverse, était
+  // traité selon son ancien type (accord de Sophie le 18/11/2026).
+  const jourModS=ficheSource.fiches[key].jours[idx];
+  const srcJourModS=(jourModS&&jourModS.date)?getVersionActive(c,parseDateLoc(jourModS.date)):c;
+  const isPlanMinVarStatut=srcJourModS.th==='plan'&&(srcJourModS.planType==='min'||srcJourModS.planType==='var');
   // Pour plan min/var : réinitialiser aussi les heures prévues
-  if(val==='init'&&(c.th==='plan'&&(c.planType==='min'||c.planType==='var'))){
+  if(val==='init'&&isPlanMinVarStatut){
     ficheSource.fiches[key].jours[idx].heureDebPrev=null;
     ficheSource.fiches[key].jours[idx].heureFinPrev=null;
   }
   // Si on repasse en non-prévu ou repos, effacer les heures réelles
-  const isPlanMinVarStatut=c.th==='plan'&&(c.planType==='min'||c.planType==='var');
   const statutsEffacerHeures=['non-prevu','repos','ferie','ferie-non','init',
     ...(isPlanMinVarStatut?['abs-enfant','abs-non','abs-am']:['abs-enfant','abs-rem','abs-non','abs-am','arret']),
     'conges-acq','conges-non','conges-am','conges-anticipe'];
@@ -10919,7 +10924,9 @@ function majFiche(contratId,key,idx,champ,val){
     }
     const cellHpm=document.getElementById('hpm-'+contratId+'-'+key+'-'+idx);
     if(cellHpm){
-      const isPlanMinVar2=c.th==='plan'&&(c.planType==='min'||c.planType==='var');
+      // 18/11/2026 : version en vigueur ce jour-là, comme à l'ouverture de la feuille (plus le type du contrat d'origine).
+      const srcJ2=getVersionActive(c,parseDateLoc(j2.date));
+      const isPlanMinVar2=srcJ2.th==='plan'&&(srcJ2.planType==='min'||srcJ2.planType==='var');
       const statutsDeduits2=['abs-non','abs-am','ferie-non','arret','abs-enfant','abs-partielle','hors-contrat','conges-non','decompte-conges'];
       const afficherDeduit2=!isPlanMinVar2||statutsDeduits2.includes(statut2);
       const hDeduitAffiche2=afficherDeduit2?hDeduit2:'';
@@ -11214,9 +11221,15 @@ function validerFiche(contratId,key){
     return;
   }
   // Vérifier que l'agenda est pointé pour les contrats qui en ont besoin
-  if(c.tc!=='52'||c.th==='plan'||c.th==='sem'){
-    if(c.tc==='52'&&(c.th==='fixe'||c.th==='min')) {} // 52 fixe/min : pas d'agenda
-    else {
+  // 18/11/2026 : le besoin se lit sur les versions en vigueur dans le mois (contrat ou avenant du mois), et non plus sur
+  // le type du contrat d'origine — un contrat parti en 52 horaires fixes puis passé en 46 planning variable n'était
+  // jamais contrôlé (accord de Sophie le 18/11/2026).
+  const [kyBA,kmBA]=key.split('-').map(Number);
+  const avenantDuMoisBA=(c.avenants||[]).find(av=>avenantCoupant(av)&&av.dateAvenant.slice(0,7)===key);
+  const versionsMoisBA=avenantDuMoisBA?[getVersionActive(c,new Date(kyBA,kmBA-1,1)),getVersionActive(c,new Date(avenantDuMoisBA.dateAvenant))]
+    :[getVersionActive(c,new Date(kyBA,kmBA-1,1))];
+  if(versionsMoisBA.some(vBA=>vBA.tc!=='52'||vBA.th==='plan'||vBA.th==='sem')){
+    {
       const [ky,km]=key.split('-').map(Number);
       const debutMoisV=new Date(ky,km-1,1);
       const finMoisV=new Date(ky,km,0);
@@ -11267,10 +11280,14 @@ function validerFiche(contratId,key){
       }
     }
   }
-  if(c.th==='plan'&&(c.planType==='min'||c.planType==='var')){
+  // 18/11/2026 : jour par jour, d'après la version en vigueur ce jour-là, et non plus le type du contrat d'origine
+  // (accord de Sophie le 18/11/2026).
+  const estMinVarJourV=dV=>{ const sV=getVersionActive(c,parseDateLoc(dV)); return sV.th==='plan'&&(sV.planType==='min'||sV.planType==='var'); };
+  if(c.fiches[key].jours.some(jv=>jv.date&&estMinVarJourV(jv.date))){
     // Blocage si des jours cochés sur le planning n'ont pas d'heures
     const jourNonPlanifieV=c.fiches[key].jours.some(jv=>{
       if(!jv.date.startsWith(key)) return false;
+      if(!estMinVarJourV(jv.date)) return false;
       const infosV=getInfosJourPlanning(c,jv.date);
       if(!infosV.jourPossible||infosV.ferieChome) return false;
       const statutEffectifV=jv.statut||getStatutPrevu(c,jv);
@@ -11283,7 +11300,7 @@ function validerFiche(contratId,key){
       return;
     }
     // Blocage si heures prévues manquantes sur jours 'prevu'
-    const joursSansPrev=c.fiches[key].jours.filter(j=>j.statut==='prevu'&&(!j.heureDebPrev||!j.heureFinPrev));
+    const joursSansPrev=c.fiches[key].jours.filter(j=>j.statut==='prevu'&&(!j.heureDebPrev||!j.heureFinPrev)&&j.date&&estMinVarJourV(j.date));
     if(joursSansPrev.length>0){
       alerte(`${joursSansPrev.length} jour(s) "Prévu" sans heures saisies — veuillez renseigner les heures avant de valider.`);
       return;
