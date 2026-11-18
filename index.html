@@ -5285,133 +5285,10 @@ function quitterFicheSansEnregistrer(contratId,key){
   S.ficheModifiee=false;
   renderDetTab(contratId,'presence');
 }
-function ouvrirFiche(contratId,key){
-  const c=S.contrats.find(x=>x.id==contratId);
-  if(!c)return;
-  // _regulDiffEuros n'est lu qu'au mois d'un passage vers un 52 sans clause (estPassageRegulSoldeRecap, 4 lecteurs) ;
-  // le calcul, lourd, n'est donc lancé que pour un contrat qui a un avenant signé en 52. Historique (17/08/2026) : L'ancienne condition ("c.tc!=='52'" OU avenant 52) se déclenchait pour la quasi-totalité
-  // des contrats 46, avenant 52 ou pas, faisant tourner ce calcul lourd (parcourt tout l'historique,
-  // rappelle calcRecapFiche/calcIndemniteConges en boucle) sans que son résultat soit jamais affiché.
-  // Repéré via un profil de performance (un contrat réel : aucun avenant en 52, plusieurs secondes à chaque
-  // ouverture de feuille pour un calcul dont le résultat n'était lu nulle part).
-  if((c.avenants||[]).some(av=>av.signe&&av.tc==='52')){
-    calcRegulDiffEurosAuto(c,undefined,key);
-  } else {
-    c._regulDiffEuros=0;
-  }
-  // Créer les fiches si nécessaire
-  if(!c.fiches) c.fiches={};
-  if(!c.fiches[key]){
-    const [annee,moisStr]=key.split('-');
-    c.fiches[key]=creerFiche(c,parseInt(annee),parseInt(moisStr)-1);
-    const cidxTmp=S.contrats.findIndex(x=>x.id==contratId);
-    if(cidxTmp!==-1) S.contrats[cidxTmp]=c;
-    localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
-  }
-  // 29/07/2026 (correctif Sophie) : recalculer aussi à l'ouverture d'une fiche déjà EXISTANTE
-  // (pas seulement nouvellement créée, ci-dessus) — sinon l'affichage congés (dont le statut
-  // anticipé) restait figé sur son dernier calcul tant que rien d'autre (comme décocher/recocher
-  // "prise en anticipé") ne le redéclenchait explicitement. Limité aux contrats concernés par
-  // l'anticipé pour éviter le coût du recalcul sur tous les contrats à chaque ouverture de fiche.
-  if(S.congesAM&&anticipeAutoriseMois(c,key)){
-    const anneeAmOf2=getAnneeAmPourDate(key);
-    if(S.congesAM[anneeAmOf2]) majFichesCgAm(anneeAmOf2,false);
-  }
-  if(!c.fiches[key])return;
-  const fiche=c.fiches[key];
-  // 29/07/2026 (correctif Sophie) : instantané de anticipeActif au premier affichage de cette fiche
-  // dans cette session — jamais écrasé tant qu'un vrai enregistrement n'a pas eu lieu (voir
-  // enregistrerFiche/validerFiche), pour pouvoir restaurer la valeur si l'utilisateur quitte sans
-  // enregistrer malgré l'avertissement (voir le bouton "← Retour").
-  if(fiche._anticipeActifSauvegarde===undefined) fiche._anticipeActifSauvegarde=fiche.anticipeActif||false;
-  // Vérifier que l'agenda est complet à l'ouverture (contrats avec agenda, non validés)
-  if(!fiche.valide&&(c.tc!=='52'||c.th==='plan'||c.th==='sem')&&!(c.tc==='52'&&(c.th==='fixe'||c.planType==='min'))){
-    const [ky,km]=key.split('-').map(Number);
-    const debutMoisV=new Date(ky,km-1,1);
-    const finMoisV=new Date(ky,km,0);
-    // Vérifier les agendas des deux versions si avenant dans ce mois
-    const avenantDuMoisV2=(c.avenants||[]).find(av=>avenantCoupant(av)&&av.dateAvenant.slice(0,7)===key);
-    const versionsV=avenantDuMoisV2?
-      [getVersionActive(c,debutMoisV), getVersionActive(c,new Date(avenantDuMoisV2.dateAvenant))]:
-      [getVersionActive(c,debutMoisV)];
-    const tousAgendasV=[...new Set(versionsV.flatMap(sv=>(sv.agendas||c.agendas||[])))];
-    if(tousAgendasV.length){
-      // 01/09/2026 (Sophie) : jours après la fin de contrat (rupture confirmée) exclus au même titre
-      // que les jours avant dateDeb — indépendamment de j.statut (peut être resté à son ancienne
-      // valeur si le jour existait avant la rupture) ou de l'état du planning (décoché par
-      // confirmerRuptureSuite pour d'autres besoins, régularisation/enveloppe).
-      const dateFinContratV=getDateFinContrat(c);
-      const dateFinContratVStr=dateFinContratV?(dateFinContratV.getFullYear()+'-'+String(dateFinContratV.getMonth()+1).padStart(2,'0')+'-'+String(dateFinContratV.getDate()).padStart(2,'0')):null;
-      const semDuMois=[...new Set(fiche.jours.map(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))))];
-      const semDuMoisFiltrees=semDuMois.filter(sk=>{
-        return fiche.jours.some(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))===sk&&
-          j.date.startsWith(key.slice(0,7))&&
-          new Date(j.date).getDay()!==(c.reposHebdo||0)&&
-          new Date(j.date).getDay()!==0&&
-          !(c.dateDeb&&j.date<c.dateDeb)&& // hors contrat : rien à pointer
-          !(dateFinContratVStr&&j.date>dateFinContratVStr)&&
-          j.statut!=='hors-contrat');
-      });
-      // Inclure les jours du mois adjacent pour les semaines à cheval, sinon leur score de congés est
-      // sous-évalué (seule la portion de la semaine dans CE mois est comptée) et une vraie semaine de
-      // congés à cheval n'est pas reconnue comme telle, déclenchant l'avertissement à tort
-      const [kyAdj,kmAdj]=key.split('-').map(Number);
-      const moisPrecKeyV=kmAdj===1?(kyAdj-1)+'-12':kyAdj+'-'+String(kmAdj-1).padStart(2,'0');
-      const moisSuivKeyV=kmAdj===12?(kyAdj+1)+'-01':kyAdj+'-'+String(kmAdj+1).padStart(2,'0');
-      const joursAdjacentsV=[
-        ...((c.fiches&&c.fiches[moisPrecKeyV]&&c.fiches[moisPrecKeyV].jours)||[]),
-        ...((c.fiches&&c.fiches[moisSuivKeyV]&&c.fiches[moisSuivKeyV].jours)||[])
-      ];
-      // 07/09/2026 (Sophie) : même règle qu'ailleurs — semaine entièrement en congés si tous ses jours
-      // du lundi au samedi sont posés ou fériés. Cet endroit réécrivait son propre classement.
-      const semsViolettes=new Set(semDuMoisFiltrees.filter(sk=>{
-        const jSemV=[...fiche.jours,...joursAdjacentsV].find(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))===sk);
-        return jSemV?estSemaineToutEnConges(jSemV.date):false;
-      }));
-      // Vérifier chaque semaine contre l'agenda qui la couvre réellement (pas un seul agenda pour tout
-      // le mois — un mois peut désormais être à cheval entre deux cycles d'agenda à l'anniversaire)
-      // 07/09/2026 (Sophie) : les semaines de congés étaient exemptées quel que soit le contrat. Sur un
-      // contrat de 52 semaines elles doivent être pointées comme les autres — le décompte des congés et
-      // la déduction des congés non acquis se calculent d'après le type pointé. La popup ne se
-      // déclenchait donc pas, alors que la validation, elle, refusait bien : deux détections
-      // différentes pour la même question. Celle-ci reprend la règle de moisSansAgendaRegul, qui sert
-      // au refus à la validation et à l'avertissement du simulateur de rupture.
-      const est52PourAgendaV=(getVersionActive(c,new Date(ky,km-1,1)).tc||c.tc)==='52'
-        ||(getVersionActive(c,new Date(ky,km,0)).tc||c.tc)==='52';
-      // 09/09/2026 (Sophie : « je n'ai pas l'avertissement à l'ouverture mais je ne peux pas valider ») :
-      // ce contrôle refaisait sa propre détection, différente de celle de la validation. Il prenait la
-      // version du PREMIER jour de chaque semaine présent dans la feuille — sur un mois d'avenant, ce
-      // jour relève souvent de la version d'avant, exemptée, alors que la fin de la semaine relève de
-      // la nouvelle. La semaine était donc exemptée en bloc à l'ouverture et réclamée à la validation,
-      // qui examine chaque jour. Les deux contrôles appellent désormais la MÊME fonction.
-      const semNonPointee=moisSansAgendaRegul(c,key);
-      if(semNonPointee){
-        // 07/09/2026 (Sophie) : le message passait par un toast, qui disparaît tout seul et se rate
-        // facilement — la feuille est longue, on est souvent en bas quand il s'affiche en haut.
-        // Alerte à fermer à la place : on l'a forcément vue. Court à dessein, les messages longs ne
-        // sont pas lus ; le pourquoi est dans les notices.
-        setTimeout(()=>alerte('⚠ <strong>Agenda incomplet</strong><br><br>Certaines semaines de ce mois ne sont pas pointées sur l’agenda (en bas de l’onglet « Contrat »). La feuille n\'est pas prête et ne pourra pas être validée.'),300);
-      } else {
-        // Agenda complet : vérifier que le planning couvre bien les jours possibles du mois
-        const srcPlanW=getVersionActive(c,debutMoisV);
-        const isPlanMinVarW=srcPlanW.th==='plan'&&(srcPlanW.planType==='min'||srcPlanW.planType==='var');
-        if(isPlanMinVarW){
-          const jourNonPlanifie=fiche.jours.some(jw=>{
-            if(!jw.date.startsWith(key)) return false;
-            const infosW=getInfosJourPlanning(c,jw.date);
-            if(!infosW.jourPossible||infosW.ferieChome) return false;
-            const statutEffectifW=jw.statut||getStatutPrevu(c,jw);
-            if(['conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','arret','abs-non','abs-am','abs-enfant'].includes(statutEffectifW)) return false;
-            const pw=(c.planning||{})[jw.date];
-            return !!(pw&&pw.coche&&!(pw.d&&pw.f));
-          });
-          if(jourNonPlanifie){
-            setTimeout(()=>toast('⚠ Planning incomplet — des jours cochés n\u2019ont pas d\u2019heures prévues'),300);
-          }
-        }
-      }
-    }
-  }
+// 18/11/2026 : mise à jour des jours d'une feuille à son ouverture (heures prévues d'après l'agenda et le planning,
+// jours hors contrat, jours après la fin d'une rupture confirmée ou le terme d'un CDD). Bloc sorti tel quel de
+// ouvrirFiche, pour servir aussi aux feuilles projetées de l'estimation de rupture (preparerFeuillesProjetees).
+function synchroniserJoursFiche(c,key,fiche){
   // Recalculer les heures prévues depuis l'agenda (au cas où l'agenda a été modifié)
   fiche.jours.forEach(j=>{
     // 11/08/2026 (Sophie) : un jour en statut congés/absence ne devrait jamais garder d'heures
@@ -5655,6 +5532,136 @@ function ouvrirFiche(contratId,key){
       }
     }
   }
+}
+
+function ouvrirFiche(contratId,key){
+  const c=S.contrats.find(x=>x.id==contratId);
+  if(!c)return;
+  // _regulDiffEuros n'est lu qu'au mois d'un passage vers un 52 sans clause (estPassageRegulSoldeRecap, 4 lecteurs) ;
+  // le calcul, lourd, n'est donc lancé que pour un contrat qui a un avenant signé en 52. Historique (17/08/2026) : L'ancienne condition ("c.tc!=='52'" OU avenant 52) se déclenchait pour la quasi-totalité
+  // des contrats 46, avenant 52 ou pas, faisant tourner ce calcul lourd (parcourt tout l'historique,
+  // rappelle calcRecapFiche/calcIndemniteConges en boucle) sans que son résultat soit jamais affiché.
+  // Repéré via un profil de performance (un contrat réel : aucun avenant en 52, plusieurs secondes à chaque
+  // ouverture de feuille pour un calcul dont le résultat n'était lu nulle part).
+  if((c.avenants||[]).some(av=>av.signe&&av.tc==='52')){
+    calcRegulDiffEurosAuto(c,undefined,key);
+  } else {
+    c._regulDiffEuros=0;
+  }
+  // Créer les fiches si nécessaire
+  if(!c.fiches) c.fiches={};
+  if(!c.fiches[key]){
+    const [annee,moisStr]=key.split('-');
+    c.fiches[key]=creerFiche(c,parseInt(annee),parseInt(moisStr)-1);
+    const cidxTmp=S.contrats.findIndex(x=>x.id==contratId);
+    if(cidxTmp!==-1) S.contrats[cidxTmp]=c;
+    localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
+  }
+  // 29/07/2026 (correctif Sophie) : recalculer aussi à l'ouverture d'une fiche déjà EXISTANTE
+  // (pas seulement nouvellement créée, ci-dessus) — sinon l'affichage congés (dont le statut
+  // anticipé) restait figé sur son dernier calcul tant que rien d'autre (comme décocher/recocher
+  // "prise en anticipé") ne le redéclenchait explicitement. Limité aux contrats concernés par
+  // l'anticipé pour éviter le coût du recalcul sur tous les contrats à chaque ouverture de fiche.
+  if(S.congesAM&&anticipeAutoriseMois(c,key)){
+    const anneeAmOf2=getAnneeAmPourDate(key);
+    if(S.congesAM[anneeAmOf2]) majFichesCgAm(anneeAmOf2,false);
+  }
+  if(!c.fiches[key])return;
+  const fiche=c.fiches[key];
+  // 29/07/2026 (correctif Sophie) : instantané de anticipeActif au premier affichage de cette fiche
+  // dans cette session — jamais écrasé tant qu'un vrai enregistrement n'a pas eu lieu (voir
+  // enregistrerFiche/validerFiche), pour pouvoir restaurer la valeur si l'utilisateur quitte sans
+  // enregistrer malgré l'avertissement (voir le bouton "← Retour").
+  if(fiche._anticipeActifSauvegarde===undefined) fiche._anticipeActifSauvegarde=fiche.anticipeActif||false;
+  // Vérifier que l'agenda est complet à l'ouverture (contrats avec agenda, non validés)
+  if(!fiche.valide&&(c.tc!=='52'||c.th==='plan'||c.th==='sem')&&!(c.tc==='52'&&(c.th==='fixe'||c.planType==='min'))){
+    const [ky,km]=key.split('-').map(Number);
+    const debutMoisV=new Date(ky,km-1,1);
+    const finMoisV=new Date(ky,km,0);
+    // Vérifier les agendas des deux versions si avenant dans ce mois
+    const avenantDuMoisV2=(c.avenants||[]).find(av=>avenantCoupant(av)&&av.dateAvenant.slice(0,7)===key);
+    const versionsV=avenantDuMoisV2?
+      [getVersionActive(c,debutMoisV), getVersionActive(c,new Date(avenantDuMoisV2.dateAvenant))]:
+      [getVersionActive(c,debutMoisV)];
+    const tousAgendasV=[...new Set(versionsV.flatMap(sv=>(sv.agendas||c.agendas||[])))];
+    if(tousAgendasV.length){
+      // 01/09/2026 (Sophie) : jours après la fin de contrat (rupture confirmée) exclus au même titre
+      // que les jours avant dateDeb — indépendamment de j.statut (peut être resté à son ancienne
+      // valeur si le jour existait avant la rupture) ou de l'état du planning (décoché par
+      // confirmerRuptureSuite pour d'autres besoins, régularisation/enveloppe).
+      const dateFinContratV=getDateFinContrat(c);
+      const dateFinContratVStr=dateFinContratV?(dateFinContratV.getFullYear()+'-'+String(dateFinContratV.getMonth()+1).padStart(2,'0')+'-'+String(dateFinContratV.getDate()).padStart(2,'0')):null;
+      const semDuMois=[...new Set(fiche.jours.map(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))))];
+      const semDuMoisFiltrees=semDuMois.filter(sk=>{
+        return fiche.jours.some(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))===sk&&
+          j.date.startsWith(key.slice(0,7))&&
+          new Date(j.date).getDay()!==(c.reposHebdo||0)&&
+          new Date(j.date).getDay()!==0&&
+          !(c.dateDeb&&j.date<c.dateDeb)&& // hors contrat : rien à pointer
+          !(dateFinContratVStr&&j.date>dateFinContratVStr)&&
+          j.statut!=='hors-contrat');
+      });
+      // Inclure les jours du mois adjacent pour les semaines à cheval, sinon leur score de congés est
+      // sous-évalué (seule la portion de la semaine dans CE mois est comptée) et une vraie semaine de
+      // congés à cheval n'est pas reconnue comme telle, déclenchant l'avertissement à tort
+      const [kyAdj,kmAdj]=key.split('-').map(Number);
+      const moisPrecKeyV=kmAdj===1?(kyAdj-1)+'-12':kyAdj+'-'+String(kmAdj-1).padStart(2,'0');
+      const moisSuivKeyV=kmAdj===12?(kyAdj+1)+'-01':kyAdj+'-'+String(kmAdj+1).padStart(2,'0');
+      const joursAdjacentsV=[
+        ...((c.fiches&&c.fiches[moisPrecKeyV]&&c.fiches[moisPrecKeyV].jours)||[]),
+        ...((c.fiches&&c.fiches[moisSuivKeyV]&&c.fiches[moisSuivKeyV].jours)||[])
+      ];
+      // 07/09/2026 (Sophie) : même règle qu'ailleurs — semaine entièrement en congés si tous ses jours
+      // du lundi au samedi sont posés ou fériés. Cet endroit réécrivait son propre classement.
+      const semsViolettes=new Set(semDuMoisFiltrees.filter(sk=>{
+        const jSemV=[...fiche.jours,...joursAdjacentsV].find(j=>getKeyAgenda(getSemISO(j.date),getSemAnnee(j.date))===sk);
+        return jSemV?estSemaineToutEnConges(jSemV.date):false;
+      }));
+      // Vérifier chaque semaine contre l'agenda qui la couvre réellement (pas un seul agenda pour tout
+      // le mois — un mois peut désormais être à cheval entre deux cycles d'agenda à l'anniversaire)
+      // 07/09/2026 (Sophie) : les semaines de congés étaient exemptées quel que soit le contrat. Sur un
+      // contrat de 52 semaines elles doivent être pointées comme les autres — le décompte des congés et
+      // la déduction des congés non acquis se calculent d'après le type pointé. La popup ne se
+      // déclenchait donc pas, alors que la validation, elle, refusait bien : deux détections
+      // différentes pour la même question. Celle-ci reprend la règle de moisSansAgendaRegul, qui sert
+      // au refus à la validation et à l'avertissement du simulateur de rupture.
+      const est52PourAgendaV=(getVersionActive(c,new Date(ky,km-1,1)).tc||c.tc)==='52'
+        ||(getVersionActive(c,new Date(ky,km,0)).tc||c.tc)==='52';
+      // 09/09/2026 (Sophie : « je n'ai pas l'avertissement à l'ouverture mais je ne peux pas valider ») :
+      // ce contrôle refaisait sa propre détection, différente de celle de la validation. Il prenait la
+      // version du PREMIER jour de chaque semaine présent dans la feuille — sur un mois d'avenant, ce
+      // jour relève souvent de la version d'avant, exemptée, alors que la fin de la semaine relève de
+      // la nouvelle. La semaine était donc exemptée en bloc à l'ouverture et réclamée à la validation,
+      // qui examine chaque jour. Les deux contrôles appellent désormais la MÊME fonction.
+      const semNonPointee=moisSansAgendaRegul(c,key);
+      if(semNonPointee){
+        // 07/09/2026 (Sophie) : le message passait par un toast, qui disparaît tout seul et se rate
+        // facilement — la feuille est longue, on est souvent en bas quand il s'affiche en haut.
+        // Alerte à fermer à la place : on l'a forcément vue. Court à dessein, les messages longs ne
+        // sont pas lus ; le pourquoi est dans les notices.
+        setTimeout(()=>alerte('⚠ <strong>Agenda incomplet</strong><br><br>Certaines semaines de ce mois ne sont pas pointées sur l’agenda (en bas de l’onglet « Contrat »). La feuille n\'est pas prête et ne pourra pas être validée.'),300);
+      } else {
+        // Agenda complet : vérifier que le planning couvre bien les jours possibles du mois
+        const srcPlanW=getVersionActive(c,debutMoisV);
+        const isPlanMinVarW=srcPlanW.th==='plan'&&(srcPlanW.planType==='min'||srcPlanW.planType==='var');
+        if(isPlanMinVarW){
+          const jourNonPlanifie=fiche.jours.some(jw=>{
+            if(!jw.date.startsWith(key)) return false;
+            const infosW=getInfosJourPlanning(c,jw.date);
+            if(!infosW.jourPossible||infosW.ferieChome) return false;
+            const statutEffectifW=jw.statut||getStatutPrevu(c,jw);
+            if(['conges-acq','conges-non','conges-anticipe','conges-am','decompte-acq','decompte-anticipe','decompte-conges','arret','abs-non','abs-am','abs-enfant'].includes(statutEffectifW)) return false;
+            const pw=(c.planning||{})[jw.date];
+            return !!(pw&&pw.coche&&!(pw.d&&pw.f));
+          });
+          if(jourNonPlanifie){
+            setTimeout(()=>toast('⚠ Planning incomplet — des jours cochés n\u2019ont pas d\u2019heures prévues'),300);
+          }
+        }
+      }
+    }
+  }
+  synchroniserJoursFiche(c,key,fiche);
   const [annee,moisStr]=key.split('-');
   const mois=parseInt(moisStr)-1;
   const label=MOIS[mois]+' '+annee;
@@ -21126,6 +21133,107 @@ function joursHorsAnciennete(c,dateDebStr,dateFinStr){
   }
   return total;
 }
+// 18/11/2026 : feuilles projetées de l'estimation du solde de tout compte (onglet Rupture) — demandé par Sophie le
+// 18/11/2026 : l'estimation calcule comme si toutes les feuilles jusqu'à la date de fin simulée étaient validées.
+// Tout se fait sur une COPIE de tous les contrats (les congés de l'assistante maternelle se répartissent entre eux),
+// jamais enregistrée. Mois par mois, dans l'ordre, comme le ferait l'utilisatrice : feuille fabriquée si elle
+// n'existe pas (creerFiche), mise à jour de ses jours comme à l'ouverture (synchroniserJoursFiche : agenda,
+// planning, jours après la fin), congés posés d'après le calendrier puis feuille validée et congés recalculés,
+// comme validerFiche. Une feuille déjà remplie compte avec ses heures saisies ; un mois sans planning compte la
+// mensualisation du contrat. La date de fin simulée est traitée comme une rupture confirmée (jours suivants hors
+// contrat). Renvoie null s'il n'y a rien à projeter, sinon un objet dont executer(fn) appelle fn(copie du contrat)
+// avec S.contrats remplacé par les copies le temps du calcul.
+// Le calcul prend plusieurs secondes : il est gardé en mémoire et n'est refait que si la date de fin ou une donnée
+// (contrats, calendrier de congés, paramètres) a changé — hors valeurs de calcul gardées en mémoire (champs « _ »).
+let _cacheFeuillesProjetees=null;
+function cleFeuillesProjetees(c, dateFin){
+  return c.id+'|'+dateToStr(dateFin)+'|'+JSON.stringify({c:S.contrats,a:S.congesAM,p:S.params},(k,v)=>(k&&k[0]==='_')?undefined:v);
+}
+// Mois non validés du début du contrat au mois de la date de fin : ceux que l'estimation projette.
+function moisFeuillesAProjeter(c, dateFin){
+  const moisFin=dateToStr(dateFin).slice(0,7);
+  const moisAP=[];
+  for(let d=new Date(+c.dateDeb.slice(0,4),+c.dateDeb.slice(5,7)-1,1);;d.setMonth(d.getMonth()+1)){
+    const k=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+    if(k>moisFin) break;
+    if(!(c.fiches&&c.fiches[k]&&c.fiches[k].valide)) moisAP.push(k);
+  }
+  return moisAP;
+}
+// 18/11/2026 : vrai si l'onglet Rupture va devoir refaire ce calcul (plusieurs secondes) — renderRupture affiche
+// alors « Calcul en cours... » avant de le lancer, comme l'onglet Régularisation (demandé par Sophie le 18/11/2026).
+function feuillesProjeteesACalculer(c){
+  if(!c||c.typeDuree==='cdd'||!c.dateDeb) return false;
+  if(!((c._ruptureTemp||c.rupture||{}).motif)||!getDateSituationAu(c)) return false;
+  const dateFin=calcDateFinContratBrute(c);
+  if(!dateFin||!moisFeuillesAProjeter(c,dateFin).length) return false;
+  return !(_cacheFeuillesProjetees&&_cacheFeuillesProjetees.cle===cleFeuillesProjetees(c,dateFin));
+}
+function preparerFeuillesProjetees(c, dateFin){
+  if(!c||!dateFin||!c.dateDeb) return null;
+  const cleProj=cleFeuillesProjetees(c,dateFin);
+  if(_cacheFeuillesProjetees&&_cacheFeuillesProjetees.cle===cleProj) return _cacheFeuillesProjetees.resultat;
+  const resultatProj=preparerFeuillesProjeteesCalcul(c,dateFin);
+  _cacheFeuillesProjetees={cle:cleProj,resultat:resultatProj};
+  return resultatProj;
+}
+function preparerFeuillesProjeteesCalcul(c, dateFin){
+  const moisFin=dateToStr(dateFin).slice(0,7);
+  const moisAProjeter=moisFeuillesAProjeter(c,dateFin);
+  if(!moisAProjeter.length) return null;
+  const contratsReels=S.contrats;
+  const copies=typeof structuredClone==='function'?structuredClone(contratsReels):JSON.parse(JSON.stringify(contratsReels));
+  const cP=copies.find(x=>x.id==c.id);
+  if(!cP) return null;
+  // La mise à jour des congés (majFichesCgAmPasse) réécrit à chaque passage la copie locale des contrats
+  // (localStorage 'cam_c') : bloquée le temps du calcul, pour que les feuilles projetées n'y entrent jamais.
+  const lsP=typeof localStorage!=='undefined'?localStorage:null;
+  const cibleSetItem=lsP?((typeof Storage!=='undefined'&&lsP instanceof Storage)?Storage.prototype:lsP):null;
+  const executer=fn=>{
+    const setItemReel=cibleSetItem&&cibleSetItem.setItem;
+    if(setItemReel) cibleSetItem.setItem=function(k,v){ if(k==='cam_c') return; return setItemReel.call(this,k,v); };
+    S.contrats=copies;
+    try{ return fn(cP); } finally{ S.contrats=contratsReels; if(setItemReel) cibleSetItem.setItem=setItemReel; }
+  };
+  // Une année de congés n'est remise à jour que s'il reste, dans sa période (1er mai → 30 avril), une feuille
+  // projetée pas encore validée : sinon elle ne changerait plus rien à ce contrat (gain de temps). Deux passes la
+  // première fois, comme majFichesCgAm ; ensuite une seule suffit, la passe du mois précédent tenant lieu de
+  // première (même résultat mesuré qu'avec deux passes à chaque mois, en deux fois moins de temps).
+  const anneesDejaMaj=new Set();
+  const majCongesCopie=(anneeAm,moisRestants)=>{
+    if(!(S.congesAM&&S.congesAM[anneeAm])) return;
+    if(!moisRestants.some(k=>k>=anneeAm+'-05'&&k<=(anneeAm+1)+'-04')) return;
+    effacerCochesSemainesCongesAM(); majFichesCgAmPasse(anneeAm,false);
+    if(!anneesDejaMaj.has(anneeAm)){ majFichesCgAmPasse(anneeAm,false); anneesDejaMaj.add(anneeAm); }
+  };
+  executer(()=>{
+    // Rupture confirmée à la date simulée (confirmerRuptureSuite) : planning du dernier mois décoché après la fin
+    cP.rupture=Object.assign({},cP.rupture||{},{confirmee:true});
+    delete cP._dateFinContratCache;
+    const finStr=dateToStr(dateFin);
+    Object.keys(cP.planning||{}).forEach(dt=>{
+      if(dt.slice(0,7)===moisFin&&dt>finStr&&cP.planning[dt]&&cP.planning[dt].coche) cP.planning[dt].coche=false;
+    });
+    cP.fiches=cP.fiches||{};
+    Object.keys(cP.fiches).forEach(k=>{ if(k>moisFin&&!cP.fiches[k].valide) delete cP.fiches[k]; });
+    moisAProjeter.forEach((k,iP)=>{
+      if(!cP.fiches[k]) cP.fiches[k]=creerFiche(cP,+k.slice(0,4),+k.slice(5,7)-1);
+      const f=cP.fiches[k];
+      delete f._recapCache; delete f._recapCacheAvant; delete f._recapCacheApres;
+      synchroniserJoursFiche(cP,k,f);
+      const anneeAm=getAnneeAmPourDate(k);
+      const moisRestants=moisAProjeter.slice(iP);
+      majCongesCopie(anneeAm,moisRestants); majCongesCopie(anneeAm+1,moisRestants);
+      f.valide=true; f.complete=true;
+      f._anticipeActifSauvegarde=f.anticipeActif||false;
+      calcCongesContrat(cP);
+    });
+    Object.values(cP.fiches).forEach(f=>{ delete f._recapCache; delete f._recapCacheAvant; delete f._recapCacheApres; });
+    calcCongesContrat(cP);
+  });
+  return {executer, moisAProjeter};
+}
+
 function calcIndemniteRupture(c, dateFin, indemCongesBrut=0, regulBrut=0){
   // 21/09/2026 (Sophie, ligne 50) : fratrie — l'ancienneté de 9 mois se compte depuis le début du contrat du premier
   // enfant de la famille ; le montant reste calculé sur les seuls salaires de ce contrat.
@@ -21906,8 +22014,18 @@ function renderRuptureCDD(c, cont){
   }
 }
 
-function renderRupture(c, cont){
+function renderRupture(c, cont, calculLance){
   if(!cont) return;
+  // 18/11/2026 : estimation à recalculer (feuilles projetées, plusieurs secondes) : « Calcul en cours... » dans la
+  // carte de l'estimation (ou à la place de l'onglet à la première ouverture), puis calcul juste après, le temps
+  // que le message s'affiche. Rien n'est redessiné si le message n'est plus affiché (onglet quitté entre-temps).
+  if(!calculLance&&feuillesProjeteesACalculer(c)){
+    const msgCalcul='<div data-calcul-rupture="1" style="text-align:center;padding:30px;color:var(--tx2)">⏳ Calcul en cours...</div>';
+    const carteEstim=cont.querySelector?cont.querySelector('[data-estimation-rupture]'):null;
+    if(carteEstim) carteEstim.innerHTML=msgCalcul; else cont.innerHTML='<div class="card">'+msgCalcul+'</div>';
+    setTimeout(()=>{ if(cont.querySelector&&cont.querySelector('[data-calcul-rupture]')) renderRupture(c,cont,true); },50);
+    return;
+  }
 
   // CDD : branche séparée
   if(c.typeDuree==='cdd') return renderRuptureCDD(c, cont);
@@ -22220,14 +22338,19 @@ function renderRupture(c, cont){
     // 18/11/2026 : congés et régularisation retenus pour la base de l'indemnité de rupture, comme dans le vrai
     // solde de tout compte (calcSoldeToutCompte) — demandé par Sophie le 18/11/2026.
     let cgBaseIrSimBrut=0, regulBaseIrSimBrut=0;
+    // 18/11/2026 : congés et indemnité de rupture calculés comme si les feuilles jusqu'à la date de fin simulée étaient
+    // validées (preparerFeuillesProjetees) — demandé par Sophie le 18/11/2026. La régularisation et le préavis restent
+    // calculés sur le contrat lui-même, comme avant.
+    const projSim=dateFinContrat?preparerFeuillesProjetees(c,dateFinContrat):null;
+    const avecProjSim=fnP=>projSim?projSim.executer(fnP):fnP(c);
     if(srcActifSim.tc==='52'){
-      const s=calcSoldeConges52(c,dateFinContrat||dateSit);
+      const s=avecProjSim(cX=>calcSoldeConges52(cX,dateFinContrat||dateSit));
       cgBaseIrSimBrut=(s.montantAcquisBrut||0)+(s.montantEnCoursBrut||0);
       if(s.montantAcquisBrut>0){lignes.push({label:'Solde congés acquis',net:s.montantAcquisNet,brut:s.montantAcquisBrut});totalNet+=s.montantAcquisNet;totalBrut+=s.montantAcquisBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
       if(s.montantFracRupture>0){lignes.push({label:'Jours de fractionnement non pris ('+s.joursFracRestants+' j)',net:s.montantFracRupture,brut:s.montantFracRuptureBrut});totalNet+=s.montantFracRupture;totalBrut+=s.montantFracRuptureBrut;}
     } else {
-      const s=calcSoldeConges46(c,dateFinContrat||dateSit);
+      const s=avecProjSim(cX=>calcSoldeConges46(cX,dateFinContrat||dateSit));
       cgBaseIrSimBrut=(s.montantNonVersesBrut||0)+(s.montantEnCoursBrut||0);
       if(s.montantNonVersesBrut>0){lignes.push({label:'Congés acquis non versés',net:s.montantNonVersesNet,brut:s.montantNonVersesBrut});totalNet+=s.montantNonVersesNet;totalBrut+=s.montantNonVersesBrut;}
       if(s.montantEnCoursBrut>0){lignes.push({label:'Congés en cours',net:s.montantEnCoursNet,brut:s.montantEnCoursBrut});totalNet+=s.montantEnCoursNet;totalBrut+=s.montantEnCoursBrut;}
@@ -22328,7 +22451,7 @@ function renderRupture(c, cont){
       // 18/11/2026 : base du 1/80ème = salaires bruts versés + congés (acquis non versés et en cours) + régularisation,
       // comme le solde de tout compte. Avant, les congés n'y entraient pas, et la régularisation seulement sous le
       // libellé « Régularisation définitive » — jamais quand elle était projetée (« Régularisation estimée au … »).
-      const ir=calcIndemniteRupture(c,dateFinContrat,cgBaseIrSimBrut,regulBaseIrSimBrut);
+      const ir=avecProjSim(cX=>calcIndemniteRupture(cX,dateFinContrat,cgBaseIrSimBrut,regulBaseIrSimBrut));
       if(ir){
         // Indemnité de rupture : brut uniquement (non soumise à cotisations)
         lignes.push({label:'Indemnité de rupture (1/80ème)',brut:ir.montantBrut,brutSeulement:true});
@@ -22336,8 +22459,30 @@ function renderRupture(c, cont){
       }
     }
 
+    // 18/11/2026 : avertissements des feuilles projetées (demandés par Sophie le 18/11/2026). Agenda : même contrôle
+    // que la validation d'une feuille (moisSansAgendaRegul, sur la copie dont la rupture est confirmée à la date
+    // simulée) ; pas répété si l'avertissement de la régularisation, ci-dessus, le donne déjà. Calendrier de congés :
+    // année Ass'Mat (1er mai → 30 avril) sans aucun jour posé.
+    if(projSim){
+      const moisProjAv=projSim.moisAProjeter||[];
+      const libMoisAv=kA=>{const [ayA,amA]=kA.split('-').map(Number);return new Date(ayA,amA-1,1).toLocaleDateString('fr-FR',{month:'long',year:'numeric'});};
+      if(!avertAgendaSimHtml.includes('Agenda non pointé')){
+        const moisSansAgP=projSim.executer(cP=>moisProjAv.filter(kA=>moisSansAgendaRegul(cP,kA)));
+        if(moisSansAgP.length){
+          const listeAgP=moisSansAgP.slice(0,8).map(libMoisAv).join(', ')+(moisSansAgP.length>8?', …':'');
+          avertAgendaSimHtml+=`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin:8px 0;font-size:12px;color:#856404">⚠ Agenda non pointé sur certaines semaines jusqu’à la fin de contrat : <strong>${listeAgP}</strong>.<br>Les semaines d’absence de l’employeur n’y sont pas connues, l’estimation des congés et de la régularisation peut être fausse. Complétez l’agenda depuis l’onglet Contrat.</div>`;
+        }
+      }
+      const anneeAmMois=kA=>{const [ayA,amA]=kA.split('-').map(Number);return amA>=5?ayA:ayA-1;};
+      const anneeCgVide=moisProjAv.map(anneeAmMois).find(aA=>!(S.congesAM&&S.congesAM[aA]&&Object.values(S.congesAM[aA].jours||{}).some(v=>v==='pose')));
+      if(anneeCgVide!==undefined){
+        const debutVide=new Date(anneeCgVide,4,1);
+        const depuisCg=(c.dateDeb&&new Date(c.dateDeb)>debutVide)?new Date(c.dateDeb):debutVide;
+        avertAgendaSimHtml+=`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin:8px 0;font-size:12px;color:#856404">⚠ Calendrier de congés non rempli à partir du ${depuisCg.toLocaleDateString('fr-FR')} : aucun congé n’est compté comme pris après cette date, les congés dus sont donc surestimés.</div>`;
+      }
+    }
     const dateRef=dateFinContrat?dateFinContrat.toLocaleDateString('fr-FR'):dateSitStr;
-    soldeHtml=`<div class="card" style="margin-bottom:10px;background:var(--mp)">
+    soldeHtml=`<div class="card" data-estimation-rupture="1" style="margin-bottom:10px;background:var(--mp)">
       <div class="ctitle">Estimation du solde de tout compte au ${dateRef}</div>
       ${avertAgendaSimHtml}
       ${lignes.map(l=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid var(--mb)">
