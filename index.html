@@ -4517,6 +4517,24 @@ function semaineEntierementEnArret(c,dateStr){
   }
   return arretsSe>0&&autresSe===0;
 }
+// 19/11/2026 : la semaine de ce jour a-t-elle un jour en arrêt avant lui ET un après lui ? Sert à la règle du férié
+// (règle DREETS, décision de Sophie le 19/11/2026) : seul un arrêt qui englobe le férié le fait perdre. Mêmes jours
+// mis de côté que semaineEntierementEnArret.
+function arretAvantEtApresDansSemaine(c,dateStr){
+  const dAa=parseDateLoc(dateStr);
+  const lundiAa=new Date(dAa); lundiAa.setDate(dAa.getDate()-((dAa.getDay()+6)%7));
+  let avantAa=false, apresAa=false;
+  for(let iAa=0;iAa<7;iAa++){
+    const xAa=new Date(lundiAa); xAa.setDate(lundiAa.getDate()+iAa);
+    const xsAa=dateToStr(xAa);
+    if(xsAa===dateStr) continue;
+    const fAa=c.fiches&&c.fiches[xsAa.slice(0,7)];
+    const jAa=fAa&&(fAa.jours||[]).find(yAa=>yAa.date===xsAa);
+    if(!(jAa&&jAa.statut==='arret')) continue;
+    if(xsAa<dateStr) avantAa=true; else apresAa=true;
+  }
+  return avantAa&&apresAa;
+}
 // 01/10/2026 (Sophie) : tous les jours possibles de la semaine sont-ils en arrêt, CELUI-CI COMPRIS ? Sert au
 // planning, qui n'a plus rien à y proposer : les heures de cette semaine ne sont plus disponibles et celles qui
 // y étaient saisies ont été retirées. Différent de semaineEntierementEnArret, qui juge les AUTRES jours pour
@@ -5160,7 +5178,9 @@ function getStatutPrevu(c,j){
           // pointes, elle traversait la moitie du mois et un seul jour en arret emportait des feries
           // lointains (mesure : un arret le mardi 6 mai faisait tomber le jeudi 8 ET le jeudi 1er).
           // Au-dela de 5 jours, le voisin n'est plus un voisin et ne dit plus rien de la suspension.
-          for(let i=1;i<=5;i++){
+          // 19/11/2026 : borne portée à 31 jours (simple garde-fou) — la convention ne fixe aucune distance, et la
+          // règle des deux côtés (ci-dessous) rend inutile la limite de 5 jours. Décidé par Sophie le 19/11/2026.
+          for(let i=1;i<=31;i++){
             d2.setDate(d2.getDate()+direction);
             if(d2.getDay()===(c.reposHebdo||0)) continue;
             const ds2=d2.getFullYear()+'-'+String(d2.getMonth()+1).padStart(2,'0')+'-'+String(d2.getDate()).padStart(2,'0');
@@ -5181,7 +5201,12 @@ function getStatutPrevu(c,j){
         }
         const statutsPrev=getVoisinPrevu(j.date,-1);
         const statutsNext=getVoisinPrevu(j.date,1);
-        const ferieNonStatuts=['arret','abs-am'];
+        // 19/11/2026 : règle de la DREETS Bourgogne-Franche-Comté (guide assistants maternels, fiche 02), choisie par
+        // Sophie le 19/11/2026 : un arrêt maladie qui se termine le jour prévu d'avant, ou commence le jour prévu
+        // d'après, ne fait pas perdre le férié. Il n'est perdu que si l'arrêt l'englobe — arrêt AVANT ET APRÈS.
+        // Seul l'arrêt compte (« Absence AM » est un ancien statut sans effet). Le 1er mai suit la même règle :
+        // pas de condition de présence, mais non payé au milieu d'un arrêt (Cass. soc. 5 février 2002, n° 99-43.898).
+        const ferieNonStatuts=['arret'];
         // 29/09/2026 (Sophie) : le 1er mai n'est plus une exception. Il se traite comme les autres fériés ; ce
         // qui le distingue — l'obligation de le travailler quand le contrat le prévoit, et son taux de
         // majoration propre — ne se joue pas ici mais au contrat, et c'est l'utilisateur qui passe un férié en
@@ -5189,8 +5214,11 @@ function getStatutPrevu(c,j){
         // alors que le contrat y est suspendu.
         // Un férié pris dans une semaine entièrement en arrêt n'est pas acquis, sans dépendre du jour voisin le
         // plus proche — la semaine elle-même suffit à le dire.
-        if(semaineEntierementEnArret(c,j.date)) return 'ferie-non';
-        if(ferieNonStatuts.includes(statutsPrev)||ferieNonStatuts.includes(statutsNext)) return 'ferie-non';
+        // 19/11/2026 : la semaine entièrement en arrêt ne fait perdre le férié que si l'arrêt l'englobe — un jour
+        // d'arrêt de la semaine AVANT lui et un APRÈS lui (règle DREETS, décision de Sophie le 19/11/2026). Un arrêt
+        // qui commence après le férié, ou finit avant, ne le fait plus perdre.
+        if(semaineEntierementEnArret(c,j.date)&&arretAvantEtApresDansSemaine(c,j.date)) return 'ferie-non';
+        if(ferieNonStatuts.includes(statutsPrev)&&ferieNonStatuts.includes(statutsNext)) return 'ferie-non';
       }
       return 'ferie';
     }
@@ -15452,7 +15480,8 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       const nextTrav=getNextJourPrevuTravaille(c,j.date);
       const sPrev=prevTrav?getStatutJourFiche(c,prevTrav):null;
       const sNext=nextTrav?getStatutJourFiche(c,nextTrav):null;
-      if(sPrev==='arret'||sNext==='arret') statut='arret';
+      // 19/11/2026 : arrêt des deux côtés, comme getStatutPrevu (règle DREETS, décidée par Sophie le 19/11/2026).
+      if(sPrev==='arret'&&sNext==='arret') statut='arret';
     }
     if(dateAvenantStr&&statut!=='hors-contrat'){
       const dateJ=j.date;
@@ -15613,7 +15642,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     if(absEnfantDeductible) absDeduites.push('abs-enfant');
     if(estCongesNonDeduit){ absDeduites.push('conges-non'); absDeduites.push('decompte-conges'); }
     if(statut==='ferie'&&c.tc!=='occ'){
-      const statutsDeduitTjrs=['arret','abs-am','ferie-non'];
+      // 19/11/2026 : seul l'arrêt (ou un férié voisin déjà perdu) compte, et des DEUX côtés — règle DREETS, décision
+      // de Sophie le 19/11/2026 (« Absence AM » est un ancien statut sans effet). Recherche portée à 31 jours.
+      const statutsDeduitTjrs=['arret','ferie-non'];
       function getStatutJourF(dateStr){
         const moisKey=dateStr.slice(0,7);
         const ficheJ=c.fiches&&c.fiches[moisKey];
@@ -15625,7 +15656,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       function getPrevJourPrevuF(dateStr){
         const parts=dateStr.split('-').map(Number);
         const d=new Date(parts[0],parts[1]-1,parts[2]);
-        for(let i=1;i<=14;i++){
+        for(let i=1;i<=31;i++){
           d.setDate(d.getDate()-1);
           const ds=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
           const sp=getStatutJourF(ds);
@@ -15636,7 +15667,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       function getNextJourPrevuF(dateStr){
         const parts=dateStr.split('-').map(Number);
         const d=new Date(parts[0],parts[1]-1,parts[2]);
-        for(let i=1;i<=14;i++){
+        for(let i=1;i<=31;i++){
           d.setDate(d.getDate()+1);
           const ds=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
           const sp=getStatutJourF(ds);
@@ -15650,7 +15681,7 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
       // le statut du congé adjacent — il se situe dans une période encore travaillée puisque la pose
       // n'a pas commencé (règle déjà établie mi-juillet, précisée par Sophie 23/07/2026 : ne
       // concerne PAS uniquement le 52, le mécanisme "doit52" ci-dessous a donc été retiré).
-      const doitTjrs=statutsDeduitTjrs.includes(statutPrev)||statutsDeduitTjrs.includes(statutNext);
+      const doitTjrs=statutsDeduitTjrs.includes(statutPrev)&&statutsDeduitTjrs.includes(statutNext);
       if(doitTjrs){
         // Vérifier que le jour férié est habituellement travaillé avant de déduire
         const partsF=j.date.split('-').map(Number);
@@ -15692,8 +15723,9 @@ function calcRecapFiche(c,fiche,dateDebPeriode,dateFinPeriode,dateRefStr,dateAve
     // (jamais déduite, et consommée) ou dans une semaine à cheval dont le mois voisin autorise les modifications
     // de planning (les heures ont pu y être déplacées).
     // 29/09/2026 (Sophie) : le férié devenu non acquis compte ici comme un jour d'arrêt — pour que le mois
-    // tombe vraiment à zéro, il doit être déduit lui aussi, même sans heures prévues. Le 1er mai fait
-    // exception : il reste acquis et payé.
+    // tombe vraiment à zéro, il doit être déduit lui aussi, même sans heures prévues. Le 1er mai suit la même règle
+    // que les autres fériés (correction de note du 19/11/2026, confirmée par Sophie : l'exception a été retirée le
+    // 29/09/2026, voir getStatutPrevu).
     // 29/09/2026 (Sophie, Silene) : ne pas écarter les jours « d'arrêt sur jour prévu ». Ce drapeau dit que le
     // jour appartient au rythme du contrat, pas qu'il porte des heures sur la feuille : en plan minimum et
     // variable il est vrai alors que la feuille est vide, et ces jours étaient alors déduits de zéro. Un jour
@@ -25604,7 +25636,7 @@ function getPrevJourPrevuTravaille(c, dateStr){
   // Retourne la date du dernier jour prévu travaillé avant dateStr
   const reposH=c.reposHebdo||0;
   let cur=new Date(dateStr.split('-')[0],parseInt(dateStr.split('-')[1])-1,parseInt(dateStr.split('-')[2]));
-  for(let i=0;i<14;i++){
+  for(let i=0;i<31;i++){ // 19/11/2026 : 31 jours, plus de limite de distance (décision de Sophie)
     cur.setDate(cur.getDate()-1);
     const ds=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
     if(cur.getDay()===reposH||isFerie(ds,c)) continue;
@@ -25618,7 +25650,7 @@ function getNextJourPrevuTravaille(c, dateStr){
   // Retourne la date du prochain jour prévu travaillé après dateStr
   const reposH=c.reposHebdo||0;
   let cur=new Date(dateStr.split('-')[0],parseInt(dateStr.split('-')[1])-1,parseInt(dateStr.split('-')[2]));
-  for(let i=0;i<14;i++){
+  for(let i=0;i<31;i++){ // 19/11/2026 : 31 jours, plus de limite de distance (décision de Sophie)
     cur.setDate(cur.getDate()+1);
     const ds=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
     if(cur.getDay()===reposH||isFerie(ds,c)) continue;
@@ -26718,7 +26750,8 @@ if(tousNonPrevus){
         const d=new Date(dateStr.split('-')[0],parseInt(dateStr.split('-')[1])-1,parseInt(dateStr.split('-')[2]));
         // 03/10/2026 (Sophie) : meme borne de 5 jours que getVoisinPrevu — les deux repondent a la meme
         // question (un arret voisin rend-il ce ferie non acquis ?) et doivent repondre pareil.
-        for(let i=1;i<=5;i++){
+        // 19/11/2026 : 31 jours, comme getVoisinPrevu (plus de limite de distance, décision de Sophie).
+        for(let i=1;i<=31;i++){
           d.setDate(d.getDate()+dir);
           const ds=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
           if(d.getDay()===(c.reposHebdo||0)) continue;
@@ -27017,7 +27050,9 @@ if(tousNonPrevus){
               // férié sur jour prévu, ça devrait, mais ça ne fonctionne pas"). Lecture directe
               // et sûre (l'arrêt est une donnée déclarée, jamais calculée par cette fonction).
               const svNextFerReprise=getStatutVoisinBoucle(dateStr,1);
-              const arretApresFerReprise=['arret','abs-am'].includes(svNextFerReprise);
+              // 19/11/2026 : règle DREETS (décision de Sophie) — un arrêt qui commence le premier jour prévu après le
+              // férié ne le fait plus perdre ; ici le jour d'avant est en congés, l'arrêt ne peut donc pas l'englober.
+              const arretApresFerReprise=false;
               if(window.DEBUG_CGAM)console.log('[CGAM]',dateStr,'| férié=reprise trouvée | estJourPrevu=',estJourPrevuFerReprise,'| arretApres=',arretApresFerReprise,'| prevusFerReprise=',JSON.stringify(prevusFerReprise));
               if(estJourPrevuFerReprise&&!arretApresFerReprise){
                 if(!fiche.valide) jour.statut='ferie';
@@ -27038,7 +27073,8 @@ if(tousNonPrevus){
             const svPrev=getStatutVoisinBoucle(dateStr,-1);
             const svNext=getStatutVoisinBoucle(dateStr,1);
             // 29/09/2026 (Sophie) : le 1er mai n'est plus une exception — même règle que dans getStatutPrevu.
-            if(['arret','abs-am'].includes(svPrev)||['arret','abs-am'].includes(svNext)){
+            // 19/11/2026 : arrêt des deux côtés seulement (règle DREETS, décision de Sophie).
+            if(svPrev==='arret'&&svNext==='arret'){
               if(!fiche.valide) jour.statut='ferie-non';
               cur.setDate(cur.getDate()+1);continue;
             }
@@ -27388,7 +27424,9 @@ if(tousNonPrevus){
           }
         }
         // Si entouré de jours rémunérés → reste férié
-        if(!statutsDeduit.includes(statutPrev)&&!statutsDeduit.includes(statutNext)) return;
+        // 19/11/2026 : congés non acquis d'un côté OU de l'autre (inchangé) ; arrêt seulement s'il est des deux côtés
+        // (règle DREETS, décision de Sophie le 19/11/2026).
+        if(statutPrev!=='conges-non'&&statutNext!=='conges-non'&&!(statutPrev==='arret'&&statutNext==='arret')) return;
         // Sinon congés non acquis
         jour.statut='conges-non';
       });
