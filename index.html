@@ -21151,8 +21151,19 @@ function joursHorsAnciennete(c,dateDebStr,dateFinStr){
 // Le calcul prend plusieurs secondes : il est gardé en mémoire et n'est refait que si la date de fin ou une donnée
 // (contrats, calendrier de congés, paramètres) a changé — hors valeurs de calcul gardées en mémoire (champs « _ »).
 let _cacheFeuillesProjetees=null;
+// 19/11/2026 : la simulation de rupture suit ce qui est saisi dans l'onglet Rupture (c._ruptureTemp), sans attendre
+// « Enregistrer » — demandé par Sophie le 19/11/2026 (« il faut que l'app suive la date indiquée »). Une rupture
+// confirmée garde ses valeurs enregistrées. contratRuptureSimulee : le contrat vu avec cette rupture (copie de surface,
+// le contrat lui-même n'est pas modifié), pour calcDateFinContratBrute qui ne lit que c.rupture.
+function ruptureSimulee(c){
+  return c.rupture?.confirmee?c.rupture:(c._ruptureTemp||c.rupture||{});
+}
+function contratRuptureSimulee(c){
+  const rpS=ruptureSimulee(c);
+  return rpS===c.rupture?c:Object.assign({},c,{rupture:rpS});
+}
 function cleFeuillesProjetees(c, dateFin){
-  return c.id+'|'+dateToStr(dateFin)+'|'+JSON.stringify({c:S.contrats,a:S.congesAM,p:S.params},(k,v)=>(k&&k[0]==='_')?undefined:v);
+  return c.id+'|'+dateToStr(dateFin)+'|'+JSON.stringify(ruptureSimulee(c))+'|'+JSON.stringify({c:S.contrats,a:S.congesAM,p:S.params},(k,v)=>(k&&k[0]==='_')?undefined:v);
 }
 // Mois non validés du début du contrat au mois de la date de fin : ceux que l'estimation projette.
 function moisFeuillesAProjeter(c, dateFin){
@@ -21169,8 +21180,8 @@ function moisFeuillesAProjeter(c, dateFin){
 // alors « Calcul en cours... » avant de le lancer, comme l'onglet Régularisation (demandé par Sophie le 18/11/2026).
 function feuillesProjeteesACalculer(c){
   if(!c||c.typeDuree==='cdd'||!c.dateDeb) return false;
-  if(!((c._ruptureTemp||c.rupture||{}).motif)||!getDateSituationAu(c)) return false;
-  const dateFin=calcDateFinContratBrute(c);
+  if(!(ruptureSimulee(c).motif)||!getDateSituationAu(c)) return false;
+  const dateFin=calcDateFinContratBrute(contratRuptureSimulee(c));
   if(!dateFin||!moisFeuillesAProjeter(c,dateFin).length) return false;
   return !(_cacheFeuillesProjetees&&_cacheFeuillesProjetees.cle===cleFeuillesProjetees(c,dateFin));
 }
@@ -21213,7 +21224,8 @@ function preparerFeuillesProjeteesCalcul(c, dateFin){
   };
   executer(()=>{
     // Rupture confirmée à la date simulée (confirmerRuptureSuite) : planning du dernier mois décoché après la fin
-    cP.rupture=Object.assign({},cP.rupture||{},{confirmee:true});
+    cP.rupture=Object.assign({},ruptureSimulee(c),{confirmee:true}); // rupture saisie (19/11)
+    delete cP._ruptureTemp;
     delete cP._dateFinContratCache;
     const finStr=dateToStr(dateFin);
     Object.keys(cP.planning||{}).forEach(dt=>{
@@ -22318,7 +22330,8 @@ function renderRupture(c, cont, calculLance){
   // grave...). Toute correction de la règle devait donc être faite à deux endroits, et celle du
   // retrait forcé du même jour montre pourquoi : oubliée ici, l'onglet Rupture aurait affiché une
   // date de fin différente de celle utilisée par tous les calculs. Source unique désormais.
-  let dateFinContrat=calcDateFinContratBrute(c);
+  // 19/11/2026 : calculée sur la rupture saisie, pas seulement enregistrée (voir ruptureSimulee).
+  let dateFinContrat=calcDateFinContratBrute(contratRuptureSimulee(c));
 
 
   // 01/09/2026 (Sophie) : calculé ici (avant confirmeeHtml et indemRuptureEncartHtml) pour pouvoir
