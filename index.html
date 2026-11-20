@@ -1097,7 +1097,10 @@ async function chargerModeEmployeur(uidProprietaire,contratId){
     }
     S.contrats=[c];
     S.params={};
-    S.congesAM={};
+    // 20/11/2026 : calendrier de congés de l'assistante maternelle, copié dans le contrat (voir
+    // synchroniserCongesAMEmployeur) ; vide tant qu'elle n'a pas ouvert l'App depuis la mise à jour.
+    S.congesAM=(c._congesAMEmployeur&&typeof c._congesAMEmployeur==='object')?c._congesAMEmployeur:{};
+    if(typeof invaliderSemsCongesGlobal==='function') invaliderSemsCongesGlobal();
     S.enCours=c.id;
     // Masquer la navigation principale, n'afficher que le détail du contrat
     document.getElementById('shell').style.cssText='display:flex;flex-direction:column;flex:1;min-height:100vh;';
@@ -1329,6 +1332,35 @@ function getContratsCompresses(){
 }
 
 
+// 20/11/2026 : la vue employeur ne lit que le contrat (fbLoadContratEmployeur), jamais le calendrier de congés
+// de l'assistante maternelle, rangé à part et commun à tous ses contrats : elle partait d'un calendrier vide, si bien
+// que l'agenda n'y montrait aucune semaine violette (constaté par Sophie le 20/11/2026, présent depuis juillet).
+// Une copie du calendrier est donc rangée dans chaque contrat qui a un accès employeur, et seulement là ; un contrat
+// n'est renvoyé que si sa copie a réellement changé. Comparaison à clés triées : la base ne garde pas l'ordre des
+// clés, une comparaison brute renverrait le contrat à chaque chargement. Accès retiré : la copie est effacée.
+// Décidé par Sophie le 20/11/2026. Rend le nombre de contrats marqués à enregistrer.
+function jsonTrie(v){
+  if(Array.isArray(v)) return '['+v.map(jsonTrie).join(',')+']';
+  if(v&&typeof v==='object') return '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+jsonTrie(v[k])).join(',')+'}';
+  return JSON.stringify(v===undefined?null:v);
+}
+function synchroniserCongesAMEmployeur(){
+  if(estLectureSeuleEmployeur()) return 0;
+  let nSync=0;
+  const cibleSync=jsonTrie(S.congesAM||{});
+  (S.contrats||[]).forEach(cSync=>{
+    if(cSync.emailEmployeurAutorise){
+      if(cSync._congesAMEmployeur&&jsonTrie(cSync._congesAMEmployeur)===cibleSync) return;
+      cSync._congesAMEmployeur=JSON.parse(JSON.stringify(S.congesAM||{}));
+    } else {
+      if(!('_congesAMEmployeur' in cSync)) return;
+      delete cSync._congesAMEmployeur;
+    }
+    if(cSync.id!=null){ _contratsModifies.add(cSync.id); nSync++; }
+  });
+  return nSync;
+}
+
 async function saveToFirestoreSync(){
   if(!window.FB_USER||!window.fbSaveData) return;
   // 19/09/2026 (Sophie) : une session employeur ne doit RIEN écrire. Elle lit le contrat directement
@@ -1340,6 +1372,7 @@ async function saveToFirestoreSync(){
   // documents orphelins contenant un seul contrat). Les trois fonctions d'envoi sont fermées ici.
   if(estLectureSeuleEmployeur()) return;
   if(_ecritureBloquee) return {ok:false,conflit:true};
+  synchroniserCongesAMEmployeur(); // 20/11/2026 : copie du calendrier de congés pour la vue employeur
   if(_contratsModifies.size===0) return {ok:true}; // rien à sauvegarder
   const contratsCompresses=getContratsCompresses();
   const contratsClean=contratsCompresses.filter(c=>_contratsModifies.has(c.id));
@@ -1384,9 +1417,13 @@ async function _flushSaveFirestore(){
   _saveEnCours=true;
   let idsEnvoyesSave=[];
   try{
+    // 20/11/2026 : « file vide = tout envoyer » se décide avant la copie du calendrier de congés, qui ajoute
+    // des contrats à la file et réduirait sinon l'envoi à ces seuls contrats.
+    const fileVideSave=_contratsModifies.size===0;
+    synchroniserCongesAMEmployeur();
     const contratsCompresses=getContratsCompresses();
     // Ne sauvegarder que les contrats modifiés (ou tous si aucun tracké)
-    const contratsClean=_contratsModifies.size>0
+    const contratsClean=!fileVideSave
       ? contratsCompresses.filter(c=>_contratsModifies.has(c.id))
       : contratsCompresses;
     idsEnvoyesSave=contratsClean.map(c=>c.id);
@@ -1493,6 +1530,9 @@ else S.params=JSON.parse(localStorage.getItem('cam_params')||'null')||JSON.parse
      // 16/11/2026 : agendas du contrat d'origine créés à tort par la signature d'un deuxième avenant (voir
      // retirerAgendasOrigineEnTrop). Nettoyage provisoire, à retirer dans quelques mois (décision de Sophie, 16/11/2026).
      try{ if(!estLectureSeuleEmployeur()&&retirerAgendasOrigineEnTrop()>0) setTimeout(()=>{ try{ saveToFirestore(); }catch(e){} },0); }catch(e){ console.error('Agendas du contrat d’origine en trop :',e); }
+     // 20/11/2026 : copie du calendrier de congés dans les contrats qui ont un accès employeur (voir
+     // synchroniserCongesAMEmployeur) ; rien n'est envoyé si les copies sont déjà à jour.
+     try{ if(!estLectureSeuleEmployeur()&&synchroniserCongesAMEmployeur()>0) setTimeout(()=>{ try{ saveToFirestore(); }catch(e){} },0); }catch(e){ console.error('Copie des congés pour l’employeur :',e); }
       localStorage.setItem('cam_c',JSON.stringify(getContratsCompresses()));
       localStorage.setItem('cam_cgam',JSON.stringify(S.congesAM||{}));
       initToutesLesFiches();
@@ -24036,7 +24076,10 @@ if(joursReposIncoherent(c)) manquants.push("des heures ou jours possibles sont i
     // Un manque par ligne : la liste était auparavant une seule phrase à virgules, illisible dès deux manques.
     const escSig=t=>String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     alerte('<strong>Le contrat ne peut pas être signé</strong><br><br>À compléter ou à corriger :<br><br>'
-      +manquants.map(m=>'• '+escSig(m)).join('<br><br>'));
+      +manquants.map(m=>'• '+escSig(m)).join('<br><br>')
+      // 20/11/2026 : la signature lit le contrat ENREGISTRÉ, pas le formulaire — demandé par Sophie le 20/11/2026
+      // (une collègue complétait le formulaire sans enregistrer et ne comprenait pas le refus).
+      +'<br><br><em>Pensez à enregistrer avant de signer.</em>');
     return;
   }
   const idx=S.contrats.findIndex(x=>x.id==id);
@@ -25009,7 +25052,9 @@ function signerAvenant(){
     // 28/09/2026 (Sophie) : même fenêtre centrée que pour la signature du contrat (voir signerContrat).
     const escSigAv=t=>String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     alerte('<strong>L’avenant ne peut pas être signé</strong><br><br>À compléter ou à corriger :<br><br>'
-      +manquantsAv.map(m=>'• '+escSigAv(m)).join('<br><br>'));
+      +manquantsAv.map(m=>'• '+escSigAv(m)).join('<br><br>')
+      // 20/11/2026 : même rappel que pour le contrat (signerContrat) — demandé par Sophie le 20/11/2026.
+      +'<br><br><em>Pensez à enregistrer avant de signer.</em>');
     return;
   }
 
